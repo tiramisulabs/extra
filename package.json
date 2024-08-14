@@ -1,0 +1,19 @@
+{
+	"name": "seyfert",
+	"private": true,
+	"scripts": {
+		"build": "turbo build",
+		"dev": "turbo dev",
+		"lint": "turbo lint",
+		"format": "turbo format"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "1.8.3",
+		"turbo": "^2.0.13",
+		"typescript": "^5.5.4"
+	},
+	"packageManager": "pnpm@8.15.6",
+	"engines": {
+		"node": ">=18"
+	}
+}

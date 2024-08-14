@@ -1,0 +1,19 @@
+{
+	"name": "@lib/main",
+	"version": "0.0.0",
+	"private": true,
+	"license": "MIT",
+	"publishConfig": {
+		"access": "public"
+	},
+	"scripts": {
+		"dev": "tsc --watch",
+		"build": "tsc",
+		"lint": "biome lint --write ./src",
+		"format": "biome format --write ./src"
+	},
+	"dependencies": {
+		"typescript": "^5.5.4",
+		"@lib/sub": "workspace:*"
+	}
+}
