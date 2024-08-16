@@ -2,7 +2,10 @@
 	"compilerOptions": {
 		"module": "CommonJS",
 		"target": "ESNext",
-		"lib": ["ESNext", "WebWorker"],
+		"lib": [
+			"ESNext",
+			"WebWorker"
+		],
 		"moduleResolution": "node",
 		"declaration": true,
 		"sourceMap": false,
@@ -20,11 +23,16 @@
 		"noUnusedParameters": true,
 		"noImplicitReturns": true,
 		"noFallthroughCasesInSwitch": true,
-		"skipLibCheck": false,
+		"skipLibCheck": true,
 		"noErrorTruncation": true,
 		"outDir": "./lib",
-		"stripInternal": true
+		"stripInternal": true,
 	},
-	"exclude": ["**/lib", "**/__test__"],
-	"include": ["src"]
+	"exclude": [
+		"**/lib",
+		"**/__test__"
+	],
+	"include": [
+		"src"
+	]
 }

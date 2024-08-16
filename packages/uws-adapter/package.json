@@ -1,0 +1,24 @@
+{
+	"name": "@slipher/uws-adapter",
+	"version": "0.0.0",
+	"private": true,
+	"license": "MIT",
+	"publishConfig": {
+		"access": "public"
+	},
+	"main": "lib/index.js",
+	"scripts": {
+		"dev": "tsc --watch",
+		"build": "tsc",
+		"lint": "biome lint --write ./src",
+		"format": "biome format --write ./src"
+	},
+	"dependencies": {
+		"tweetnacl": "^1.0.3",
+		"uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.42.0"
+	},
+	"devDependencies": {
+		"@types/node": "^22.3.0",
+		"typescript": "^5.5.4"
+	}
+}

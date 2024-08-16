@@ -1,5 +1,5 @@
 {
-	"name": "@lib/sub",
+	"name": "@slipher/generic-adapter",
 	"version": "0.0.0",
 	"private": true,
 	"license": "MIT",
@@ -14,6 +14,10 @@
 		"format": "biome format --write ./src"
 	},
 	"dependencies": {
+		"tweetnacl": "^1.0.3"
+	},
+	"devDependencies": {
+		"@types/node": "^22.3.0",
 		"typescript": "^5.5.4"
 	}
 }

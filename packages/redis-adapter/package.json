@@ -1,5 +1,5 @@
 {
-	"name": "@lib/main",
+	"name": "@slipher/redis-adapter",
 	"version": "0.0.0",
 	"private": true,
 	"license": "MIT",
@@ -13,7 +13,10 @@
 		"format": "biome format --write ./src"
 	},
 	"dependencies": {
-		"typescript": "^5.5.4",
-		"@lib/sub": "workspace:*"
+		"ioredis": "^5.4.1"
+	},
+	"devDependencies": {
+		"@types/node": "^22.3.0",
+		"typescript": "^5.5.4"
 	}
 }
