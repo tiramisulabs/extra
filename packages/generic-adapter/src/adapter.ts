@@ -90,17 +90,3 @@ export class GenericAdapter implements HttpServerAdapter {
         }
     }
 }
-
-const client = new HttpClient
-const generic = new GenericAdapter(client)
-
-client.start()
-    .then(() => {
-        generic.start();
-    });
-
-export default {
-    fetch(req: Request) {
-        return generic.fetch(req)
-    }
-}

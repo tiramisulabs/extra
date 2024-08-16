@@ -114,12 +114,3 @@ export class UwsAdapter implements HttpServerAdapter {
         });
     }
 }
-
-const client = new HttpClient();
-
-const uws = new UwsAdapter(client)
-
-client.start()
-    .then(() => {
-        uws.start();
-    });
