@@ -1,12 +1,17 @@
 {
 	"name": "@slipher/generic-adapter",
-	"version": "0.0.0",
+	"version": "0.0.1",
 	"private": true,
 	"license": "MIT",
 	"publishConfig": {
 		"access": "public"
 	},
-	"main": "lib/index.js",
+	"files": [
+		"lib/**"
+	],
+	"main": "./lib/index.js",
+	"module": "./lib/index.js",
+	"types": "./lib/index.d.ts",
 	"scripts": {
 		"dev": "tsc --watch",
 		"build": "tsc",
