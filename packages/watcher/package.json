@@ -1,0 +1,30 @@
+{
+	"name": "@slipher/watcher",
+	"version": "0.0.1",
+	"private": false,
+	"license": "MIT",
+	"publishConfig": {
+		"access": "public"
+	},
+	"files": [
+		"lib/**"
+	],
+	"main": "./lib/index.js",
+	"module": "./lib/index.js",
+	"types": "./lib/index.d.ts",
+	"scripts": {
+		"dev": "tsc --watch",
+		"build": "tsc",
+		"lint": "biome lint --write ./src",
+		"format": "biome format --write ./src"
+	},
+	"dependencies": {
+		"chokidar": "^3.6.0",
+		"seyfert": "github:marcrock22/seyfert",
+		"tweetnacl": "^1.0.3"
+	},
+	"devDependencies": {
+		"@types/node": "^22.3.0",
+		"typescript": "^5.5.4"
+	}
+}
