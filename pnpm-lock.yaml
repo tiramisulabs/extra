@@ -18,8 +18,8 @@ importers:
   packages/generic-adapter:
     dependencies:
       seyfert:
-        specifier: github:marcrock22/seyfert
-        version: https://codeload.github.com/marcrock22/seyfert/tar.gz/c5935a1ad3e948551d3c5e0e541ce1ce404053e3
+        specifier: github:tiramisulabs/seyfert
+        version: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/afd3aa62ad452ebb14bae52e44614ee1972f3e65
       tweetnacl:
         specifier: ^1.0.3
         version: 1.0.3
@@ -37,8 +37,8 @@ importers:
         specifier: ^5.4.1
         version: 5.4.1
       seyfert:
-        specifier: github:marcrock22/seyfert
-        version: https://codeload.github.com/marcrock22/seyfert/tar.gz/c5935a1ad3e948551d3c5e0e541ce1ce404053e3
+        specifier: github:tiramisulabs/seyfert
+        version: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/afd3aa62ad452ebb14bae52e44614ee1972f3e65
     devDependencies:
       '@types/node':
         specifier: ^22.3.0
@@ -50,14 +50,14 @@ importers:
   packages/uws-adapter:
     dependencies:
       seyfert:
-        specifier: github:marcrock22/seyfert
-        version: https://codeload.github.com/marcrock22/seyfert/tar.gz/c5935a1ad3e948551d3c5e0e541ce1ce404053e3
+        specifier: github:tiramisulabs/seyfert
+        version: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/afd3aa62ad452ebb14bae52e44614ee1972f3e65
       tweetnacl:
         specifier: ^1.0.3
         version: 1.0.3
       uWebSockets.js:
-        specifier: github:uNetworking/uWebSockets.js#v20.42.0
-        version: https://codeload.github.com/uNetworking/uWebSockets.js/tar.gz/f40213ec0a97d0d8721d9d32d92d6eb6ddcd22e7
+        specifier: github:uNetworking/uWebSockets.js#v20.47.0
+        version: https://codeload.github.com/uNetworking/uWebSockets.js/tar.gz/6f4b450fc642abba540535f0755c990b42a16026
     devDependencies:
       '@types/node':
         specifier: ^22.3.0
@@ -72,8 +72,8 @@ importers:
         specifier: ^3.6.0
         version: 3.6.0
       seyfert:
-        specifier: github:marcrock22/seyfert
-        version: https://codeload.github.com/marcrock22/seyfert/tar.gz/c5935a1ad3e948551d3c5e0e541ce1ce404053e3
+        specifier: github:tiramisulabs/seyfert
+        version: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/afd3aa62ad452ebb14bae52e44614ee1972f3e65
       tweetnacl:
         specifier: ^1.0.3
         version: 1.0.3
@@ -241,8 +241,8 @@ packages:
     resolution: {integrity: sha512-DJnGAeenTdpMEH6uAJRK/uiyEIH9WVsUmoLwzudwGJUwZPp80PDBWPHXSAGNPwNvIXAbe7MSUB1zQFugFml66A==}
     engines: {node: '>=4'}
 
-  seyfert@https://codeload.github.com/marcrock22/seyfert/tar.gz/c5935a1ad3e948551d3c5e0e541ce1ce404053e3:
-    resolution: {tarball: https://codeload.github.com/marcrock22/seyfert/tar.gz/c5935a1ad3e948551d3c5e0e541ce1ce404053e3}
+  seyfert@https://codeload.github.com/tiramisulabs/seyfert/tar.gz/afd3aa62ad452ebb14bae52e44614ee1972f3e65:
+    resolution: {tarball: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/afd3aa62ad452ebb14bae52e44614ee1972f3e65}
     version: 1.5.0
 
   standard-as-callback@2.1.0:
@@ -294,9 +294,9 @@ packages:
     engines: {node: '>=14.17'}
     hasBin: true
 
-  uWebSockets.js@https://codeload.github.com/uNetworking/uWebSockets.js/tar.gz/f40213ec0a97d0d8721d9d32d92d6eb6ddcd22e7:
-    resolution: {tarball: https://codeload.github.com/uNetworking/uWebSockets.js/tar.gz/f40213ec0a97d0d8721d9d32d92d6eb6ddcd22e7}
-    version: 20.42.0
+  uWebSockets.js@https://codeload.github.com/uNetworking/uWebSockets.js/tar.gz/6f4b450fc642abba540535f0755c990b42a16026:
+    resolution: {tarball: https://codeload.github.com/uNetworking/uWebSockets.js/tar.gz/6f4b450fc642abba540535f0755c990b42a16026}
+    version: 20.47.0
 
   undici-types@6.19.6:
     resolution: {integrity: sha512-e/vggGopEfTKSvj4ihnOLTsqhrKRN3LeO6qSN/GxohhuRv8qH9bNQ4B8W7e/vFL+0XTnmHPB4/kegunZGA4Org==}
@@ -432,9 +432,7 @@ snapshots:
     dependencies:
       redis-errors: 1.2.0
 
-  seyfert@https://codeload.github.com/marcrock22/seyfert/tar.gz/c5935a1ad3e948551d3c5e0e541ce1ce404053e3:
-    optionalDependencies:
-      chokidar: 3.6.0
+  seyfert@https://codeload.github.com/tiramisulabs/seyfert/tar.gz/afd3aa62ad452ebb14bae52e44614ee1972f3e65: {}
 
   standard-as-callback@2.1.0: {}
 
@@ -473,6 +471,6 @@ snapshots:
 
   typescript@5.5.4: {}
 
-  uWebSockets.js@https://codeload.github.com/uNetworking/uWebSockets.js/tar.gz/f40213ec0a97d0d8721d9d32d92d6eb6ddcd22e7: {}
+  uWebSockets.js@https://codeload.github.com/uNetworking/uWebSockets.js/tar.gz/6f4b450fc642abba540535f0755c990b42a16026: {}
 
   undici-types@6.19.6: {}

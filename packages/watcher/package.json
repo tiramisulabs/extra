@@ -20,7 +20,7 @@
 	},
 	"dependencies": {
 		"chokidar": "^3.6.0",
-		"seyfert": "github:marcrock22/seyfert",
+		"seyfert": "github:tiramisulabs/seyfert",
 		"tweetnacl": "^1.0.3"
 	},
 	"devDependencies": {

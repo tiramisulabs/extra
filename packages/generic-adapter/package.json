@@ -19,7 +19,7 @@
 		"format": "biome format --write ./src"
 	},
 	"dependencies": {
-		"seyfert": "github:marcrock22/seyfert",
+		"seyfert": "github:tiramisulabs/seyfert",
 		"tweetnacl": "^1.0.3"
 	},
 	"devDependencies": {
