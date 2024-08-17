@@ -19,7 +19,8 @@
 		"format": "biome format --write ./src"
 	},
 	"dependencies": {
-		"ioredis": "^5.4.1"
+		"ioredis": "^5.4.1",
+		"seyfert": "github:marcrock22/seyfert"
 	},
 	"devDependencies": {
 		"@types/node": "^22.3.0",
