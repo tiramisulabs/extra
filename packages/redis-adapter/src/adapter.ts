@@ -17,6 +17,10 @@ export class RedisAdapter implements Adapter {
 		this.namespace = data.namespace ?? 'seyfert';
 	}
 
+	async start() {
+		//should i do something here?
+	}
+
 	private __scanSets(query: string, returnKeys?: false): Promise<any[]>;
 	private __scanSets(query: string, returnKeys: true): Promise<string[]>;
 	private __scanSets(query: string, returnKeys = false) {

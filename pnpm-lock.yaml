@@ -19,7 +19,7 @@ importers:
     dependencies:
       seyfert:
         specifier: github:tiramisulabs/seyfert
-        version: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/afd3aa62ad452ebb14bae52e44614ee1972f3e65
+        version: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/285ec140a06e67c67efc6e78d0704d8b6d38f86e
       tweetnacl:
         specifier: ^1.0.3
         version: 1.0.3
@@ -38,7 +38,7 @@ importers:
         version: 5.4.1
       seyfert:
         specifier: github:tiramisulabs/seyfert
-        version: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/afd3aa62ad452ebb14bae52e44614ee1972f3e65
+        version: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/285ec140a06e67c67efc6e78d0704d8b6d38f86e
     devDependencies:
       '@types/node':
         specifier: ^22.3.0
@@ -51,7 +51,7 @@ importers:
     dependencies:
       seyfert:
         specifier: github:tiramisulabs/seyfert
-        version: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/afd3aa62ad452ebb14bae52e44614ee1972f3e65
+        version: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/285ec140a06e67c67efc6e78d0704d8b6d38f86e
       tweetnacl:
         specifier: ^1.0.3
         version: 1.0.3
@@ -73,7 +73,7 @@ importers:
         version: 3.6.0
       seyfert:
         specifier: github:tiramisulabs/seyfert
-        version: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/afd3aa62ad452ebb14bae52e44614ee1972f3e65
+        version: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/285ec140a06e67c67efc6e78d0704d8b6d38f86e
       tweetnacl:
         specifier: ^1.0.3
         version: 1.0.3
@@ -241,8 +241,8 @@ packages:
     resolution: {integrity: sha512-DJnGAeenTdpMEH6uAJRK/uiyEIH9WVsUmoLwzudwGJUwZPp80PDBWPHXSAGNPwNvIXAbe7MSUB1zQFugFml66A==}
     engines: {node: '>=4'}
 
-  seyfert@https://codeload.github.com/tiramisulabs/seyfert/tar.gz/afd3aa62ad452ebb14bae52e44614ee1972f3e65:
-    resolution: {tarball: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/afd3aa62ad452ebb14bae52e44614ee1972f3e65}
+  seyfert@https://codeload.github.com/tiramisulabs/seyfert/tar.gz/285ec140a06e67c67efc6e78d0704d8b6d38f86e:
+    resolution: {tarball: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/285ec140a06e67c67efc6e78d0704d8b6d38f86e}
     version: 1.5.0
 
   standard-as-callback@2.1.0:
@@ -432,7 +432,7 @@ snapshots:
     dependencies:
       redis-errors: 1.2.0
 
-  seyfert@https://codeload.github.com/tiramisulabs/seyfert/tar.gz/afd3aa62ad452ebb14bae52e44614ee1972f3e65: {}
+  seyfert@https://codeload.github.com/tiramisulabs/seyfert/tar.gz/285ec140a06e67c67efc6e78d0704d8b6d38f86e: {}
 
   standard-as-callback@2.1.0: {}
 
