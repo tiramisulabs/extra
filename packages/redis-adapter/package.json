@@ -20,7 +20,7 @@
 	},
 	"dependencies": {
 		"ioredis": "^5.4.1",
-		"seyfert": "github:tiramisulabs/seyfert"
+		"seyfert": "^2.0.0"
 	},
 	"devDependencies": {
 		"@types/node": "^22.3.0",

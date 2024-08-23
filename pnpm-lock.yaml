@@ -18,8 +18,8 @@ importers:
   packages/generic-adapter:
     dependencies:
       seyfert:
-        specifier: github:tiramisulabs/seyfert
-        version: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/285ec140a06e67c67efc6e78d0704d8b6d38f86e
+        specifier: ^2.0.0
+        version: 2.0.0
       tweetnacl:
         specifier: ^1.0.3
         version: 1.0.3
@@ -37,8 +37,8 @@ importers:
         specifier: ^5.4.1
         version: 5.4.1
       seyfert:
-        specifier: github:tiramisulabs/seyfert
-        version: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/285ec140a06e67c67efc6e78d0704d8b6d38f86e
+        specifier: ^2.0.0
+        version: 2.0.0
     devDependencies:
       '@types/node':
         specifier: ^22.3.0
@@ -50,8 +50,8 @@ importers:
   packages/uws-adapter:
     dependencies:
       seyfert:
-        specifier: github:tiramisulabs/seyfert
-        version: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/285ec140a06e67c67efc6e78d0704d8b6d38f86e
+        specifier: ^2.0.0
+        version: 2.0.0
       tweetnacl:
         specifier: ^1.0.3
         version: 1.0.3
@@ -72,8 +72,8 @@ importers:
         specifier: ^3.6.0
         version: 3.6.0
       seyfert:
-        specifier: github:tiramisulabs/seyfert
-        version: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/285ec140a06e67c67efc6e78d0704d8b6d38f86e
+        specifier: ^2.0.0
+        version: 2.0.0
       tweetnacl:
         specifier: ^1.0.3
         version: 1.0.3
@@ -241,9 +241,8 @@ packages:
     resolution: {integrity: sha512-DJnGAeenTdpMEH6uAJRK/uiyEIH9WVsUmoLwzudwGJUwZPp80PDBWPHXSAGNPwNvIXAbe7MSUB1zQFugFml66A==}
     engines: {node: '>=4'}
 
-  seyfert@https://codeload.github.com/tiramisulabs/seyfert/tar.gz/285ec140a06e67c67efc6e78d0704d8b6d38f86e:
-    resolution: {tarball: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/285ec140a06e67c67efc6e78d0704d8b6d38f86e}
-    version: 1.5.0
+  seyfert@2.0.0:
+    resolution: {integrity: sha512-cAMBhZWr+edrjDkTi2cS+hE74LuwIsML+zZOPOKVFQbXsnd8bbiM+/QHWyDfSjQ2PGWcRZEzCGt6IpsyL7quQQ==}
 
   standard-as-callback@2.1.0:
     resolution: {integrity: sha512-qoRRSyROncaz1z0mvYqIE4lCd9p2R90i6GxW3uZv5ucSu8tU7B5HXUP1gG8pVZsYNVaXjk8ClXHPttLyxAL48A==}
@@ -432,7 +431,7 @@ snapshots:
     dependencies:
       redis-errors: 1.2.0
 
-  seyfert@https://codeload.github.com/tiramisulabs/seyfert/tar.gz/285ec140a06e67c67efc6e78d0704d8b6d38f86e: {}
+  seyfert@2.0.0: {}
 
   standard-as-callback@2.1.0: {}
 

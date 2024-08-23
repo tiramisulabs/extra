@@ -19,7 +19,7 @@
 		"format": "biome format --write ./src"
 	},
 	"dependencies": {
-		"seyfert": "github:tiramisulabs/seyfert",
+		"seyfert": "^2.0.0",
 		"tweetnacl": "^1.0.3",
 		"uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.47.0"
 	},
