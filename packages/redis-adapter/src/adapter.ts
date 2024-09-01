@@ -38,21 +38,28 @@ export class RedisAdapter implements Adapter {
 		});
 	}
 
-	scan(query: string, returnKeys?: false): Promise<any[]>;
-	scan(query: string, returnKeys: true): Promise<string[]>;
-	scan(query: string, returnKeys = false) {
+	async scan(query: string, returnKeys?: false): Promise<any[]>;
+	async scan(query: string, returnKeys: true): Promise<string[]>;
+	async scan(query: string, returnKeys = false) {
 		const match = this.buildKey(query);
-		return new Promise<string[] | any[]>((r, j) => {
-			const stream = this.client.scanStream({
-				match,
-				// omit relationships
-				type: 'hash',
-			});
+		return new Promise<string[] | any[]>((resolve, reject) => {
 			const keys: string[] = [];
-			stream
-				.on('data', resultKeys => keys.push(...resultKeys))
-				.on('end', () => (returnKeys ? r(keys.map(x => this.buildKey(x))) : r(this.bulkGet(keys))))
-				.on('error', err => j(err));
+			const stream = this.client.scanStream({ match });
+
+			stream.on("data", (resultKeys) => keys.push(...resultKeys));
+			stream.on("end", async () => {
+				const filteredKeys = await Promise.all(
+					keys.map(async (key) => {
+						const type = await this.client.type(key);
+						return type === "hash" ? key : null;
+					}),
+				);
+
+				const validKeys = filteredKeys.filter((key) => key !== null) as string[];
+
+				resolve(returnKeys ? validKeys.map((key) => this.buildKey(key)) : this.bulkGet(validKeys));
+			});
+			stream.on("error", reject);
 		});
 	}
 
