@@ -31,6 +31,19 @@ importers:
         specifier: ^5.5.4
         version: 5.5.4
 
+  packages/cooldown:
+    dependencies:
+      seyfert:
+        specifier: ^2.0.0
+        version: 2.0.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.4.0
+        version: 22.4.0
+      typescript:
+        specifier: ^5.5.4
+        version: 5.5.4
+
   packages/generic-adapter:
     dependencies:
       seyfert:
