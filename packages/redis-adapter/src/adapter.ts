@@ -1,6 +1,6 @@
-import type { RedisOptions } from 'ioredis';
+import type { RedisOptions } from 'iovalkey';
 import type { Adapter } from 'seyfert/lib/cache';
-import { Redis } from 'ioredis';
+import { Redis } from 'iovalkey';
 
 interface RedisAdapterOptions {
 	namespace?: string;
@@ -63,7 +63,12 @@ export class RedisAdapter implements Adapter {
 			pipeline.hgetall(this.buildKey(key));
 		}
 
-		return (await pipeline.exec())?.filter(x => !!x[1]).map(x => toNormal(x[1] as Record<string, any>)) ?? [];
+		return (
+			(await pipeline.exec())
+				?.filter(x => !!x[1])
+				.map(x => toNormal(x[1] as Record<string, any>))
+				.filter(x => x) ?? []
+		);
 	}
 
 	async get(keys: string): Promise<any> {
