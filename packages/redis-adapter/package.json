@@ -16,10 +16,11 @@
 		"dev": "tsc --watch",
 		"build": "tsc",
 		"lint": "biome lint --write ./src",
-		"format": "biome format --write ./src"
+		"format": "biome format --write ./src",
+		"test": "node --test ./test/*"
 	},
 	"dependencies": {
-		"ioredis": "^5.4.1",
+		"iovalkey": "^0.1.0",
 		"seyfert": "^2.0.0"
 	},
 	"devDependencies": {
