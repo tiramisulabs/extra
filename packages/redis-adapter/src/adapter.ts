@@ -155,6 +155,7 @@ export class RedisAdapter implements Adapter {
 	}
 
 	async bulkRemove(keys: string[]) {
+		if (!keys.length) return;
 		await this.client.del(...keys.map(x => this.buildKey(x)));
 	}
 
