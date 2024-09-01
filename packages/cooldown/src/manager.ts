@@ -1,6 +1,7 @@
 import type { UsingClient } from 'seyfert';
 import { type CooldownData, type CooldownDataInsert, Cooldowns, type CooldownType } from './resource';
 import { getMilliseconds } from './clock';
+import { fakePromise } from 'seyfert/lib/common';
 
 export class CooldownManager {
 	resource: Cooldowns;
@@ -27,16 +28,18 @@ export class CooldownManager {
 		const data = this.getData(name);
 		if (!data) return false;
 
-		const cooldown = this.resource.get(`${name}:${data.type}:${target}`);
-		if (!cooldown) {
-			this.set(name, target, { type: data.type, interval: data.interval, remaining: data.refill - data.tokens });
+		return fakePromise(this.resource.get(`${name}:${data.type}:${target}`)).then(cooldown => {
+			if (!cooldown) {
+				return fakePromise(
+					this.set(name, target, { type: data.type, interval: data.interval, remaining: data.refill - data.tokens }),
+				).then(() => false);
+			}
+
+			const remaining = cooldown.remaining - data.tokens;
+
+			if (remaining <= 0) return true;
 			return false;
-		}
-
-		const remaining = cooldown.remaining - data.tokens;
-
-		if (remaining <= 0) return true;
-		return false;
+		});
 	}
 
 	/**
@@ -50,21 +53,22 @@ export class CooldownManager {
 		const data = this.getData(name);
 		if (!data) return;
 
-		const cooldown = this.resource.get(`${name}:${data.type}:${target}`);
-		if (!cooldown) {
-			this.set(name, target, {
-				type: data.type,
-				interval: data.interval,
-				remaining: data.refill - (tokens ?? data.tokens),
+		return fakePromise(this.resource.get(`${name}:${data.type}:${target}`)).then(cooldown => {
+			if (!cooldown) {
+				return fakePromise(
+					this.set(name, target, {
+						type: data.type,
+						interval: data.interval,
+						remaining: data.refill - (tokens ?? data.tokens),
+					}),
+				).then(() => true);
+			}
+
+			return fakePromise(this.drip(name, target, data, cooldown)).then(drip => {
+				if (drip.remaining >= data.tokens) return false;
+				return true;
 			});
-			return true;
-		}
-
-		const drip = this.drip(name, target, data, cooldown);
-
-		if (drip.remaining <= 0) return false;
-
-		return true;
+		});
 	}
 
 	/**
@@ -79,18 +83,17 @@ export class CooldownManager {
 
 		const refill = tokens ?? data.refill;
 
-		const cooldown = this.resource.get(`${name}:${data.type}:${target}`);
-		if (!cooldown) {
-			this.set(name, target, {
-				type: data.type,
-				interval: data.interval,
-				remaining: refill,
-			});
-			return true;
-		}
+		return fakePromise(this.resource.get(`${name}:${data.type}:${target}`)).then(cooldown => {
+			if (!cooldown) {
+				return fakePromise(
+					this.set(name, target, { type: data.type, interval: data.interval, remaining: refill }),
+				).then(() => true);
+			}
 
-		this.set(name, target, { type: data.type, interval: data.interval, remaining: refill });
-		return true;
+			return fakePromise(this.set(name, target, { type: data.type, interval: data.interval, remaining: refill })).then(
+				() => true,
+			);
+		});
 	}
 
 	/**
@@ -100,7 +103,7 @@ export class CooldownManager {
 	 * @param data - The cooldown data to set
 	 */
 	set(name: string, target: string, data: CooldownDataInsert & { type: `${CooldownType}` }) {
-		this.resource.set(`${name}:${data.type}:${target}`, data);
+		return fakePromise(this.resource.set(`${name}:${data.type}:${target}`, data)).then(() => {});
 	}
 
 	/**
@@ -119,8 +122,7 @@ export class CooldownManager {
 		const dripAmount = deltaMS * (props.refill / props.interval);
 		data.remaining = Math.min(data.remaining + dripAmount, props.refill);
 		const result = { type: props.type, interval: props.interval, remaining: data.remaining };
-		this.set(name, target, result);
-		return result;
+		return fakePromise(this.set(name, target, result)).then(() => result);
 	}
 }
 
