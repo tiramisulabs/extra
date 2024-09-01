@@ -38,9 +38,9 @@ export class RedisAdapter implements Adapter {
 		});
 	}
 
-	async scan(query: string, returnKeys?: false): Promise<any[]>;
-	async scan(query: string, returnKeys: true): Promise<string[]>;
-	async scan(query: string, returnKeys = false) {
+	scan(query: string, returnKeys?: false): Promise<any[]>;
+	scan(query: string, returnKeys: true): Promise<string[]>;
+	scan(query: string, returnKeys = false) {
 		const match = this.buildKey(query);
 		return new Promise<string[] | any[]>((resolve, reject) => {
 			const keys: string[] = [];
