@@ -1,5 +1,5 @@
 import type { ChartConfiguration, Chart as ChartJS } from 'chart.js/auto';
-import { Canvas, createCanvas } from '@napi-rs/canvas';
+import { type Canvas, createCanvas } from '@napi-rs/canvas';
 import { freshRequire } from './freshRequire';
 import { BackgroundColourPlugin } from './backgroundcolorplugin';
 import type { ChartJSNapiRSCanvasOptions } from './options';
@@ -63,10 +63,9 @@ export class NapiChartjsCanvas {
 		configuration.options ??= {};
 		configuration.options.responsive = false;
 		configuration.options.animation = false;
-		return new this._chartJs(canvas.getContext('2d') as any, configuration) as any as Omit<
-			ChartJS,
-			'canvas'
-		> & { canvas: Canvas };
+		return new this._chartJs(canvas.getContext('2d') as any, configuration) as any as Omit<ChartJS, 'canvas'> & {
+			canvas: Canvas;
+		};
 	}
 
 	renderToBuffer(configuration: ChartConfiguration) {

@@ -37,8 +37,7 @@ export class CooldownManager {
 
 			const remaining = cooldown.remaining - data.tokens;
 
-			if (remaining <= 0) return true;
-			return false;
+			return remaining <= 0;
 		});
 	}
 
@@ -65,8 +64,7 @@ export class CooldownManager {
 			}
 
 			return fakePromise(this.drip(name, target, data, cooldown)).then(drip => {
-				if (drip.remaining >= data.tokens) return false;
-				return true;
+				return drip.remaining < data.tokens;
 			});
 		});
 	}

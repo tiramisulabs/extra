@@ -1,5 +1,5 @@
-import { BaseResource } from "seyfert/lib/cache/resources/default/base";
-import { getMilliseconds } from "./clock";
+import { BaseResource } from 'seyfert/lib/cache/resources/default/base';
+import { getMilliseconds } from './clock';
 
 export interface CooldownData {
 	remaining: number;
@@ -22,7 +22,7 @@ export class Cooldowns extends BaseResource<CooldownData> {
 		return true;
 	}
 
-	override set(id: string, data: CooldownDataInsert){
-		return super.set(id, {...data, lastDrip: getMilliseconds()});
+	override set(id: string, data: CooldownDataInsert) {
+		return super.set(id, { ...data, lastDrip: getMilliseconds() });
 	}
 }

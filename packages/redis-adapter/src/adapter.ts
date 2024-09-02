@@ -65,7 +65,7 @@ export class RedisAdapter implements Adapter {
 
 		return (
 			(await pipeline.exec())
-				?.filter(x => !!x[1])
+				?.filter(x => x[1])
 				.map(x => toNormal(x[1] as Record<string, any>))
 				.filter(x => x) ?? []
 		);
