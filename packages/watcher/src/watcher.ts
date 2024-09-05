@@ -133,8 +133,8 @@ export class Watcher extends ShardManager {
 			this.logger.info('Builded');
 		} catch (e: any) {
 			this.logger.fatal('Build Error');
-			this.logger.error(e.stdout?.toString());
-			if (e.stderr) this.logger.error(e.stderr?.toString());
+			if (e.stdout?.length) this.logger.error(e.stdout.toString());
+			if (e.stderr?.length) this.logger.error(e.stderr.toString());
 		}
 	}
 }
