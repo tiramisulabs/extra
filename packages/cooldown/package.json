@@ -25,6 +25,6 @@
 		"typescript": "^5.5.4"
 	},
 	"dependencies": {
-		"seyfert": "link:..\\..\\..\\seyfert"
+		"seyfert": "^2.0.0"
 	}
 }
