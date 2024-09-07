@@ -1,6 +1,7 @@
 {
 	"name": "seyfert",
 	"private": true,
+	"workspaces": ["packages/*"],
 	"scripts": {
 		"build": "turbo build",
 		"dev": "turbo dev",

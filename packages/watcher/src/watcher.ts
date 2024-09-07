@@ -2,7 +2,12 @@ import { execSync } from 'node:child_process';
 import { ShardManager, Logger, ApiHandler, Router } from 'seyfert';
 import { BaseClient, type InternalRuntimeConfig } from 'seyfert/lib/client/base';
 import type { MakeRequired, MakePartial } from 'seyfert/lib/common';
-import type { GatewayDispatchPayload, GatewaySendPayload } from 'seyfert/lib/types';
+import {
+	GatewayDispatchEvents,
+	type GatewayReadyDispatch,
+	type GatewayDispatchPayload,
+	type GatewaySendPayload,
+} from 'seyfert/lib/types';
 import type { ShardManagerDefaults, ShardManagerOptions } from 'seyfert/lib/websocket';
 import { Worker } from 'node:worker_threads';
 import { watch } from 'chokidar';
@@ -16,6 +21,7 @@ export class Watcher extends ShardManager {
 		name: '[Watcher]',
 	});
 	rest?: ApiHandler;
+	private readyPacket?: GatewayReadyDispatch;
 
 	declare options: MakeRequired<WatcherOptions, 'token' | 'info' | keyof typeof ShardManagerDefaults>;
 
@@ -63,6 +69,14 @@ export class Watcher extends ShardManager {
 					break;
 			}
 		});
+
+		if (this.readyPacket) {
+			this.worker?.postMessage({
+				type: 'PAYLOAD',
+				shardId: 0,
+				payload: this.readyPacket,
+			} satisfies WatcherPayload);
+		}
 	}
 
 	/**
@@ -89,6 +103,12 @@ export class Watcher extends ShardManager {
 				shardId,
 				payload,
 			} satisfies WatcherPayload);
+
+			if (!this.readyPacket && payload.t === GatewayDispatchEvents.Ready) {
+				this.readyPacket = payload;
+				this.readyPacket.d.guilds = [];
+			}
+
 			return oldFn?.(shardId, payload);
 		};
 		this.connectQueue.concurrency = this.options.info.session_start_limit.max_concurrency;
@@ -108,8 +128,14 @@ export class Watcher extends ShardManager {
 	 * Builds the watcher.
 	 */
 	protected build() {
-		if (this.options.transpileCommand) execSync(`cd ${process.cwd()} && ${this.options.transpileCommand}`);
-		this.logger.info('Builded');
+		try {
+			if (this.options.transpileCommand) execSync(`cd ${process.cwd()} && ${this.options.transpileCommand}`);
+			this.logger.info('Builded');
+		} catch (e: any) {
+			this.logger.fatal('Build Error');
+			if (e.stdout?.length) this.logger.error(e.stdout.toString());
+			if (e.stderr?.length) this.logger.error(e.stderr.toString());
+		}
 	}
 }
 
