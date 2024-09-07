@@ -1,5 +1,5 @@
-import { BaseResource } from 'seyfert/lib/cache/resources/default/base';
-import { getMilliseconds } from './clock';
+import { BaseResource } from 'seyfert/lib/cache';
+import type { MakePartial } from 'seyfert/lib/common';
 
 export interface CooldownData {
 	remaining: number;
@@ -7,22 +7,20 @@ export interface CooldownData {
 	lastDrip: number;
 }
 
-export type CooldownDataInsert = Omit<CooldownData, 'lastDrip'>;
-
 export enum CooldownType {
 	User = 'user',
 	Guild = 'guild',
 	Channel = 'channel',
 }
 
-export class Cooldowns extends BaseResource<CooldownData> {
+export class CooldownResource extends BaseResource<CooldownData> {
 	namespace = 'cooldowns';
 
 	filter(_data: CooldownData, _id: string): boolean {
 		return true;
 	}
 
-	override set(id: string, data: CooldownDataInsert) {
-		return super.set(id, { ...data, lastDrip: getMilliseconds() });
+	override set(id: string, data: MakePartial<CooldownData, 'lastDrip'>) {
+		return super.set(id, { ...data, lastDrip: data.lastDrip ?? Date.now() });
 	}
 }

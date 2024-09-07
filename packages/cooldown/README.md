@@ -1,1 +1,3 @@
-A custom implementation of [limiter](https://github.com/jhurliman/node-rate-limiter) for cooldown in seyfert
+A custom implementation of cooldown in seyfert
+
+[Documentation](https://docs.seyfert.dev/)

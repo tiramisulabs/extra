@@ -1,12 +1,13 @@
-import type { UsingClient } from 'seyfert';
-import { type CooldownData, type CooldownDataInsert, Cooldowns, type CooldownType } from './resource';
-import { getMilliseconds } from './clock';
-import { fakePromise } from 'seyfert/lib/common';
+import type { ReturnCache } from 'seyfert/lib/cache';
+import { type CooldownData, CooldownResource, type CooldownType } from './resource';
+import type { BaseClient } from 'seyfert/lib/client/base';
+import { fakePromise, type MakePartial } from 'seyfert/lib/common';
 
 export class CooldownManager {
-	resource: Cooldowns;
-	constructor(readonly client: UsingClient) {
-		this.resource = new Cooldowns(client.cache, client);
+	resource: CooldownResource;
+	constructor(public readonly client: BaseClient) {
+		// free was here
+		this.resource = new CooldownResource(client.cache, client);
 	}
 
 	/**
@@ -14,7 +15,7 @@ export class CooldownManager {
 	 * @param name - The name of the command
 	 * @returns The cooldown data for the command
 	 */
-	getData(name: string): CooldownProps | undefined {
+	getCommandData(name: string): CooldownProps | undefined {
 		return this.client.commands?.values.find(x => x.name === name)?.cooldown;
 	}
 
@@ -24,33 +25,41 @@ export class CooldownManager {
 	 * @param target - The target of the cooldown
 	 * @returns Whether the user has a cooldown
 	 */
-	has(name: string, target: string) {
-		const data = this.getData(name);
+	has(name: string, target: string, tokens = 1): ReturnCache<boolean> {
+		const data = this.getCommandData(name);
 		if (!data) return false;
 
 		return fakePromise(this.resource.get(`${name}:${data.type}:${target}`)).then(cooldown => {
+			if (tokens > data.uses) return true;
 			if (!cooldown) {
 				return fakePromise(
-					this.set(name, target, { type: data.type, interval: data.interval, remaining: data.refill - data.tokens }),
+					this.set(name, target, { type: data.type, interval: data.interval, remaining: data.uses }),
 				).then(() => false);
 			}
 
-			const remaining = cooldown.remaining - data.tokens;
+			const remaining = Math.max(cooldown.remaining - tokens, 0);
 
-			return remaining <= 0;
+			return remaining === 0;
 		});
+	}
+
+	set(
+		name: string,
+		target: string,
+		{ type, ...data }: MakePartial<CooldownData, 'lastDrip'> & { type: `${CooldownType}` },
+	) {
+		return fakePromise(this.resource.set(`${name}:${type}:${target}`, data)).then(() => {});
 	}
 
 	/**
 	 * Use a cooldown
 	 * @param name - The name of the command
 	 * @param target - The target of the cooldown
-	 * @param tokens - The number of tokens to use
-	 * @returns The remaining cooldown
+	 * @returns The remaining cooldown in seconds or true if successful
 	 */
-	use(name: string, target: string, tokens?: number) {
-		const data = this.getData(name);
-		if (!data) return;
+	use(name: string, target: string): ReturnCache<number | true> {
+		const data = this.getCommandData(name);
+		if (!data) return true;
 
 		return fakePromise(this.resource.get(`${name}:${data.type}:${target}`)).then(cooldown => {
 			if (!cooldown) {
@@ -58,50 +67,15 @@ export class CooldownManager {
 					this.set(name, target, {
 						type: data.type,
 						interval: data.interval,
-						remaining: data.refill - (tokens ?? data.tokens),
+						remaining: data.uses - 1,
 					}),
 				).then(() => true);
 			}
 
 			return fakePromise(this.drip(name, target, data, cooldown)).then(drip => {
-				return drip.remaining < data.tokens;
+				return typeof drip === 'number' ? data.interval - drip : true;
 			});
 		});
-	}
-
-	/**
-	 * Refill the cooldown
-	 * @param name - The name of the command
-	 * @param target - The target of the cooldown
-	 * @returns Whether the cooldown was refilled
-	 */
-	refill(name: string, target: string, tokens?: number) {
-		const data = this.getData(name);
-		if (!data) return false;
-
-		const refill = tokens ?? data.refill;
-
-		return fakePromise(this.resource.get(`${name}:${data.type}:${target}`)).then(cooldown => {
-			if (!cooldown) {
-				return fakePromise(
-					this.set(name, target, { type: data.type, interval: data.interval, remaining: refill }),
-				).then(() => true);
-			}
-
-			return fakePromise(this.set(name, target, { type: data.type, interval: data.interval, remaining: refill })).then(
-				() => true,
-			);
-		});
-	}
-
-	/**
-	 * Set the cooldown data for a command
-	 * @param name - The name of the command
-	 * @param target - The target of the cooldown
-	 * @param data - The cooldown data to set
-	 */
-	set(name: string, target: string, data: CooldownDataInsert & { type: `${CooldownType}` }) {
-		return fakePromise(this.resource.set(`${name}:${data.type}:${target}`, data)).then(() => {});
 	}
 
 	/**
@@ -110,17 +84,42 @@ export class CooldownManager {
 	 * @param target - The target of the cooldown
 	 * @param props - The cooldown properties
 	 * @param data - The cooldown data
-	 * @returns The remaining cooldown
+	 * @returns The cooldown was processed
 	 */
-	drip(name: string, target: string, props: CooldownProps, data: CooldownData) {
-		const now = getMilliseconds();
-		const deltaMS = Math.max(now - data.lastDrip, 0);
-		data.lastDrip = now;
+	drip(name: string, target: string, props: CooldownProps, data: CooldownData): ReturnCache<boolean | number> {
+		const now = Date.now();
+		const deltaMS = now - data.lastDrip;
+		if (deltaMS >= props.interval) {
+			return fakePromise(
+				this.resource.patch(`${name}:${props.type}:${target}`, {
+					lastDrip: now,
+					remaining: props.uses - 1,
+				}),
+			).then(() => true);
+		}
 
-		const dripAmount = deltaMS * (props.refill / props.interval);
-		data.remaining = Math.min(data.remaining + dripAmount, props.refill);
-		const result = { type: props.type, interval: props.interval, remaining: data.remaining };
-		return fakePromise(this.set(name, target, result)).then(() => result);
+		if (data.remaining - 1 < 0) {
+			return deltaMS;
+		}
+
+		return fakePromise(this.resource.patch(`${name}:${props.type}:${target}`, { remaining: data.remaining - 1 })).then(
+			() => true,
+		);
+	}
+
+	/**
+	 * Refill the cooldown
+	 * @param name - The name of the command
+	 * @param target - The target of the cooldown
+	 * @returns Whether the cooldown was refilled
+	 */
+	refill(name: string, target: string) {
+		const data = this.getCommandData(name);
+		if (!data) return false;
+
+		return fakePromise(this.resource.patch(`${name}:${data.type}:${target}`, { remaining: data.uses })).then(
+			() => true,
+		);
 	}
 }
 
@@ -130,9 +129,7 @@ export interface CooldownProps {
 	/** interval in ms */
 	interval: number;
 	/** refill amount */
-	refill: number;
-	/** tokens to use */
-	tokens: number;
+	uses: number;
 	/** byPass users */
 	byPass?: string[];
 }
