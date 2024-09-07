@@ -34,8 +34,8 @@ importers:
   packages/cooldown:
     dependencies:
       seyfert:
-        specifier: ^2.0.0
-        version: 2.0.0
+        specifier: ^2.1.0
+        version: 2.1.0
     devDependencies:
       '@types/node':
         specifier: ^22.4.0
@@ -47,8 +47,8 @@ importers:
   packages/generic-adapter:
     dependencies:
       seyfert:
-        specifier: ^2.0.0
-        version: 2.0.0
+        specifier: ^2.1.0
+        version: 2.1.0
       tweetnacl:
         specifier: ^1.0.3
         version: 1.0.3
@@ -66,8 +66,8 @@ importers:
         specifier: ^0.1.0
         version: 0.1.0
       seyfert:
-        specifier: ^2.0.0
-        version: 2.0.0
+        specifier: ^2.1.0
+        version: 2.1.0
     devDependencies:
       '@types/node':
         specifier: ^22.3.0
@@ -79,8 +79,8 @@ importers:
   packages/uws-adapter:
     dependencies:
       seyfert:
-        specifier: ^2.0.0
-        version: 2.0.0
+        specifier: ^2.1.0
+        version: 2.1.0
       tweetnacl:
         specifier: ^1.0.3
         version: 1.0.3
@@ -101,8 +101,8 @@ importers:
         specifier: ^3.6.0
         version: 3.6.0
       seyfert:
-        specifier: ^2.0.0
-        version: 2.0.0
+        specifier: ^2.1.0
+        version: 2.1.0
       tweetnacl:
         specifier: ^1.0.3
         version: 1.0.3
@@ -335,8 +335,8 @@ packages:
     resolution: {integrity: sha512-DJnGAeenTdpMEH6uAJRK/uiyEIH9WVsUmoLwzudwGJUwZPp80PDBWPHXSAGNPwNvIXAbe7MSUB1zQFugFml66A==}
     engines: {node: '>=4'}
 
-  seyfert@2.0.0:
-    resolution: {integrity: sha512-cAMBhZWr+edrjDkTi2cS+hE74LuwIsML+zZOPOKVFQbXsnd8bbiM+/QHWyDfSjQ2PGWcRZEzCGt6IpsyL7quQQ==}
+  seyfert@2.1.0:
+    resolution: {integrity: sha512-L5AoUVACw1HDosUj0an9oA9ORICaGzU99mTs9yX2siT8SPe2LP3eoJ+MhRWrNULAV50qKKVzXMbiXyCzkY0jeA==}
 
   standard-as-callback@2.1.0:
     resolution: {integrity: sha512-qoRRSyROncaz1z0mvYqIE4lCd9p2R90i6GxW3uZv5ucSu8tU7B5HXUP1gG8pVZsYNVaXjk8ClXHPttLyxAL48A==}
@@ -570,7 +570,7 @@ snapshots:
     dependencies:
       redis-errors: 1.2.0
 
-  seyfert@2.0.0: {}
+  seyfert@2.1.0: {}
 
   standard-as-callback@2.1.0: {}
 

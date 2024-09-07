@@ -52,10 +52,12 @@ export class CooldownManager {
 	}
 
 	context(context: AnyContext) {
+		if (!('command' in context)) return true;
+
 		const cd = context.command.cooldown;
 		if (!cd) return true;
 
-		let target: string;
+		let target: string | undefined;
 		switch (cd.type) {
 			case 'user':
 				target = context.author.id;
@@ -66,9 +68,11 @@ export class CooldownManager {
 			case 'channel':
 				target = context.channelId;
 				break;
-			default:
-				target = context.author.id;
 		}
+
+		target ??= context.author.id;
+
+		if (!('name' in context.command)) return true;
 
 		return this.use(context.command.name, target);
 	}
@@ -164,6 +168,16 @@ declare module 'seyfert' {
 		cooldown?: CooldownProps;
 	}
 	interface ContextMenuCommand {
+		cooldown?: CooldownProps;
+	}
+
+	interface ComponentCommand {
+		cooldown?: CooldownProps;
+	}
+	interface ModalCommand {
+		cooldown?: CooldownProps;
+	}
+	interface EntryPointCommand {
 		cooldown?: CooldownProps;
 	}
 }
