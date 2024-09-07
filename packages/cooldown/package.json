@@ -3,7 +3,6 @@
 	"version": "0.0.1",
 	"private": false,
 	"license": "MIT",
-
 	"publishConfig": {
 		"access": "public"
 	},
@@ -18,13 +17,14 @@
 		"build": "tsc",
 		"lint": "biome lint --write ./src",
 		"format": "biome format --write ./src",
-		"test": "node --test ./test/*"
+		"turbo:build": "turbo build",
+		"test": "pnpm turbo:build && node --test ./test/*"
 	},
 	"devDependencies": {
 		"@types/node": "^22.4.0",
 		"typescript": "^5.5.4"
 	},
-	"peerDependencies": {
-		"seyfert": "^2.0.0"
+	"dependencies": {
+		"seyfert": "^2.1.0"
 	}
 }

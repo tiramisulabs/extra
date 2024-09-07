@@ -21,7 +21,7 @@
 	},
 	"dependencies": {
 		"iovalkey": "^0.1.0",
-		"seyfert": "^2.0.0"
+		"seyfert": "^2.1.0"
 	},
 	"devDependencies": {
 		"@types/node": "^22.3.0",

@@ -9,21 +9,22 @@ const { CooldownType } = require('../lib/resource.js');
 describe('CooldownManager', async () => {
   let client;
   let cooldownManager;
+  let cooldownData;
 
   beforeEach(() => {
-    client = new Client();
+    client = new Client({ getRC: () => ({ debug: true }) });
 
     const handler = new CommandHandler(new Logger({ active: true }), client);
+    cooldownData = {
+      type: CooldownType.User,
+      interval: 10000,
+      uses: 3
+    }
     handler.values = [
       // @ts-expect-error
       {
         name: 'testCommand',
-        cooldown: {
-          type: CooldownType.User,
-          interval: 1000,
-          refill: 3,
-          tokens: 1
-        }
+        cooldown: cooldownData
       }
     ]
 
@@ -32,21 +33,19 @@ describe('CooldownManager', async () => {
 
     client.cache = new Cache(0, new MemoryAdapter(), {}, client);
     cooldownManager = new CooldownManager(client);
-    client.cache.cooldown = cooldownManager.resource;
   });
 
-  await test('getData should return cooldown data for a command', () => {
-    const data = cooldownManager.getData('testCommand');
+  await test('Data should return cooldown data for a command', () => {
+    const data = cooldownManager.getCommandData('testCommand');
     assert.deepEqual(data, {
       type: CooldownType.User,
-      interval: 1000,
-      refill: 3,
-      tokens: 1
+      interval: 10000,
+      uses: 3
     });
   });
 
-  await test('getData should return undefined for non-existent command', () => {
-    const data = cooldownManager.getData('nonExistentCommand');
+  await test('Data should return undefined for non-existent command', () => {
+    const data = cooldownManager.getCommandData('nonExistentCommand');
     assert.equal(data, undefined);
   });
 
@@ -56,20 +55,24 @@ describe('CooldownManager', async () => {
   });
 
   await test('has should return true when cooldown is active', () => {
-    cooldownManager.use('testCommand', 'user1', 1000);
+    for (let i = 0; i < cooldownData.uses; i++) {
+      cooldownManager.use('testCommand', 'user1');
+    }
     const result = cooldownManager.has('testCommand', 'user1');
     assert.equal(result, true);
   });
 
   await test('use should set cooldown when used for the first time', () => {
-    const result = cooldownManager.use('testCommand', 'user1');
+    const result = cooldownManager.use('testCommand', 'user2');
     assert.equal(result, true);
   });
 
-  await test('use should return true when cooldown is active', () => {
-    cooldownManager.use('testCommand', 'user1');
-    const result = cooldownManager.use('testCommand', 'user1');
-    assert.equal(result, true);
+  await test('use should return time left when cooldown is active', () => {
+    for (let i = 0; i < cooldownData.uses; i++) {
+      cooldownManager.use('testCommand', 'user3');
+    }
+    const result = cooldownManager.use('testCommand', 'user3');
+    assert.ok(typeof result === 'number');
   });
 
   await test('refill should refill the cooldown', () => {
@@ -83,12 +86,13 @@ describe('CooldownManager', async () => {
     cooldownManager.use('testCommand', 'user1');
 
     // Simulate time passing
-    await new Promise(resolve => setTimeout(resolve, 1500)); // Half the interval
+    await new Promise(resolve => setTimeout(resolve, 10000));
 
     const data = cooldownManager.resource.get('testCommand:user:user1');
-    const props = cooldownManager.getData('testCommand');
-    const result = cooldownManager.drip('testCommand', 'user1', props, data);
-    assert.ok(result.remaining === 3);
+    const props = cooldownManager.getCommandData('testCommand');
+    await cooldownManager.drip('testCommand', 'user1', props, data);
+    const getter = cooldownManager.resource.get('testCommand:user:user1');
+    assert.ok(getter.remaining === 2);
   });
 });
 
