@@ -53,6 +53,7 @@ export class CooldownManager {
 
 	context(context: AnyContext) {
 		if (!('command' in context)) return true;
+		if (!('name' in context.command)) return true;
 
 		const cd = context.command.cooldown;
 		if (!cd) return true;
@@ -71,9 +72,6 @@ export class CooldownManager {
 		}
 
 		target ??= context.author.id;
-
-		if (!('name' in context.command)) return true;
-
 		return this.use(context.command.name, target);
 	}
 
@@ -156,8 +154,6 @@ export interface CooldownProps {
 	interval: number;
 	/** refill amount */
 	uses: number;
-	/** byPass users */
-	byPass?: string[];
 }
 
 declare module 'seyfert' {
