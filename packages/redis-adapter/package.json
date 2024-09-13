@@ -17,10 +17,12 @@
 		"build": "tsc",
 		"lint": "biome lint --write ./src",
 		"format": "biome format --write ./src",
-		"test": "node --test ./test/*"
+		"test": "node --test ./test/*",
+		"test:adapter": "node --test ./test/adapter.test.js",
+		"test:cache": "node --test ./test/cache.test.js"
 	},
 	"dependencies": {
-		"iovalkey": "^0.1.0",
+		"@redis/client": "^1.6.0",
 		"seyfert": "^2.1.0"
 	},
 	"devDependencies": {

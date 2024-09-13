@@ -1,6 +1,5 @@
-import type { RedisOptions } from 'iovalkey';
 import type { Adapter } from 'seyfert/lib/cache';
-import { Redis } from 'iovalkey';
+import { createClient, type RedisClientOptions } from '@redis/client';
 
 interface RedisAdapterOptions {
 	namespace?: string;
@@ -9,109 +8,109 @@ interface RedisAdapterOptions {
 export class RedisAdapter implements Adapter {
 	isAsync = true;
 
-	client: Redis;
+	client: ReturnType<typeof createClient>;
 	namespace: string;
 
-	constructor(data: ({ client: Redis } | { redisOptions: RedisOptions }) & RedisAdapterOptions) {
-		this.client = 'client' in data ? data.client : new Redis(data.redisOptions);
+	constructor(
+		data: ({ client: ReturnType<typeof createClient> } | { redisOptions: RedisClientOptions }) & RedisAdapterOptions,
+	) {
+		this.client = 'client' in data ? data.client : createClient(data.redisOptions);
 		this.namespace = data.namespace ?? 'seyfert';
 	}
 
 	async start() {
-		//should i do something here?
+		await this.client.connect();
 	}
 
-	private __scanSets(query: string, returnKeys?: false): Promise<any[]>;
-	private __scanSets(query: string, returnKeys: true): Promise<string[]>;
-	private __scanSets(query: string, returnKeys = false) {
+	private async __scanSets(query: string, returnKeys?: false): Promise<any[]>;
+	private async __scanSets(query: string, returnKeys: true): Promise<string[]>;
+	private async __scanSets(query: string, returnKeys = false) {
 		const match = this.buildKey(query);
-		return new Promise<string[] | any[]>((r, j) => {
-			const stream = this.client.scanStream({
-				match,
-				type: 'set',
-			});
-			const keys: string[] = [];
-			stream
-				.on('data', resultKeys => keys.push(...resultKeys))
-				.on('end', () => (returnKeys ? r(keys.map(x => this.buildKey(x))) : r(this.bulkGet(keys))))
-				.on('error', err => j(err));
-		});
+		const keys: any[] = [];
+
+		for await (const i of this.client.scanIterator({
+			MATCH: match,
+			TYPE: 'set',
+		})) {
+			keys.push(i);
+		}
+
+		return returnKeys ? keys.map(x => this.buildKey(x)) : this.bulkGet(keys);
 	}
 
-	scan(query: string, returnKeys?: false): Promise<any[]>;
-	scan(query: string, returnKeys: true): Promise<string[]>;
-	scan(query: string, returnKeys = false) {
+	async scan(query: string, returnKeys?: false): Promise<any[]>;
+	async scan(query: string, returnKeys: true): Promise<string[]>;
+	async scan(query: string, returnKeys = false) {
 		const match = this.buildKey(query);
-		return new Promise<string[] | any[]>((r, j) => {
-			const stream = this.client.scanStream({
-				match,
-				// omit relationships
-				type: 'hash',
-			});
-			const keys: string[] = [];
-			stream
-				.on('data', resultKeys => keys.push(...resultKeys))
-				.on('end', () => (returnKeys ? r(keys.map(x => this.buildKey(x))) : r(this.bulkGet(keys))))
-				.on('error', err => j(err));
-		});
+		const values = [];
+		for await (const i of this.client.scanIterator({
+			MATCH: match,
+			TYPE: 'hash',
+		})) {
+			values.push(i);
+		}
+
+		return returnKeys ? values : this.bulkGet(values);
 	}
 
 	async bulkGet(keys: string[]) {
-		const pipeline = this.client.pipeline();
+		const promises: Promise<any>[] = [];
 
 		for (const key of keys) {
-			pipeline.hgetall(this.buildKey(key));
+			promises.push(this.client.hGetAll(this.buildKey(key)));
 		}
 
 		return (
-			(await pipeline.exec())
-				?.filter(x => x[1])
-				.map(x => toNormal(x[1] as Record<string, any>))
+			(await Promise.all(promises))
+				?.filter(x => x)
+				.map(x => toNormal(x as Record<string, any>))
 				.filter(x => x) ?? []
 		);
 	}
 
 	async get(keys: string): Promise<any> {
-		const value = await this.client.hgetall(this.buildKey(keys));
+		const value = await this.client.hGetAll(this.buildKey(keys));
 		if (value) {
 			return toNormal(value);
 		}
 	}
 
 	async bulkSet(data: [string, any][]) {
-		const pipeline = this.client.pipeline();
+		const promises: Promise<any>[] = [];
 
 		for (const [k, v] of data) {
-			pipeline.hset(this.buildKey(k), toDb(v));
+			promises.push(this.client.hSet(this.buildKey(k), toDb(v)));
 		}
 
-		await pipeline.exec();
+		await Promise.all(promises);
 	}
 
 	async set(id: string, data: any) {
-		await this.client.hset(this.buildKey(id), toDb(data));
+		await this.client.hSet(this.buildKey(id), toDb(data));
 	}
 
 	async bulkPatch(updateOnly: boolean, data: [string, any][]) {
-		const pipeline = this.client.pipeline();
-
+		const promises: Promise<any>[] = [];
 		for (const [k, v] of data) {
 			if (updateOnly) {
-				pipeline.eval(
-					`if redis.call('exists',KEYS[1]) == 1 then redis.call('hset', KEYS[1], ${Array.from(
-						{ length: Object.keys(v).length * 2 },
-						(_, i) => `ARGV[${i + 1}]`,
-					)}) end`,
-					1,
-					this.buildKey(k),
-					...Object.entries(toDb(v)).flat(),
+				promises.push(
+					this.client.eval(
+						`if redis.call('exists',KEYS[1]) == 1 then redis.call('hset', KEYS[1], ${Array.from(
+							{ length: Object.keys(v).length * 2 },
+							(_, i) => `ARGV[${i + 1}]`,
+						)}) end`,
+						{
+							arguments: Object.entries(toDb(v)).flat(),
+							keys: [this.buildKey(k)],
+						},
+					),
 				);
 			} else {
-				pipeline.hset(this.buildKey(k), toDb(v));
+				promises.push(this.client.hSet(this.buildKey(k), toDb(v)));
 			}
 		}
 
-		await pipeline.exec();
+		await Promise.all(promises);
 	}
 
 	async patch(updateOnly: boolean, id: string, data: any): Promise<void> {
@@ -121,12 +120,13 @@ export class RedisAdapter implements Adapter {
 					{ length: Object.keys(data).length * 2 },
 					(_, i) => `ARGV[${i + 1}]`,
 				)}) end`,
-				1,
-				this.buildKey(id),
-				...Object.entries(toDb(data)).flat(),
+				{
+					keys: [this.buildKey(id)],
+					arguments: Object.entries(toDb(data)).flat(),
+				},
 			);
 		} else {
-			await this.client.hset(this.buildKey(id), toDb(data));
+			await this.client.hSet(this.buildKey(id), toDb(data));
 		}
 	}
 
@@ -151,12 +151,12 @@ export class RedisAdapter implements Adapter {
 	}
 
 	async count(to: string): Promise<number> {
-		return this.client.scard(`${this.buildKey(to)}:set`);
+		return this.client.sCard(`${this.buildKey(to)}:set`);
 	}
 
 	async bulkRemove(keys: string[]) {
 		if (!keys.length) return;
-		await this.client.del(...keys.map(x => this.buildKey(x)));
+		await this.client.del(keys.map(x => this.buildKey(x)));
 	}
 
 	async remove(keys: string): Promise<void> {
@@ -172,36 +172,34 @@ export class RedisAdapter implements Adapter {
 		await this.bulkRemove(keys);
 	}
 
-	async contains(to: string, keys: string): Promise<boolean> {
-		return (await this.client.sismember(`${this.buildKey(to)}:set`, keys)) === 1;
+	contains(to: string, keys: string): Promise<boolean> {
+		return this.client.sIsMember(`${this.buildKey(to)}:set`, keys);
 	}
 
-	async getToRelationship(to: string): Promise<string[]> {
-		return this.client.smembers(`${this.buildKey(to)}:set`);
+	getToRelationship(to: string): Promise<string[]> {
+		return this.client.sMembers(`${this.buildKey(to)}:set`);
 	}
 
 	async bulkAddToRelationShip(data: Record<string, string[]>): Promise<void> {
-		const pipeline = this.client.pipeline();
+		const promises: Promise<unknown>[] = [];
 
 		for (const [key, value] of Object.entries(data)) {
-			pipeline.sadd(`${this.buildKey(key)}:set`, ...value);
+			promises.push(this.client.sAdd(`${this.buildKey(key)}:set`, value));
 		}
 
-		await pipeline.exec();
+		await Promise.all(promises);
 	}
 
 	async addToRelationship(to: string, keys: string | string[]): Promise<void> {
-		await this.client.sadd(`${this.buildKey(to)}:set`, ...(Array.isArray(keys) ? keys : [keys]));
+		await this.client.sAdd(`${this.buildKey(to)}:set`, Array.isArray(keys) ? keys : [keys]);
 	}
 
 	async removeToRelationship(to: string, keys: string | string[]): Promise<void> {
-		await this.client.srem(`${this.buildKey(to)}:set`, ...(Array.isArray(keys) ? keys : [keys]));
+		await this.client.sRem(`${this.buildKey(to)}:set`, Array.isArray(keys) ? keys : [keys]);
 	}
 
 	async removeRelationship(to: string | string[]): Promise<void> {
-		await this.client.del(
-			...(Array.isArray(to) ? to.map(x => `${this.buildKey(x)}:set`) : [`${this.buildKey(to)}:set`]),
-		);
+		await this.client.del(Array.isArray(to) ? to.map(x => `${this.buildKey(x)}:set`) : [`${this.buildKey(to)}:set`]);
 	}
 
 	protected buildKey(key: string) {
@@ -223,7 +221,7 @@ function toNormal(target: Record<string, any>): undefined | Record<string, any> 
 		} else if (key.startsWith('N_')) {
 			result[key.slice(2)] = Number(value);
 		} else if (key.startsWith('B_')) {
-			result[key.slice(2)] = value === 'true';
+			result[key.slice(2)] = value === 't';
 		} else {
 			result[key] = value;
 		}
@@ -231,13 +229,13 @@ function toNormal(target: Record<string, any>): undefined | Record<string, any> 
 	return result;
 }
 
-function toDb(target: Record<string, any>): Record<string, any> | Record<string, any>[] {
+function toDb(target: Record<string, any> | Record<string, any>[]): Record<string, any> | { ARRAY_OF: string } {
 	if (Array.isArray(target)) return { ARRAY_OF: JSON.stringify(target.map(toDb)) };
 	const result: Record<string, any> = {};
 	for (const [key, value] of Object.entries(target)) {
 		switch (typeof value) {
 			case 'boolean':
-				result[`B_${key}`] = value;
+				result[`B_${key}`] = value ? 't' : 'f';
 				break;
 			case 'number':
 				result[`N_${key}`] = `${value}`;

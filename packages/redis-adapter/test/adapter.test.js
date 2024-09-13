@@ -6,37 +6,36 @@ describe('RedisAdapter', async () => {
 	const bulk = [['key1', { value: 'value1' }], ['key2', { value: 'value2' }]]
 
 	const adapter = new RedisAdapter({
-		redisOptions: {
-			host: 'localhost',
-			port: 6379,
-		},
-		namespace: 'test',
+		redisOptions: {},
+		namespace: 'custom_namespace',
 	});
 
-	before(async () => {
-		// Clean the Redis instance before each test
-		await adapter.flush();
+	await adapter.start();
 
+	before(async () => {
+		await adapter.flush();
+		// Clean the Redis instance before each test
 	});
 
 	await test('constructor', () => {
 		strict.strictEqual(adapter.isAsync, true);
-		strict.strictEqual(adapter.namespace, 'test');
+		strict.strictEqual(adapter.namespace, 'custom_namespace');
 	});
 
 	await test('get', async () => {
-		const result = await adapter.get('testKey');
+		const result = await adapter.get('test_key');
 		strict.deepStrictEqual(result, undefined);
 	});
 
 	await test('set', async () => {
 		await strict.doesNotReject(async () => {
-			await adapter.set('testKey', { value: 'testValue' });
+			await adapter.set('test_key', { value: 'testValue' });
 		});
 	});
 
 	await test('bulkSet', async () => {
 		await strict.doesNotReject(async () => {
+			//@ts-expect-error
 			await adapter.bulkSet(bulk);
 		});
 	});
@@ -50,7 +49,7 @@ describe('RedisAdapter', async () => {
 
 	await test('patch', async () => {
 		await strict.doesNotReject(async () => {
-			await adapter.patch(false, 'testKey', { newValue: 'updatedValue' });
+			await adapter.patch(false, 'test_key', { newValue: 'updatedValue' });
 		});
 	});
 
@@ -61,7 +60,7 @@ describe('RedisAdapter', async () => {
 	});
 
 	await test('scan', async () => {
-		const result = await adapter.scan('test*');
+		const result = await adapter.scan('*');
 		strict.strictEqual(result.length, 3);
 	});
 
