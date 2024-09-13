@@ -3,22 +3,17 @@
 	"ui": "tui",
 	"tasks": {
 		"build": {
-			"dependsOn": [
-				"^build"
-			],
-			"outputs": [
-				"lib/**"
-			]
+			"dependsOn": ["^build"],
+			"outputs": ["lib/**"]
 		},
 		"lint": {
-			"dependsOn": [
-				"^lint"
-			]
+			"dependsOn": ["^lint"]
 		},
 		"format": {
-			"dependsOn": [
-				"^format"
-			]
+			"dependsOn": ["^format"]
+		},
+		"test": {
+			"dependsOn": ["^test"]
 		},
 		"dev": {
 			"cache": false,

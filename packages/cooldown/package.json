@@ -17,8 +17,7 @@
 		"build": "tsc",
 		"lint": "biome lint --write ./src",
 		"format": "biome format --write ./src",
-		"turbo:build": "turbo build",
-		"test": "pnpm turbo:build && node --test ./test/*"
+		"test": "node --test ./test/*"
 	},
 	"devDependencies": {
 		"@types/node": "^22.4.0",
