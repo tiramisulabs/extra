@@ -6,7 +6,9 @@
 		"build": "turbo build",
 		"dev": "turbo dev",
 		"lint": "turbo lint",
-		"format": "turbo format"
+		"format": "turbo format",
+		"test": "turbo test",
+		"check": "turbo run lint format build test"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "1.8.3",

@@ -1,7 +1,6 @@
-const { describe, test, after, before } = require('node:test');
-const { Cache, Client } = require('seyfert');
+const { describe, test } = require('node:test');
+const { Client } = require('seyfert');
 const { RedisAdapter } = require('../lib/index');
-const { setTimeout } = require('node:timers/promises');
 const { doesNotThrow } = require('node:assert/strict');
 
 // all intents
@@ -33,13 +32,8 @@ describe('Test Adapter cache', async t => {
 				}
 			})
 			await client.cache.testAdapter();
+
+			await adapter.client.quit();
 		});
-		await setTimeout(2e3);
-	});
-
-
-	after(async () => {
-		await adapter.flush()
-		await adapter.client.quit();
 	});
 });

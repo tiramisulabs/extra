@@ -17,7 +17,7 @@ describe('CooldownManager', async () => {
     const handler = new CommandHandler(new Logger({ active: true }), client);
     cooldownData = {
       type: CooldownType.User,
-      interval: 10000,
+      interval: 1000,
       uses: 3
     }
     handler.values = [
@@ -39,7 +39,7 @@ describe('CooldownManager', async () => {
     const data = cooldownManager.getCommandData('testCommand');
     assert.deepEqual(data, {
       type: CooldownType.User,
-      interval: 10000,
+      interval: 1000,
       uses: 3
     });
   });
@@ -86,7 +86,7 @@ describe('CooldownManager', async () => {
     cooldownManager.use('testCommand', 'user1');
 
     // Simulate time passing
-    await new Promise(resolve => setTimeout(resolve, 10000));
+    await new Promise(resolve => setTimeout(resolve, 1000));
 
     const data = cooldownManager.resource.get('testCommand:user:user1');
     const props = cooldownManager.getCommandData('testCommand');

@@ -1,0 +1,59 @@
+name: Build, Lint, Format & Publish
+on:
+  push:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:latest
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: check out code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - run: corepack enable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # For some reason, in actions, run check can execute test before build
+      - name: Run formating
+        run: pnpm run format lint
+        id: biome
+      
+      - name: Building
+        run: pnpm run build
+        id: build
+      
+      - name: Testing
+        run: pnpm run test
+        id: test
+
+      - name: Commit and Push changes
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if ! git diff-index --quiet HEAD; then
+            git commit -m "chore: apply formatting"
+            git push origin HEAD:${{ github.ref }}
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HUSKY: 0
+
+      - name: Publish in pkg.pr.new
+        run: pnpx pkg-pr-new publish './packages/*'
+        if: github.repository == 'tiramisulabs/extra'
