@@ -12,23 +12,23 @@ importers:
         specifier: 1.9.1
         version: 1.9.1
       turbo:
-        specifier: ^2.0.13
+        specifier: ^2.1.2
         version: 2.1.2
 
   packages/chartjs:
     dependencies:
       '@napi-rs/canvas':
-        specifier: ^0.1.54
+        specifier: ^0.1.55
         version: 0.1.55
       chart.js:
         specifier: ^4.4.4
         version: 4.4.4
     devDependencies:
       '@types/node':
-        specifier: ^22.3.0
+        specifier: ^22.5.5
         version: 22.5.5
       typescript:
-        specifier: ^5.5.4
+        specifier: ^5.6.2
         version: 5.6.2
 
   packages/cooldown:
@@ -38,10 +38,10 @@ importers:
         version: 2.1.0
     devDependencies:
       '@types/node':
-        specifier: ^22.4.0
+        specifier: ^22.5.5
         version: 22.5.5
       typescript:
-        specifier: ^5.5.4
+        specifier: ^5.6.2
         version: 5.6.2
 
   packages/generic-adapter:
@@ -54,10 +54,10 @@ importers:
         version: 1.0.3
     devDependencies:
       '@types/node':
-        specifier: ^22.3.0
+        specifier: ^22.5.5
         version: 22.5.5
       typescript:
-        specifier: ^5.5.4
+        specifier: ^5.6.2
         version: 5.6.2
 
   packages/redis-adapter:
@@ -70,10 +70,10 @@ importers:
         version: 2.1.0
     devDependencies:
       '@types/node':
-        specifier: ^22.3.0
+        specifier: ^22.5.5
         version: 22.5.5
       typescript:
-        specifier: ^5.5.4
+        specifier: ^5.6.2
         version: 5.6.2
 
   packages/uws-adapter:
@@ -89,16 +89,16 @@ importers:
         version: https://codeload.github.com/uNetworking/uWebSockets.js/tar.gz/6f4b450fc642abba540535f0755c990b42a16026
     devDependencies:
       '@types/node':
-        specifier: ^22.3.0
+        specifier: ^22.5.5
         version: 22.5.5
       typescript:
-        specifier: ^5.5.4
+        specifier: ^5.6.2
         version: 5.6.2
 
   packages/watcher:
     dependencies:
       chokidar:
-        specifier: ^3.6.0
+        specifier: ^4.0.0
         version: 4.0.0
       seyfert:
         specifier: ^2.1.0
@@ -108,10 +108,10 @@ importers:
         version: 1.0.3
     devDependencies:
       '@types/node':
-        specifier: ^22.3.0
+        specifier: ^22.5.5
         version: 22.5.5
       typescript:
-        specifier: ^5.5.4
+        specifier: ^5.6.2
         version: 5.6.2
 
 packages:
@@ -306,8 +306,8 @@ packages:
     resolution: {tarball: https://codeload.github.com/uNetworking/uWebSockets.js/tar.gz/6f4b450fc642abba540535f0755c990b42a16026}
     version: 20.47.0
 
-  undici-types@6.19.6:
-    resolution: {integrity: sha512-e/vggGopEfTKSvj4ihnOLTsqhrKRN3LeO6qSN/GxohhuRv8qH9bNQ4B8W7e/vFL+0XTnmHPB4/kegunZGA4Org==}
+  undici-types@6.19.8:
+    resolution: {integrity: sha512-ve2KP6f/JnbPBFyobGHuerC9g1FYGn/F8n1LWTwNxCEzd6IfqTwUQcNXgEtmmQ6DlRrC1hrSrBnCZPokRrDHjw==}
 
   yallist@4.0.0:
     resolution: {integrity: sha512-3wdGidZyq5PB084XLES5TpOSRA3wjXAlIWMhum2kRcv/41Sn2emQ0dycQW4uZXLejwKvg6EsvbdlVL+FYEct7A==}
@@ -398,7 +398,7 @@ snapshots:
 
   '@types/node@22.5.5':
     dependencies:
-      undici-types: 6.19.6
+      undici-types: 6.19.8
 
   chart.js@4.4.4:
     dependencies:
@@ -449,6 +449,6 @@ snapshots:
 
   uWebSockets.js@https://codeload.github.com/uNetworking/uWebSockets.js/tar.gz/6f4b450fc642abba540535f0755c990b42a16026: {}
 
-  undici-types@6.19.6: {}
+  undici-types@6.19.8: {}
 
   yallist@4.0.0: {}

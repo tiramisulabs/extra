@@ -117,7 +117,7 @@ export class Watcher extends ShardManager {
 
 		await super.spawnShards();
 
-		const watcher = watch(this.options.srcPath).on('ready', () => {
+		const watcher = watch(this.options.srcPath, {}).on('ready', () => {
 			this.logger.debug(`Watching ${this.options.srcPath}`);
 			watcher.on('all', event => {
 				this.logger.debug(`${event} event detected, building`);
