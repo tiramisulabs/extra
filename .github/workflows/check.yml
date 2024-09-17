@@ -30,13 +30,17 @@ jobs:
 
       # For some reason, in actions, run check can execute test before build
       - name: Run formating
-        run: pnpm run format lint
+        run: pnpm run format
         id: biome
-      
+
+      - name: Run linter
+        run: pnpm run lint
+        id: biome
+
       - name: Building
         run: pnpm run build
         id: build
-      
+
       - name: Testing
         run: pnpm run test
         id: test
