@@ -1,7 +1,7 @@
+import { type RedisClientOptions, createClient } from '@redis/client';
 import type { Adapter } from 'seyfert/lib/cache';
-import { createClient, type RedisClientOptions } from '@redis/client';
 
-interface RedisAdapterOptions {
+export interface RedisAdapterOptions {
 	namespace?: string;
 }
 
@@ -22,9 +22,9 @@ export class RedisAdapter implements Adapter {
 		await this.client.connect();
 	}
 
-	private async __scanSets(query: string, returnKeys?: false): Promise<any[]>;
-	private async __scanSets(query: string, returnKeys: true): Promise<string[]>;
-	private async __scanSets(query: string, returnKeys = false) {
+	async __scanSets(query: string, returnKeys?: false): Promise<any[]>;
+	async __scanSets(query: string, returnKeys: true): Promise<string[]>;
+	async __scanSets(query: string, returnKeys = false) {
 		const match = this.buildKey(query);
 		const keys: any[] = [];
 
@@ -42,7 +42,7 @@ export class RedisAdapter implements Adapter {
 	async scan(query: string, returnKeys: true): Promise<string[]>;
 	async scan(query: string, returnKeys = false) {
 		const match = this.buildKey(query);
-		const values = [];
+		const values: string[] = [];
 		for await (const i of this.client.scanIterator({
 			MATCH: match,
 			TYPE: 'hash',
@@ -55,7 +55,6 @@ export class RedisAdapter implements Adapter {
 
 	async bulkGet(keys: string[]) {
 		const promises: Promise<any>[] = [];
-
 		for (const key of keys) {
 			promises.push(this.client.hGetAll(this.buildKey(key)));
 		}
@@ -91,23 +90,9 @@ export class RedisAdapter implements Adapter {
 
 	async bulkPatch(updateOnly: boolean, data: [string, any][]) {
 		const promises: Promise<any>[] = [];
+
 		for (const [k, v] of data) {
-			if (updateOnly) {
-				promises.push(
-					this.client.eval(
-						`if redis.call('exists',KEYS[1]) == 1 then redis.call('hset', KEYS[1], ${Array.from(
-							{ length: Object.keys(v).length * 2 },
-							(_, i) => `ARGV[${i + 1}]`,
-						)}) end`,
-						{
-							arguments: Object.entries(toDb(v)).flat(),
-							keys: [this.buildKey(k)],
-						},
-					),
-				);
-			} else {
-				promises.push(this.client.hSet(this.buildKey(k), toDb(v)));
-			}
+			promises.push(this.patch(updateOnly, k, v));
 		}
 
 		await Promise.all(promises);
@@ -207,11 +192,11 @@ export class RedisAdapter implements Adapter {
 	}
 }
 
-const isObject = (o: unknown) => {
+export const isObject = (o: unknown) => {
 	return !!o && typeof o === 'object' && !Array.isArray(o);
 };
 
-function toNormal(target: Record<string, any>): undefined | Record<string, any> | Record<string, any>[] {
+export function toNormal(target: Record<string, any>): undefined | Record<string, any> | Record<string, any>[] {
 	if (typeof target.ARRAY_OF === 'string') return JSON.parse(target.ARRAY_OF as string).map(toNormal);
 	if (!Object.keys(target).length) return undefined;
 	const result: Record<string, any> = {};
@@ -229,7 +214,7 @@ function toNormal(target: Record<string, any>): undefined | Record<string, any> 
 	return result;
 }
 
-function toDb(target: Record<string, any> | Record<string, any>[]): Record<string, any> | { ARRAY_OF: string } {
+export function toDb(target: Record<string, any> | Record<string, any>[]): Record<string, any> | { ARRAY_OF: string } {
 	if (Array.isArray(target)) return { ARRAY_OF: JSON.stringify(target.map(toDb)) };
 	const result: Record<string, any> = {};
 	for (const [key, value] of Object.entries(target)) {
@@ -240,7 +225,7 @@ function toDb(target: Record<string, any> | Record<string, any>[]): Record<strin
 			case 'number':
 				result[`N_${key}`] = `${value}`;
 				break;
-			case 'object':
+			case 'object': {
 				if (Array.isArray(value)) {
 					result[`O_${key}`] = JSON.stringify(value);
 					break;
@@ -255,6 +240,7 @@ function toDb(target: Record<string, any> | Record<string, any>[]): Record<strin
 				}
 				result[`O_${key}`] = JSON.stringify(value);
 				break;
+			}
 			default:
 				result[key] = value;
 				break;

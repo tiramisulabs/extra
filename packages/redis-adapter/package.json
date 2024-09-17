@@ -18,8 +18,11 @@
 		"lint": "biome lint --write ./src",
 		"format": "biome format --write ./src",
 		"test": "node --test ./test/*",
+		"checkb": "biome check --write --no-errors-on-unmatched ./src",
 		"test:adapter": "node --test ./test/adapter.test.js",
-		"test:cache": "node --test ./test/cache.test.js"
+		"test:cache": "node --test ./test/cache.test.js",
+		"test:expirableadapter": "node --test ./test/expirableadapter.test.js",
+		"test:expirablecache": "node --test ./test/expirablecache.test.js"
 	},
 	"dependencies": {
 		"@redis/client": "^1.6.0",

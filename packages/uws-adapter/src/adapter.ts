@@ -1,7 +1,7 @@
 import type { HttpClient, Logger } from 'seyfert';
 import type { InternalRuntimeConfigHTTP } from 'seyfert/lib/client/base';
-import { type APIInteraction, InteractionResponseType, InteractionType } from 'seyfert/lib/types';
 import type { HttpServerAdapter } from 'seyfert/lib/client/types';
+import { type APIInteraction, InteractionResponseType, InteractionType } from 'seyfert/lib/types';
 
 import nacl from 'tweetnacl';
 import { App, type HttpRequest, type HttpResponse, type TemplatedApp } from 'uWebSockets.js';
@@ -70,10 +70,11 @@ export class UwsAdapter implements HttpServerAdapter {
 			return;
 		}
 		switch (rawBody.type) {
-			case InteractionType.Ping:
+			case InteractionType.Ping: {
 				this.debugger?.debug('Ping interaction received, responding.');
 				res.writeHeader('Content-Type', 'application/json').end(JSON.stringify({ type: InteractionResponseType.Pong }));
 				break;
+			}
 			default:
 				res.cork(async () => {
 					const { headers, response } = await this.client.onPacket(rawBody);
@@ -82,7 +83,7 @@ export class UwsAdapter implements HttpServerAdapter {
 					}
 					res.end(JSON.stringify(response));
 				});
-				return;
+				break;
 		}
 	}
 

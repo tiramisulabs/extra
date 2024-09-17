@@ -1,17 +1,19 @@
 {
 	"name": "seyfert",
 	"private": true,
-	"workspaces": ["packages/*"],
+	"workspaces": [
+		"packages/*"
+	],
 	"scripts": {
 		"build": "turbo build",
 		"dev": "turbo dev",
 		"lint": "turbo lint",
 		"format": "turbo format",
 		"test": "turbo test",
-		"check": "turbo run lint format build test"
+		"check": "turbo run --concurrency 32 lint format build test checkb"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "1.8.3",
+		"@biomejs/biome": "1.9.1",
 		"turbo": "^2.0.13"
 	},
 	"packageManager": "pnpm@9.7.0",

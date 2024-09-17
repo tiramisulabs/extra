@@ -1,4 +1,4 @@
-import type { Chart as ChartJS, ChartComponentLike } from 'chart.js';
+import type { ChartComponentLike, Chart as ChartJS } from 'chart.js';
 
 export type ChartCallback = (chartJS: typeof ChartJS) => void | Promise<void>;
 
@@ -38,13 +38,13 @@ export type ChartJSNapiRSCanvasPlugins = {
 	/**
 	 * This will work for plugins that `require` ChartJS themselves.
 	 */
-	readonly requireChartJSLegacy?: ReadonlyArray<string>;
+	readonly requireChartJSLegacy?: readonly string[];
 	/**
 	 * This should work for any plugin that expects a global Chart variable.
 	 */
-	readonly globalVariableLegacy?: ReadonlyArray<string>;
+	readonly globalVariableLegacy?: readonly string[];
 	/**
 	 * This will work with plugins that just return a plugin object and do no specific loading themselves.
 	 */
-	readonly requireLegacy?: ReadonlyArray<string>;
+	readonly requireLegacy?: readonly string[];
 };

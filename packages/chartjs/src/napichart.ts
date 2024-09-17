@@ -1,7 +1,7 @@
-import type { ChartConfiguration, Chart as ChartJS } from 'chart.js/auto';
 import { type Canvas, createCanvas } from '@napi-rs/canvas';
-import { freshRequire } from './freshRequire';
+import type { ChartConfiguration, Chart as ChartJS } from 'chart.js/auto';
 import { BackgroundColourPlugin } from './backgroundcolorplugin';
+import { freshRequire } from './freshRequire';
 import type { ChartJSNapiRSCanvasOptions } from './options';
 
 export class NapiChartjsCanvas {

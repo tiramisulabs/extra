@@ -6,16 +6,23 @@
 			"dependsOn": ["^build"],
 			"outputs": ["lib/**"]
 		},
-		"lint": {
-			"dependsOn": ["^lint"]
-		},
-		"format": {
-			"dependsOn": ["^format"]
-		},
 		"test": {
-			"dependsOn": ["^test"]
+			"cache": false,
+			"persistent": true
 		},
 		"dev": {
+			"cache": false,
+			"persistent": true
+		},
+		"lint": {
+			"cache": false,
+			"persistent": true
+		},
+		"format": {
+			"cache": false,
+			"persistent": true
+		},
+		"checkb": {
 			"cache": false,
 			"persistent": true
 		}

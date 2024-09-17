@@ -1,8 +1,8 @@
-import type { ReturnCache } from 'seyfert/lib/cache';
-import { type CooldownData, CooldownResource, type CooldownType } from './resource';
-import type { BaseClient } from 'seyfert/lib/client/base';
-import { fakePromise, type MakePartial } from 'seyfert/lib/common';
 import type { AnyContext } from 'seyfert';
+import type { ReturnCache } from 'seyfert/lib/cache';
+import type { BaseClient } from 'seyfert/lib/client/base';
+import { type MakePartial, fakePromise } from 'seyfert/lib/common';
+import { type CooldownData, CooldownResource, type CooldownType } from './resource';
 
 export class CooldownManager {
 	resource: CooldownResource;
@@ -48,7 +48,7 @@ export class CooldownManager {
 		target: string,
 		{ type, ...data }: MakePartial<CooldownData, 'lastDrip'> & { type: `${CooldownType}` },
 	) {
-		return fakePromise(this.resource.set(`${name}:${type}:${target}`, data)).then(() => {});
+		return this.resource.set(`${name}:${type}:${target}`, data);
 	}
 
 	context(context: AnyContext) {

@@ -1,4 +1,4 @@
-import type { Plugin as ChartJSPlugin, Chart as ChartJS } from 'chart.js';
+import type { Chart as ChartJS, Plugin as ChartJSPlugin } from 'chart.js';
 
 export class BackgroundColourPlugin implements ChartJSPlugin {
 	public readonly id: string = 'chartjs-plugin-chartjs-napirs-canvas-background-colour';

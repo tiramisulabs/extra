@@ -1,15 +1,22 @@
 const { describe, test } = require('node:test');
 const { Client } = require('seyfert');
-const { RedisAdapter } = require('../lib/index');
+const { ExpirableRedisAdapter } = require('../lib/index');
 
 // all intents
 const intents = 53608447;
 
 describe('Test Adapter cache', async t => {
-	const adapter = new RedisAdapter({
-		redisOptions: {},
-		namespace: 'test_cache',
-	});
+	const adapter = new ExpirableRedisAdapter(
+		{
+			redisOptions: {},
+			namespace: 'ex_test_cache',
+		},
+		{
+			default: {
+				expire: 2,
+			},
+		},
+	);
 
 	await adapter.start();
 

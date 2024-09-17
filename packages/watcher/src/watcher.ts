@@ -1,16 +1,16 @@
 import { execSync } from 'node:child_process';
-import { ShardManager, Logger, ApiHandler, Router } from 'seyfert';
+import { Worker } from 'node:worker_threads';
+import { watch } from 'chokidar';
+import { ApiHandler, Logger, Router, ShardManager } from 'seyfert';
 import { BaseClient, type InternalRuntimeConfig } from 'seyfert/lib/client/base';
-import type { MakeRequired, MakePartial } from 'seyfert/lib/common';
+import type { MakePartial, MakeRequired } from 'seyfert/lib/common';
 import {
 	GatewayDispatchEvents,
-	type GatewayReadyDispatch,
 	type GatewayDispatchPayload,
+	type GatewayReadyDispatch,
 	type GatewaySendPayload,
 } from 'seyfert/lib/types';
 import type { ShardManagerDefaults, ShardManagerOptions } from 'seyfert/lib/websocket';
-import { Worker } from 'node:worker_threads';
-import { watch } from 'chokidar';
 
 /**
  * Represents a watcher class that extends the ShardManager.
@@ -31,7 +31,9 @@ export class Watcher extends ShardManager {
 	 */
 	constructor(options: WatcherOptions) {
 		super({
-			handlePayload() {},
+			handlePayload() {
+				//
+			},
 			token: '',
 			intents: 0,
 			info: {

@@ -1,16 +1,16 @@
 const { strict } = require('node:assert/strict');
 const { test, describe, after, before } = require('node:test');
-const { RedisAdapter } = require('../lib/index');
+const { ExpirableRedisAdapter } = require('../lib/index');
 
-describe('RedisAdapter', async () => {
+describe('ExpirableRedisAdapter', async () => {
 	const bulk = [
 		['key1', { value: 'value1' }],
 		['key2', { value: 'value2' }],
 	];
 
-	const adapter = new RedisAdapter({
+	const adapter = new ExpirableRedisAdapter({
 		redisOptions: {},
-		namespace: 'custom_namespace',
+		namespace: 'ex_custom_namespace',
 	});
 
 	await adapter.start();
@@ -22,7 +22,7 @@ describe('RedisAdapter', async () => {
 
 	await test('constructor', () => {
 		strict.strictEqual(adapter.isAsync, true);
-		strict.strictEqual(adapter.namespace, 'custom_namespace');
+		strict.strictEqual(adapter.namespace, 'ex_custom_namespace');
 	});
 
 	await test('get', async () => {

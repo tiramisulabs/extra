@@ -1,10 +1,10 @@
 import type { HttpClient, Logger } from 'seyfert';
 import type { InternalRuntimeConfigHTTP } from 'seyfert/lib/client/base';
-import { type APIInteraction, InteractionResponseType, InteractionType } from 'seyfert/lib/types';
 import type { HttpServerAdapter } from 'seyfert/lib/client/types';
+import { type APIInteraction, InteractionResponseType, InteractionType } from 'seyfert/lib/types';
 
-import nacl from 'tweetnacl';
 import { isCloudfareWorker } from 'seyfert/lib/common';
+import nacl from 'tweetnacl';
 
 export class GenericAdapter implements HttpServerAdapter {
 	publicKeyHex!: Buffer;
@@ -55,7 +55,7 @@ export class GenericAdapter implements HttpServerAdapter {
 			return new Response('', { status: 418 });
 		}
 		switch (rawBody.type) {
-			case InteractionType.Ping:
+			case InteractionType.Ping: {
 				this.debugger?.debug('Ping interaction received, responding.');
 				return Response.json(
 					{ type: InteractionResponseType.Pong },
@@ -65,7 +65,8 @@ export class GenericAdapter implements HttpServerAdapter {
 						},
 					},
 				);
-			default:
+			}
+			default: {
 				if (isCloudfareWorker()) {
 					// you can not do more net requests after responding.
 					// so we use discord api instead
@@ -84,6 +85,7 @@ export class GenericAdapter implements HttpServerAdapter {
 								}),
 					);
 				});
+			}
 		}
 	}
 }
