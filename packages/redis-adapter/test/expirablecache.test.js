@@ -13,7 +13,7 @@ describe('Test Adapter cache', async t => {
 		},
 		{
 			default: {
-				expire: 2,
+				expire: 2e3,
 			},
 		},
 	);

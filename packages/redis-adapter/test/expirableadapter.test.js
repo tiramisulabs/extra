@@ -8,10 +8,17 @@ describe('ExpirableRedisAdapter', async () => {
 		['key2', { value: 'value2' }],
 	];
 
-	const adapter = new ExpirableRedisAdapter({
-		redisOptions: {},
-		namespace: 'ex_custom_namespace',
-	});
+	const adapter = new ExpirableRedisAdapter(
+		{
+			redisOptions: {},
+			namespace: 'ex_custom_namespace',
+		},
+		{
+			default: {
+				expire: 2e3,
+			},
+		},
+	);
 
 	await adapter.start();
 

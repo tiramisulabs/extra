@@ -73,7 +73,7 @@ export class ExpirableRedisAdapter extends RedisAdapter {
 			const cacheType = key.split('.')[0] as keyof ExpirableRedisAdapterOptions;
 			const expire = this.options[cacheType]?.expire ?? this.options.default.expire!;
 			if (expire > 0) {
-				promises.push(this.client.set(`${this.buildKey(key)}.uset.${value}`, 's', { EX: expire }));
+				promises.push(this.client.set(`${this.buildKey(key)}.uset.${value}`, 's', { PX: expire }));
 			} else {
 				promises.push(this.client.set(`${this.buildKey(key)}.uset.${value}`, 's'));
 			}
@@ -138,7 +138,7 @@ export class ExpirableRedisAdapter extends RedisAdapter {
 
 		const expire = this.options[cacheType]?.expire ?? this.options.default.expire!;
 		if (expire > 0) {
-			promises.push(this.client.expire(this.buildKey(id), expire));
+			promises.push(this.client.pExpire(this.buildKey(id), expire));
 		}
 
 		await Promise.all(promises);
@@ -167,7 +167,7 @@ export class ExpirableRedisAdapter extends RedisAdapter {
 		const cacheType = id.split('.')[0] as keyof ExpirableRedisAdapterOptions;
 		const expire = this.options[cacheType]?.expire ?? this.options.default.expire!;
 		if (expire > 0) {
-			promises.push(this.client.expire(this.buildKey(id), expire));
+			promises.push(this.client.pExpire(this.buildKey(id), expire));
 		}
 
 		await Promise.all(promises);
