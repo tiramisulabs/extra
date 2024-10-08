@@ -3,8 +3,7 @@
 		"module": "CommonJS",
 		"target": "ESNext",
 		"lib": [
-			"ESNext",
-			"WebWorker"
+			"ESNext"
 		],
 		"moduleResolution": "node",
 		"declaration": true,
