@@ -25,15 +25,15 @@ export class CooldownManager {
 	 * @param target - The target of the cooldown
 	 * @returns Whether the user has a cooldown
 	 */
-	has(name: string, target: string, tokens = 1): ReturnCache<boolean> {
+	has(name: string, target: string, use: keyof UsesProps = 'default', tokens = 1): ReturnCache<boolean> {
 		const data = this.getCommandData(name);
 		if (!data) return false;
 
 		return fakePromise(this.resource.get(`${name}:${data.type}:${target}`)).then(cooldown => {
-			if (tokens > data.uses) return true;
+			if (tokens > data.uses[use]) return true;
 			if (!cooldown) {
 				return fakePromise(
-					this.set(name, target, { type: data.type, interval: data.interval, remaining: data.uses }),
+					this.set(name, target, { type: data.type, interval: data.interval, remaining: data.uses[use] }),
 				).then(() => false);
 			}
 
@@ -81,7 +81,7 @@ export class CooldownManager {
 	 * @param target - The target of the cooldown
 	 * @returns The remaining cooldown in seconds or true if successful
 	 */
-	use(name: string, target: string): ReturnCache<number | true> {
+	use(name: string, target: string, use: keyof UsesProps = 'default'): ReturnCache<number | true> {
 		const data = this.getCommandData(name);
 		if (!data) return true;
 
@@ -91,12 +91,12 @@ export class CooldownManager {
 					this.set(name, target, {
 						type: data.type,
 						interval: data.interval,
-						remaining: data.uses - 1,
+						remaining: data.uses[use] - 1,
 					}),
 				).then(() => true);
 			}
 
-			return fakePromise(this.drip(name, target, data, cooldown)).then(drip => {
+			return fakePromise(this.drip(name, target, data, cooldown, use)).then(drip => {
 				return typeof drip === 'number' ? data.interval - drip : true;
 			});
 		});
@@ -110,14 +110,20 @@ export class CooldownManager {
 	 * @param data - The cooldown data
 	 * @returns The cooldown was processed
 	 */
-	drip(name: string, target: string, props: CooldownProps, data: CooldownData): ReturnCache<boolean | number> {
+	drip(
+		name: string,
+		target: string,
+		props: CooldownProps,
+		data: CooldownData,
+		use: keyof UsesProps,
+	): ReturnCache<boolean | number> {
 		const now = Date.now();
 		const deltaMS = now - data.lastDrip;
 		if (deltaMS >= props.interval) {
 			return fakePromise(
 				this.resource.patch(`${name}:${props.type}:${target}`, {
 					lastDrip: now,
-					remaining: props.uses - 1,
+					remaining: props.uses[use] - 1,
 				}),
 			).then(() => true);
 		}
@@ -137,11 +143,11 @@ export class CooldownManager {
 	 * @param target - The target of the cooldown
 	 * @returns Whether the cooldown was refilled
 	 */
-	refill(name: string, target: string) {
+	refill(name: string, target: string, use: keyof UsesProps = 'default') {
 		const data = this.getCommandData(name);
 		if (!data) return false;
 
-		return fakePromise(this.resource.patch(`${name}:${data.type}:${target}`, { remaining: data.uses })).then(
+		return fakePromise(this.resource.patch(`${name}:${data.type}:${target}`, { remaining: data.uses[use] })).then(
 			() => true,
 		);
 	}
@@ -153,7 +159,11 @@ export interface CooldownProps {
 	/** interval in ms */
 	interval: number;
 	/** refill amount */
-	uses: number;
+	uses: UsesProps;
+}
+
+export interface UsesProps {
+	default: number;
 }
 
 declare module 'seyfert' {
