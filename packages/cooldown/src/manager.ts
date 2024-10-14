@@ -51,7 +51,7 @@ export class CooldownManager {
 		return this.resource.set(`${name}:${type}:${target}`, data);
 	}
 
-	context(context: AnyContext) {
+	context(context: AnyContext, use?: keyof UsesProps) {
 		if (!('command' in context)) return true;
 		if (!('name' in context.command)) return true;
 
@@ -72,7 +72,7 @@ export class CooldownManager {
 		}
 
 		target ??= context.author.id;
-		return this.use(context.command.name, target);
+		return this.use(context.command.name, target, use);
 	}
 
 	/**
