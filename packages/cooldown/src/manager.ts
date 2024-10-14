@@ -115,7 +115,7 @@ export class CooldownManager {
 		target: string,
 		props: CooldownProps,
 		data: CooldownData,
-		use: keyof UsesProps,
+		use: keyof UsesProps = 'default',
 	): ReturnCache<boolean | number> {
 		const now = Date.now();
 		const deltaMS = now - data.lastDrip;

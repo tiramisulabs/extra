@@ -27,7 +27,9 @@ describe('CooldownManager', async () => {
 		cooldownData = {
 			type: CooldownType.User,
 			interval: 1000,
-			uses: 3,
+			uses: {
+				default: 3
+			},
 		};
 		handler.values = [
 			// @ts-expect-error
@@ -48,7 +50,9 @@ describe('CooldownManager', async () => {
 		assert.deepEqual(data, {
 			type: CooldownType.User,
 			interval: 1000,
-			uses: 3,
+			uses: {
+				default: 3
+			}
 		});
 	});
 
@@ -63,7 +67,7 @@ describe('CooldownManager', async () => {
 	});
 
 	await test('has should return true when cooldown is active', () => {
-		for (let i = 0; i < cooldownData.uses; i++) {
+		for (let i = 0; i < cooldownData.uses.default; i++) {
 			cooldownManager.use('testCommand', 'user1');
 		}
 		const result = cooldownManager.has('testCommand', 'user1');
@@ -76,7 +80,7 @@ describe('CooldownManager', async () => {
 	});
 
 	await test('use should return time left when cooldown is active', () => {
-		for (let i = 0; i < cooldownData.uses; i++) {
+		for (let i = 0; i < cooldownData.uses.default; i++) {
 			cooldownManager.use('testCommand', 'user3');
 		}
 		const result = cooldownManager.use('testCommand', 'user3');
