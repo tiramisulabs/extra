@@ -15,13 +15,17 @@ export class CooldownManager {
 	 * @param name - The name of the command
 	 * @returns The cooldown data for the command
 	 */
-	getCommandData(name: string): CooldownProps | undefined {
+	getCommandData(name: string): [name: string, data: CooldownProps | undefined] | undefined {
 		if (!this.client.commands?.values?.length) return;
 		for (const command of this.client.commands.values) {
 			if (!('cooldown' in command)) continue;
-			if (command.name === name) return command.cooldown;
-			if ('options' in command)
-				return command.options?.find((x): x is SubCommand => 'cooldown' in x && x.name === name)?.cooldown;
+			if (command.name === name) return [command.name, command.cooldown];
+			if ('options' in command) {
+				const option = command.options?.find((x): x is SubCommand => x.name === name);
+				if (option) {
+					return [option.name, option.cooldown ?? command.cooldown];
+				}
+			}
 		}
 		return undefined;
 	}
@@ -33,14 +37,14 @@ export class CooldownManager {
 	 * @returns Whether the user has a cooldown
 	 */
 	has(name: string, target: string, tokens = 1): ReturnCache<boolean> {
-		const data = this.getCommandData(name);
-		if (!data) return false;
+		const [resolve, data] = this.getCommandData(name) ?? [];
+		if (!(data && resolve)) return false;
 
-		return fakePromise(this.resource.get(`${name}:${data.type}:${target}`)).then(cooldown => {
+		return fakePromise(this.resource.get(`${resolve}:${data.type}:${target}`)).then(cooldown => {
 			if (tokens > data.uses) return true;
 			if (!cooldown) {
 				return fakePromise(
-					this.set(name, target, { type: data.type, interval: data.interval, remaining: data.uses }),
+					this.set(resolve, target, { type: data.type, interval: data.interval, remaining: data.uses }),
 				).then(() => false);
 			}
 
@@ -89,13 +93,13 @@ export class CooldownManager {
 	 * @returns The remaining cooldown in seconds or true if successful
 	 */
 	use(name: string, target: string): ReturnCache<number | true> {
-		const data = this.getCommandData(name);
-		if (!data) return true;
+		const [resolve, data] = this.getCommandData(name) ?? [];
+		if (!(data && resolve)) return true;
 
-		return fakePromise(this.resource.get(`${name}:${data.type}:${target}`)).then(cooldown => {
+		return fakePromise(this.resource.get(`${resolve}:${data.type}:${target}`)).then(cooldown => {
 			if (!cooldown) {
 				return fakePromise(
-					this.set(name, target, {
+					this.set(resolve, target, {
 						type: data.type,
 						interval: data.interval,
 						remaining: data.uses - 1,
@@ -103,7 +107,7 @@ export class CooldownManager {
 				).then(() => true);
 			}
 
-			return fakePromise(this.drip(name, target, data, cooldown)).then(drip => {
+			return fakePromise(this.drip(resolve, target, data, cooldown)).then(drip => {
 				return typeof drip === 'number' ? data.interval - drip : true;
 			});
 		});
@@ -145,10 +149,10 @@ export class CooldownManager {
 	 * @returns Whether the cooldown was refilled
 	 */
 	refill(name: string, target: string) {
-		const data = this.getCommandData(name);
-		if (!data) return false;
+		const [resolve, data] = this.getCommandData(name) ?? [];
+		if (!(data && resolve)) return false;
 
-		return fakePromise(this.resource.patch(`${name}:${data.type}:${target}`, { remaining: data.uses })).then(
+		return fakePromise(this.resource.patch(`${resolve}:${data.type}:${target}`, { remaining: data.uses })).then(
 			() => true,
 		);
 	}

@@ -39,6 +39,11 @@ describe('CooldownManager', async () => {
 						description: 'aaa',
 						cooldown: cooldownData,
 					},
+					// @ts-expect-error
+					{
+						name: 'testSubNon',
+						description: 'aaa',
+					},
 				],
 			},
 		];
@@ -51,34 +56,55 @@ describe('CooldownManager', async () => {
 
 	test('Data should return cooldown data for a command', () => {
 		const data = cooldownManager.getCommandData('testCommand');
-		assert.deepEqual(data, {
-			type: CooldownType.User,
-			interval: 1000,
-			uses: 3,
-		});
+		assert.deepEqual(data, [
+			'testCommand',
+			{
+				type: CooldownType.User,
+				interval: 1000,
+				uses: 3,
+			},
+		]);
 	});
 
 	test('Data should return cooldown data for a subcommand', () => {
 		const data = cooldownManager.getCommandData('testSub');
-		assert.deepEqual(data, {
-			type: CooldownType.User,
-			interval: 1000,
-			uses: 3,
-		});
-	});
-
-	test('Data should return cooldown data for a command', () => {
-		const data = cooldownManager.getCommandData('testCommand');
-		assert.deepEqual(data, {
-			type: CooldownType.User,
-			interval: 1000,
-			uses: 3,
-		});
+		assert.deepEqual(data, [
+			'testSub',
+			{
+				type: CooldownType.User,
+				interval: 1000,
+				uses: 3,
+			},
+		]);
 	});
 
 	test('Data should return undefined for non-existent command', () => {
 		const data = cooldownManager.getCommandData('nonExistentCommand');
 		assert.equal(data, undefined);
+	});
+
+	test('Data should return cooldown data parent for a non-existent subcommand', () => {
+		const data = cooldownManager.getCommandData('testSub');
+		assert.deepEqual(data, [
+			'testSub',
+			{
+				type: CooldownType.User,
+				interval: 1000,
+				uses: 3,
+			},
+		]);
+	});
+
+	test('Data should return cooldown data parent for a subcommand without cooldown data ', () => {
+		const data = cooldownManager.getCommandData('testSubNon');
+		assert.deepEqual(data, [
+			'testSubNon',
+			{
+				type: CooldownType.User,
+				interval: 1000,
+				uses: 3,
+			},
+		]);
 	});
 
 	test('has should return false for a new cooldown', () => {
@@ -122,7 +148,7 @@ describe('CooldownManager', async () => {
 
 		const data = cooldownManager.resource.get('testCommand:user:user1');
 		const props = cooldownManager.getCommandData('testCommand');
-		await cooldownManager.drip('testCommand', 'user1', props!, data!);
+		await cooldownManager.drip('testCommand', 'user1', props![1]!, data!);
 		const getter = cooldownManager.resource.get('testCommand:user:user1');
 		assert.ok(getter?.remaining === 2);
 	});
