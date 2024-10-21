@@ -28,10 +28,18 @@ describe('CooldownManager', async () => {
 			uses: 3,
 		};
 		handler.values = [
-			// @ts-expect-error
 			{
 				name: 'testCommand',
+				description: 'aaaa',
 				cooldown: cooldownData,
+				options: [
+					// @ts-expect-error
+					{
+						name: 'testSub',
+						description: 'aaa',
+						cooldown: cooldownData,
+					},
+				],
 			},
 		];
 
@@ -41,7 +49,7 @@ describe('CooldownManager', async () => {
 		cooldownManager = new CooldownManager(client);
 	});
 
-	await test('Data should return cooldown data for a command', () => {
+	test('Data should return cooldown data for a command', () => {
 		const data = cooldownManager.getCommandData('testCommand');
 		assert.deepEqual(data, {
 			type: CooldownType.User,
@@ -50,17 +58,35 @@ describe('CooldownManager', async () => {
 		});
 	});
 
-	await test('Data should return undefined for non-existent command', () => {
+	test('Data should return cooldown data for a subcommand', () => {
+		const data = cooldownManager.getCommandData('testSub');
+		assert.deepEqual(data, {
+			type: CooldownType.User,
+			interval: 1000,
+			uses: 3,
+		});
+	});
+
+	test('Data should return cooldown data for a command', () => {
+		const data = cooldownManager.getCommandData('testCommand');
+		assert.deepEqual(data, {
+			type: CooldownType.User,
+			interval: 1000,
+			uses: 3,
+		});
+	});
+
+	test('Data should return undefined for non-existent command', () => {
 		const data = cooldownManager.getCommandData('nonExistentCommand');
 		assert.equal(data, undefined);
 	});
 
-	await test('has should return false for a new cooldown', () => {
+	test('has should return false for a new cooldown', () => {
 		const result = cooldownManager.has('testCommand', 'user1');
 		assert.equal(result, false);
 	});
 
-	await test('has should return true when cooldown is active', () => {
+	test('has should return true when cooldown is active', () => {
 		for (let i = 0; i < cooldownData.uses; i++) {
 			cooldownManager.use('testCommand', 'user1');
 		}
@@ -68,12 +94,12 @@ describe('CooldownManager', async () => {
 		assert.equal(result, true);
 	});
 
-	await test('use should set cooldown when used for the first time', () => {
+	test('use should set cooldown when used for the first time', () => {
 		const result = cooldownManager.use('testCommand', 'user2');
 		assert.equal(result, true);
 	});
 
-	await test('use should return time left when cooldown is active', () => {
+	test('use should return time left when cooldown is active', () => {
 		for (let i = 0; i < cooldownData.uses; i++) {
 			cooldownManager.use('testCommand', 'user3');
 		}
@@ -81,14 +107,14 @@ describe('CooldownManager', async () => {
 		assert.ok(typeof result === 'number');
 	});
 
-	await test('refill should refill the cooldown', () => {
+	test('refill should refill the cooldown', () => {
 		cooldownManager.use('testCommand', 'user1');
 		const result = cooldownManager.refill('testCommand', 'user1');
 		assert.equal(result, true);
 		assert.equal(cooldownManager.has('testCommand', 'user1'), false);
 	});
 
-	await test('drip should drip the cooldown over time', async () => {
+	test('drip should drip the cooldown over time', async () => {
 		cooldownManager.use('testCommand', 'user1');
 
 		// Simulate time passing

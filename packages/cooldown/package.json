@@ -18,7 +18,7 @@
 		"lint": "biome lint --write ./src",
 		"format": "biome format --write ./src",
 		"checkb": "biome check --write --no-errors-on-unmatched ./src",
-		"test": "vitest run --config ./test/vitest.config.ts ./test/"
+		"test": "vitest run --config ./test/vitest.config.mts ./test/"
 	},
 	"devDependencies": {
 		"@types/node": "^22.5.5",

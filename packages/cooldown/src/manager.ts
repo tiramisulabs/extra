@@ -1,4 +1,4 @@
-import type { AnyContext } from 'seyfert';
+import type { AnyContext, SubCommand } from 'seyfert';
 import type { ReturnCache } from 'seyfert/lib/cache';
 import type { BaseClient } from 'seyfert/lib/client/base';
 import { type MakePartial, fakePromise } from 'seyfert/lib/common';
@@ -16,7 +16,14 @@ export class CooldownManager {
 	 * @returns The cooldown data for the command
 	 */
 	getCommandData(name: string): CooldownProps | undefined {
-		return this.client.commands?.values.find(x => x.name === name)?.cooldown;
+		if (!this.client.commands?.values?.length) return;
+		for (const command of this.client.commands.values) {
+			if (!('cooldown' in command)) continue;
+			if (command.name === name) return command.cooldown;
+			if ('options' in command)
+				return command.options?.find((x): x is SubCommand => 'cooldown' in x && x.name === name)?.cooldown;
+		}
+		return undefined;
 	}
 
 	/**
@@ -164,13 +171,6 @@ declare module 'seyfert' {
 		cooldown?: CooldownProps;
 	}
 	interface ContextMenuCommand {
-		cooldown?: CooldownProps;
-	}
-
-	interface ComponentCommand {
-		cooldown?: CooldownProps;
-	}
-	interface ModalCommand {
 		cooldown?: CooldownProps;
 	}
 	interface EntryPointCommand {
