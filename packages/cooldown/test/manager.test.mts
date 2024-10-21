@@ -25,7 +25,9 @@ describe('CooldownManager', async () => {
 		cooldownData = {
 			type: CooldownType.User,
 			interval: 1000,
-			uses: 3,
+			uses: {
+				default: 3,
+			},
 		};
 		handler.values = [
 			{
@@ -61,7 +63,9 @@ describe('CooldownManager', async () => {
 			{
 				type: CooldownType.User,
 				interval: 1000,
-				uses: 3,
+				uses: {
+					default: 3,
+				},
 			},
 		]);
 	});
@@ -73,7 +77,9 @@ describe('CooldownManager', async () => {
 			{
 				type: CooldownType.User,
 				interval: 1000,
-				uses: 3,
+				uses: {
+					default: 3,
+				},
 			},
 		]);
 	});
@@ -90,7 +96,9 @@ describe('CooldownManager', async () => {
 			{
 				type: CooldownType.User,
 				interval: 1000,
-				uses: 3,
+				uses: {
+					default: 3,
+				},
 			},
 		]);
 	});
@@ -102,7 +110,9 @@ describe('CooldownManager', async () => {
 			{
 				type: CooldownType.User,
 				interval: 1000,
-				uses: 3,
+				uses: {
+					default: 3,
+				},
 			},
 		]);
 	});
@@ -113,7 +123,7 @@ describe('CooldownManager', async () => {
 	});
 
 	test('has should return true when cooldown is active', () => {
-		for (let i = 0; i < cooldownData.uses; i++) {
+		for (let i = 0; i < cooldownData.uses.default; i++) {
 			cooldownManager.use('testCommand', 'user1');
 		}
 		const result = cooldownManager.has('testCommand', 'user1');
@@ -126,7 +136,7 @@ describe('CooldownManager', async () => {
 	});
 
 	test('use should return time left when cooldown is active', () => {
-		for (let i = 0; i < cooldownData.uses; i++) {
+		for (let i = 0; i < cooldownData.uses.default; i++) {
 			cooldownManager.use('testCommand', 'user3');
 		}
 		const result = cooldownManager.use('testCommand', 'user3');
