@@ -10,15 +10,11 @@ export class CooldownManager {
 		this.resource = new CooldownResource(client.cache, client);
 	}
 
-	/**
-	 * Get the cooldown data for a command
-	 * @param name - The name of the command
-	 * @returns The cooldown data for the command
-	 */
-	getCommandData(name: string): [name: string, data: CooldownProps | undefined] | undefined {
+	getCommandData(name: string, guildId?: string): [name: string, data: CooldownProps | undefined] | undefined {
 		if (!this.client.commands?.values?.length) return;
 		for (const command of this.client.commands.values) {
 			if (!('cooldown' in command)) continue;
+			if (guildId && !command.guildId?.includes(guildId)) continue;
 			if (command.name === name) return [command.name, command.cooldown];
 			if ('options' in command) {
 				const option = command.options?.find((x): x is SubCommand => x.name === name);
@@ -30,39 +26,39 @@ export class CooldownManager {
 		return undefined;
 	}
 
-	/**
-	 * Check if a user has a cooldown
-	 * @param name - The name of the command
-	 * @param target - The target of the cooldown
-	 * @returns Whether the user has a cooldown
-	 */
-	has(name: string, target: string, use: keyof UsesProps = 'default', tokens = 1): ReturnCache<boolean> {
-		const [resolve, data] = this.getCommandData(name) ?? [];
+	has(options: CooldownHasOptions): ReturnCache<boolean> {
+		const [resolve, data] = this.getCommandData(options.name, options.guildId) ?? [];
 		if (!(data && resolve)) return false;
 
-		return fakePromise(this.resource.get(`${resolve}:${data.type}:${target}`)).then(cooldown => {
-			if (tokens > data.uses[use]) return true;
+		return fakePromise(this.resource.get(`${resolve}:${data.type}:${options.target}`)).then(cooldown => {
+			if ((options.tokens ?? 1) > data.uses[options.use ?? 'default']) return true;
 			if (!cooldown) {
 				return fakePromise(
-					this.set(resolve, target, { type: data.type, interval: data.interval, remaining: data.uses[use] }),
+					this.set({
+						name: resolve,
+						target: options.target,
+						type: data.type,
+						interval: data.interval,
+						remaining: data.uses[options.use ?? 'default'],
+					}),
 				).then(() => false);
 			}
 
-			const remaining = Math.max(cooldown.remaining - tokens, 0);
+			const remaining = Math.max(cooldown.remaining - (options.tokens ?? 1), 0);
 
 			return remaining === 0;
 		});
 	}
 
-	set(
-		name: string,
-		target: string,
-		{ type, ...data }: MakePartial<CooldownData, 'lastDrip'> & { type: `${CooldownType}` },
-	) {
-		return this.resource.set(`${name}:${type}:${target}`, data);
+	set(options: CooldownSetOptions) {
+		return this.resource.set(`${options.name}:${options.type}:${options.target}`, {
+			interval: options.interval,
+			remaining: options.remaining,
+			lastDrip: options.lastDrip,
+		});
 	}
 
-	context(context: AnyContext, use?: keyof UsesProps) {
+	context(context: AnyContext, use?: keyof UsesProps, guildId?: string) {
 		if (!('command' in context)) return true;
 		if (!('name' in context.command)) return true;
 
@@ -83,31 +79,39 @@ export class CooldownManager {
 		}
 
 		target ??= context.author.id;
-		return this.use(context.command.name, target, use);
+		return this.use({ name: context.command.name, target, use, guildId });
 	}
 
 	/**
 	 * Use a cooldown
-	 * @param name - The name of the command
-	 * @param target - The target of the cooldown
 	 * @returns The remaining cooldown in seconds or true if successful
 	 */
-	use(name: string, target: string, use: keyof UsesProps = 'default'): ReturnCache<number | true> {
-		const [resolve, data] = this.getCommandData(name) ?? [];
+	use(options: CooldownUseOptions): ReturnCache<number | true> {
+		const [resolve, data] = this.getCommandData(options.name, options.guildId) ?? [];
 		if (!(data && resolve)) return true;
 
-		return fakePromise(this.resource.get(`${resolve}:${data.type}:${target}`)).then(cooldown => {
+		return fakePromise(this.resource.get(`${resolve}:${data.type}:${options.target}`)).then(cooldown => {
 			if (!cooldown) {
 				return fakePromise(
-					this.set(resolve, target, {
+					this.set({
+						name: resolve,
+						target: options.target,
 						type: data.type,
 						interval: data.interval,
-						remaining: data.uses[use] - 1,
+						remaining: data.uses[options.use ?? 'default'] - 1,
 					}),
 				).then(() => true);
 			}
 
-			return fakePromise(this.drip(resolve, target, data, cooldown, use)).then(drip => {
+			return fakePromise(
+				this.drip({
+					name: resolve,
+					props: data,
+					data: cooldown,
+					target: options.target,
+					use: options.use,
+				}),
+			).then(drip => {
 				return typeof drip === 'number' ? data.interval - drip : true;
 			});
 		});
@@ -115,37 +119,29 @@ export class CooldownManager {
 
 	/**
 	 * Drip the cooldown
-	 * @param name - The name of the command
-	 * @param target - The target of the cooldown
-	 * @param props - The cooldown properties
-	 * @param data - The cooldown data
 	 * @returns The cooldown was processed
 	 */
-	drip(
-		name: string,
-		target: string,
-		props: CooldownProps,
-		data: CooldownData,
-		use: keyof UsesProps = 'default',
-	): ReturnCache<boolean | number> {
+	drip(options: CooldownDripOptions): ReturnCache<boolean | number> {
 		const now = Date.now();
-		const deltaMS = now - data.lastDrip;
-		if (deltaMS >= props.interval) {
+		const deltaMS = now - options.data.lastDrip;
+		if (deltaMS >= options.props.interval) {
 			return fakePromise(
-				this.resource.patch(`${name}:${props.type}:${target}`, {
+				this.resource.patch(`${options.name}:${options.props.type}:${options.target}`, {
 					lastDrip: now,
-					remaining: props.uses[use] - 1,
+					remaining: options.props.uses[options.use ?? 'default'] - 1,
 				}),
 			).then(() => true);
 		}
 
-		if (data.remaining - 1 < 0) {
+		if (options.data.remaining - 1 < 0) {
 			return deltaMS;
 		}
 
-		return fakePromise(this.resource.patch(`${name}:${props.type}:${target}`, { remaining: data.remaining - 1 })).then(
-			() => true,
-		);
+		return fakePromise(
+			this.resource.patch(`${options.name}:${options.props.type}:${options.target}`, {
+				remaining: options.data.remaining - 1,
+			}),
+		).then(() => true);
 	}
 
 	/**
@@ -171,6 +167,28 @@ export interface CooldownProps {
 	interval: number;
 	/** refill amount */
 	uses: UsesProps;
+}
+
+export interface CooldownUseOptions {
+	name: string;
+	target: string;
+	use?: keyof UsesProps;
+	guildId?: string;
+}
+
+export interface CooldownDripOptions extends Omit<CooldownUseOptions, 'guildId'> {
+	props: CooldownProps;
+	data: CooldownData;
+}
+
+export interface CooldownHasOptions extends CooldownUseOptions {
+	tokens?: number;
+}
+
+export interface CooldownSetOptions extends MakePartial<CooldownData, 'lastDrip'> {
+	name: string;
+	target: string;
+	type: `${CooldownType}`;
 }
 
 export interface UsesProps {

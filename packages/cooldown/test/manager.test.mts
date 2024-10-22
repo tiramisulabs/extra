@@ -118,47 +118,82 @@ describe('CooldownManager', async () => {
 	});
 
 	test('has should return false for a new cooldown', () => {
-		const result = cooldownManager.has('testCommand', 'user1');
+		const result = cooldownManager.has({
+			name: 'testCommand',
+			target: 'user1',
+		});
 		assert.equal(result, false);
 	});
 
 	test('has should return true when cooldown is active', () => {
 		for (let i = 0; i < cooldownData.uses.default; i++) {
-			cooldownManager.use('testCommand', 'user1');
+			cooldownManager.use({
+				name: 'testCommand',
+				target: 'user1',
+			});
 		}
-		const result = cooldownManager.has('testCommand', 'user1');
+		const result = cooldownManager.has({
+			name: 'testCommand',
+			target: 'user1',
+		});
 		assert.equal(result, true);
 	});
 
 	test('use should set cooldown when used for the first time', () => {
-		const result = cooldownManager.use('testCommand', 'user2');
+		const result = cooldownManager.use({
+			name: 'testCommand',
+			target: 'user2',
+		});
 		assert.equal(result, true);
 	});
 
 	test('use should return time left when cooldown is active', () => {
 		for (let i = 0; i < cooldownData.uses.default; i++) {
-			cooldownManager.use('testCommand', 'user3');
+			cooldownManager.use({
+				name: 'testCommand',
+				target: 'user3',
+			});
 		}
-		const result = cooldownManager.use('testCommand', 'user3');
+		const result = cooldownManager.use({
+			name: 'testCommand',
+			target: 'user3',
+		});
 		assert.ok(typeof result === 'number');
 	});
 
 	test('refill should refill the cooldown', () => {
-		cooldownManager.use('testCommand', 'user1');
+		cooldownManager.use({
+			name: 'testCommand',
+			target: 'user1',
+		});
 		const result = cooldownManager.refill('testCommand', 'user1');
 		assert.equal(result, true);
-		assert.equal(cooldownManager.has('testCommand', 'user1'), false);
+		assert.equal(
+			cooldownManager.has({
+				name: 'testCommand',
+				target: 'user1',
+			}),
+			false,
+		);
 	});
 
 	test('drip should drip the cooldown over time', async () => {
-		cooldownManager.use('testCommand', 'user1');
+		cooldownManager.use({
+			name: 'testCommand',
+			target: 'user1',
+		});
 
 		// Simulate time passing
 		await new Promise(resolve => setTimeout(resolve, 1000));
 
 		const data = cooldownManager.resource.get('testCommand:user:user1');
 		const props = cooldownManager.getCommandData('testCommand');
-		await cooldownManager.drip('testCommand', 'user1', props![1]!, data!);
+		await cooldownManager.drip({
+			name: 'testCommand',
+			target: 'user1',
+			data: data!,
+			props: props![1]!,
+		});
 		const getter = cooldownManager.resource.get('testCommand:user:user1');
 		assert.ok(getter?.remaining === 2);
 	});
