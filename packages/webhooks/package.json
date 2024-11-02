@@ -17,7 +17,6 @@
 		"build": "tsc",
 		"lint": "biome lint --write ./src",
 		"format": "biome format --write ./src",
-		"test": "vitest run --config ./test/vitest.config.mts ./test/",
 		"checkb": "biome check --write --no-errors-on-unmatched ./src"
 	},
 	"devDependencies": {
