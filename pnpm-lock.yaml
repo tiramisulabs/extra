@@ -117,6 +117,19 @@ importers:
         specifier: ^5.6.2
         version: 5.6.2
 
+  packages/webhooks:
+    dependencies:
+      tweetnacl:
+        specifier: ^1.0.3
+        version: 1.0.3
+    devDependencies:
+      '@types/node':
+        specifier: ^22.5.5
+        version: 22.5.5
+      typescript:
+        specifier: ^5.6.2
+        version: 5.6.2
+
 packages:
 
   '@biomejs/biome@1.9.1':

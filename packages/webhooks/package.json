@@ -1,0 +1,30 @@
+{
+	"name": "@slipher/webhooks",
+	"version": "0.0.1",
+	"private": false,
+	"license": "MIT",
+	"publishConfig": {
+		"access": "public"
+	},
+	"files": [
+		"lib/**"
+	],
+	"main": "./lib/index.js",
+	"module": "./lib/index.js",
+	"types": "./lib/index.d.ts",
+	"scripts": {
+		"dev": "tsc --watch",
+		"build": "tsc",
+		"lint": "biome lint --write ./src",
+		"format": "biome format --write ./src",
+		"test": "vitest run --config ./test/vitest.config.mts ./test/",
+		"checkb": "biome check --write --no-errors-on-unmatched ./src"
+	},
+	"devDependencies": {
+		"@types/node": "^22.5.5",
+		"typescript": "^5.6.2"
+	},
+	"dependencies": {
+		"tweetnacl": "^1.0.3"
+	}
+}
