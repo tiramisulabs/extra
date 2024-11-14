@@ -1,4 +1,4 @@
-import type { HttpClient, Logger } from 'seyfert';
+import type { Logger, UsingClient } from 'seyfert';
 import type { InternalRuntimeConfigHTTP } from 'seyfert/lib/client/base';
 import type { HttpServerAdapter } from 'seyfert/lib/client/types';
 import { type APIInteraction, InteractionResponseType, InteractionType } from 'seyfert/lib/types';
@@ -13,7 +13,7 @@ export class UwsAdapter implements HttpServerAdapter {
 	debugger?: Logger;
 	logger: Logger;
 
-	constructor(public client: HttpClient) {
+	constructor(public client: UsingClient) {
 		this.logger = client.logger;
 	}
 
@@ -77,7 +77,7 @@ export class UwsAdapter implements HttpServerAdapter {
 			}
 			default:
 				res.cork(async () => {
-					const { headers, response } = await this.client.onPacket(rawBody);
+					const { headers, response } = await this.client.onInteractionRequest(rawBody);
 					for (const i in headers) {
 						res.writeHeader(i, headers[i as keyof typeof headers]!);
 					}

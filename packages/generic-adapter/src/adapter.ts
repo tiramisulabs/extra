@@ -1,4 +1,4 @@
-import type { HttpClient, Logger } from 'seyfert';
+import type { Logger, UsingClient } from 'seyfert';
 import type { InternalRuntimeConfigHTTP } from 'seyfert/lib/client/base';
 import type { HttpServerAdapter } from 'seyfert/lib/client/types';
 import { type APIInteraction, InteractionResponseType, InteractionType } from 'seyfert/lib/types';
@@ -12,7 +12,7 @@ export class GenericAdapter implements HttpServerAdapter {
 	debugger?: Logger;
 	logger: Logger;
 
-	constructor(public client: HttpClient) {
+	constructor(public client: UsingClient) {
 		this.logger = client.logger;
 	}
 
@@ -76,7 +76,7 @@ export class GenericAdapter implements HttpServerAdapter {
 						.catch(() => new Response());
 				}
 				return new Promise(async r => {
-					const { headers, response } = await this.client.onPacket(rawBody);
+					const { headers, response } = await this.client.onInteractionRequest(rawBody);
 					r(
 						response instanceof FormData
 							? new Response(response, { headers })

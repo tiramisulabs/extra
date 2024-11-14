@@ -20,8 +20,8 @@
 		"checkb": "biome check --write --no-errors-on-unmatched ./src"
 	},
 	"devDependencies": {
-		"@types/node": "^22.5.5",
-		"typescript": "^5.6.2"
+		"@types/node": "^22.9.0",
+		"typescript": "^5.6.3"
 	},
 	"dependencies": {
 		"tweetnacl": "^1.0.3"

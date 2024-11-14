@@ -21,10 +21,10 @@
 		"test": "vitest run --config ./test/vitest.config.mts ./test/"
 	},
 	"devDependencies": {
-		"@types/node": "^22.5.5",
-		"typescript": "^5.6.2"
+		"@types/node": "^22.9.0",
+		"typescript": "^5.6.3"
 	},
 	"dependencies": {
-		"seyfert": "^2.1.0"
+		"seyfert": "2.1.1-dev-11847255319.0"
 	}
 }
