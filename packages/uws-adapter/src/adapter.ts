@@ -1,5 +1,4 @@
 import type { Logger, UsingClient } from 'seyfert';
-import type { InternalRuntimeConfigHTTP } from 'seyfert/lib/client/base';
 import type { HttpServerAdapter } from 'seyfert/lib/client/types';
 import { type APIInteraction, InteractionResponseType, InteractionType } from 'seyfert/lib/types';
 
@@ -20,7 +19,7 @@ export class UwsAdapter implements HttpServerAdapter {
 	async start(path: `/${string}` = '/interactions', uwsApp?: TemplatedApp) {
 		if (this.client.debugger) this.debugger = this.client.debugger;
 
-		const { publicKey, port, applicationId } = await this.client.getRC<InternalRuntimeConfigHTTP>();
+		const { publicKey, port, applicationId } = await this.client.getRC();
 
 		if (!publicKey) {
 			throw new Error('Expected a publicKey, check your config file');
@@ -39,7 +38,7 @@ export class UwsAdapter implements HttpServerAdapter {
 		if (uwsApp) {
 			this.logger.info(`Running on <url>${path}`);
 		} else {
-			this.app.listen(port, () => {
+			this.app.listen(port!, () => {
 				this.logger.info(`Listening to <url>:${port}${path}`);
 			});
 		}

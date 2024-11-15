@@ -1,5 +1,4 @@
 import type { Logger, UsingClient } from 'seyfert';
-import type { InternalRuntimeConfigHTTP } from 'seyfert/lib/client/base';
 import type { HttpServerAdapter } from 'seyfert/lib/client/types';
 import { type APIInteraction, InteractionResponseType, InteractionType } from 'seyfert/lib/types';
 
@@ -19,7 +18,7 @@ export class GenericAdapter implements HttpServerAdapter {
 	async start() {
 		if (this.client.debugger) this.debugger = this.client.debugger;
 
-		const { publicKey, applicationId } = await this.client.getRC<InternalRuntimeConfigHTTP>();
+		const { publicKey, applicationId } = await this.client.getRC();
 
 		if (!publicKey) {
 			throw new Error('Expected a publicKey, check your config file');
