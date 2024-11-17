@@ -37,8 +37,8 @@ importers:
   packages/cooldown:
     dependencies:
       seyfert:
-        specifier: 2.1.1-dev-11847255319.0
-        version: 2.1.1-dev-11847255319.0
+        specifier: 2.1.1-dev-11882952397.0
+        version: 2.1.1-dev-11882952397.0
     devDependencies:
       '@types/node':
         specifier: ^22.9.0
@@ -50,8 +50,8 @@ importers:
   packages/generic-adapter:
     dependencies:
       seyfert:
-        specifier: 2.1.1-dev-11847255319.0
-        version: 2.1.1-dev-11847255319.0
+        specifier: 2.1.1-dev-11882952397.0
+        version: 2.1.1-dev-11882952397.0
       tweetnacl:
         specifier: ^1.0.3
         version: 1.0.3
@@ -69,8 +69,8 @@ importers:
         specifier: ^1.6.0
         version: 1.6.0
       seyfert:
-        specifier: 2.1.1-dev-11847255319.0
-        version: 2.1.1-dev-11847255319.0
+        specifier: 2.1.1-dev-11882952397.0
+        version: 2.1.1-dev-11882952397.0
     devDependencies:
       '@types/node':
         specifier: ^22.9.0
@@ -82,8 +82,8 @@ importers:
   packages/uws-adapter:
     dependencies:
       seyfert:
-        specifier: 2.1.1-dev-11847255319.0
-        version: 2.1.1-dev-11847255319.0
+        specifier: 2.1.1-dev-11882952397.0
+        version: 2.1.1-dev-11882952397.0
       tweetnacl:
         specifier: ^1.0.3
         version: 1.0.3
@@ -104,8 +104,8 @@ importers:
         specifier: ^4.0.1
         version: 4.0.1
       seyfert:
-        specifier: 2.1.1-dev-11847255319.0
-        version: 2.1.1-dev-11847255319.0
+        specifier: 2.1.1-dev-11882952397.0
+        version: 2.1.1-dev-11882952397.0
       tweetnacl:
         specifier: ^1.0.3
         version: 1.0.3
@@ -618,8 +618,8 @@ packages:
     engines: {node: '>=18.0.0', npm: '>=8.0.0'}
     hasBin: true
 
-  seyfert@2.1.1-dev-11847255319.0:
-    resolution: {integrity: sha512-UJ6CryHNWsDNH8LvRJ60FYYdxlhw4m/Gh6OEojtL+TMWdGS/uNus2NpFiHJLGXvtADLvEaeYPNt4yfmI5OjEPw==}
+  seyfert@2.1.1-dev-11882952397.0:
+    resolution: {integrity: sha512-6on0UUjj7Xtt3Qv6oGxzJuuQCk6xsdybK0amFFUJmSGahc2/tsM14HgUilPuq1YQVmBxXRzKOHm4Xbb2Gsn/Cw==}
 
   siginfo@2.0.0:
     resolution: {integrity: sha512-ybx0WO1/8bSBLEWXZvEd7gMW3Sn3JFlW3TvX1nREbDLRNQNaeNN8WK0meBwPdAaOI7TtRRRJn/Es1zhrrCHu7g==}
@@ -1142,7 +1142,7 @@ snapshots:
       '@rollup/rollup-win32-x64-msvc': 4.26.0
       fsevents: 2.3.3
 
-  seyfert@2.1.1-dev-11847255319.0: {}
+  seyfert@2.1.1-dev-11882952397.0: {}
 
   siginfo@2.0.0: {}
 
