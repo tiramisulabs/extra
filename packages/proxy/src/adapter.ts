@@ -69,17 +69,19 @@ export function createProxy(options: {
 				query,
 				reason,
 			});
-			res.cork(() => {
-				res.writeHeader('content-type', 'application/json').end(JSON.stringify(result));
-			});
+			if (!res.aborted)
+				res.cork(() => {
+					res.writeHeader('content-type', 'application/json').end(JSON.stringify(result));
+				});
 		} catch (e) {
 			const message = typeof e === 'object' && e && 'message' in e ? (e.message as string) : String(e);
-			res.cork(() => {
-				res
-					.writeStatus(message.match(/\[[0-9]{1,3}/g)?.[0].slice(1) ?? '500')
-					.writeHeader('content-type', 'application/json')
-					.end(JSON.stringify({ message }));
-			});
+			if (!res.aborted)
+				res.cork(() => {
+					res
+						.writeStatus(message.match(/\[[0-9]{1,3}/g)?.[0].slice(1) ?? '500')
+						.writeHeader('content-type', 'application/json')
+						.end(JSON.stringify({ message }));
+				});
 		}
 	});
 
