@@ -20,9 +20,9 @@
 		"checkb": "biome check --write --no-errors-on-unmatched ./src"
 	},
 	"dependencies": {
-		"seyfert": "2.1.1-dev-11882952397.0",
+		"seyfert": "2.1.1-dev-11916234323.0",
 		"tweetnacl": "^1.0.3",
-		"uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.47.0"
+		"uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.49.0"
 	},
 	"devDependencies": {
 		"@types/node": "^22.9.0",
