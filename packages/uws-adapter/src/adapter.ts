@@ -3,7 +3,6 @@ import type { HttpServerAdapter } from 'seyfert/lib/client/types';
 import { type APIInteraction, InteractionResponseType, InteractionType } from 'seyfert/lib/types';
 import nacl from 'tweetnacl';
 import { App, type HttpRequest, type HttpResponse, type TemplatedApp } from 'uWebSockets.js';
-import type { File } from '../../../node_modules/.pnpm/undici-types@6.19.8/node_modules/undici-types/file';
 
 export class UwsAdapter implements HttpServerAdapter {
 	public app!: TemplatedApp;
