@@ -42,6 +42,7 @@ export function createProxy(options: {
 		const method = <HttpMethods>req.getMethod().toUpperCase();
 		const query = new URLSearchParams(req.getQuery());
 		const path = <`/${string}`>req.getUrl().slice(sliceLength);
+		const reason = req.getHeader('x-audit-log-reason');
 		if (method !== 'GET' && method !== 'DELETE') {
 			const contentType = req.getHeader('content-type');
 			if (contentType.includes('multipart/form-data')) {
@@ -62,7 +63,6 @@ export function createProxy(options: {
 			} else body = await readJson(res);
 		}
 		try {
-			const reason = req.getHeader('x-audit-log-reason');
 			const result = await rest.request(method, path, {
 				body,
 				files,
