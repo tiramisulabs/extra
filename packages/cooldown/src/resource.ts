@@ -1,5 +1,5 @@
 import { BaseResource } from 'seyfert/lib/cache';
-import type { MakePartial } from 'seyfert/lib/common';
+import type { PickPartial } from 'seyfert/lib/common';
 
 export interface CooldownData {
 	remaining: number;
@@ -20,7 +20,7 @@ export class CooldownResource extends BaseResource<CooldownData> {
 		return true;
 	}
 
-	override set(id: string, data: MakePartial<CooldownData, 'lastDrip'>) {
+	override set(id: string, data: PickPartial<CooldownData, 'lastDrip'>) {
 		return super.set(id, { ...data, lastDrip: data.lastDrip ?? Date.now() });
 	}
 }

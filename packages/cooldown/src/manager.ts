@@ -1,7 +1,7 @@
 import type { AnyContext, SubCommand } from 'seyfert';
 import type { ReturnCache } from 'seyfert/lib/cache';
 import type { BaseClient } from 'seyfert/lib/client/base';
-import { type MakePartial, fakePromise } from 'seyfert/lib/common';
+import { type PickPartial, fakePromise } from 'seyfert/lib/common';
 import { type CooldownData, CooldownResource, type CooldownType } from './resource';
 
 export class CooldownManager {
@@ -185,7 +185,7 @@ export interface CooldownHasOptions extends CooldownUseOptions {
 	tokens?: number;
 }
 
-export interface CooldownSetOptions extends MakePartial<CooldownData, 'lastDrip'> {
+export interface CooldownSetOptions extends PickPartial<CooldownData, 'lastDrip'> {
 	name: string;
 	target: string;
 	type: `${CooldownType}`;

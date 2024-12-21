@@ -37,8 +37,8 @@ importers:
   packages/cooldown:
     dependencies:
       seyfert:
-        specifier: 2.1.1-dev-11916234323.0
-        version: 2.1.1-dev-11916234323.0
+        specifier: 2.1.1-dev-12418439067.0
+        version: 2.1.1-dev-12418439067.0
     devDependencies:
       '@types/node':
         specifier: ^22.9.0
@@ -50,8 +50,8 @@ importers:
   packages/generic-adapter:
     dependencies:
       seyfert:
-        specifier: 2.1.1-dev-11916234323.0
-        version: 2.1.1-dev-11916234323.0
+        specifier: 2.1.1-dev-12418439067.0
+        version: 2.1.1-dev-12418439067.0
       tweetnacl:
         specifier: ^1.0.3
         version: 1.0.3
@@ -66,8 +66,8 @@ importers:
   packages/proxy:
     dependencies:
       seyfert:
-        specifier: 2.1.1-dev-11916234323.0
-        version: 2.1.1-dev-11916234323.0
+        specifier: 2.1.1-dev-12418439067.0
+        version: 2.1.1-dev-12418439067.0
       uWebSockets.js:
         specifier: github:uNetworking/uWebSockets.js#v20.49.0
         version: https://codeload.github.com/uNetworking/uWebSockets.js/tar.gz/442087c0a01bf146acb7386910739ec81df06700
@@ -85,8 +85,8 @@ importers:
         specifier: ^1.6.0
         version: 1.6.0
       seyfert:
-        specifier: 2.1.1-dev-11916234323.0
-        version: 2.1.1-dev-11916234323.0
+        specifier: 2.1.1-dev-12418439067.0
+        version: 2.1.1-dev-12418439067.0
     devDependencies:
       '@types/node':
         specifier: ^22.9.0
@@ -98,8 +98,8 @@ importers:
   packages/uws-adapter:
     dependencies:
       seyfert:
-        specifier: 2.1.1-dev-11916234323.0
-        version: 2.1.1-dev-11916234323.0
+        specifier: 2.1.1-dev-12418439067.0
+        version: 2.1.1-dev-12418439067.0
       tweetnacl:
         specifier: ^1.0.3
         version: 1.0.3
@@ -120,8 +120,8 @@ importers:
         specifier: ^4.0.1
         version: 4.0.1
       seyfert:
-        specifier: 2.1.1-dev-11916234323.0
-        version: 2.1.1-dev-11916234323.0
+        specifier: 2.1.1-dev-12418439067.0
+        version: 2.1.1-dev-12418439067.0
       tweetnacl:
         specifier: ^1.0.3
         version: 1.0.3
@@ -634,8 +634,8 @@ packages:
     engines: {node: '>=18.0.0', npm: '>=8.0.0'}
     hasBin: true
 
-  seyfert@2.1.1-dev-11916234323.0:
-    resolution: {integrity: sha512-d6V4m319EbYxbVusDGt62aiILOASB2Z7DMD1BCg9jx0j5SwpBg52iLAvtc7UVDwdVjSczW2rHpDBQthVT+MkaQ==}
+  seyfert@2.1.1-dev-12418439067.0:
+    resolution: {integrity: sha512-0n0K8q+u8S7GxOy6Ph9WmzpJihR7skkT6oTWo/Sa4PtiH03Gx4M7u9+d1uRK0hRuXLiPR0yeP/8bPlKhs3jOUA==}
 
   siginfo@2.0.0:
     resolution: {integrity: sha512-ybx0WO1/8bSBLEWXZvEd7gMW3Sn3JFlW3TvX1nREbDLRNQNaeNN8WK0meBwPdAaOI7TtRRRJn/Es1zhrrCHu7g==}
@@ -1158,7 +1158,7 @@ snapshots:
       '@rollup/rollup-win32-x64-msvc': 4.27.3
       fsevents: 2.3.3
 
-  seyfert@2.1.1-dev-11916234323.0: {}
+  seyfert@2.1.1-dev-12418439067.0: {}
 
   siginfo@2.0.0: {}
 
