@@ -26,7 +26,7 @@
 	},
 	"dependencies": {
 		"@redis/client": "^1.6.0",
-		"seyfert": "2.1.1-dev-12418439067.0"
+		"seyfert": "2.1.1-dev-12450598903.0"
 	},
 	"devDependencies": {
 		"@types/node": "^22.9.0",
