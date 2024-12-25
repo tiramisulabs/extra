@@ -1,5 +1,5 @@
 // @ts-check
-import { afterAll, assert, beforeAll, describe, test } from 'vitest';
+import { assert, afterAll, beforeAll, describe, test } from 'vitest';
 import { ExpirableRedisAdapter } from '../lib/index';
 
 describe('ExpirableRedisAdapter', async () => {
@@ -61,13 +61,13 @@ describe('ExpirableRedisAdapter', async () => {
 
 	await test('patch', async () => {
 		await assert.doesNotThrow(async () => {
-			await adapter.patch(false, 'test_key', { newValue: 'updatedValue' });
+			await adapter.patch('test_key', { newValue: 'updatedValue' });
 		});
 	});
 
 	await test('bulkPatch', async () => {
 		await assert.doesNotThrow(async () => {
-			await adapter.bulkPatch(false, [
+			await adapter.bulkPatch([
 				['key1', { newValue: 'updatedValue1' }],
 				['key2', { newValue: 'updatedValue2' }],
 			]);

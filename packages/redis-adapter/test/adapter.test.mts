@@ -1,4 +1,4 @@
-import { afterAll, assert, beforeAll, describe, test } from 'vitest';
+import { assert, afterAll, beforeAll, describe, test } from 'vitest';
 import { RedisAdapter } from '../lib/index';
 
 describe('RedisAdapter', async () => {
@@ -53,13 +53,13 @@ describe('RedisAdapter', async () => {
 
 	test('patch', async () => {
 		assert.doesNotThrow(async () => {
-			await adapter.patch(false, 'test_key', { newValue: 'updatedValue' });
+			await adapter.patch('test_key', { newValue: 'updatedValue' });
 		});
 	});
 
 	test('bulkPatch', async () => {
 		assert.doesNotThrow(async () => {
-			await adapter.bulkPatch(false, [
+			await adapter.bulkPatch([
 				['key1', { newValue: 'updatedValue1' }],
 				['key2', { newValue: 'updatedValue2' }],
 			]);
