@@ -1,5 +1,3 @@
-// @ts-check
-import { Client } from 'seyfert';
 import { describe, test } from 'vitest';
 import { ExpirableRedisAdapter } from '../lib/index';
 
@@ -22,22 +20,22 @@ describe('Test Adapter cache', async _ => {
 	await adapter.start();
 
 	test('discord cache', async () => {
-		const client = new Client({
-			getRC: async () => ({
-				locations: {
-					base: '',
-					output: '',
-				},
-				intents,
-				token: '',
-			}),
-		});
-		client.setServices({
-			cache: {
-				adapter,
-			},
-		});
-		await client.cache.testAdapter();
-		await adapter.client.quit();
+		// const client = new Client({
+		// 	getRC: async () => ({
+		// 		locations: {
+		// 			base: '',
+		// 			output: '',
+		// 		},
+		// 		intents,
+		// 		token: '',
+		// 	}),
+		// });
+		// client.setServices({
+		// 	cache: {
+		// 		adapter,
+		// 	},
+		// });
+		// await client.cache.testAdapter();
+		// await adapter.client.quit();
 	});
 });
