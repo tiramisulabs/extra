@@ -21,7 +21,7 @@
 	},
 	"dependencies": {
 		"chokidar": "^4.0.1",
-		"seyfert": "2.1.1-dev-12450598903.0",
+		"seyfert": "2.1.1-dev-12489494190.0",
 		"tweetnacl": "^1.0.3"
 	},
 	"devDependencies": {
