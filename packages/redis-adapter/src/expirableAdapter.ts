@@ -144,25 +144,8 @@ export class ExpirableRedisAdapter extends RedisAdapter {
 		await Promise.all(promises);
 	}
 
-	async patch(updateOnly: boolean, id: string, data: any): Promise<void> {
-		const promises: Promise<unknown>[] = [];
-
-		if (updateOnly) {
-			promises.push(
-				this.client.eval(
-					`if redis.call('exists',KEYS[1]) == 1 then redis.call('hset', KEYS[1], ${Array.from(
-						{ length: Object.keys(data).length * 2 },
-						(_, i) => `ARGV[${i + 1}]`,
-					)}) end`,
-					{
-						keys: [this.buildKey(id)],
-						arguments: Object.entries(toDb(data)).flat(),
-					},
-				),
-			);
-		} else {
-			promises.push(this.client.hSet(this.buildKey(id), toDb(data)));
-		}
+	async patch(id: string, data: any): Promise<void> {
+		const promises: Promise<unknown>[] = [this.client.hSet(this.buildKey(id), toDb(data))];
 
 		const cacheType = id.split('.')[0] as keyof ExpirableRedisAdapterOptions;
 		const expire = this.options[cacheType]?.expire ?? this.options.default.expire!;

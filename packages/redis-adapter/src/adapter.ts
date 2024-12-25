@@ -88,31 +88,18 @@ export class RedisAdapter implements Adapter {
 		await this.client.hSet(this.buildKey(id), toDb(data));
 	}
 
-	async bulkPatch(updateOnly: boolean, data: [string, any][]) {
+	async bulkPatch(data: [string, any][]) {
 		const promises: Promise<any>[] = [];
 
 		for (const [k, v] of data) {
-			promises.push(this.patch(updateOnly, k, v));
+			promises.push(this.patch(k, v));
 		}
 
 		await Promise.all(promises);
 	}
 
-	async patch(updateOnly: boolean, id: string, data: any): Promise<void> {
-		if (updateOnly) {
-			await this.client.eval(
-				`if redis.call('exists',KEYS[1]) == 1 then redis.call('hset', KEYS[1], ${Array.from(
-					{ length: Object.keys(data).length * 2 },
-					(_, i) => `ARGV[${i + 1}]`,
-				)}) end`,
-				{
-					keys: [this.buildKey(id)],
-					arguments: Object.entries(toDb(data)).flat(),
-				},
-			);
-		} else {
-			await this.client.hSet(this.buildKey(id), toDb(data));
-		}
+	async patch(id: string, data: any): Promise<void> {
+		await this.client.hSet(this.buildKey(id), toDb(data));
 	}
 
 	async values(to: string): Promise<any[]> {

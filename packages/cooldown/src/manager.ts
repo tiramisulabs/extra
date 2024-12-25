@@ -1,5 +1,5 @@
 import type { AnyContext, SubCommand } from 'seyfert';
-import type { ReturnCache } from 'seyfert/lib/cache';
+import { CacheFrom, type ReturnCache } from 'seyfert/lib/cache';
 import type { BaseClient } from 'seyfert/lib/client/base';
 import { type PickPartial, fakePromise } from 'seyfert/lib/common';
 import { type CooldownData, CooldownResource, type CooldownType } from './resource';
@@ -51,7 +51,7 @@ export class CooldownManager {
 	}
 
 	set(options: CooldownSetOptions) {
-		return this.resource.set(`${options.name}:${options.type}:${options.target}`, {
+		return this.resource.set(CacheFrom.Gateway, `${options.name}:${options.type}:${options.target}`, {
 			interval: options.interval,
 			remaining: options.remaining,
 			lastDrip: options.lastDrip,
@@ -126,7 +126,7 @@ export class CooldownManager {
 		const deltaMS = now - options.data.lastDrip;
 		if (deltaMS >= options.props.interval) {
 			return fakePromise(
-				this.resource.patch(`${options.name}:${options.props.type}:${options.target}`, {
+				this.resource.patch(CacheFrom.Gateway, `${options.name}:${options.props.type}:${options.target}`, {
 					lastDrip: now,
 					remaining: options.props.uses[options.use ?? 'default'] - 1,
 				}),
@@ -138,7 +138,7 @@ export class CooldownManager {
 		}
 
 		return fakePromise(
-			this.resource.patch(`${options.name}:${options.props.type}:${options.target}`, {
+			this.resource.patch(CacheFrom.Gateway, `${options.name}:${options.props.type}:${options.target}`, {
 				remaining: options.data.remaining - 1,
 			}),
 		).then(() => true);
@@ -154,9 +154,9 @@ export class CooldownManager {
 		const [resolve, data] = this.getCommandData(name) ?? [];
 		if (!(data && resolve)) return false;
 
-		return fakePromise(this.resource.patch(`${resolve}:${data.type}:${target}`, { remaining: data.uses[use] })).then(
-			() => true,
-		);
+		return fakePromise(
+			this.resource.patch(CacheFrom.Gateway, `${resolve}:${data.type}:${target}`, { remaining: data.uses[use] }),
+		).then(() => true);
 	}
 }
 
