@@ -23,7 +23,6 @@ export interface ExpirableRedisAdapterOptions {
 	role?: ResourceLimitedMemoryAdapter;
 	stage_instance?: ResourceLimitedMemoryAdapter;
 	sticker?: ResourceLimitedMemoryAdapter;
-	thread?: ResourceLimitedMemoryAdapter;
 	overwrite?: ResourceLimitedMemoryAdapter;
 	message?: ResourceLimitedMemoryAdapter;
 }
@@ -31,7 +30,9 @@ export interface ExpirableRedisAdapterOptions {
 export class ExpirableRedisAdapter extends RedisAdapter {
 	options: MakeRequired<ExpirableRedisAdapterOptions, 'default'>;
 	constructor(
-		data: ({ client: ReturnType<typeof createClient> } | { redisOptions: RedisClientOptions }) & RedisAdapterOptions,
+		data: ({ client: ReturnType<typeof createClient> } | { redisOptions: RedisClientOptions }) & RedisAdapterOptions = {
+			redisOptions: {},
+		},
 		options: ExpirableRedisAdapterOptions = {},
 	) {
 		super(data);

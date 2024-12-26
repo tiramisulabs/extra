@@ -12,10 +12,10 @@ export class RedisAdapter implements Adapter {
 	namespace: string;
 
 	constructor(
-		data: ({ client: ReturnType<typeof createClient> } | { redisOptions: RedisClientOptions }) & RedisAdapterOptions,
+		data?: ({ client: ReturnType<typeof createClient> } | { redisOptions: RedisClientOptions }) & RedisAdapterOptions,
 	) {
-		this.client = 'client' in data ? data.client : createClient(data.redisOptions);
-		this.namespace = data.namespace ?? 'seyfert';
+		this.client = data && 'client' in data ? data.client : createClient(data?.redisOptions);
+		this.namespace = data?.namespace ?? 'seyfert';
 	}
 
 	async start() {

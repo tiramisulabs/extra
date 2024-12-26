@@ -8,7 +8,7 @@ const client = new Client();
 
 client.setServices({
     cache: {
-        adapter: new RedisAdapter({ redisOptions: { port: 4444 } })
+        adapter: new RedisAdapter()
     }
 });
 
