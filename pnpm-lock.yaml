@@ -37,8 +37,8 @@ importers:
   packages/cooldown:
     dependencies:
       seyfert:
-        specifier: 2.2.0
-        version: 2.2.0
+        specifier: 2.2.1-dev-12889248293.0
+        version: 2.2.1-dev-12889248293.0
     devDependencies:
       '@types/node':
         specifier: ^22.10.2
@@ -50,8 +50,8 @@ importers:
   packages/generic-adapter:
     dependencies:
       seyfert:
-        specifier: 2.2.0
-        version: 2.2.0
+        specifier: 2.2.1-dev-12889248293.0
+        version: 2.2.1-dev-12889248293.0
       tweetnacl:
         specifier: ^1.0.3
         version: 1.0.3
@@ -66,8 +66,8 @@ importers:
   packages/proxy:
     dependencies:
       seyfert:
-        specifier: 2.2.0
-        version: 2.2.0
+        specifier: 2.2.1-dev-12889248293.0
+        version: 2.2.1-dev-12889248293.0
       uWebSockets.js:
         specifier: github:uNetworking/uWebSockets.js#v20.49.0
         version: https://codeload.github.com/uNetworking/uWebSockets.js/tar.gz/442087c0a01bf146acb7386910739ec81df06700
@@ -85,8 +85,8 @@ importers:
         specifier: ^1.6.0
         version: 1.6.0
       seyfert:
-        specifier: 2.2.0
-        version: 2.2.0
+        specifier: 2.2.1-dev-12889248293.0
+        version: 2.2.1-dev-12889248293.0
     devDependencies:
       '@types/node':
         specifier: ^22.10.2
@@ -98,8 +98,8 @@ importers:
   packages/uws-adapter:
     dependencies:
       seyfert:
-        specifier: 2.2.0
-        version: 2.2.0
+        specifier: 2.2.1-dev-12889248293.0
+        version: 2.2.1-dev-12889248293.0
       tweetnacl:
         specifier: ^1.0.3
         version: 1.0.3
@@ -120,8 +120,8 @@ importers:
         specifier: ^4.0.3
         version: 4.0.3
       seyfert:
-        specifier: 2.2.0
-        version: 2.2.0
+        specifier: 2.2.1-dev-12889248293.0
+        version: 2.2.1-dev-12889248293.0
       tweetnacl:
         specifier: ^1.0.3
         version: 1.0.3
@@ -645,8 +645,8 @@ packages:
     engines: {node: '>=18.0.0', npm: '>=8.0.0'}
     hasBin: true
 
-  seyfert@2.2.0:
-    resolution: {integrity: sha512-EUM7wpTJcHyS1trJ/uzMtH1CCo64UK4/PH3UNY4p1ZkLzdBbMGYb3lp0P/y1/RfiV6qjBDQAa26hVL083DhYcA==}
+  seyfert@2.2.1-dev-12889248293.0:
+    resolution: {integrity: sha512-9g++r1dVrz56/AEymJmQ1PP7ipzcfGQzPbYQRu+jG39hbXhl5glBhxvEH8OcqCMuvToFQuj2C+VTtlEsgkkjOw==}
 
   siginfo@2.0.0:
     resolution: {integrity: sha512-ybx0WO1/8bSBLEWXZvEd7gMW3Sn3JFlW3TvX1nREbDLRNQNaeNN8WK0meBwPdAaOI7TtRRRJn/Es1zhrrCHu7g==}
@@ -1177,7 +1177,7 @@ snapshots:
       '@rollup/rollup-win32-x64-msvc': 4.29.1
       fsevents: 2.3.3
 
-  seyfert@2.2.0: {}
+  seyfert@2.2.1-dev-12889248293.0: {}
 
   siginfo@2.0.0: {}
 
