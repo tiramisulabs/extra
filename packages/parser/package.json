@@ -1,0 +1,31 @@
+{
+	"name": "@slipher/yuna",
+	"version": "0.1.0",
+	"private": false,
+	"license": "MIT",
+	"publishConfig": {
+		"access": "public"
+	},
+	"files": [
+		"lib/**"
+	],
+	"main": "./lib/index.js",
+	"module": "./lib/index.js",
+	"types": "./lib/index.d.ts",
+	"scripts": {
+		"dev": "tsc --watch",
+		"build": "tsc",
+		"lint": "biome lint --write ./src",
+		"format": "biome format --write ./src",
+		"checkb": "biome check --write --no-errors-on-unmatched ./src",
+		"test": "vitest run --config ./test/vitest.config.mts ./test/"
+	},
+	"devDependencies": {
+		"@types/node": "^22.10.7",
+		"didyoumean2": "^7.0.4",
+		"typescript": "^5.7.3"
+	},
+	"dependencies": {
+		"seyfert": "2.2.1-dev-12889384680.0"
+	}
+}
