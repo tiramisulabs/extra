@@ -86,7 +86,7 @@ export class UwsAdapter implements HttpServerAdapter {
 							if (key === 'payload_json') {
 								body = value as string;
 							} else {
-								files.push(value as File);
+								files.push(value as unknown as File);
 							}
 						}
 
