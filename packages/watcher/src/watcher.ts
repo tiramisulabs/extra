@@ -3,7 +3,7 @@ import { Worker } from 'node:worker_threads';
 import { watch } from 'chokidar';
 import { ApiHandler, Logger, Router, ShardManager } from 'seyfert';
 import { BaseClient, type InternalRuntimeConfig } from 'seyfert/lib/client/base';
-import type { PickPartial, MakeRequired } from 'seyfert/lib/common';
+import type { MakeRequired, PickPartial } from 'seyfert/lib/common';
 import {
 	GatewayDispatchEvents,
 	type GatewayDispatchPayload,

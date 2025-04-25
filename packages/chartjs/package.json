@@ -20,7 +20,7 @@
 		"checkb": "biome check --write --no-errors-on-unmatched ./src"
 	},
 	"devDependencies": {
-		"@types/node": "^22.14.1",
+		"@types/node": "^22.15.1",
 		"typescript": "^5.8.3"
 	},
 	"dependencies": {
