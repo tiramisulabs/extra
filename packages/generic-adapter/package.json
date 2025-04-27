@@ -1,6 +1,6 @@
 {
 	"name": "@slipher/generic-adapter",
-	"version": "0.0.3",
+	"version": "0.0.4",
 	"private": false,
 	"license": "MIT",
 	"publishConfig": {
@@ -20,7 +20,7 @@
 		"checkb": "biome check --write --no-errors-on-unmatched ./src"
 	},
 	"dependencies": {
-		"seyfert": "3.0.1-dev-14656752310.0",
+		"seyfert": "3.1.0",
 		"tweetnacl": "^1.0.3"
 	},
 	"devDependencies": {

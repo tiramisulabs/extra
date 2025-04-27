@@ -1,6 +1,6 @@
 {
 	"name": "@slipher/redis-adapter",
-	"version": "0.0.3",
+	"version": "0.0.4",
 	"private": false,
 	"license": "MIT",
 	"publishConfig": {
@@ -26,7 +26,7 @@
 	},
 	"dependencies": {
 		"@redis/client": "^1.6.0",
-		"seyfert": "3.0.1-dev-14656752310.0"
+		"seyfert": "3.1.0"
 	},
 	"devDependencies": {
 		"@types/node": "^22.15.1",
