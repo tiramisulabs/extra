@@ -22,7 +22,8 @@
 		"test:adapter": "node --test ./test/adapter.test.js",
 		"test:cache": "node --test ./test/cache.test.js",
 		"test:expirableadapter": "node --test ./test/expirableadapter.test.js",
-		"test:expirablecache": "node --test ./test/expirablecache.test.js"
+		"test:expirablecache": "node --test ./test/expirablecache.test.js",
+		"prepublish": "pnpm build"
 	},
 	"dependencies": {
 		"@redis/client": "^1.6.0",

@@ -17,7 +17,8 @@
 		"build": "tsc",
 		"lint": "biome lint --write ./src",
 		"format": "biome format --write ./src",
-		"checkb": "biome check --write --no-errors-on-unmatched ./src"
+		"checkb": "biome check --write --no-errors-on-unmatched ./src",
+		"prepublish": "pnpm build"
 	},
 	"devDependencies": {
 		"@types/node": "^22.15.1",
