@@ -47,7 +47,7 @@ export class RedisAdapter implements Adapter {
 			MATCH: match,
 			TYPE: 'hash',
 		})) {
-			values.push(i);
+			values.push(...i);
 		}
 
 		return returnKeys ? values : this.bulkGet(values);
@@ -144,8 +144,8 @@ export class RedisAdapter implements Adapter {
 		await this.bulkRemove(keys);
 	}
 
-	contains(to: string, keys: string): Promise<boolean> {
-		return this.client.sIsMember(`${this.buildKey(to)}:set`, keys);
+	async contains(to: string, keys: string): Promise<boolean> {
+		return await this.client.sIsMember(`${this.buildKey(to)}:set`, keys)>0;
 	}
 
 	getToRelationship(to: string): Promise<string[]> {
