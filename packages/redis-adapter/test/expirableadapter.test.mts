@@ -1,5 +1,5 @@
 // @ts-check
-import { assert, afterAll, beforeAll, describe, test } from 'vitest';
+import { afterAll, assert, beforeAll, describe, test } from 'vitest';
 import { ExpirableRedisAdapter } from '../lib/index';
 
 describe('ExpirableRedisAdapter', async () => {

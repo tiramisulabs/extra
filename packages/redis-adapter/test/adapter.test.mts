@@ -1,4 +1,4 @@
-import { assert, afterAll, beforeAll, describe, test } from 'vitest';
+import { afterAll, assert, beforeAll, describe, test } from 'vitest';
 import { RedisAdapter } from '../lib/index';
 
 describe('RedisAdapter', async () => {

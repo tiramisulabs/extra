@@ -1,4 +1,4 @@
-import { type RedisClientOptions, createClient } from '@redis/client';
+import { createClient, type RedisClientOptions } from '@redis/client';
 import type { Adapter } from 'seyfert/lib/cache';
 
 export interface RedisAdapterOptions {
@@ -32,9 +32,8 @@ export class RedisAdapter implements Adapter {
 			MATCH: match,
 			TYPE: 'set',
 		})) {
-			keys.push(i);
+			keys.push(...i);
 		}
-
 		return returnKeys ? keys.map(x => this.buildKey(x)) : this.bulkGet(keys);
 	}
 
@@ -175,6 +174,7 @@ export class RedisAdapter implements Adapter {
 	}
 
 	protected buildKey(key: string) {
+		console.log({ key }, 'buildKey');
 		return key.startsWith(this.namespace) ? key : `${this.namespace}:${key}`;
 	}
 }

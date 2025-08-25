@@ -1,4 +1,4 @@
-import type { RedisClientOptions, createClient } from '@redis/client';
+import type { createClient, RedisClientOptions } from '@redis/client';
 import { type MakeRequired, MergeOptions } from 'seyfert/lib/common';
 import { RedisAdapter, type RedisAdapterOptions, toDb } from './adapter';
 
@@ -56,7 +56,7 @@ export class ExpirableRedisAdapter extends RedisAdapter {
 			MATCH: match,
 			TYPE: 'string',
 		})) {
-			keys.push(i);
+			keys.push(...i);
 		}
 
 		return returnKeys ? keys.map(x => this.buildKey(x)) : this.bulkGet(keys);
