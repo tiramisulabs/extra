@@ -145,7 +145,7 @@ export class RedisAdapter implements Adapter {
 	}
 
 	async contains(to: string, keys: string): Promise<boolean> {
-		return await this.client.sIsMember(`${this.buildKey(to)}:set`, keys)>0;
+		return (await this.client.sIsMember(`${this.buildKey(to)}:set`, keys)) > 0;
 	}
 
 	getToRelationship(to: string): Promise<string[]> {

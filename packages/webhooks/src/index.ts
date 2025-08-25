@@ -22,7 +22,6 @@ export const init = (options: AppOptions) => {
 					publicKey: options.publicKey,
 				});
 			} catch (e) {
-				// biome-ignore lint/suspicious/noConsole: logger rip
 				console.error(e);
 				return res.writeHead(401).end();
 			}
