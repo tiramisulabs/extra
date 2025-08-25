@@ -174,7 +174,6 @@ export class RedisAdapter implements Adapter {
 	}
 
 	protected buildKey(key: string) {
-		console.log({ key }, 'buildKey');
 		return key.startsWith(this.namespace) ? key : `${this.namespace}:${key}`;
 	}
 }
