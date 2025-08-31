@@ -5,7 +5,7 @@ import { type APIInteraction, InteractionResponseType, InteractionType } from 's
 import nacl from 'tweetnacl';
 
 export class GenericAdapter implements HttpServerAdapter {
-	publicKeyHex!: Uint8Array;
+	publicKeyHex!: Buffer;
 	applicationId!: string;
 	debugger?: Logger;
 	logger: Logger;
@@ -25,7 +25,7 @@ export class GenericAdapter implements HttpServerAdapter {
 		if (applicationId) {
 			this.applicationId = applicationId;
 		}
-		this.publicKeyHex = new Uint8Array(Buffer.from(publicKey, 'hex'));
+		this.publicKeyHex = Buffer.from(publicKey, 'hex');
 		this.logger.info('Running on <url>');
 	}
 
@@ -35,8 +35,8 @@ export class GenericAdapter implements HttpServerAdapter {
 		const body = (await req.json()) as APIInteraction;
 		if (
 			nacl!.sign.detached.verify(
-				Uint8Array.from(timestamp + JSON.stringify(body)),
-				new Uint8Array(Buffer.from(ed25519, 'hex')),
+				Buffer.from(timestamp + JSON.stringify(body)),
+				Buffer.from(ed25519, 'hex'),
 				this.publicKeyHex,
 			)
 		) {
