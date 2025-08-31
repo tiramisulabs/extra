@@ -1,12 +1,12 @@
-import { ApiHandler, type HttpMethods, type RawFile } from 'seyfert';
 import {
 	App,
+	getParts,
 	type HttpRequest,
 	type HttpResponse,
 	type TemplatedApp,
-	getParts,
 	type us_listen_socket,
 } from 'uWebSockets.js';
+import { ApiHandler, type HttpMethods, type RawFile } from 'seyfert';
 export function createProxy(options: {
 	token: string;
 	port: number;

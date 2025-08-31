@@ -1,8 +1,8 @@
+import { App, type HttpRequest, type HttpResponse, type TemplatedApp } from 'uWebSockets.js';
 import type { Logger, UsingClient } from 'seyfert';
 import type { HttpServerAdapter } from 'seyfert/lib/client/types';
 import { type APIInteraction, InteractionResponseType, InteractionType } from 'seyfert/lib/types';
 import nacl from 'tweetnacl';
-import { App, type HttpRequest, type HttpResponse, type TemplatedApp } from 'uWebSockets.js';
 
 export class UwsAdapter implements HttpServerAdapter {
 	public app!: TemplatedApp;

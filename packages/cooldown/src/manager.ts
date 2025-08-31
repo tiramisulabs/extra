@@ -1,7 +1,7 @@
 import type { AnyContext, SubCommand } from 'seyfert';
 import { CacheFrom, type ReturnCache } from 'seyfert/lib/cache';
 import type { BaseClient } from 'seyfert/lib/client/base';
-import { type PickPartial, fakePromise } from 'seyfert/lib/common';
+import { fakePromise, type PickPartial } from 'seyfert/lib/common';
 import { type CooldownData, CooldownResource, type CooldownType } from './resource';
 
 export class CooldownManager {
