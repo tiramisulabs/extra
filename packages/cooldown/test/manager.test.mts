@@ -35,7 +35,7 @@ describe('CooldownManager', async () => {
 				name: 'commandWithfakeGuildId',
 				description: 'aaaa',
 				cooldown: cooldownData,
-				guildId: [],
+				guildId: ['124'],
 			},
 			{
 				name: 'testCommand',
@@ -209,7 +209,6 @@ describe('CooldownManager', async () => {
 		const shouldUndefined = cooldownManager.getCommandData('commandWithfakeGuildId', '123');
 		const shouldNotUndefined = cooldownManager.getCommandData('commandWithfakeGuildId');
 		assert.equal(shouldUndefined, undefined);
-		console.log(shouldNotUndefined);
 		assert.deepEqual(shouldNotUndefined, [
 			'commandWithfakeGuildId',
 			{
