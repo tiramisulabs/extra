@@ -14,7 +14,7 @@ export class CooldownManager {
 		if (!this.client.commands?.values?.length) return;
 		for (const command of this.client.commands.values) {
 			if (!('cooldown' in command)) continue;
-			if (guildId && !command.guildId?.includes(guildId)) continue;
+			if (guildId && command.guildId?.length && !command.guildId.includes(guildId)) continue;
 			if (command.name === name) return [command.name, command.cooldown];
 			if ('options' in command) {
 				const option = command.options?.find((x): x is SubCommand => x.name === name);

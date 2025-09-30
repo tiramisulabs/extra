@@ -1,7 +1,7 @@
 import { Cache, Client, Logger, MemoryAdapter } from 'seyfert';
 import { CommandHandler } from 'seyfert/lib/commands/handler.js';
 import { assert, beforeEach, describe, test } from 'vitest';
-import { CooldownManager, type CooldownProps, CooldownType } from '../src';
+import { CooldownManager, type CooldownProps, CooldownType } from '../lib';
 
 describe('CooldownManager', async () => {
 	let client: Client;
@@ -30,6 +30,13 @@ describe('CooldownManager', async () => {
 			},
 		};
 		handler.values = [
+			// @ts-expect-error
+			{
+				name: 'commandWithfakeGuildId',
+				description: 'aaaa',
+				cooldown: cooldownData,
+				guildId: [],
+			},
 			{
 				name: 'testCommand',
 				description: 'aaaa',
@@ -196,5 +203,22 @@ describe('CooldownManager', async () => {
 		});
 		const getter = cooldownManager.resource.get('testCommand:user:user1');
 		assert.ok(getter?.remaining === 2);
+	});
+
+	test('getCommandData should return undefined for a command with a fake guildId', () => {
+		const shouldUndefined = cooldownManager.getCommandData('commandWithfakeGuildId', '123');
+		const shouldNotUndefined = cooldownManager.getCommandData('commandWithfakeGuildId');
+		assert.equal(shouldUndefined, undefined);
+		console.log(shouldNotUndefined);
+		assert.deepEqual(shouldNotUndefined, [
+			'commandWithfakeGuildId',
+			{
+				type: 'user',
+				interval: 1000,
+				uses: {
+					default: 3,
+				},
+			},
+		]);
 	});
 });
