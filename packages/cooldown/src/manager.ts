@@ -14,7 +14,7 @@ export class CooldownManager {
 		if (!this.client.commands?.values?.length) return;
 		for (const command of this.client.commands.values) {
 			if (!('cooldown' in command)) continue;
-			if (guildId && !command.guildId?.includes(guildId)) continue;
+			if (guildId && command.guildId?.length && !command.guildId.includes(guildId)) continue;
 			if (command.name === name) return [command.name, command.cooldown];
 			if ('options' in command) {
 				const option = command.options?.find((x): x is SubCommand => x.name === name);
@@ -62,11 +62,11 @@ export class CooldownManager {
 		if (!('command' in context)) return true;
 		if (!('name' in context.command)) return true;
 
-		const cd = context.command.cooldown;
-		if (!cd) return true;
+		const [resolve, data] = this.getCommandData(context.command.name, guildId) ?? [];
+		if (!(data && resolve)) return true;
 
 		let target: string | undefined;
-		switch (cd.type) {
+		switch (data.type) {
 			case 'user':
 				target = context.author.id;
 				break;
@@ -79,15 +79,15 @@ export class CooldownManager {
 		}
 
 		target ??= context.author.id;
-		return this.use({ name: context.command.name, target, use, guildId });
+		return this.use({ name: context.command.name, target, use, guildId }, [resolve, data]);
 	}
 
 	/**
 	 * Use a cooldown
 	 * @returns The remaining cooldown in seconds or true if successful
 	 */
-	use(options: CooldownUseOptions): ReturnCache<number | true> {
-		const [resolve, data] = this.getCommandData(options.name, options.guildId) ?? [];
+	use(options: CooldownUseOptions, resolveData?: [string, CooldownProps]): ReturnCache<number | true> {
+		const [resolve, data] = resolveData ?? this.getCommandData(options.name, options.guildId) ?? [];
 		if (!(data && resolve)) return true;
 
 		return fakePromise(this.resource.get(`${resolve}:${data.type}:${options.target}`)).then(cooldown => {
