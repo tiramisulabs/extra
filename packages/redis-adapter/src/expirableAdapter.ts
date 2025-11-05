@@ -100,13 +100,18 @@ export class ExpirableRedisAdapter extends RedisAdapter {
 	}
 
 	async removeRelationship(to: string | string[]): Promise<void> {
-		const promisesScan: Promise<string>[] = [];
+		const promisesScan: Promise<string[]>[] = [];
 
 		for (const i of Array.isArray(to) ? to : [to]) {
-			await this.scan(`${this.buildKey(i)}.uset.*`);
+			promisesScan.push(this.scan(`${this.buildKey(i)}.uset.*`));
 		}
 
-		await this.client.del(await Promise.all(promisesScan));
+		if (promisesScan.length) {
+			const keys = (await Promise.all(promisesScan)).flat();
+			if (keys.length) {
+				await this.client.del(keys);
+			}
+		}
 	}
 
 	async count(to: string): Promise<number> {
