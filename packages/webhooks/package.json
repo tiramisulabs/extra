@@ -1,6 +1,6 @@
 {
 	"name": "@slipher/webhooks",
-	"version": "0.0.2",
+	"version": "0.0.3",
 	"private": false,
 	"license": "MIT",
 	"publishConfig": {
@@ -21,8 +21,8 @@
 		"prepublish": "pnpm build"
 	},
 	"devDependencies": {
-		"@types/node": "^24.3.0",
-		"typescript": "^5.9.2"
+		"@types/node": "^25.0.10",
+		"typescript": "^5.9.3"
 	},
 	"dependencies": {
 		"tweetnacl": "^1.0.3"

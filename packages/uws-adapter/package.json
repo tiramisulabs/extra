@@ -1,6 +1,6 @@
 {
 	"name": "@slipher/uws-adapter",
-	"version": "0.0.5",
+	"version": "0.0.6",
 	"private": false,
 	"license": "MIT",
 	"publishConfig": {
@@ -21,12 +21,12 @@
 		"prepublish": "pnpm build"
 	},
 	"dependencies": {
-		"seyfert": "3.2.6",
+		"seyfert": "4.1.0",
 		"tweetnacl": "^1.0.3",
 		"uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.51.0"
 	},
 	"devDependencies": {
-		"@types/node": "^24.3.0",
-		"typescript": "^5.9.2"
+		"@types/node": "^25.0.10",
+		"typescript": "^5.9.3"
 	}
 }
