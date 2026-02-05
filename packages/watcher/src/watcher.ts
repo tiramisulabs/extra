@@ -1,9 +1,9 @@
 import { execSync } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
 import { watch } from 'chokidar';
-import { ApiHandler, Logger, Router, ShardManager } from 'seyfert';
+import { ApiHandler, Logger, ShardManager } from 'seyfert';
 import { BaseClient, type InternalRuntimeConfig } from 'seyfert/lib/client/base';
-import type { MakeRequired, PickPartial } from 'seyfert/lib/common';
+import type { MakeDeepPartial, MakeRequired, PickPartial } from 'seyfert/lib/common';
 import {
 	GatewayDispatchEvents,
 	type GatewayDispatchPayload,
@@ -29,7 +29,7 @@ export class Watcher extends ShardManager {
 	 * Initializes a new instance of the Watcher class.
 	 * @param options The options for the watcher.
 	 */
-	constructor(options: WatcherOptions) {
+	constructor(options: MakeDeepPartial<WatcherOptions, 'connectionTimeout' | 'reconnectTimeout' | 'resharding'>) {
 		super({
 			handlePayload() {
 				//
@@ -86,14 +86,14 @@ export class Watcher extends ShardManager {
 	 */
 	async spawnShards() {
 		const RC = await BaseClient.prototype.getRC<InternalRuntimeConfig>();
-		this.options.token = RC.token;
+		this.options.token ||= RC.token;
 		this.rest ??= new ApiHandler({
 			baseUrl: 'api/v10',
 			domain: 'https://discord.com',
 			token: this.options.token,
 		});
-		this.options.intents = RC.intents;
-		this.options.info = await new Router(this.rest!).createProxy().gateway.bot.get();
+		this.options.intents ||= RC.intents;
+		if (this.options.info.shards <= 0) this.options.info = await this.rest!.proxy.gateway.bot.get();
 		this.options.totalShards = this.options.info.shards;
 
 		this.resetWorker();
@@ -153,10 +153,15 @@ export interface WatcherOptions
 		| 'totalShards'
 		| 'url'
 		| 'version'
+		| 'debug'
 	> {
+	/** Path to the worker (index) file. */
 	filePath: string;
+	/** Command to transpile the source code. */
 	transpileCommand?: string;
+	/** Path to watch for changes. */
 	srcPath: string;
+	/** Arguments to pass to the worker. */
 	argv?: string[];
 	handlePayload?: ShardManagerOptions['handlePayload'];
 	info?: ShardManagerOptions['info'];
