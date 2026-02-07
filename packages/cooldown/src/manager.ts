@@ -1,4 +1,4 @@
-import { AnyContext } from 'seyfert';
+import type { AnyContext } from 'seyfert';
 import { CacheFrom, type ReturnCache } from 'seyfert/lib/cache';
 import type { BaseClient } from 'seyfert/lib/client/base';
 import { fakePromise, type PickPartial } from 'seyfert/lib/common';
@@ -6,17 +6,17 @@ import { type CooldownData, CooldownResource, type CooldownType } from './resour
 
 export class CooldownManager {
 	resource: CooldownResource;
-	
+
 	constructor(public readonly client: BaseClient) {
 		this.resource = new CooldownResource(client.cache, client);
 	}
 
 	private get debugger() {
-		return this.client.debugger
+		return this.client.debugger;
 	}
 
 	getCommandData(name: string, guildId?: string): [name: string, data: CooldownProps | undefined] | undefined {
-		const { command, parent, fullCommandName }= this.client.handleCommand.getCommandFromContent(
+		const { command, parent, fullCommandName } = this.client.handleCommand.getCommandFromContent(
 			name
 				.split(' ')
 				.filter(x => x)
@@ -33,11 +33,10 @@ export class CooldownManager {
 			if (command.guildId?.includes(guildId)) return [fullCommandName, command.cooldown];
 			this.debugger?.info(`No guild-specific cooldown found for command ${command.name} and guildId ${guildId}`);
 			return undefined;
-		} 
+		}
 
 		this.debugger?.info(`No guildId provided, checking for global cooldown for command ${command.name}`);
-		return [fullCommandName, command.cooldown ?? parent?.cooldown]
-
+		return [fullCommandName, command.cooldown ?? parent?.cooldown];
 	}
 
 	has(options: CooldownHasOptions): ReturnCache<boolean> {
