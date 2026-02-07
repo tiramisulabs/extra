@@ -1,4 +1,4 @@
-import type { AnyContext, SubCommand } from 'seyfert';
+import { AnyContext } from 'seyfert';
 import { CacheFrom, type ReturnCache } from 'seyfert/lib/cache';
 import type { BaseClient } from 'seyfert/lib/client/base';
 import { fakePromise, type PickPartial } from 'seyfert/lib/common';
@@ -6,24 +6,38 @@ import { type CooldownData, CooldownResource, type CooldownType } from './resour
 
 export class CooldownManager {
 	resource: CooldownResource;
+	
 	constructor(public readonly client: BaseClient) {
 		this.resource = new CooldownResource(client.cache, client);
 	}
 
+	private get debugger() {
+		return this.client.debugger
+	}
+
 	getCommandData(name: string, guildId?: string): [name: string, data: CooldownProps | undefined] | undefined {
-		if (!this.client.commands?.values?.length) return;
-		for (const command of this.client.commands.values) {
-			if (!('cooldown' in command)) continue;
-			if (guildId && command.guildId?.length && !command.guildId.includes(guildId)) continue;
-			if (command.name === name) return [command.name, command.cooldown];
-			if ('options' in command) {
-				const option = command.options?.find((x): x is SubCommand => x.name === name);
-				if (option) {
-					return [option.name, option.cooldown ?? command.cooldown];
-				}
-			}
-		}
-		return undefined;
+		const { command, parent, fullCommandName }= this.client.handleCommand.getCommandFromContent(
+			name
+				.split(' ')
+				.filter(x => x)
+				.slice(0, 3),
+		);
+
+		this.debugger?.info(`Resolving cooldown data for command ${name} with guildId ${guildId}`);
+
+		if (!command) return undefined;
+
+		this.debugger?.info(`Found command ${command.name} for cooldown data resolution`);
+		if (guildId) {
+			this.debugger?.info(`Checking guild-specific cooldown for command ${command.name} and guildId ${guildId}`);
+			if (command.guildId?.includes(guildId)) return [fullCommandName, command.cooldown];
+			this.debugger?.info(`No guild-specific cooldown found for command ${command.name} and guildId ${guildId}`);
+			return undefined;
+		} 
+
+		this.debugger?.info(`No guildId provided, checking for global cooldown for command ${command.name}`);
+		return [fullCommandName, command.cooldown ?? parent?.cooldown]
+
 	}
 
 	has(options: CooldownHasOptions): ReturnCache<boolean> {
@@ -60,9 +74,10 @@ export class CooldownManager {
 
 	context(context: AnyContext, use?: keyof UsesProps, guildId?: string) {
 		if (!('command' in context)) return true;
-		if (!('name' in context.command)) return true;
+		if (!('fullCommandName' in context)) return true;
+		const name = context.fullCommandName;
 
-		const [resolve, data] = this.getCommandData(context.command.name, guildId) ?? [];
+		const [resolve, data] = this.getCommandData(name, guildId) ?? [];
 		if (!(data && resolve)) return true;
 
 		let target: string | undefined;
@@ -79,7 +94,8 @@ export class CooldownManager {
 		}
 
 		target ??= context.author.id;
-		return this.use({ name: context.command.name, target, use, guildId }, [resolve, data]);
+		this.debugger?.info(`Using target ${target} for cooldown of type ${data.type}`);
+		return this.use({ name, target, use, guildId }, [resolve, data]);
 	}
 
 	/**
@@ -90,8 +106,12 @@ export class CooldownManager {
 		const [resolve, data] = resolveData ?? this.getCommandData(options.name, options.guildId) ?? [];
 		if (!(data && resolve)) return true;
 
+		this.debugger?.info(`Using cooldown for command ${options.name} and target ${options.target}`);
 		return fakePromise(this.resource.get(`${resolve}:${data.type}:${options.target}`)).then(cooldown => {
 			if (!cooldown) {
+				this.debugger?.info(
+					`No existing cooldown found for command ${options.name} and target ${options.target}, setting new cooldown`,
+				);
 				return fakePromise(
 					this.set({
 						name: resolve,
@@ -103,6 +123,7 @@ export class CooldownManager {
 				).then(() => true);
 			}
 
+			this.debugger?.info(`Found existing cooldown for command ${options.name} and target ${options.target}`);
 			return fakePromise(
 				this.drip({
 					name: resolve,
@@ -125,6 +146,7 @@ export class CooldownManager {
 		const now = Date.now();
 		const deltaMS = now - options.data.lastDrip;
 		if (deltaMS >= options.props.interval) {
+			this.debugger?.info(`Cooldown expired for ${options.name} and target ${options.target}, resetting cooldown`);
 			return fakePromise(
 				this.resource.patch(CacheFrom.Gateway, `${options.name}:${options.props.type}:${options.target}`, {
 					lastDrip: now,
@@ -134,9 +156,11 @@ export class CooldownManager {
 		}
 
 		if (options.data.remaining - 1 < 0) {
+			this.debugger?.info(`Cooldown still active for ${options.name} and target ${options.target}, cannot drip`);
 			return deltaMS;
 		}
 
+		this.debugger?.info(`Dripping cooldown for ${options.name} and target ${options.target}`);
 		return fakePromise(
 			this.resource.patch(CacheFrom.Gateway, `${options.name}:${options.props.type}:${options.target}`, {
 				remaining: options.data.remaining - 1,
@@ -154,6 +178,7 @@ export class CooldownManager {
 		const [resolve, data] = this.getCommandData(name) ?? [];
 		if (!(data && resolve)) return false;
 
+		this.debugger?.info(`Refilling cooldown for command ${name} and target ${target}`);
 		return fakePromise(
 			this.resource.patch(CacheFrom.Gateway, `${resolve}:${data.type}:${target}`, { remaining: data.uses[use] }),
 		).then(() => true);

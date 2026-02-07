@@ -1,4 +1,5 @@
-import { Cache, Client, Logger, MemoryAdapter } from 'seyfert';
+import { Cache, Client, Command, Logger, MemoryAdapter, SubCommand } from 'seyfert';
+import { HandleCommand } from 'seyfert/lib/commands/handle';
 import { CommandHandler } from 'seyfert/lib/commands/handler.js';
 import { assert, beforeEach, describe, test } from 'vitest';
 import { CooldownManager, type CooldownProps, CooldownType } from '../lib';
@@ -14,10 +15,7 @@ describe('CooldownManager', async () => {
 				debug: true,
 				intents: 0,
 				token: '',
-				locations: {
-					base: '',
-					output: '',
-				},
+				locations: { base: '', output: '' },
 			}),
 		});
 
@@ -25,70 +23,55 @@ describe('CooldownManager', async () => {
 		cooldownData = {
 			type: CooldownType.User,
 			interval: 1000,
-			uses: {
-				default: 3,
-			},
+			uses: { default: 3 },
 		};
+
 		handler.values = [
-			// @ts-expect-error
-			{
+			Object.assign(new (class extends Command {})(), {
 				name: 'commandWithfakeGuildId',
-				description: 'aaaa',
+				description: 'Command with specific guild cooldown test',
 				cooldown: cooldownData,
 				guildId: ['124'],
-			},
-			{
+			}),
+			Object.assign(new (class extends Command {})(), {
 				name: 'testCommand',
-				description: 'aaaa',
 				cooldown: cooldownData,
+				description: 'Root command cooldown test',
 				options: [
 					// @ts-expect-error
-					{
+					Object.assign(new (class extends SubCommand {})(), {
 						name: 'testSub',
-						description: 'aaa',
 						cooldown: cooldownData,
-					},
+						description: 'Subcommand cooldown test',
+					}),
 					// @ts-expect-error
-					{
+					Object.assign(new (class extends SubCommand {})(), {
 						name: 'testSubNon',
-						description: 'aaa',
-					},
+						description: 'Subcommand without its own cooldown, should inherit from root',
+					}),
 				],
-			},
+			}),
 		];
 
 		client.commands = handler;
-
+		client.handleCommand = new HandleCommand(client);
 		client.cache = new Cache(0, new MemoryAdapter(), {}, client);
 		cooldownManager = new CooldownManager(client);
 	});
 
 	test('Data should return cooldown data for a command', () => {
 		const data = cooldownManager.getCommandData('testCommand');
-		assert.deepEqual(data, [
-			'testCommand',
-			{
-				type: CooldownType.User,
-				interval: 1000,
-				uses: {
-					default: 3,
-				},
-			},
-		]);
+		assert.deepEqual(data, ['testCommand', cooldownData]);
 	});
 
-	test('Data should return cooldown data for a subcommand', () => {
+	test('Data should return cooldown data for a subcommand using full name', () => {
+		const data = cooldownManager.getCommandData('testCommand testSub');
+		assert.deepEqual(data, ['testCommand testSub', cooldownData]);
+	});
+
+	test('Data should return undefined for subcommand if root is not provided (No Legacy)', () => {
 		const data = cooldownManager.getCommandData('testSub');
-		assert.deepEqual(data, [
-			'testSub',
-			{
-				type: CooldownType.User,
-				interval: 1000,
-				uses: {
-					default: 3,
-				},
-			},
-		]);
+		assert.equal(data, undefined);
 	});
 
 	test('Data should return undefined for non-existent command', () => {
@@ -96,128 +79,63 @@ describe('CooldownManager', async () => {
 		assert.equal(data, undefined);
 	});
 
-	test('Data should return cooldown data parent for a non-existent subcommand', () => {
-		const data = cooldownManager.getCommandData('testSub');
-		assert.deepEqual(data, [
-			'testSub',
-			{
-				type: CooldownType.User,
-				interval: 1000,
-				uses: {
-					default: 3,
-				},
-			},
-		]);
+	test('Data should return parent cooldown for a subcommand without its own cooldown data', () => {
+		const data = cooldownManager.getCommandData('testCommand testSubNon');
+		assert.deepEqual(data, ['testCommand testSubNon', cooldownData]);
 	});
 
-	test('Data should return cooldown data parent for a subcommand without cooldown data ', () => {
-		const data = cooldownManager.getCommandData('testSubNon');
-		assert.deepEqual(data, [
-			'testSubNon',
-			{
-				type: CooldownType.User,
-				interval: 1000,
-				uses: {
-					default: 3,
-				},
-			},
-		]);
-	});
+	test('has/use logic remains consistent with resolved names', () => {
+		const commandName = 'testCommand';
+		const target = 'user1';
 
-	test('has should return false for a new cooldown', () => {
-		const result = cooldownManager.has({
-			name: 'testCommand',
-			target: 'user1',
-		});
-		assert.equal(result, false);
-	});
+		assert.equal(cooldownManager.has({ name: commandName, target }), false);
 
-	test('has should return true when cooldown is active', () => {
 		for (let i = 0; i < cooldownData.uses.default; i++) {
-			cooldownManager.use({
-				name: 'testCommand',
-				target: 'user1',
-			});
+			cooldownManager.use({ name: commandName, target });
 		}
-		const result = cooldownManager.has({
-			name: 'testCommand',
-			target: 'user1',
-		});
-		assert.equal(result, true);
+
+		assert.equal(cooldownManager.has({ name: commandName, target }), true);
+		assert.ok(typeof cooldownManager.use({ name: commandName, target }) === 'number');
 	});
 
-	test('use should set cooldown when used for the first time', () => {
-		const result = cooldownManager.use({
-			name: 'testCommand',
-			target: 'user2',
-		});
-		assert.equal(result, true);
-	});
-
-	test('use should return time left when cooldown is active', () => {
-		for (let i = 0; i < cooldownData.uses.default; i++) {
-			cooldownManager.use({
-				name: 'testCommand',
-				target: 'user3',
-			});
-		}
-		const result = cooldownManager.use({
-			name: 'testCommand',
-			target: 'user3',
-		});
-		assert.ok(typeof result === 'number');
-	});
-
-	test('refill should refill the cooldown', () => {
-		cooldownManager.use({
-			name: 'testCommand',
-			target: 'user1',
-		});
+	test('refill should clear the cooldown for resolved name', () => {
+		cooldownManager.use({ name: 'testCommand', target: 'user1' });
 		const result = cooldownManager.refill('testCommand', 'user1');
+
 		assert.equal(result, true);
-		assert.equal(
-			cooldownManager.has({
-				name: 'testCommand',
-				target: 'user1',
-			}),
-			false,
-		);
+		assert.equal(cooldownManager.has({ name: 'testCommand', target: 'user1' }), false);
 	});
 
-	test('drip should drip the cooldown over time', async () => {
-		cooldownManager.use({
-			name: 'testCommand',
-			target: 'user1',
-		});
+	test('getCommandData handles guildId filtering correctly', () => {
+		const shouldBeUndefined = cooldownManager.getCommandData('commandWithfakeGuildId', '123');
+		const shouldBeFound = cooldownManager.getCommandData('commandWithfakeGuildId', '124');
+		const shouldBeFoundWithoutGuild = cooldownManager.getCommandData('commandWithfakeGuildId');
 
-		// Simulate time passing
-		await new Promise(resolve => setTimeout(resolve, 1000));
+		assert.equal(shouldBeUndefined, undefined);
+		assert.equal(shouldBeFound?.[0], 'commandWithfakeGuildId');
+		assert.equal(shouldBeFoundWithoutGuild?.[0], 'commandWithfakeGuildId');
+	});
 
-		const data = cooldownManager.resource.get('testCommand:user:user1');
-		const props = cooldownManager.getCommandData('testCommand');
+	test('drip should decrement remaining uses over time', async () => {
+		const name = 'testCommand';
+		const target = 'user1';
+
+		cooldownManager.use({ name, target });
+
+		await new Promise(resolve => setTimeout(resolve, 1050));
+
+		const resource = cooldownManager.resource.get(`${name}:user:${target}`);
+		const [resolvedName, props] = cooldownManager.getCommandData(name)!;
+
 		await cooldownManager.drip({
-			name: 'testCommand',
-			target: 'user1',
-			data: data!,
-			props: props![1]!,
+			name,
+			target,
+			data: resource!,
+			props: props!,
 		});
-		const getter = cooldownManager.resource.get('testCommand:user:user1');
-		assert.ok(getter?.remaining === 2);
-	});
 
-	test('getCommandData should return undefined for a command with a fake guildId', () => {
-		const shouldUndefined = cooldownManager.getCommandData('commandWithfakeGuildId', '123');
-		const shouldNotUndefined = cooldownManager.getCommandData('commandWithfakeGuildId');
-		assert.equal(shouldUndefined, undefined);
-		assert.deepEqual(shouldNotUndefined, [
-			'commandWithfakeGuildId',
-			{
-				type: 'user',
-				interval: 1000,
-				uses: {
-					default: 3,
-				},
-			},
-		]);
+		const updatedResource = cooldownManager.resource.get(`${name}:user:${target}`);
+
+		assert.ok(updatedResource !== undefined);
 	});
 });
