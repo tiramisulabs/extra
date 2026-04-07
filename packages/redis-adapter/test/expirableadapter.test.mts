@@ -20,6 +20,23 @@ describe('ExpirableRedisAdapter', async () => {
 		},
 	);
 
+	const createAdapter = async (
+		namespace: string,
+		options: ConstructorParameters<typeof ExpirableRedisAdapter>[1] = {},
+	) => {
+		const instance = new ExpirableRedisAdapter(
+			{
+				redisOptions: {},
+				namespace,
+			},
+			options,
+		);
+
+		await instance.start();
+		await instance.flush();
+		return instance;
+	};
+
 	await adapter.start();
 
 	beforeAll(async () => {
@@ -54,7 +71,6 @@ describe('ExpirableRedisAdapter', async () => {
 		const result = await adapter.bulkGet(['key1', 'key2']);
 		assert.deepEqual(
 			result,
-			// @ts-expect-error
 			bulk.map(x => x[1]),
 		);
 	});
@@ -77,6 +93,66 @@ describe('ExpirableRedisAdapter', async () => {
 	await test('scan', async () => {
 		const result = await adapter.scan('*');
 		assert.equal(result.length, 3);
+	});
+
+	await test('uses ondemand cache per resource', async () => {
+		const localAdapter = await createAdapter('ondemand_namespace', {
+			default: {
+				ondemand: false,
+				native: false,
+			},
+			user: {
+				ondemand: true,
+			},
+			guild: {
+				native: true,
+			},
+		});
+
+		try {
+			await localAdapter.set('user.1', { value: 'cached-user' });
+			await localAdapter.set('guild.1', { value: 'plain-guild' });
+
+			await localAdapter.client.del([
+				'ondemand_namespace:user.1',
+				'ondemand_namespace:guild.1',
+			]);
+
+			assert.deepEqual(await localAdapter.get('user.1'), { value: 'cached-user' });
+			assert.deepEqual(await localAdapter.get('guild.1'), undefined);
+		} finally {
+			await localAdapter.flush();
+			await localAdapter.client.quit();
+		}
+	});
+
+	await test('evicts ondemand cache entries with per-resource limit', async () => {
+		const localAdapter = await createAdapter('limited_ondemand_namespace', {
+			user: {
+				ondemand: true,
+				limit: 2,
+			},
+		});
+
+		try {
+			await localAdapter.set('user.1', { value: 'one' });
+			await localAdapter.set('user.2', { value: 'two' });
+			await localAdapter.get('user.1');
+			await localAdapter.set('user.3', { value: 'three' });
+
+			await localAdapter.client.del([
+				'limited_ondemand_namespace:user.1',
+				'limited_ondemand_namespace:user.2',
+				'limited_ondemand_namespace:user.3',
+			]);
+
+			assert.deepEqual(await localAdapter.get('user.1'), { value: 'one' });
+			assert.deepEqual(await localAdapter.get('user.2'), undefined);
+			assert.deepEqual(await localAdapter.get('user.3'), { value: 'three' });
+		} finally {
+			await localAdapter.flush();
+			await localAdapter.client.quit();
+		}
 	});
 
 	afterAll(async () => {
