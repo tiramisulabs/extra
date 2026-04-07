@@ -3,8 +3,14 @@ import { type MakeRequired, MergeOptions } from 'seyfert/lib/common';
 import { RedisAdapter, type RedisAdapterOptions, toDb } from './adapter';
 
 export interface ResourceLimitedMemoryAdapter {
+	/** Expiration time for Redis keys in milliseconds. */
 	expire?: number;
-	// limit?: number; soontm?
+	/** Keeps fetched entries in a local in-memory cache for this resource. */
+	ondemand?: boolean;
+	/** Skips the local on-demand cache and relies on Redis/client-native caching instead. */
+	native?: boolean;
+	/** Maximum number of keys kept in the local on-demand cache for this resource. */
+	limit?: number;
 }
 
 export interface ExpirableRedisAdapterOptions {
@@ -29,6 +35,8 @@ export interface ExpirableRedisAdapterOptions {
 
 export class ExpirableRedisAdapter extends RedisAdapter {
 	options: MakeRequired<ExpirableRedisAdapterOptions, 'default'>;
+	protected readonly ondemandCache = new Map<string, Map<string, any>>();
+
 	constructor(
 		data: ({ client: ReturnType<typeof createClient> } | { redisOptions: RedisClientOptions }) & RedisAdapterOptions = {
 			redisOptions: {},
@@ -40,10 +48,81 @@ export class ExpirableRedisAdapter extends RedisAdapter {
 			{
 				default: {
 					expire: undefined,
+					ondemand: false,
+					native: false,
 				},
 			} satisfies ExpirableRedisAdapterOptions,
 			options,
 		);
+	}
+
+	protected resolveCacheType(key: string): keyof ExpirableRedisAdapterOptions {
+		const normalized = key.startsWith(`${this.namespace}:`) ? key.slice(this.namespace.length + 1) : key;
+		const cacheType = normalized.split('.')[0] as keyof ExpirableRedisAdapterOptions;
+		return cacheType in this.options ? cacheType : 'default';
+	}
+
+	protected getResourceOptions(key: string) {
+		const cacheType = this.resolveCacheType(key);
+		return this.options[cacheType] ?? this.options.default;
+	}
+
+	protected getOndemandBucket(key: string, create = false) {
+		const options = this.getResourceOptions(key);
+		if (!options.ondemand || options.native) return;
+
+		const cacheType = this.resolveCacheType(key);
+		let bucket = this.ondemandCache.get(cacheType);
+
+		if (!bucket && create) {
+			bucket = new Map<string, any>();
+			this.ondemandCache.set(cacheType, bucket);
+		}
+
+		return bucket;
+	}
+
+	protected getCachedValue(key: string) {
+		const bucket = this.getOndemandBucket(key);
+		const normalizedKey = this.buildKey(key);
+		const value = bucket?.get(normalizedKey);
+
+		// Refresh insertion order so the map behaves like an LRU cache.
+		if (bucket && value !== undefined) {
+			bucket.delete(normalizedKey);
+			bucket.set(normalizedKey, value);
+		}
+
+		return value;
+	}
+
+	protected cacheValue(key: string, value: any) {
+		const bucket = this.getOndemandBucket(key, true);
+		if (!bucket) return;
+
+		const normalizedKey = this.buildKey(key);
+		if (bucket.has(normalizedKey)) {
+			bucket.delete(normalizedKey);
+		}
+
+		bucket.set(normalizedKey, value);
+
+		const limit = this.getResourceOptions(key).limit;
+		if (limit && limit > 0) {
+			while (bucket.size > limit) {
+				const oldestKey = bucket.keys().next().value as string | undefined;
+				if (!oldestKey) break;
+				bucket.delete(oldestKey);
+			}
+		}
+	}
+
+	protected deleteCachedValue(key: string) {
+		this.getOndemandBucket(key)?.delete(this.buildKey(key));
+	}
+
+	protected clearOndemandCache() {
+		this.ondemandCache.clear();
 	}
 
 	async __scanString(query: string, returnKeys?: false): Promise<any[]>;
@@ -119,6 +198,7 @@ export class ExpirableRedisAdapter extends RedisAdapter {
 	}
 
 	async flush(): Promise<void> {
+		this.clearOndemandCache();
 		const keys = await Promise.all([
 			this.scan(this.buildKey('*'), true),
 			this.__scanString(this.buildKey('*'), true),
@@ -140,9 +220,9 @@ export class ExpirableRedisAdapter extends RedisAdapter {
 	async set(id: string, data: any) {
 		const promises: Promise<unknown>[] = [];
 		promises.push(this.client.hSet(this.buildKey(id), toDb(data)));
-		const cacheType = id.split('.')[0] as keyof ExpirableRedisAdapterOptions;
+		this.cacheValue(id, data);
 
-		const expire = this.options[cacheType]?.expire ?? this.options.default.expire!;
+		const expire = this.getResourceOptions(id).expire ?? this.options.default.expire!;
 		if (expire > 0) {
 			promises.push(this.client.pExpire(this.buildKey(id), expire));
 		}
@@ -150,15 +230,51 @@ export class ExpirableRedisAdapter extends RedisAdapter {
 		await Promise.all(promises);
 	}
 
+	async get(keys: string): Promise<any> {
+		const cached = this.getCachedValue(keys);
+		if (cached !== undefined) {
+			return cached;
+		}
+
+		const value = await super.get(keys);
+		if (value !== undefined) {
+			this.cacheValue(keys, value);
+		}
+		return value;
+	}
+
+	async bulkGet(keys: string[]) {
+		const result = await Promise.all(keys.map(key => this.get(key)));
+		return result.filter(x => x !== undefined);
+	}
+
 	async patch(id: string, data: any): Promise<void> {
 		const promises: Promise<unknown>[] = [this.client.hSet(this.buildKey(id), toDb(data))];
 
-		const cacheType = id.split('.')[0] as keyof ExpirableRedisAdapterOptions;
-		const expire = this.options[cacheType]?.expire ?? this.options.default.expire!;
+		const oldValue = this.getCachedValue(id);
+		if (oldValue !== undefined && !Array.isArray(oldValue) && !Array.isArray(data)) {
+			this.cacheValue(id, { ...oldValue, ...data });
+		} else {
+			this.deleteCachedValue(id);
+		}
+
+		const expire = this.getResourceOptions(id).expire ?? this.options.default.expire!;
 		if (expire > 0) {
 			promises.push(this.client.pExpire(this.buildKey(id), expire));
 		}
 
 		await Promise.all(promises);
+	}
+
+	async remove(keys: string): Promise<void> {
+		this.deleteCachedValue(keys);
+		await super.remove(keys);
+	}
+
+	async bulkRemove(keys: string[]) {
+		for (const key of keys) {
+			this.deleteCachedValue(key);
+		}
+		await super.bulkRemove(keys);
 	}
 }
