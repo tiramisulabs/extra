@@ -1,6 +1,7 @@
 import type { AnyContext } from 'seyfert';
 import { CacheFrom, type ReturnCache } from 'seyfert/lib/cache';
 import type { BaseClient } from 'seyfert/lib/client/base';
+import type { CommandFromContent } from 'seyfert/lib/commands/handle';
 import { fakePromise, type PickPartial } from 'seyfert/lib/common';
 import { type CooldownData, CooldownResource, type CooldownType } from './resource';
 
@@ -15,28 +16,42 @@ export class CooldownManager {
 		return this.client.debugger;
 	}
 
-	getCommandData(name: string, guildId?: string): [name: string, data: CooldownProps | undefined] | undefined {
-		const { command, parent, fullCommandName } = this.client.handleCommand.getCommandFromContent(
-			name
-				.split(' ')
-				.filter(x => x)
-				.slice(0, 3),
-		);
+	private resolveCommand(name: string) {
+		const content = name.trim();
+		const resolved = this.client.handleCommand.resolveCommandFromContent(content, '', undefined as never);
 
+		if (resolved.command) return resolved;
+
+		return this.client.handleCommand.getCommandFromContent(content.split(' ').filter(Boolean).slice(0, 3));
+	}
+
+	private getFullCommandName({ command, parent, fullCommandName }: CommandFromContent) {
+		if (!command) return fullCommandName;
+		if (parent && command !== parent)
+			return [parent.name, 'group' in command ? command.group : undefined, command.name].filter(Boolean).join(' ');
+		return command.name || fullCommandName;
+	}
+
+	getCommandData(name: string, guildId?: string): [name: string, data: CooldownProps | undefined] | undefined {
 		this.debugger?.info(`Resolving cooldown data for command ${name} with guildId ${guildId}`);
 
+		const { command, parent, fullCommandName } = this.resolveCommand(name);
+
 		if (!command) return undefined;
+
+		const resolvedName = this.getFullCommandName({ command, parent, fullCommandName });
+		const cooldown = command.cooldown ?? parent?.cooldown;
 
 		this.debugger?.info(`Found command ${command.name} for cooldown data resolution`);
 		if (guildId) {
 			this.debugger?.info(`Checking guild-specific cooldown for command ${command.name} and guildId ${guildId}`);
-			if (command.guildId?.includes(guildId)) return [fullCommandName, command.cooldown];
+			if (command.guildId?.includes(guildId) || parent?.guildId?.includes(guildId)) return [resolvedName, cooldown];
 			this.debugger?.info(`No guild-specific cooldown found for command ${command.name} and guildId ${guildId}`);
 			return undefined;
 		}
 
 		this.debugger?.info(`No guildId provided, checking for global cooldown for command ${command.name}`);
-		return [fullCommandName, command.cooldown ?? parent?.cooldown];
+		return [resolvedName, cooldown];
 	}
 
 	has(options: CooldownHasOptions): ReturnCache<boolean> {
