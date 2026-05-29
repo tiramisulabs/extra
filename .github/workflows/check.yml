@@ -44,6 +44,8 @@ jobs:
       - name: Testing
         run: pnpm run test
         id: test
+        env:
+          REDIS_URL: redis://localhost:6379
 
       - name: Commit and Push changes
         continue-on-error: true
