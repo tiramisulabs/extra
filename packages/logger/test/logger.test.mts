@@ -81,6 +81,20 @@ describe('createLogger', () => {
 		});
 	});
 
+	test('redacts circular structures without throwing', async () => {
+		const adapter = new RecordingAdapter();
+		const logger = createLogger({ adapter, redact: ['token'] });
+		const payload: Record<string, unknown> = { token: 'secret' };
+		payload.self = payload;
+
+		await logger.info(payload, 'redacted circular');
+
+		assert.deepEqual(adapter.entries[0].data, {
+			token: '[Redacted]',
+			self: '[Circular]',
+		});
+	});
+
 	test('redactLogValue can be used directly', () => {
 		assert.deepEqual(redactLogValue({ accessToken: 'secret', ok: true }, ['accessToken']), {
 			accessToken: '[Redacted]',

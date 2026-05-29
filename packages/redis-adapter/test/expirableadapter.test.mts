@@ -45,16 +45,12 @@ if (!redisUrl) {
 		});
 
 		await test('set', async () => {
-			await assert.doesNotThrow(async () => {
-				await adapter.set('test_key', { value: 'testValue' });
-			});
+			await adapter.set('test_key', { value: 'testValue' });
 		});
 
 		await test('bulkSet', async () => {
-			await assert.doesNotThrow(async () => {
-				//@ts-expect-error
-				await adapter.bulkSet(bulk);
-			});
+			//@ts-expect-error
+			await adapter.bulkSet(bulk);
 		});
 
 		await test('bulkGet', async () => {
@@ -67,18 +63,14 @@ if (!redisUrl) {
 		});
 
 		await test('patch', async () => {
-			await assert.doesNotThrow(async () => {
-				await adapter.patch('test_key', { newValue: 'updatedValue' });
-			});
+			await adapter.patch('test_key', { newValue: 'updatedValue' });
 		});
 
 		await test('bulkPatch', async () => {
-			await assert.doesNotThrow(async () => {
-				await adapter.bulkPatch([
-					['key1', { newValue: 'updatedValue1' }],
-					['key2', { newValue: 'updatedValue2' }],
-				]);
-			});
+			await adapter.bulkPatch([
+				['key1', { newValue: 'updatedValue1' }],
+				['key2', { newValue: 'updatedValue2' }],
+			]);
 		});
 
 		await test('scan', async () => {

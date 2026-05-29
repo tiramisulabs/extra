@@ -146,16 +146,30 @@ function normalizeLogArguments(data?: LogData | string | Error, message?: string
 	return { data: data ?? {}, message };
 }
 
-function redactValue(value: unknown, keys: ReadonlySet<string>, replacement: string): unknown {
-	if (Array.isArray(value)) return value.map(item => redactValue(item, keys, replacement));
+function redactValue(
+	value: unknown,
+	keys: ReadonlySet<string>,
+	replacement: string,
+	seen = new WeakSet<object>(),
+): unknown {
+	if (Array.isArray(value)) {
+		if (seen.has(value)) return '[Circular]';
+		seen.add(value);
+		const result = value.map(item => redactValue(item, keys, replacement, seen));
+		seen.delete(value);
+		return result;
+	}
 	if (value instanceof Date) return value;
-	if (value instanceof Error) return redactValue(serializeError(value), keys, replacement);
+	if (value instanceof Error) return redactValue(serializeError(value), keys, replacement, seen);
 	if (!isPlainObject(value)) return value;
+	if (seen.has(value)) return '[Circular]';
+	seen.add(value);
 
 	const result: Record<string, unknown> = {};
 	for (const [key, nestedValue] of Object.entries(value)) {
-		result[key] = keys.has(key.toLowerCase()) ? replacement : redactValue(nestedValue, keys, replacement);
+		result[key] = keys.has(key.toLowerCase()) ? replacement : redactValue(nestedValue, keys, replacement, seen);
 	}
+	seen.delete(value);
 	return result;
 }
 
