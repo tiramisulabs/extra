@@ -10,7 +10,6 @@
 		"lib/**"
 	],
 	"main": "./lib/index.js",
-	"module": "./lib/index.js",
 	"types": "./lib/index.d.ts",
 	"scripts": {
 		"dev": "tsc --watch",
@@ -18,7 +17,7 @@
 		"lint": "biome lint ./src",
 		"format": "biome format --write ./src",
 		"checkb": "biome check --no-errors-on-unmatched ./src",
-		"prepublish": "pnpm build"
+		"prepublishOnly": "pnpm build"
 	},
 	"dependencies": {
 		"chokidar": "^5.0.0",

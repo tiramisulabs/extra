@@ -1,5 +1,5 @@
 import { assert, describe, test } from 'vitest';
-import { LockAcquireError, LockManager, MemoryLockStore, parseDuration } from '../src';
+import { LockAcquireError, LockManager, type LockStore, MemoryLockStore, parseDuration } from '../src';
 
 function wait(milliseconds: number): Promise<void> {
 	return new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -7,14 +7,16 @@ function wait(milliseconds: number): Promise<void> {
 
 async function expectRejects(action: () => Promise<unknown>, validate: (error: unknown) => void): Promise<void> {
 	let thrown: unknown;
+	let rejected = false;
 
 	try {
 		await action();
 	} catch (error) {
 		thrown = error;
+		rejected = true;
 	}
 
-	if (!thrown) throw new Error('Expected promise to reject.');
+	if (!rejected) throw new Error('Expected promise to reject.');
 	validate(thrown);
 }
 
@@ -57,6 +59,21 @@ describe('LockManager', () => {
 				assert.instanceOf(error, LockAcquireError);
 			},
 		);
+	});
+
+	test('treats explicit zero wait as an immediate acquisition attempt', async () => {
+		const locks = new LockManager();
+		const lock = await locks.acquire('zero-wait', { ttl: '1s' });
+
+		await expectRejects(
+			() => locks.acquire('zero-wait', { wait: 0 }),
+			error => {
+				assert.instanceOf(error, LockAcquireError);
+				assert.include((error as Error).message, 'unavailable');
+			},
+		);
+
+		await locks.release(lock);
 	});
 
 	test('waits for a held lock to be released', async () => {
@@ -158,6 +175,60 @@ describe('LockManager', () => {
 		const next = await locks.acquire('with-throw');
 		assert.equal(next.key, 'with-throw');
 		await locks.release(next);
+	});
+
+	test('release returns a rejected promise when the store throws synchronously', async () => {
+		const releaseError = new Error('release failed');
+		const store: LockStore = {
+			acquire: (_key, _token, ttl, now) => ({ acquired: true, expiresAt: now + ttl }),
+			release: () => {
+				throw releaseError;
+			},
+			extend: () => true,
+		};
+		const locks = new LockManager({ store });
+		const lock = await locks.acquire('sync-release', { ttl: '1s' });
+		let releasePromise: Promise<boolean> | undefined;
+		let syncError: unknown;
+
+		try {
+			releasePromise = locks.release(lock);
+		} catch (error) {
+			syncError = error;
+		}
+
+		assert.equal(syncError, undefined);
+		assert.ok(releasePromise);
+		await expectRejects(
+			() => releasePromise!,
+			error => {
+				assert.equal(error, releaseError);
+			},
+		);
+	});
+
+	test('withLock preserves runner and release errors together', async () => {
+		const runnerError = new Error('runner failed');
+		const releaseError = new Error('release failed');
+		const store: LockStore = {
+			acquire: (_key, _token, ttl, now) => ({ acquired: true, expiresAt: now + ttl }),
+			release: () => {
+				throw releaseError;
+			},
+			extend: () => true,
+		};
+		const locks = new LockManager({ store });
+
+		await expectRejects(
+			() =>
+				locks.withLock('aggregate-release', () => {
+					throw runnerError;
+				}),
+			error => {
+				assert.instanceOf(error, AggregateError);
+				assert.deepEqual((error as AggregateError).errors, [runnerError, releaseError]);
+			},
+		);
 	});
 
 	test('fails predictably when wait timeout expires', async () => {

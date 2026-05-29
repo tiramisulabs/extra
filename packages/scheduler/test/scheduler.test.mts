@@ -37,6 +37,10 @@ function waitForSchedulerOutcome(
 	});
 }
 
+function wait(milliseconds: number): Promise<void> {
+	return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
 describe('parseDuration', () => {
 	test('parses scheduler intervals', () => {
 		assert.equal(parseDuration('10ms'), 10);
@@ -65,6 +69,21 @@ describe('CronExpression', () => {
 
 	test('accepts Sunday as 7', () => {
 		assert.deepEqual([...parseCronField('0,7', 0, 7, value => (value === 7 ? 0 : value))], [0]);
+	});
+
+	test('matches day-of-month or day-of-week when both are restricted', () => {
+		const expression = new CronExpression('0 9 1 * 1');
+
+		assert.equal(expression.matches(new Date('2026-05-01T09:00:00Z')), true);
+		assert.equal(expression.matches(new Date('2026-05-04T09:00:00Z')), true);
+		assert.equal(expression.matches(new Date('2026-05-05T09:00:00Z')), false);
+	});
+
+	test('rejects malformed step and range tokens', () => {
+		assert.throws(() => new CronExpression('1/2/3 * * * *'), RangeError);
+		assert.throws(() => new CronExpression('1-5-7 * * * *'), RangeError);
+		assert.throws(() => new CronExpression('*/ * * * *'), RangeError);
+		assert.throws(() => new CronExpression('-5 * * * *'), RangeError);
 	});
 });
 
@@ -119,10 +138,51 @@ describe('Scheduler', () => {
 		assert.deepEqual(scheduler.list(), [task]);
 		scheduler.start('report');
 		assert.equal(task.status, 'scheduled');
+		assert.ok(task.nextRunAt instanceof Date);
 		scheduler.pause('report');
 		assert.equal(task.status, 'paused');
 		assert.equal(scheduler.remove('report'), true);
 		assert.equal(scheduler.get('report'), undefined);
+	});
+
+	test('global start resumes globally paused tasks', () => {
+		const scheduler = new Scheduler();
+		const task = scheduler.every('1m', () => undefined, { id: 'global-report' });
+
+		scheduler.pause();
+		assert.equal(task.status, 'paused');
+		scheduler.start();
+
+		assert.equal(task.status, 'scheduled');
+		assert.ok(task.nextRunAt instanceof Date);
+		scheduler.clear();
+	});
+
+	test('listener errors do not prevent task execution', async () => {
+		const scheduler = new Scheduler();
+		const completed = Promise.race([
+			waitForEvent(scheduler, 'completed'),
+			wait(25).then(() => {
+				throw new Error('Timed out waiting for completed event.');
+			}),
+		]);
+		let ran = false;
+
+		scheduler.on('started', () => {
+			throw new Error('listener failed');
+		});
+		const task = scheduler.every(
+			'1h',
+			() => {
+				ran = true;
+			},
+			{ runImmediately: true },
+		);
+		const [completedTask] = await completed;
+
+		assert.equal(completedTask, task);
+		assert.equal(ran, true);
+		scheduler.clear();
 	});
 
 	test('creates cron tasks without starting when autostart is disabled', () => {

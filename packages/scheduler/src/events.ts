@@ -10,7 +10,7 @@ export type SchedulerEventMap = {
 };
 
 export type SchedulerEventName = keyof SchedulerEventMap;
-export type SchedulerListener<TArgs extends readonly unknown[]> = (...args: TArgs) => void;
+export type SchedulerListener<TArgs extends readonly unknown[]> = (...args: TArgs) => Promise<void> | void;
 
 export class SchedulerEmitter {
 	private readonly listeners = new Map<SchedulerEventName, Set<SchedulerListener<readonly unknown[]>>>();
@@ -31,7 +31,11 @@ export class SchedulerEmitter {
 	}
 
 	emit<TEvent extends SchedulerEventName>(event: TEvent, ...args: SchedulerEventMap[TEvent]): void {
-		for (const listener of this.listeners.get(event) ?? []) listener(...args);
+		for (const listener of this.listeners.get(event) ?? []) {
+			try {
+				Promise.resolve(listener(...args)).catch(() => {});
+			} catch {}
+		}
 	}
 
 	removeAllListeners(): void {

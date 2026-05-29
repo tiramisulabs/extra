@@ -10,7 +10,6 @@
 		"lib/**"
 	],
 	"main": "./lib/index.js",
-	"module": "./lib/index.js",
 	"types": "./lib/index.d.ts",
 	"scripts": {
 		"dev": "tsc --watch",
@@ -19,7 +18,7 @@
 		"format": "biome format --write ./src",
 		"checkb": "biome check --no-errors-on-unmatched ./src",
 		"test": "pnpm build && vitest run --config ./test/vitest.config.mts ./test/",
-		"prepublish": "pnpm build"
+		"prepublishOnly": "pnpm build"
 	},
 	"devDependencies": {
 		"@types/node": "^25.0.10",

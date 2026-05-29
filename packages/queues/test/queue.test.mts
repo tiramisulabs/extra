@@ -14,6 +14,10 @@ function waitForEvent<TArgs extends readonly unknown[]>(
 	});
 }
 
+function wait(milliseconds: number): Promise<void> {
+	return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
 function createDeferred<T>() {
 	let resolve!: (value: T) => void;
 	const promise = new Promise<T>(next => {
@@ -47,6 +51,29 @@ describe('Queue', () => {
 		assert.equal(job.result, 42);
 		assert.equal(queue.counts().completed, 1);
 		assert.equal(queue.getJob(job.id), job);
+	});
+
+	test('rejects duplicate explicit job IDs', () => {
+		const queue = new Queue<string, string>('duplicate', { autostart: false });
+
+		queue.add('first', { id: 'same' });
+
+		assert.throws(() => queue.add('second', { id: 'same' }), RangeError);
+		assert.equal(queue.counts().waiting, 1);
+	});
+
+	test('skips generated job ID collisions', () => {
+		const ids = ['same', 'same', 'other'];
+		const queue = new Queue<string, string>('generated-duplicate', {
+			autostart: false,
+			idGenerator: () => ids.shift() ?? 'fallback',
+		});
+
+		const first = queue.add('first');
+		const second = queue.add('second');
+
+		assert.equal(first.id, 'same');
+		assert.equal(second.id, 'other');
 	});
 
 	test('respects concurrency', async () => {
@@ -135,6 +162,31 @@ describe('Queue', () => {
 		assert.equal(queue.counts().failed, 1);
 	});
 
+	test('marks jobs as failed when retry delay resolution is invalid', async () => {
+		const queue = new Queue<string, string>('invalid-retry', {
+			attempts: 2,
+			retryDelay: () => 'soon',
+		});
+		const failed = Promise.race([
+			waitForEvent(queue, 'failed'),
+			wait(25).then(() => {
+				throw new Error('Timed out waiting for failed event.');
+			}),
+		]);
+
+		queue.process(() => {
+			throw new Error('processor failed');
+		});
+		const job = queue.add('bad-retry');
+		const [failedJob, error] = await failed;
+
+		assert.equal(failedJob, job);
+		assert.instanceOf(error, Error);
+		assert.equal(job.status, 'failed');
+		assert.equal(queue.counts().failed, 1);
+		assert.equal(queue.getJob(job.id), job);
+	});
+
 	test('waits for delayed jobs', async () => {
 		const queue = new Queue<string, string>('delayed');
 		const completed = waitForEvent(queue, 'completed');
@@ -147,6 +199,26 @@ describe('Queue', () => {
 
 		const [completedJob] = await completed;
 		assert.equal(completedJob, job);
+	});
+
+	test('refuses to clear while jobs are active', async () => {
+		const release = createDeferred<void>();
+		const queue = new Queue<string, string>('clear-active');
+		const active = waitForEvent(queue, 'active');
+		const completed = waitForEvent(queue, 'completed');
+
+		queue.process(async job => {
+			await release.promise;
+			return job.data;
+		});
+		queue.add('running');
+		await active;
+
+		assert.throws(() => queue.clear(), RangeError);
+		assert.equal(queue.counts().active, 1);
+
+		release.resolve();
+		await completed;
 	});
 
 	test('runs processors while holding a resolved lock key', async () => {

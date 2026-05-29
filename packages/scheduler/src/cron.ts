@@ -31,12 +31,19 @@ export class CronExpression {
 	}
 
 	matches(date: Date): boolean {
+		const dayOfMonthMatches = this.parts.daysOfMonth.has(date.getUTCDate());
+		const dayOfWeekMatches = this.parts.daysOfWeek.has(date.getUTCDay());
+		const dayMatches =
+			isCronWildcard(this.parts.daysOfMonth, cronRanges[2][0], cronRanges[2][1]) ||
+			isCronWildcard(this.parts.daysOfWeek, 0, 6)
+				? dayOfMonthMatches && dayOfWeekMatches
+				: dayOfMonthMatches || dayOfWeekMatches;
+
 		return (
 			this.parts.minutes.has(date.getUTCMinutes()) &&
 			this.parts.hours.has(date.getUTCHours()) &&
-			this.parts.daysOfMonth.has(date.getUTCDate()) &&
 			this.parts.months.has(date.getUTCMonth() + 1) &&
-			this.parts.daysOfWeek.has(date.getUTCDay())
+			dayMatches
 		);
 	}
 
@@ -77,7 +84,10 @@ function addCronPart(
 	max: number,
 	normalize: (value: number) => number,
 ): void {
-	const [rangePart, stepPart] = part.split('/');
+	const stepSegments = part.split('/');
+	if (stepSegments.length > 2 || stepSegments.some(segment => !segment))
+		throw new RangeError(`Invalid cron field: ${part}`);
+	const [rangePart, stepPart] = stepSegments;
 	const step = stepPart ? Number(stepPart) : 1;
 	if (!Number.isInteger(step) || step <= 0) throw new RangeError(`Invalid cron step: ${part}`);
 
@@ -92,7 +102,10 @@ function addCronPart(
 function parseCronRange(part: string, min: number, max: number): [number, number] {
 	if (part === '*') return [min, max];
 
-	const [start, end] = part.split('-');
+	const rangeSegments = part.split('-');
+	if (rangeSegments.length > 2 || rangeSegments.some(segment => !segment))
+		throw new RangeError(`Invalid cron range: ${part}`);
+	const [start, end] = rangeSegments;
 	const parsedStart = Number(start);
 	const parsedEnd = typeof end === 'undefined' ? parsedStart : Number(end);
 
@@ -102,4 +115,13 @@ function parseCronRange(part: string, min: number, max: number): [number, number
 		throw new RangeError(`Cron range out of bounds: ${part}`);
 
 	return [parsedStart, parsedEnd];
+}
+
+function isCronWildcard(values: Set<number>, min: number, max: number): boolean {
+	if (values.size !== max - min + 1) return false;
+	for (let value = min; value <= max; value++) {
+		if (!values.has(value)) return false;
+	}
+
+	return true;
 }

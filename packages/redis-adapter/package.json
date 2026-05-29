@@ -10,7 +10,6 @@
 		"lib/**"
 	],
 	"main": "./lib/index.js",
-	"module": "./lib/index.js",
 	"types": "./lib/index.d.ts",
 	"scripts": {
 		"dev": "tsc --watch",
@@ -23,7 +22,7 @@
 		"test:cache": "node --test ./test/cache.test.js",
 		"test:expirableadapter": "node --test ./test/expirableadapter.test.js",
 		"test:expirablecache": "node --test ./test/expirablecache.test.js",
-		"prepublish": "pnpm build"
+		"prepublishOnly": "pnpm build"
 	},
 	"dependencies": {
 		"@redis/client": "^5.10.0",

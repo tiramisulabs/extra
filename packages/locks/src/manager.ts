@@ -44,7 +44,7 @@ export class LockManager {
 
 	async acquire(key: string, options: LockOptions = {}): Promise<Lock> {
 		const ttl = parseDuration(options.ttl ?? this.defaultTtl);
-		const wait = typeof options.wait === 'undefined' ? 0 : parseDuration(options.wait);
+		const wait = typeof options.wait === 'undefined' || options.wait === 0 ? 0 : parseDuration(options.wait);
 		const retryInterval = parseDuration(options.retryInterval ?? this.defaultRetryInterval);
 		const waitDeadline = Date.now() + wait;
 
@@ -73,8 +73,8 @@ export class LockManager {
 		}
 	}
 
-	release(lock: Lock): Promise<boolean> {
-		return Promise.resolve(this.store.release(lock.key, lock.token));
+	async release(lock: Lock): Promise<boolean> {
+		return await this.store.release(lock.key, lock.token);
 	}
 
 	async extend(lock: Lock, ttl: DurationInput = this.defaultTtl): Promise<boolean> {
@@ -89,11 +89,25 @@ export class LockManager {
 
 	async withLock<TResult>(key: string, runner: LockRunner<TResult>, options: LockOptions = {}): Promise<TResult> {
 		const lock = await this.acquire(key, options);
+		let runnerError: unknown;
+		let didRunnerFail = false;
 
 		try {
 			return await runner(lock);
+		} catch (error) {
+			runnerError = error;
+			didRunnerFail = true;
+			throw error;
 		} finally {
-			await this.release(lock);
+			try {
+				await this.release(lock);
+			} catch (releaseError) {
+				if (didRunnerFail) {
+					throw new AggregateError([runnerError, releaseError], 'Lock runner failed and lock release also failed.');
+				}
+
+				throw releaseError;
+			}
 		}
 	}
 }

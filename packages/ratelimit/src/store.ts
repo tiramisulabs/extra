@@ -43,7 +43,7 @@ export class MemoryRateLimitStore implements RateLimitStore {
 
 	peek(key: string, options: Omit<RateLimitStoreConsumeOptions, 'cost'>): RateLimitStoreState {
 		const entry = this.getActiveEntry(key, options);
-		return this.toState(entry, options.limit, true, options.now);
+		return this.toState(entry, options.limit, entry.count < options.limit, options.now);
 	}
 
 	reset(key: string): boolean {

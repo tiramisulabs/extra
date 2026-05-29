@@ -118,6 +118,22 @@ describe('RateLimiter', () => {
 		assert.equal(afterReset.used, 0);
 	});
 
+	test('peek reports denied state when a key is exhausted', async () => {
+		const limiter = new RateLimiter<{ userId: string }>({
+			limit: 1,
+			window: '1m',
+			key: ctx => ctx.userId,
+			now: () => 0,
+		});
+
+		await limiter.consume({ userId: '1' });
+		const peeked = await limiter.peek({ userId: '1' });
+
+		assert.equal(peeked.allowed, false);
+		assert.equal(peeked.remaining, 0);
+		assert.equal(peeked.used, 1);
+	});
+
 	test('can abort while waiting for a rate limit window', async () => {
 		const limiter = new RateLimiter<{ userId: string }>({
 			limit: 1,

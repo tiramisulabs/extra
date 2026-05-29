@@ -69,6 +69,8 @@ export class Scheduler extends SchedulerEmitter {
 	}
 
 	start(id?: string): this {
+		this.running = true;
+
 		if (id) {
 			const task = this.requireTask(id);
 			task.status = 'scheduled';
@@ -76,8 +78,10 @@ export class Scheduler extends SchedulerEmitter {
 			return this;
 		}
 
-		this.running = true;
-		for (const task of this.tasks.values()) this.schedule(task, false);
+		for (const task of this.tasks.values()) {
+			task.status = 'scheduled';
+			this.schedule(task, false);
+		}
 		return this;
 	}
 

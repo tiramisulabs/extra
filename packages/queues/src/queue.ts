@@ -88,9 +88,11 @@ export class Queue<TData = unknown, TResult = unknown> extends QueueEmitter<TDat
 		const delay = parseDuration(options.delay ?? 0);
 		const attempts = options.attempts ?? this.defaultAttempts;
 		if (!Number.isInteger(attempts) || attempts <= 0) throw new RangeError('Job attempts must be a positive integer.');
+		const jobId = options.id ?? this.generateJobId();
+		if (this.getJob(jobId)) throw new RangeError(`Job with id "${jobId}" already exists.`);
 
 		const job = new Job<TData, TResult>(
-			options.id ?? this.idGenerator(),
+			jobId,
 			data,
 			attempts,
 			options.priority ?? 0,
@@ -125,6 +127,7 @@ export class Queue<TData = unknown, TResult = unknown> extends QueueEmitter<TDat
 	}
 
 	clear(): void {
+		if (this.activeJobs.size > 0) throw new RangeError('Cannot clear a queue while jobs are active.');
 		this.queue.length = 0;
 		this.completedJobs.clear();
 		this.failedJobs.clear();
@@ -244,15 +247,23 @@ export class Queue<TData = unknown, TResult = unknown> extends QueueEmitter<TDat
 			}
 
 			if (job.attemptsMade < job.maxAttempts) {
-				const delay = this.resolveRetryDelay(job, error);
+				let delay: number;
+				try {
+					delay = this.resolveRetryDelay(job, error);
+				} catch (retryError) {
+					this.failJob(
+						job,
+						new AggregateError([error, retryError], 'Queue job failed and retry delay resolution also failed.'),
+					);
+					return;
+				}
+
 				job.runAt = new Date(this.now() + delay);
 				this.idle = false;
 				this.emit('retrying', job, error, delay);
 				this.enqueue(job);
 			} else {
-				job.status = 'failed';
-				this.failedJobs.set(job.id, job);
-				this.emit('failed', job, error);
+				this.failJob(job, error);
 			}
 		} finally {
 			this.activeJobs.delete(job.id);
@@ -263,6 +274,23 @@ export class Queue<TData = unknown, TResult = unknown> extends QueueEmitter<TDat
 	private resolveRetryDelay(job: Job<TData, TResult>, error: unknown): number {
 		const delay = typeof this.retryDelay === 'function' ? this.retryDelay(job, error) : this.retryDelay;
 		return parseDuration(delay);
+	}
+
+	private failJob(job: Job<TData, TResult>, error: unknown): void {
+		job.error = error;
+		job.status = 'failed';
+		job.updatedAt = new Date(this.now());
+		this.failedJobs.set(job.id, job);
+		this.emit('failed', job, error);
+	}
+
+	private generateJobId(): string {
+		for (let attempt = 0; attempt < 1000; attempt++) {
+			const id = this.idGenerator();
+			if (!this.getJob(id)) return id;
+		}
+
+		throw new RangeError('Unable to generate a unique job id.');
 	}
 
 	private async processLocked(job: Job<TData, TResult>): Promise<TResult> {

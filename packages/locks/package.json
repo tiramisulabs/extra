@@ -10,7 +10,6 @@
 		"lib/**"
 	],
 	"main": "./lib/index.js",
-	"module": "./lib/index.js",
 	"types": "./lib/index.d.ts",
 	"exports": {
 		".": {
@@ -36,7 +35,7 @@
 		"format": "biome format --write ./src ./test",
 		"checkb": "biome check --no-errors-on-unmatched ./src ./test",
 		"test": "pnpm build && vitest run --config ./test/vitest.config.mts ./test/",
-		"prepublish": "pnpm build"
+		"prepublishOnly": "pnpm build"
 	},
 	"peerDependencies": {
 		"@redis/client": "^5.10.0"

@@ -30,6 +30,8 @@ scheduler.cron('0 */6 * * *', async () => {
 });
 ```
 
+`scheduler.cron` evaluates expressions in UTC. Write cron fields for the UTC time you want, not the host machine's local timezone.
+
 ## Events
 
 ```ts
