@@ -7,7 +7,6 @@
 			"DOM"
 		],
 		"moduleResolution": "node",
-		"ignoreDeprecations": "6.0",
 		"declaration": true,
 		"sourceMap": false,
 		"strict": true,

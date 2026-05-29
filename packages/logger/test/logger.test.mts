@@ -123,9 +123,10 @@ describe('logger plugin', () => {
 		assert.equal(adapter.entries[0].message, 'command failed');
 		assert.equal(adapter.entries[0].data.outcome, 'error');
 		assert.equal(adapter.entries[0].data.token, 'keep-me');
-		assert.equal((adapter.entries[0].data.error as { message: string }).message, 'Missing Permissions');
+		assert.equal(adapter.entries[0].data.error, error);
 		assert.equal(adapter.entries[0].logs.length, 1);
 		assert.equal(adapter.entries[0].logs[0].message, 'command failed');
+		assert.equal(adapter.entries[0].logs[0].data.error, error);
 	});
 
 	test('closes terminal hooks that do not reach onAfterRun', async () => {
@@ -234,12 +235,13 @@ describe('createLogger', () => {
 	test('writes immediate root logs and supports child bindings', async () => {
 		const adapter = new RecordingAdapter();
 		const root = createLogger({ adapter, bindings: { app: 'bot' } }).child({ shardId: 1 });
+		const error = new Error('boom');
 
-		await root.error({ route: '/sync' }, 'sync failed');
+		await root.error({ route: '/sync' }, 'sync failed', error);
 
 		assert.equal(adapter.entries.length, 1);
 		assert.deepEqual(adapter.entries[0].bindings, { app: 'bot', shardId: 1 });
-		assert.deepEqual(adapter.entries[0].data, { route: '/sync' });
+		assert.deepEqual(adapter.entries[0].data, { route: '/sync', error });
 		assert.equal(adapter.entries[0].message, 'sync failed');
 	});
 

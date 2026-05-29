@@ -127,7 +127,6 @@ export interface EvlogAdapterOptions {
 	eventName?: string;
 }
 
-const circularReplacement = '[Circular]';
 const levelValues: Record<LogLevel, number> = {
 	trace: 10,
 	debug: 20,
@@ -148,7 +147,7 @@ export class RootLogger {
 	constructor(options: LoggerOptions = {}) {
 		this.name = options.name;
 		this.level = options.level ?? 'info';
-		this.bindings = sanitizeLogObject(options.bindings ?? {});
+		this.bindings = options.bindings ?? {};
 		this.adapter = options.adapter ?? new ConsoleLoggerAdapter();
 		this.now = options.now ?? (() => new Date());
 	}
@@ -178,12 +177,11 @@ export class RootLogger {
 	}
 
 	child(bindings: LogBindings): RootLogger {
-		const sanitizedBindings = sanitizeLogObject(bindings);
 		return new RootLogger({
 			name: this.name,
 			level: this.level,
-			bindings: { ...this.bindings, ...sanitizedBindings },
-			adapter: this.adapter.child?.(sanitizedBindings) ?? this.adapter,
+			bindings: { ...this.bindings, ...bindings },
+			adapter: this.adapter.child?.(bindings) ?? this.adapter,
 			now: this.now,
 		});
 	}
@@ -206,15 +204,7 @@ export class RootLogger {
 
 	writeEntry(entry: LogEntry): Awaitable<void> {
 		if (!this.isEnabled(entry.level)) return;
-		return this.adapter.write({
-			...entry,
-			bindings: sanitizeLogObject(entry.bindings),
-			data: sanitizeLogObject(entry.data),
-			logs: entry.logs.map(record => ({
-				...record,
-				data: sanitizeLogObject(record.data),
-			})),
-		});
+		return this.adapter.write(entry);
 	}
 
 	private write(level: WritableLogLevel, args: readonly unknown[]): Awaitable<void> {
@@ -244,11 +234,11 @@ export class WideEventLogger {
 	constructor(root: RootLogger, data: LogData = {}) {
 		this.root = root;
 		this.startedAt = root.timestamp();
-		this.data = sanitizeLogObject(data);
+		this.data = data;
 	}
 
 	add(data: LogData): this {
-		this.data = { ...this.data, ...sanitizeLogObject(data) };
+		this.data = { ...this.data, ...data };
 		return this;
 	}
 
@@ -292,11 +282,11 @@ export class WideEventLogger {
 		const outcome = options.outcome ?? (options.error === undefined ? 'success' : 'error');
 		const data: LogData = {
 			...this.data,
-			...sanitizeLogObject(options.data ?? {}),
+			...(options.data ?? {}),
 			outcome,
 			durationMs: Math.max(0, time.getTime() - this.startedAt.getTime()),
 		};
-		if (options.error !== undefined) data.error = serializeErrorValue(options.error);
+		if (options.error !== undefined) data.error = options.error;
 
 		const level = options.level ?? selectWideEventLevel(outcome, this.records);
 		const kind = getString(data.kind) ?? 'event';
@@ -556,17 +546,17 @@ function normalizeLogArguments(args: readonly unknown[]): { data: LogData; messa
 		message = first;
 		remaining.push(second, ...rest);
 	} else if (first instanceof Error) {
-		data.error = serializeErrorValue(first);
+		data.error = first;
 		if (typeof second === 'string') message = second;
 		else remaining.push(second);
 		remaining.push(...rest);
-	} else if (isPlainObject(first)) {
-		data = sanitizeLogObject(first);
+	} else if (isLogData(first)) {
+		data = first;
 		if (typeof second === 'string') message = second;
 		else remaining.push(second);
 		remaining.push(...rest);
 	} else if (first !== undefined) {
-		data.value = sanitizeLogValue(first);
+		data.value = first;
 		if (typeof second === 'string') message = second;
 		else remaining.push(second);
 		remaining.push(...rest);
@@ -576,59 +566,23 @@ function normalizeLogArguments(args: readonly unknown[]): { data: LogData; messa
 	for (const value of remaining) {
 		if (value === undefined) continue;
 		if (value instanceof Error && data.error === undefined) {
-			data.error = serializeErrorValue(value);
+			data.error = value;
 			continue;
 		}
-		if (isPlainObject(value)) {
-			data = { ...data, ...sanitizeLogObject(value) };
+		if (isLogData(value)) {
+			data = { ...data, ...value };
 			continue;
 		}
-		extraArgs.push(sanitizeLogValue(value));
+		extraArgs.push(value);
 	}
 	if (extraArgs.length) data.args = extraArgs;
 
-	return { data: sanitizeLogObject(data), message };
+	return { data, message };
 }
 
 function withError(data: LogData, error: unknown): LogData {
 	if (error === undefined) return data;
-	return { ...data, error: serializeErrorValue(error) };
-}
-
-function serializeErrorValue(value: unknown): unknown {
-	if (!(value instanceof Error)) return sanitizeLogValue(value);
-	return stripUndefined({
-		name: value.name,
-		message: value.message,
-		stack: value.stack,
-		cause: value.cause === undefined ? undefined : sanitizeLogValue(value.cause),
-	});
-}
-
-function sanitizeLogObject(value: Record<string, unknown>): LogData {
-	return sanitizeLogValue(value) as LogData;
-}
-
-function sanitizeLogValue(value: unknown, seen = new WeakSet<object>()): unknown {
-	if (value instanceof Date) return value;
-	if (value instanceof Error) return serializeErrorValue(value);
-	if (Array.isArray(value)) {
-		if (seen.has(value)) return circularReplacement;
-		seen.add(value);
-		const result = value.map(item => sanitizeLogValue(item, seen));
-		seen.delete(value);
-		return result;
-	}
-	if (!isPlainObject(value)) return value;
-	if (seen.has(value)) return circularReplacement;
-	seen.add(value);
-
-	const result: Record<string, unknown> = {};
-	for (const [key, nestedValue] of Object.entries(value)) {
-		result[key] = sanitizeLogValue(nestedValue, seen);
-	}
-	seen.delete(value);
-	return result;
+	return { ...data, error };
 }
 
 function entryToAdapterPayload(entry: LogEntry): Record<string, unknown> {
@@ -650,10 +604,14 @@ function asRecord(value: unknown): Record<string, unknown> {
 	return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-	if (!value || typeof value !== 'object') return false;
-	const prototype = Object.getPrototypeOf(value);
-	return prototype === Object.prototype || prototype === null;
+function isLogData(value: unknown): value is LogData {
+	return (
+		!!value &&
+		typeof value === 'object' &&
+		!(value instanceof Date) &&
+		!(value instanceof Error) &&
+		!Array.isArray(value)
+	);
 }
 
 function getString(value: unknown): string | undefined {
