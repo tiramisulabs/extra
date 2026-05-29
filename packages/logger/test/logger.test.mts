@@ -1,5 +1,15 @@
 import { assert, describe, test } from 'vitest';
-import { ConsoleLoggerAdapter, createLogger, type LogEntry, type LoggerAdapter, redactLogValue } from '../src';
+import {
+	ConsoleLoggerAdapter,
+	commandLogger,
+	createLogger,
+	createSeyfertLoggerDefaults,
+	extractSeyfertLogContext,
+	installSeyfertLogger,
+	type LogEntry,
+	type LoggerAdapter,
+	redactLogValue,
+} from '../src';
 
 class RecordingAdapter implements LoggerAdapter {
 	readonly entries: LogEntry[] = [];
@@ -43,6 +53,30 @@ describe('createLogger', () => {
 		assert.deepEqual(adapter.entries[0].bindings, {});
 		assert.deepEqual(adapter.entries[0].data, { guildId: '123' });
 		assert.instanceOf(adapter.entries[0].time, Date);
+	});
+
+	test('accepts Seyfert core logger variadic calls', async () => {
+		const adapter = new RecordingAdapter();
+		const logger = createLogger({ adapter, level: 'debug' });
+		const error = new Error('boom');
+
+		await logger.warn('EventHandler.onFail', error, 'MESSAGE_CREATE');
+
+		assert.equal(adapter.entries[0].message, 'EventHandler.onFail');
+		assert.equal((adapter.entries[0].data.error as { message: string }).message, 'boom');
+		assert.deepEqual(adapter.entries[0].data.args, ['MESSAGE_CREATE']);
+	});
+
+	test('does not mutate caller log objects when appending extra args', async () => {
+		const adapter = new RecordingAdapter();
+		const logger = createLogger({ adapter });
+		const payload: Record<string, unknown> = { guildId: '123' };
+		const error = new Error('boom');
+
+		await logger.error(payload, 'failed', error);
+
+		assert.deepEqual(payload, { guildId: '123' });
+		assert.equal((adapter.entries[0].data.error as { message: string }).message, 'boom');
 	});
 
 	test('child loggers merge bindings into every entry', async () => {
@@ -126,5 +160,109 @@ describe('ConsoleLoggerAdapter', () => {
 		const adapter: LoggerAdapter = new ConsoleLoggerAdapter();
 
 		assert.equal(typeof adapter.write, 'function');
+	});
+});
+
+describe('Seyfert logger integration', () => {
+	test('installs the logger as the client and handler logger', () => {
+		const logger = createLogger({ adapter: new RecordingAdapter() });
+		const client = {
+			logger: undefined,
+			commands: { logger: undefined },
+			components: { logger: undefined },
+			events: { logger: undefined },
+			langs: { logger: undefined },
+			cache: { __logger__: undefined },
+		};
+
+		const installed = installSeyfertLogger(client, logger);
+
+		assert.equal(installed, logger);
+		assert.equal(client.logger, logger);
+		assert.equal(client.commands.logger, logger);
+		assert.equal(client.components.logger, logger);
+		assert.equal(client.events.logger, logger);
+		assert.equal(client.langs.logger, logger);
+		assert.equal(client.cache.__logger__, logger);
+	});
+
+	test('extracts useful Seyfert context fields', () => {
+		const context = {
+			fullCommandName: 'image anime',
+			guildId: 'guild-1',
+			channelId: 'channel-1',
+			shardId: 2,
+			author: { id: 'user-1', username: 'Socram' },
+			interaction: { id: 'interaction-1', locale: 'es-ES' },
+		};
+
+		assert.deepEqual(extractSeyfertLogContext(context), {
+			command: 'image anime',
+			guildId: 'guild-1',
+			channelId: 'channel-1',
+			shardId: 2,
+			userId: 'user-1',
+			username: 'Socram',
+			interactionId: 'interaction-1',
+			locale: 'es-ES',
+		});
+	});
+
+	test('provides a global command logging middleware', async () => {
+		const adapter = new RecordingAdapter();
+		const logger = createLogger({ adapter });
+		const middleware = commandLogger(logger);
+		let nextCalled = false;
+
+		await middleware({
+			context: {
+				fullCommandName: 'ping',
+				guildId: 'guild-1',
+				channelId: 'channel-1',
+				shardId: 0,
+				author: { id: 'user-1' },
+				interaction: { id: 'interaction-1' },
+			},
+			next: () => {
+				nextCalled = true;
+			},
+			stop: () => undefined,
+			pass: () => undefined,
+		});
+
+		assert.equal(nextCalled, true);
+		assert.equal(adapter.entries[0].message, 'command executed');
+		assert.deepEqual(adapter.entries[0].data, {
+			command: 'ping',
+			guildId: 'guild-1',
+			channelId: 'channel-1',
+			shardId: 0,
+			userId: 'user-1',
+			interactionId: 'interaction-1',
+		});
+	});
+
+	test('provides Seyfert defaults that log command errors with context', async () => {
+		const adapter = new RecordingAdapter();
+		const logger = createLogger({ adapter });
+		const defaults = createSeyfertLoggerDefaults(logger);
+		const error = new Error('failed');
+
+		await defaults.commands.onRunError(
+			{
+				fullCommandName: 'image anime',
+				guildId: 'guild-1',
+				channelId: 'channel-1',
+				shardId: 1,
+				author: { id: 'user-1' },
+				interaction: { id: 'interaction-1' },
+			},
+			error,
+		);
+
+		assert.equal(adapter.entries[0].level, 'error');
+		assert.equal(adapter.entries[0].message, 'command failed');
+		assert.equal((adapter.entries[0].data.error as { message: string }).message, 'failed');
+		assert.equal(adapter.entries[0].data.command, 'image anime');
 	});
 });

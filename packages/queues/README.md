@@ -1,8 +1,8 @@
 # @slipher/queues
 
-In-memory job queues for Slipher and Seyfert projects.
+Seyfert-first job queues for Discord work that should not run directly inside command handlers.
 
-Use it for reminders, expensive background work, retries, rate-controlled syncs, and other bot tasks that should not run directly inside command handlers.
+Use it for image generation, reminders, expensive syncs, retries, and other bot tasks that need queue state, shard-aware locks, Discord context, processors, producers, and lifecycle events.
 
 Status: beta/draft. The package is usable, but public API details may change before a stable release.
 
@@ -12,41 +12,55 @@ Status: beta/draft. The package is usable, but public API details may change bef
 pnpm add @slipher/queues
 ```
 
-## Basic usage
+## Seyfert module usage
 
 ```ts
-import { Queue } from '@slipher/queues';
+import { createSeyfertJob, Process, Processor, QueueEvent, QueueModule } from '@slipher/queues';
 
-const reminders = new Queue<{ userId: string; message: string }>('reminders', {
-	concurrency: 5,
-	attempts: 3,
-	retryDelay: '5s',
-});
+@Processor('images', { concurrency: 2, attempts: 3, retryDelay: '5s' })
+class ImageProcessor {
+	@Process('anime')
+	async anime(job) {
+		return generateAnimeImage(job.data.payload);
+	}
 
-reminders.process(async job => {
-	await sendReminder(job.data.userId, job.data.message);
-});
+	@QueueEvent('completed')
+	async completed(job, result) {
+		const channel = await client.channels.fetch(job.data.context.channelId);
+		await channel?.messages.write({ files: [result] });
+	}
+}
 
-reminders.add({ userId: '123', message: 'Time to ship!' }, { delay: '10m' });
+const queues = new QueueModule({ logger: client.logger, lock: locks });
+queues.register({ processors: [ImageProcessor] });
+
+queues.get('images').add(createSeyfertJob(ctx, { prompt: 'kanna ship it' }, { name: 'anime' }));
 ```
 
-## Events
+Jobs created with `createSeyfertJob` keep a compact snapshot of command context: command, guild, channel, user, shard, interaction, and locale.
+
+## Producers
 
 ```ts
-reminders.on('completed', job => {
-	console.log(`Completed ${job.id}`);
-});
+import { InjectQueue } from '@slipher/queues';
 
-reminders.on('failed', (job, error) => {
-	console.error(`Failed ${job.id}`, error);
-});
+class ImageProducer {
+	constructor(@InjectQueue('images') private readonly images) {}
+
+	anime(ctx, payload) {
+		return this.images.add(createSeyfertJob(ctx, payload, { name: 'anime' }));
+	}
+}
+
+queues.register({ producers: [ImageProducer] });
+const producer = queues.getProducer(ImageProducer);
 ```
 
 ## Inspecting queue state
 
 ```ts
-console.log(reminders.counts());
-console.log(reminders.getJob('1')?.snapshot());
+console.log(queues.get('images').counts());
+console.log(queues.get('images').getJob('1')?.snapshot());
 ```
 
 ## Lifecycle
@@ -62,7 +76,7 @@ Pass a `LockManager` when multiple Seyfert shards may enqueue equivalent work an
 ```ts
 import { LockManager } from '@slipher/locks';
 import { RedisLockStore } from '@slipher/locks/redis';
-import { Queue } from '@slipher/queues';
+import { QueueModule } from '@slipher/queues';
 
 const store = new RedisLockStore({
 	redisOptions: { url: process.env.REDIS_URL },
@@ -71,14 +85,8 @@ const store = new RedisLockStore({
 await store.start();
 
 const locks = new LockManager({ store });
-const syncs = new Queue<{ guildId: string }>('syncs', {
+const queues = new QueueModule({
 	lock: locks,
-	lockKey: job => `guild:${job.data.guildId}:sync`,
-	lockOptions: { ttl: '30s', wait: '5s' },
-});
-
-syncs.process(async job => {
-	await syncGuild(job.data.guildId);
 });
 ```
 

@@ -1,8 +1,8 @@
 # @slipher/logger
 
-Small logger facade for Slipher infrastructure packages and Seyfert-adjacent code.
+Seyfert-first structured logger for bots that need richer command, component, modal, event, queue, and shard logs than the default console output.
 
-Use it when package code needs structured logs, redaction, child bindings, or adapter compatibility without forcing a specific logger dependency on consumers. It is not intended to replace Seyfert's client logger; pass Seyfert, Pino, evlog, console, or any other sink through an adapter when that is the runtime logger for the app.
+Use it to replace `client.logger`, wire Seyfert command defaults, add a global command logging middleware, redact Discord secrets, and forward normalized entries into Pino, evlog, console, or any custom sink.
 
 Status: beta/draft. The package is usable, but public API details may change before a stable release.
 
@@ -15,17 +15,27 @@ pnpm add @slipher/logger
 ## Usage
 
 ```ts
-import { createLogger } from '@slipher/logger';
+import { commandLogger, createSeyfertLogger, createSeyfertLoggerDefaults } from '@slipher/logger';
 
-const logger = createLogger({
-	name: 'worker',
+const logger = createSeyfertLogger({
+	client,
+	name: 'Hiraku',
 	level: 'info',
-	redact: ['token', 'authorization'],
 });
 
-logger.info({ guildId }, 'sync started');
-logger.error({ error }, 'sync failed');
+client.setServices({
+	middlewares: {
+		logger: commandLogger(logger),
+	},
+});
+
+client.options.commands.defaults = {
+	...client.options.commands.defaults,
+	...createSeyfertLoggerDefaults(logger).commands,
+};
 ```
+
+`createSeyfertLogger({ client })` replaces `client.logger` and the logger references held by Seyfert handlers such as commands, components, events, langs, and cache.
 
 ## Child loggers
 
@@ -34,6 +44,19 @@ const shardLogger = logger.child({ shardId: 1 });
 
 shardLogger.info({ guildId }, 'guild sync queued');
 ```
+
+## Context
+
+`commandLogger` and the default hooks extract Seyfert context when available:
+
+- `command`
+- `guildId`
+- `channelId`
+- `shardId`
+- `userId`
+- `username`
+- `interactionId`
+- `locale`
 
 ## Adapters
 
@@ -53,5 +76,3 @@ const adapter: LoggerAdapter = {
 ```
 
 Optional compatibility should be provided by passing already-created logger instances into adapter factories. Do not wrap optional imports in `try/catch`; put Pino or evlog-specific helpers in separate optional packages if needed later.
-
-This package stays dependency-free in core. Pino, evlog, OpenTelemetry, and Seyfert-specific adapters belong in adapter helpers or separate optional packages after the facade is stable.

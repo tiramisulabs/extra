@@ -1,6 +1,15 @@
 import { LockManager } from '@slipher/locks';
 import { assert, describe, test } from 'vitest';
-import { parseDuration, Queue } from '../src';
+import {
+	createSeyfertJob,
+	InjectQueue,
+	Process,
+	Processor,
+	parseDuration,
+	Queue,
+	QueueEvent,
+	QueueModule,
+} from '../src';
 
 function waitForEvent<TArgs extends readonly unknown[]>(
 	queue: { on(event: string, listener: (...args: TArgs) => void): () => void },
@@ -266,5 +275,111 @@ describe('Queue', () => {
 		assert.equal(queue.counts().skipped, 1);
 		assert.equal(queue.counts().failed, 0);
 		await locks.release(lock);
+	});
+});
+
+describe('QueueModule', () => {
+	test('creates Seyfert job payloads from command context', () => {
+		const job = createSeyfertJob(
+			{
+				fullCommandName: 'image anime',
+				guildId: 'guild-1',
+				channelId: 'channel-1',
+				shardId: 3,
+				author: { id: 'user-1' },
+				interaction: { id: 'interaction-1', locale: 'es-ES' },
+			},
+			{ prompt: 'ship it' },
+			{ name: 'generate' },
+		);
+
+		assert.deepEqual(job, {
+			name: 'generate',
+			payload: { prompt: 'ship it' },
+			context: {
+				command: 'image anime',
+				guildId: 'guild-1',
+				channelId: 'channel-1',
+				shardId: 3,
+				userId: 'user-1',
+				interactionId: 'interaction-1',
+				locale: 'es-ES',
+			},
+		});
+	});
+
+	test('registers decorated Seyfert processors and queue events', async () => {
+		const processed: string[] = [];
+		const events: string[] = [];
+
+		class ImageProcessor {
+			async generate(job: { data: { payload: { prompt: string } } }) {
+				processed.push(job.data.payload.prompt);
+				return 'image.png';
+			}
+
+			completed(_job: unknown, result: string) {
+				events.push(result);
+			}
+		}
+
+		Processor('images')(ImageProcessor);
+		Process('generate')(ImageProcessor.prototype, 'generate');
+		QueueEvent('completed')(ImageProcessor.prototype, 'completed');
+
+		const module = new QueueModule();
+		module.register({ processors: [ImageProcessor] });
+		const queue = module.get('images');
+		const completed = waitForEvent(queue, 'completed');
+
+		const job = queue.add(createSeyfertJob({}, { prompt: 'draw' }, { name: 'generate' }));
+		const [completedJob, result] = await completed;
+
+		assert.equal(completedJob, job);
+		assert.equal(result, 'image.png');
+		assert.deepEqual(processed, ['draw']);
+		assert.deepEqual(events, ['image.png']);
+	});
+
+	test('injects queues into producer constructor positions', () => {
+		class ImageProducer {
+			constructor(
+				readonly audit: unknown,
+				readonly images: unknown,
+			) {}
+		}
+
+		InjectQueue('images')(ImageProducer, undefined, 1);
+		InjectQueue('audit')(ImageProducer, undefined, 0);
+
+		const module = new QueueModule();
+		module.register({ producers: [ImageProducer] });
+		const producer = module.getProducer(ImageProducer);
+
+		assert.equal(producer?.audit, module.get('audit'));
+		assert.equal(producer?.images, module.get('images'));
+	});
+
+	test('rejects duplicate processor queue registrations with conflicting options', () => {
+		class FirstProcessor {
+			run() {
+				return 'first';
+			}
+		}
+		class SecondProcessor {
+			run() {
+				return 'second';
+			}
+		}
+
+		Processor('images', { concurrency: 1 })(FirstProcessor);
+		Process()(FirstProcessor.prototype, 'run');
+		Processor('images', { concurrency: 2 })(SecondProcessor);
+		Process()(SecondProcessor.prototype, 'run');
+
+		const module = new QueueModule();
+		module.register({ processors: [FirstProcessor] });
+
+		assert.throws(() => module.register({ processors: [SecondProcessor] }), RangeError);
 	});
 });
