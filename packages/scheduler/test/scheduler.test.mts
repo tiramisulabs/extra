@@ -1,3 +1,4 @@
+import { LockAcquireError, LockManager } from '@slipher/locks';
 import { assert, describe, test } from 'vitest';
 import { CronExpression, parseCronField, parseDuration, Scheduler } from '../src';
 
@@ -10,6 +11,29 @@ function waitForEvent<TArgs extends readonly unknown[]>(
 			off();
 			resolve(args);
 		});
+	});
+}
+
+function waitForSchedulerOutcome(
+	scheduler: Scheduler,
+	events: readonly string[],
+	timeout = 50,
+): Promise<{ event: string; args: readonly unknown[] }> {
+	return new Promise((resolve, reject) => {
+		const offs = events.map(event =>
+			scheduler.on(event as never, (...args: readonly unknown[]) => {
+				cleanup();
+				resolve({ event, args });
+			}),
+		);
+		const timer = setTimeout(() => {
+			cleanup();
+			reject(new Error(`Timed out waiting for scheduler events: ${events.join(', ')}`));
+		}, timeout);
+		const cleanup = () => {
+			clearTimeout(timer);
+			for (const off of offs) off();
+		};
 	});
 }
 
@@ -108,5 +132,56 @@ describe('Scheduler', () => {
 		assert.equal(task.kind, 'cron');
 		assert.equal(task.nextRunAt, undefined);
 		assert.equal(scheduler.get('cron'), task);
+	});
+
+	test('runs tasks while holding the scheduler lock key', async () => {
+		const locks = new LockManager();
+		const scheduler = new Scheduler({ lock: locks });
+		const completed = waitForEvent(scheduler, 'completed');
+		let competing = true;
+
+		const task = scheduler.every(
+			'1h',
+			async task => {
+				competing = await locks
+					.acquire(`scheduler:${task.id}`)
+					.then(async lock => {
+						await locks.release(lock);
+						return true;
+					})
+					.catch(() => false);
+			},
+			{ id: 'sharded-report', runImmediately: true },
+		);
+		const [completedTask] = await completed;
+
+		assert.equal(completedTask, task);
+		assert.equal(competing, false);
+		scheduler.clear();
+	});
+
+	test('skips a run when another shard holds the scheduler lock', async () => {
+		const locks = new LockManager();
+		const held = await locks.acquire('scheduler:locked-report', { ttl: '1s' });
+		const scheduler = new Scheduler({ lock: locks });
+		let ran = false;
+		const outcome = waitForSchedulerOutcome(scheduler, ['skipped', 'completed']);
+
+		const task = scheduler.every(
+			'1h',
+			() => {
+				ran = true;
+			},
+			{ id: 'locked-report', runImmediately: true },
+		);
+		const result = await outcome;
+
+		assert.equal(result.event, 'skipped');
+		assert.equal(result.args[0], task);
+		assert.instanceOf(result.args[1], LockAcquireError);
+		assert.equal(ran, false);
+
+		scheduler.clear();
+		await locks.release(held);
 	});
 });

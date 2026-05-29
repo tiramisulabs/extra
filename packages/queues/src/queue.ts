@@ -1,3 +1,4 @@
+import type { LockManager, LockOptions } from '@slipher/locks';
 import { type DurationInput, parseDuration } from './duration';
 import { QueueEmitter } from './events';
 import { Job, type JobOptions } from './job';
@@ -8,11 +9,18 @@ export type RetryDelayResolver<TData, TResult> =
 	| number
 	| string
 	| ((job: Job<TData, TResult>, error: unknown) => DurationInput);
+export type QueueLockKeyResolver<TData, TResult> = string | ((job: Job<TData, TResult>) => Awaitable<string>);
+export type QueueLockOptionsResolver<TData, TResult> =
+	| LockOptions
+	| ((job: Job<TData, TResult>) => Awaitable<LockOptions>);
 
 export interface QueueOptions<TData, TResult> {
 	concurrency?: number;
 	attempts?: number;
 	retryDelay?: RetryDelayResolver<TData, TResult>;
+	lock?: LockManager;
+	lockKey?: QueueLockKeyResolver<TData, TResult>;
+	lockOptions?: QueueLockOptionsResolver<TData, TResult>;
 	autostart?: boolean;
 	now?: () => number;
 	idGenerator?: () => string;
@@ -37,6 +45,9 @@ export class Queue<TData = unknown, TResult = unknown> extends QueueEmitter<TDat
 	readonly concurrency: number;
 	private readonly defaultAttempts: number;
 	private readonly retryDelay: RetryDelayResolver<TData, TResult>;
+	private readonly lock?: LockManager;
+	private readonly lockKey?: QueueLockKeyResolver<TData, TResult>;
+	private readonly lockOptions?: QueueLockOptionsResolver<TData, TResult>;
 	private readonly now: () => number;
 	private readonly idGenerator: () => string;
 	private readonly queue: QueueEntry<TData, TResult>[] = [];
@@ -55,6 +66,9 @@ export class Queue<TData = unknown, TResult = unknown> extends QueueEmitter<TDat
 		this.concurrency = options.concurrency ?? 1;
 		this.defaultAttempts = options.attempts ?? 1;
 		this.retryDelay = options.retryDelay ?? 0;
+		this.lock = options.lock;
+		this.lockKey = options.lockKey;
+		this.lockOptions = options.lockOptions;
 		this.now = options.now ?? Date.now;
 		this.idGenerator = options.idGenerator ?? createJobIdGenerator();
 
@@ -201,7 +215,7 @@ export class Queue<TData = unknown, TResult = unknown> extends QueueEmitter<TDat
 		this.emit('active', job);
 
 		try {
-			const result = await this.processor(job);
+			const result = await this.processLocked(job);
 			job.result = result;
 			job.status = 'completed';
 			job.updatedAt = new Date(this.now());
@@ -231,6 +245,27 @@ export class Queue<TData = unknown, TResult = unknown> extends QueueEmitter<TDat
 	private resolveRetryDelay(job: Job<TData, TResult>, error: unknown): number {
 		const delay = typeof this.retryDelay === 'function' ? this.retryDelay(job, error) : this.retryDelay;
 		return parseDuration(delay);
+	}
+
+	private async processLocked(job: Job<TData, TResult>): Promise<TResult> {
+		if (!this.processor) throw new Error('Queue processor is not configured.');
+		if (!this.lock) return this.processor(job);
+
+		return this.lock.withLock(
+			await this.resolveLockKey(job),
+			() => this.processor!(job),
+			await this.resolveLockOptions(job),
+		);
+	}
+
+	private async resolveLockKey(job: Job<TData, TResult>): Promise<string> {
+		if (typeof this.lockKey === 'function') return this.lockKey(job);
+		return this.lockKey ?? `queue:${this.name}:${job.id}`;
+	}
+
+	private async resolveLockOptions(job: Job<TData, TResult>): Promise<LockOptions> {
+		if (typeof this.lockOptions === 'function') return this.lockOptions(job);
+		return this.lockOptions ?? {};
 	}
 
 	private clearTimer(): void {

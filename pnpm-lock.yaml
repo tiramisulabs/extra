@@ -89,6 +89,10 @@ importers:
         version: 5.9.3
 
   packages/queues:
+    dependencies:
+      '@slipher/locks':
+        specifier: workspace:*
+        version: link:../locks
     devDependencies:
       '@types/node':
         specifier: ^25.0.10
@@ -123,6 +127,10 @@ importers:
         version: 5.9.3
 
   packages/scheduler:
+    dependencies:
+      '@slipher/locks':
+        specifier: workspace:*
+        version: link:../locks
     devDependencies:
       '@types/node':
         specifier: ^25.0.10

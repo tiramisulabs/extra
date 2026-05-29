@@ -5,6 +5,7 @@ export type SchedulerEventMap = {
 	started: [task: ScheduledTask];
 	completed: [task: ScheduledTask];
 	failed: [task: ScheduledTask, error: unknown];
+	skipped: [task: ScheduledTask, error: unknown];
 	removed: [task: ScheduledTask];
 };
 

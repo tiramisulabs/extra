@@ -1,3 +1,4 @@
+import { LockManager } from '@slipher/locks';
 import { assert, describe, test } from 'vitest';
 import { parseDuration, Queue } from '../src';
 
@@ -146,5 +147,30 @@ describe('Queue', () => {
 
 		const [completedJob] = await completed;
 		assert.equal(completedJob, job);
+	});
+
+	test('runs processors while holding a resolved lock key', async () => {
+		const locks = new LockManager();
+		const queue = new Queue<string, string>('locked', {
+			lock: locks,
+			lockKey: job => `queue:${job.data}`,
+		});
+		const completed = waitForEvent(queue, 'completed');
+
+		queue.process(async job => {
+			const competing = await locks
+				.acquire(`queue:${job.data}`)
+				.then(async lock => {
+					await locks.release(lock);
+					return true;
+				})
+				.catch(() => false);
+			return competing ? 'unlocked' : 'locked';
+		});
+		const job = queue.add('sync');
+		const [completedJob, result] = await completed;
+
+		assert.equal(completedJob, job);
+		assert.equal(result, 'locked');
 	});
 });

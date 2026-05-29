@@ -46,3 +46,25 @@ reminders.on('failed', (job, error) => {
 console.log(reminders.counts());
 console.log(reminders.getJob('1')?.snapshot());
 ```
+
+## Shard-safe processing
+
+Pass a `LockManager` when multiple Seyfert shards may enqueue equivalent work and only one processor should run at a time.
+
+```ts
+import { LockManager } from '@slipher/locks';
+import { Queue } from '@slipher/queues';
+
+const locks = new LockManager();
+const syncs = new Queue<{ guildId: string }>('syncs', {
+	lock: locks,
+	lockKey: job => `guild:${job.data.guildId}:sync`,
+	lockOptions: { ttl: '30s', wait: '5s' },
+});
+
+syncs.process(async job => {
+	await syncGuild(job.data.guildId);
+});
+```
+
+`MemoryLockStore` only coordinates work inside one process. Use a future distributed lock adapter for cross-process or cross-host shards.

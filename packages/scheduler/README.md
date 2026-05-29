@@ -36,6 +36,10 @@ scheduler.cron('0 */6 * * *', async () => {
 scheduler.on('failed', (task, error) => {
 	console.error(`Task ${task.id} failed`, error);
 });
+
+scheduler.on('skipped', task => {
+	console.log(`Task ${task.id} is already running on another shard`);
+});
 ```
 
 ## Control
@@ -47,3 +51,31 @@ scheduler.pause(task.id);
 scheduler.start(task.id);
 scheduler.remove(task.id);
 ```
+
+## Shard-safe schedules
+
+Pass a `LockManager` when the same scheduler task is registered by multiple Seyfert shards. If another holder owns the lock, the local run emits `skipped` and is rescheduled without calling the runner.
+
+```ts
+import { LockManager } from '@slipher/locks';
+import { Scheduler } from '@slipher/scheduler';
+
+const locks = new LockManager();
+const scheduler = new Scheduler({
+	lock: locks,
+	lockOptions: { ttl: '30s' },
+});
+
+scheduler.every(
+	'5m',
+	async () => {
+		await syncGuilds();
+	},
+	{
+		id: 'sync-guilds',
+		lockKey: 'scheduler:sync-guilds',
+	},
+);
+```
+
+`MemoryLockStore` only coordinates work inside one process. Use a future distributed lock adapter for cross-process or cross-host shards.
