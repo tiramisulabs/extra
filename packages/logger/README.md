@@ -1,8 +1,8 @@
 # @slipher/logger
 
-Small logger facade for Slipher and Seyfert packages.
+Small logger facade for Slipher infrastructure packages and Seyfert-adjacent code.
 
-Use it when package code needs structured logs without forcing a specific logger dependency on consumers.
+Use it when package code needs structured logs, redaction, child bindings, or adapter compatibility without forcing a specific logger dependency on consumers. It is not intended to replace Seyfert's client logger; pass Seyfert, Pino, evlog, console, or any other sink through an adapter when that is the runtime logger for the app.
 
 ## Install
 

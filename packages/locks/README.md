@@ -63,10 +63,11 @@ await locks.release(lock);
 
 `MemoryLockStore` is local-process only. It uses owner tokens to prevent one caller from releasing or extending another caller's lock.
 
-`RedisLockStore` coordinates locks across processes that share the same Redis instance.
+`RedisLockStore` coordinates locks across processes that share the same Redis instance. Redis support is exposed from the `@slipher/locks/redis` subpath so the default package entry stays dependency-light.
 
 ```ts
-import { LockManager, RedisLockStore } from '@slipher/locks';
+import { LockManager } from '@slipher/locks';
+import { RedisLockStore } from '@slipher/locks/redis';
 
 const store = new RedisLockStore({
 	redisOptions: { url: process.env.REDIS_URL },

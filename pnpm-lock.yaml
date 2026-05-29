@@ -64,11 +64,10 @@ importers:
         version: 5.9.3
 
   packages/locks:
-    dependencies:
+    devDependencies:
       '@redis/client':
         specifier: ^5.10.0
         version: 5.10.0
-    devDependencies:
       '@types/node':
         specifier: ^25.0.10
         version: 25.0.10

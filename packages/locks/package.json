@@ -12,6 +12,23 @@
 	"main": "./lib/index.js",
 	"module": "./lib/index.js",
 	"types": "./lib/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./lib/index.d.ts",
+			"default": "./lib/index.js"
+		},
+		"./redis": {
+			"types": "./lib/redis.d.ts",
+			"default": "./lib/redis.js"
+		}
+	},
+	"typesVersions": {
+		"*": {
+			"redis": [
+				"./lib/redis.d.ts"
+			]
+		}
+	},
 	"scripts": {
 		"dev": "tsc --watch",
 		"build": "tsc",
@@ -21,10 +38,16 @@
 		"test": "pnpm build && vitest run --config ./test/vitest.config.mts ./test/",
 		"prepublish": "pnpm build"
 	},
-	"dependencies": {
+	"peerDependencies": {
 		"@redis/client": "^5.10.0"
 	},
+	"peerDependenciesMeta": {
+		"@redis/client": {
+			"optional": true
+		}
+	},
 	"devDependencies": {
+		"@redis/client": "^5.10.0",
 		"@types/node": "^25.0.10",
 		"typescript": "^5.9.3"
 	}

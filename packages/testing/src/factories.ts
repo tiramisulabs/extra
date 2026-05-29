@@ -51,7 +51,7 @@ export function createMockGuild(options: MockGuildOptions = {}) {
 export function createMockChannel(options: MockChannelOptions = {}) {
 	return {
 		id: options.id ?? '300000000000000000',
-		guildId: options.guildId ?? '200000000000000000',
+		guildId: options.guildId === undefined ? '200000000000000000' : options.guildId,
 		name: options.name ?? 'general',
 		type: options.type ?? 0,
 	};

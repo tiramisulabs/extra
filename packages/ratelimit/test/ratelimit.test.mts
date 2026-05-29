@@ -1,6 +1,10 @@
 import { assert, describe, test } from 'vitest';
 import { MemoryRateLimitStore, parseDuration, RateLimiter, serializeRateLimitKey } from '../src';
 
+function wait(milliseconds: number): Promise<void> {
+	return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
+
 describe('parseDuration', () => {
 	test('parses numeric milliseconds and human durations', () => {
 		assert.equal(parseDuration(1000), 1000);
@@ -17,7 +21,14 @@ describe('parseDuration', () => {
 
 describe('serializeRateLimitKey', () => {
 	test('serializes nested key segments', () => {
-		assert.equal(serializeRateLimitKey(['guild', 123n, ['feature', 'ai']]), 'guild:123:feature:ai');
+		assert.equal(
+			serializeRateLimitKey(['guild', 123n, ['feature', 'ai']]),
+			'[["string","guild"],["bigint","123"],[["string","feature"],["string","ai"]]]',
+		);
+	});
+
+	test('serializes arrays without segment collisions', () => {
+		assert.notEqual(serializeRateLimitKey(['a:b', 'c']), serializeRateLimitKey(['a', 'b:c']));
 	});
 });
 
@@ -105,5 +116,28 @@ describe('RateLimiter', () => {
 		assert.equal(peeked.used, 1);
 		assert.equal(reset, true);
 		assert.equal(afterReset.used, 0);
+	});
+
+	test('can abort while waiting for a rate limit window', async () => {
+		const limiter = new RateLimiter<{ userId: string }>({
+			limit: 1,
+			window: '50ms',
+			key: ctx => ctx.userId,
+		});
+		const controller = new AbortController();
+
+		await limiter.consume({ userId: '1' });
+		const waiting = limiter.blockUntilAllowed(
+			{ userId: '1' },
+			{
+				signal: controller.signal,
+			},
+		);
+		controller.abort(new Error('stop waiting'));
+
+		const result = await Promise.race([waiting.catch(error => error), wait(20).then(() => new Error('timed out'))]);
+
+		assert.instanceOf(result, Error);
+		assert.equal((result as Error).message, 'stop waiting');
 	});
 });

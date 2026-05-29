@@ -42,7 +42,7 @@ export interface MockCommandContext {
 export function createMockCommandContext(options: MockCommandContextOptions = {}): MockCommandContext {
 	const author = options.author ?? createMockUser({ id: options.userId });
 	const guild = options.guild === null ? null : (options.guild ?? createMockGuild({ id: options.guildId }));
-	const guildId = guild?.id ?? options.guildId;
+	const guildId = guild ? guild.id : undefined;
 	const channel = options.channel ?? createMockChannel({ id: options.channelId, guildId: guildId ?? null });
 	const responses: MockContextResponse[] = [];
 	const createResponseRecorder = () =>
@@ -65,7 +65,7 @@ export function createMockCommandContext(options: MockCommandContextOptions = {}
 		guildLocale: options.guildLocale ?? guild?.preferredLocale,
 		guild,
 		channel,
-		member: options.member ?? (guild ? createMockMember({ user: author }) : null),
+		member: guild ? (options.member ?? createMockMember({ user: author })) : null,
 		responses,
 		write,
 		editOrReply,

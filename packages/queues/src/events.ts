@@ -5,6 +5,7 @@ export type QueueEventMap<TData, TResult> = {
 	active: [job: Job<TData, TResult>];
 	completed: [job: Job<TData, TResult>, result: TResult];
 	failed: [job: Job<TData, TResult>, error: unknown];
+	skipped: [job: Job<TData, TResult>, error: unknown];
 	retrying: [job: Job<TData, TResult>, error: unknown, delay: number];
 	idle: [];
 };

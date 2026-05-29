@@ -52,7 +52,8 @@ console.log(reminders.getJob('1')?.snapshot());
 Pass a `LockManager` when multiple Seyfert shards may enqueue equivalent work and only one processor should run at a time.
 
 ```ts
-import { LockManager, RedisLockStore } from '@slipher/locks';
+import { LockManager } from '@slipher/locks';
+import { RedisLockStore } from '@slipher/locks/redis';
 import { Queue } from '@slipher/queues';
 
 const store = new RedisLockStore({
@@ -72,5 +73,7 @@ syncs.process(async job => {
 	await syncGuild(job.data.guildId);
 });
 ```
+
+When a shard cannot acquire the lock for a job, the queue marks it as `skipped` and emits `skipped` instead of treating lock contention as processor failure. That keeps duplicate shard attempts out of retry and dead-letter accounting.
 
 `MemoryLockStore` only coordinates work inside one process. Use `RedisLockStore` for cross-process or cross-host shards.

@@ -1,4 +1,4 @@
-import type { LockManager, LockOptions } from '@slipher/locks';
+import { LockAcquireError, type LockManager, type LockOptions } from '@slipher/locks';
 import { type DurationInput, parseDuration } from './duration';
 import { QueueEmitter } from './events';
 import { Job, type JobOptions } from './job';
@@ -32,6 +32,7 @@ export interface QueueCounts {
 	active: number;
 	completed: number;
 	failed: number;
+	skipped: number;
 	total: number;
 }
 
@@ -54,6 +55,7 @@ export class Queue<TData = unknown, TResult = unknown> extends QueueEmitter<TDat
 	private readonly activeJobs = new Map<string, Job<TData, TResult>>();
 	private readonly completedJobs = new Map<string, Job<TData, TResult>>();
 	private readonly failedJobs = new Map<string, Job<TData, TResult>>();
+	private readonly skippedJobs = new Map<string, Job<TData, TResult>>();
 	private processor?: QueueProcessor<TData, TResult>;
 	private sequence = 0;
 	private idle = true;
@@ -126,6 +128,7 @@ export class Queue<TData = unknown, TResult = unknown> extends QueueEmitter<TDat
 		this.queue.length = 0;
 		this.completedJobs.clear();
 		this.failedJobs.clear();
+		this.skippedJobs.clear();
 		this.idle = true;
 		this.clearTimer();
 	}
@@ -146,7 +149,13 @@ export class Queue<TData = unknown, TResult = unknown> extends QueueEmitter<TDat
 			active: this.activeJobs.size,
 			completed: this.completedJobs.size,
 			failed: this.failedJobs.size,
-			total: this.queue.length + this.activeJobs.size + this.completedJobs.size + this.failedJobs.size,
+			skipped: this.skippedJobs.size,
+			total:
+				this.queue.length +
+				this.activeJobs.size +
+				this.completedJobs.size +
+				this.failedJobs.size +
+				this.skippedJobs.size,
 		};
 	}
 
@@ -155,6 +164,7 @@ export class Queue<TData = unknown, TResult = unknown> extends QueueEmitter<TDat
 			this.activeJobs.get(id) ??
 			this.completedJobs.get(id) ??
 			this.failedJobs.get(id) ??
+			this.skippedJobs.get(id) ??
 			this.queue.find(entry => entry.job.id === id)?.job
 		);
 	}
@@ -216,6 +226,7 @@ export class Queue<TData = unknown, TResult = unknown> extends QueueEmitter<TDat
 
 		try {
 			const result = await this.processLocked(job);
+			job.error = undefined;
 			job.result = result;
 			job.status = 'completed';
 			job.updatedAt = new Date(this.now());
@@ -224,6 +235,13 @@ export class Queue<TData = unknown, TResult = unknown> extends QueueEmitter<TDat
 		} catch (error) {
 			job.error = error;
 			job.updatedAt = new Date(this.now());
+
+			if (error instanceof LockAcquireError) {
+				job.status = 'skipped';
+				this.skippedJobs.set(job.id, job);
+				this.emit('skipped', job, error);
+				return;
+			}
 
 			if (job.attemptsMade < job.maxAttempts) {
 				const delay = this.resolveRetryDelay(job, error);

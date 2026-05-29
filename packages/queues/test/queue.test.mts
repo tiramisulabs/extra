@@ -173,4 +173,26 @@ describe('Queue', () => {
 		assert.equal(completedJob, job);
 		assert.equal(result, 'locked');
 	});
+
+	test('emits skipped instead of failed when another holder owns the lock', async () => {
+		const locks = new LockManager();
+		const lock = await locks.acquire('queue:shared', { ttl: '100ms' });
+		const queue = new Queue<string, string>('locked', {
+			lock: locks,
+			lockKey: 'queue:shared',
+			attempts: 1,
+		});
+		const skipped = waitForEvent(queue, 'skipped');
+
+		queue.process(job => job.data);
+		const job = queue.add('sync');
+		const [skippedJob, error] = await skipped;
+
+		assert.equal(skippedJob, job);
+		assert.instanceOf(error, Error);
+		assert.equal(job.status, 'skipped');
+		assert.equal(queue.counts().skipped, 1);
+		assert.equal(queue.counts().failed, 0);
+		await locks.release(lock);
+	});
 });

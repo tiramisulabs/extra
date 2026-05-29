@@ -1,4 +1,5 @@
-import { LockManager, RedisLockStore } from '@slipher/locks';
+import { LockManager } from '@slipher/locks';
+import { RedisLockStore } from '@slipher/locks/redis';
 import { assert, describe, test } from 'vitest';
 import { Queue } from '../src';
 
@@ -8,10 +9,10 @@ function wait(milliseconds: number): Promise<void> {
 	return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
 
-function waitForQueueOutcome(queue: Queue): Promise<'completed' | 'failed'> {
+function waitForQueueOutcome(queue: Queue): Promise<'completed' | 'skipped'> {
 	return new Promise(resolve => {
 		queue.on('completed', () => resolve('completed'));
-		queue.on('failed', () => resolve('failed'));
+		queue.on('skipped', () => resolve('skipped'));
 	});
 }
 
@@ -61,7 +62,7 @@ if (!redisUrl) {
 				const outcomes = await Promise.all([outcomeA, outcomeB]);
 
 				assert.equal(processed.length, 1);
-				assert.deepEqual(outcomes.sort(), ['completed', 'failed']);
+				assert.deepEqual(outcomes.sort(), ['completed', 'skipped']);
 			} finally {
 				queueA.clear();
 				queueB.clear();

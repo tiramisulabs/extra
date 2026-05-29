@@ -57,7 +57,8 @@ scheduler.remove(task.id);
 Pass a `LockManager` when the same scheduler task is registered by multiple Seyfert shards. If another holder owns the lock, the local run emits `skipped` and is rescheduled without calling the runner.
 
 ```ts
-import { LockManager, RedisLockStore } from '@slipher/locks';
+import { LockManager } from '@slipher/locks';
+import { RedisLockStore } from '@slipher/locks/redis';
 import { Scheduler } from '@slipher/scheduler';
 
 const store = new RedisLockStore({

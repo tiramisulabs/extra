@@ -1,4 +1,4 @@
-export type JobStatus = 'waiting' | 'delayed' | 'active' | 'completed' | 'failed';
+export type JobStatus = 'waiting' | 'delayed' | 'active' | 'completed' | 'failed' | 'skipped';
 
 export interface JobOptions {
 	id?: string;

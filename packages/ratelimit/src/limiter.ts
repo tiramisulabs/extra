@@ -22,6 +22,10 @@ export interface RateLimitConsumeOptions<TContext = unknown> {
 	window?: RateLimitResolver<TContext, DurationInput>;
 }
 
+export interface RateLimitBlockUntilAllowedOptions<TContext = unknown> extends RateLimitConsumeOptions<TContext> {
+	signal?: AbortSignal;
+}
+
 export interface RateLimitResult {
 	allowed: boolean;
 	key: string;
@@ -84,12 +88,13 @@ export class RateLimiter<TContext = unknown> {
 
 	async blockUntilAllowed(
 		context: TContext,
-		options: RateLimitConsumeOptions<TContext> = {},
+		options: RateLimitBlockUntilAllowedOptions<TContext> = {},
 	): Promise<RateLimitResult> {
+		throwIfAborted(options.signal);
 		let result = await this.consume(context, options);
 
 		while (!result.allowed) {
-			await new Promise(resolve => setTimeout(resolve, result.retryAfter));
+			await delay(result.retryAfter, options.signal);
 			result = await this.consume(context, options);
 		}
 
@@ -97,12 +102,12 @@ export class RateLimiter<TContext = unknown> {
 	}
 
 	private async resolve(context: TContext, options: RateLimitConsumeOptions<TContext>) {
-		const now = this.now();
 		const [key, limit, window] = await Promise.all([
 			this.resolveKey(context, options.key ?? this.getKey),
 			this.resolveValue(context, options.limit ?? this.getLimit),
 			this.resolveValue(context, options.window ?? this.getWindow),
 		]);
+		const now = this.now();
 		const cost = options.cost ?? 1;
 
 		if (!Number.isInteger(limit) || limit <= 0) throw new RangeError('Rate limit must be a positive integer.');
@@ -144,6 +149,43 @@ export class RateLimiter<TContext = unknown> {
 }
 
 export function serializeRateLimitKey(key: RateLimitKey): string {
-	if (Array.isArray(key)) return key.map(serializeRateLimitKey).join(':');
-	return String(key);
+	return JSON.stringify(serializeRateLimitKeyPart(key));
+}
+
+function serializeRateLimitKeyPart(key: RateLimitKey): unknown {
+	if (Array.isArray(key)) return key.map(serializeRateLimitKeyPart);
+	return [typeof key, String(key)];
+}
+
+function delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
+	throwIfAborted(signal);
+
+	return new Promise((resolve, reject) => {
+		const timeout = setTimeout(() => {
+			cleanup();
+			resolve();
+		}, milliseconds);
+		const onAbort = () => {
+			clearTimeout(timeout);
+			cleanup();
+			reject(getAbortReason(signal));
+		};
+		const cleanup = () => {
+			signal?.removeEventListener('abort', onAbort);
+		};
+
+		signal?.addEventListener('abort', onAbort, { once: true });
+	});
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+	if (!signal?.aborted) return;
+	throw getAbortReason(signal);
+}
+
+function getAbortReason(signal?: AbortSignal): Error {
+	const reason = signal?.reason;
+	if (reason instanceof Error) return reason;
+	if (typeof reason === 'string') return new Error(reason);
+	return new Error('Rate limit wait aborted.');
 }

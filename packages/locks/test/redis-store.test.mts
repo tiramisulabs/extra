@@ -1,5 +1,6 @@
 import { afterAll, assert, beforeAll, describe, test } from 'vitest';
-import { LockAcquireError, LockManager, RedisLockStore } from '../src';
+import { LockAcquireError, LockManager } from '../src';
+import { RedisLockStore } from '../src/redis';
 
 const redisUrl = process.env.REDIS_URL;
 

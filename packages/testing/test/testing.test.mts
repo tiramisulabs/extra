@@ -1,7 +1,9 @@
 import { assert, describe, test } from 'vitest';
 import {
+	createMockChannel,
 	createMockCommandContext,
 	createMockGuild,
+	createMockMember,
 	createMockUser,
 	createRecorder,
 	expectCallCount,
@@ -76,11 +78,19 @@ describe('createMockCommandContext', () => {
 	});
 
 	test('can create direct-message-like contexts', () => {
-		const ctx = createMockCommandContext({ guild: null });
+		const member = createMockMember();
+		const ctx = createMockCommandContext({ guild: null, guildId: '2', member });
 
 		assert.equal(ctx.guild, null);
 		assert.equal(ctx.guildId, undefined);
 		assert.equal(ctx.member, null);
+		assert.equal(ctx.channel.guildId, null);
+	});
+
+	test('preserves explicit null guild IDs for DM channels', () => {
+		const channel = createMockChannel({ guildId: null });
+
+		assert.equal(channel.guildId, null);
 	});
 });
 

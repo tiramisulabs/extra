@@ -1,4 +1,5 @@
-import { LockManager, RedisLockStore } from '@slipher/locks';
+import { LockManager } from '@slipher/locks';
+import { RedisLockStore } from '@slipher/locks/redis';
 import { assert, describe, test } from 'vitest';
 import { Scheduler } from '../src';
 
