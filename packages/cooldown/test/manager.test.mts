@@ -108,7 +108,7 @@ describe('CooldownManager', async () => {
 			option => option instanceof SubCommand && option.name === 'testGroupSub',
 		) as SubCommand;
 
-		class YunaLikeHandleCommand extends HandleCommand {
+		class ShortcutHandleCommand extends HandleCommand {
 			override resolveCommandFromContent(content: string, prefix: string, message: never) {
 				if (content === 'shortcut') {
 					return {
@@ -123,7 +123,7 @@ describe('CooldownManager', async () => {
 			}
 		}
 
-		client.handleCommand = new YunaLikeHandleCommand(client);
+		client.handleCommand = new ShortcutHandleCommand(client);
 
 		const data = cooldownManager.getCommandData('shortcut');
 
