@@ -119,7 +119,7 @@ describe('Queue', () => {
 
 	test('runs higher priority jobs first when run time matches', async () => {
 		const processed: string[] = [];
-		const queue = new Queue<string, string>('priority', { autostart: false });
+		const queue = new Queue<string, string>('priority', { autostart: false, now: () => 0 });
 		const idle = waitForEvent(queue, 'idle');
 
 		queue.add('low', { priority: 0 });

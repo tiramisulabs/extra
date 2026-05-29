@@ -15,27 +15,28 @@ pnpm add @slipher/logger
 ## Usage
 
 ```ts
-import { commandLogger, createSeyfertLogger, createSeyfertLoggerDefaults } from '@slipher/logger';
+import { createSeyfertLogger, createSeyfertLoggerServices } from '@slipher/logger';
 
 const logger = createSeyfertLogger({
 	client,
 	name: 'Hiraku',
 	level: 'info',
+	defaults: true,
 });
 
 client.setServices({
 	middlewares: {
-		logger: commandLogger(logger),
+		...client.middlewares,
+		...createSeyfertLoggerServices(logger).middlewares,
 	},
 });
 
-client.options.commands.defaults = {
-	...client.options.commands.defaults,
-	...createSeyfertLoggerDefaults(logger).commands,
-};
+client.options.globalMiddlewares = [...(client.options.globalMiddlewares ?? []), 'logger'];
 ```
 
-`createSeyfertLogger({ client })` replaces `client.logger` and the logger references held by Seyfert handlers such as commands, components, events, langs, and cache.
+`createSeyfertLogger({ client, defaults: true })` replaces `client.logger`, updates the logger references held by Seyfert handlers such as commands, components, events, langs, and cache, and replaces Seyfert's default command/component/modal error hooks with structured Slipher hooks.
+
+If you want manual control, use `installSeyfertLogger(client, logger)` and `installSeyfertLoggerDefaults(client, createSeyfertLoggerDefaults(logger))` separately.
 
 ## Child loggers
 

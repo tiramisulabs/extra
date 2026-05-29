@@ -3,12 +3,16 @@ import {
 	ConsoleLoggerAdapter,
 	commandLogger,
 	createLogger,
+	createSeyfertLogger,
 	createSeyfertLoggerDefaults,
+	createSeyfertLoggerServices,
 	extractSeyfertLogContext,
 	installSeyfertLogger,
+	installSeyfertLoggerDefaults,
 	type LogEntry,
 	type LoggerAdapter,
 	redactLogValue,
+	type SeyfertClientLike,
 } from '../src';
 
 class RecordingAdapter implements LoggerAdapter {
@@ -186,6 +190,46 @@ describe('Seyfert logger integration', () => {
 		assert.equal(client.cache.__logger__, logger);
 	});
 
+	test('can replace Seyfert defaults when installed on a client', async () => {
+		const adapter = new RecordingAdapter();
+		const client: SeyfertClientLike = {
+			logger: undefined,
+			options: {
+				commands: { defaults: { custom: true } },
+			},
+		};
+
+		const logger = createSeyfertLogger({ adapter, client, defaults: true, level: 'debug' });
+		const commandDefaults = client.options?.commands?.defaults as Record<string, unknown>;
+		const componentDefaults = client.options?.components?.defaults as Record<string, unknown>;
+		const modalDefaults = client.options?.modals?.defaults as Record<string, unknown>;
+		const onBeforeMiddlewares = commandDefaults.onBeforeMiddlewares as (context: unknown) => unknown;
+
+		await onBeforeMiddlewares({ fullCommandName: 'ping', author: { id: 'user-1' } });
+
+		assert.equal(client.logger, logger);
+		assert.equal(commandDefaults.custom, true);
+		assert.equal(typeof commandDefaults.onRunError, 'function');
+		assert.equal(typeof componentDefaults.onRunError, 'function');
+		assert.equal(typeof modalDefaults.onRunError, 'function');
+		assert.equal(adapter.entries[0].level, 'debug');
+		assert.equal(adapter.entries[0].message, 'command received');
+		assert.equal(adapter.entries[0].data.command, 'ping');
+	});
+
+	test('installs explicit Seyfert defaults without replacing the logger', () => {
+		const logger = createLogger({ adapter: new RecordingAdapter() });
+		const defaults = createSeyfertLoggerDefaults(logger);
+		const client: SeyfertClientLike = { options: {} };
+
+		const installed = installSeyfertLoggerDefaults(client, defaults);
+
+		assert.equal(installed, client);
+		assert.equal(client.options.commands?.defaults?.onRunError, defaults.commands.onRunError);
+		assert.equal(client.options.components?.defaults?.onAfterRun, defaults.components.onAfterRun);
+		assert.equal(client.options.modals?.defaults?.onBeforeMiddlewares, defaults.modals.onBeforeMiddlewares);
+	});
+
 	test('extracts useful Seyfert context fields', () => {
 		const context = {
 			fullCommandName: 'image anime',
@@ -242,27 +286,58 @@ describe('Seyfert logger integration', () => {
 		});
 	});
 
-	test('provides Seyfert defaults that log command errors with context', async () => {
+	test('creates Seyfert services for setServices middleware registration', async () => {
 		const adapter = new RecordingAdapter();
 		const logger = createLogger({ adapter });
-		const defaults = createSeyfertLoggerDefaults(logger);
-		const error = new Error('failed');
+		const services = createSeyfertLoggerServices(logger, {
+			commandMiddlewareName: 'slipherLogger',
+			commandMiddleware: { message: 'command observed' },
+		});
+		let nextCalled = false;
 
-		await defaults.commands.onRunError(
-			{
-				fullCommandName: 'image anime',
-				guildId: 'guild-1',
-				channelId: 'channel-1',
-				shardId: 1,
+		await services.middlewares.slipherLogger({
+			context: {
+				fullCommandName: 'ping',
 				author: { id: 'user-1' },
 				interaction: { id: 'interaction-1' },
 			},
-			error,
-		);
+			next: () => {
+				nextCalled = true;
+			},
+			stop: () => undefined,
+			pass: () => undefined,
+		});
 
-		assert.equal(adapter.entries[0].level, 'error');
-		assert.equal(adapter.entries[0].message, 'command failed');
-		assert.equal((adapter.entries[0].data.error as { message: string }).message, 'failed');
-		assert.equal(adapter.entries[0].data.command, 'image anime');
+		assert.equal(nextCalled, true);
+		assert.equal(adapter.entries[0].message, 'command observed');
+		assert.equal(adapter.entries[0].data.command, 'ping');
+	});
+
+	test('provides Seyfert defaults that log command errors with context', async () => {
+		const adapter = new RecordingAdapter();
+		const logger = createLogger({ adapter, level: 'debug' });
+		const defaults = createSeyfertLoggerDefaults(logger);
+		const error = new Error('failed');
+		const context = {
+			fullCommandName: 'image anime',
+			guildId: 'guild-1',
+			channelId: 'channel-1',
+			shardId: 1,
+			author: { id: 'user-1' },
+			interaction: { id: 'interaction-1' },
+		};
+
+		await defaults.commands.onBeforeMiddlewares(context);
+		await defaults.commands.onRunError(context, error);
+		await defaults.commands.onAfterRun(context, undefined);
+
+		assert.equal(adapter.entries[0].level, 'debug');
+		assert.equal(adapter.entries[0].message, 'command received');
+		assert.equal(adapter.entries[1].level, 'error');
+		assert.equal(adapter.entries[1].message, 'command failed');
+		assert.equal((adapter.entries[1].data.error as { message: string }).message, 'failed');
+		assert.equal(adapter.entries[1].data.command, 'image anime');
+		assert.equal(adapter.entries[2].level, 'info');
+		assert.equal(adapter.entries[2].message, 'command completed');
 	});
 });

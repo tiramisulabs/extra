@@ -35,6 +35,23 @@ export interface LoggerOptions {
 
 export interface SeyfertLoggerOptions extends LoggerOptions {
 	client?: SeyfertClientLike;
+	defaults?: boolean;
+}
+
+export interface InstallSeyfertLoggerOptions {
+	defaults?: boolean;
+}
+
+export interface SeyfertLoggerServicesOptions {
+	commandMiddlewareName?: string;
+	commandMiddleware?: {
+		level?: WritableLogLevel;
+		message?: string;
+	};
+}
+
+export interface SeyfertLoggerServices {
+	middlewares: Record<string, ReturnType<typeof commandLogger>>;
 }
 
 export interface SeyfertLogContext extends LogData {
@@ -56,6 +73,7 @@ export interface SeyfertClientLike {
 	langs?: unknown;
 	cache?: unknown;
 	options?: {
+		globalMiddlewares?: readonly string[];
 		commands?: { defaults?: Record<string, unknown> };
 		components?: { defaults?: Record<string, unknown> };
 		modals?: { defaults?: Record<string, unknown> };
@@ -64,22 +82,29 @@ export interface SeyfertClientLike {
 
 export interface SeyfertLoggerDefaults {
 	commands: {
+		onBeforeMiddlewares(context: unknown): Awaitable<void>;
+		onBeforeOptions(context: unknown): Awaitable<void>;
 		onRunError(context: unknown, error: unknown): Awaitable<void>;
 		onMiddlewaresError(context: unknown, error: unknown): Awaitable<void>;
 		onOptionsError(context: unknown, metadata: unknown): Awaitable<void>;
 		onPermissionsFail(context: unknown, permissions: unknown): Awaitable<void>;
 		onBotPermissionsFail(context: unknown, permissions: unknown): Awaitable<void>;
 		onInternalError(client: unknown, command: unknown, error?: unknown): Awaitable<void>;
+		onAfterRun(context: unknown, error: unknown | undefined): Awaitable<void>;
 	};
 	components: {
+		onBeforeMiddlewares(context: unknown): Awaitable<void>;
 		onRunError(context: unknown, error: unknown): Awaitable<void>;
 		onMiddlewaresError(context: unknown, error: unknown): Awaitable<void>;
 		onInternalError(client: unknown, error?: unknown): Awaitable<void>;
+		onAfterRun(context: unknown, error: unknown | undefined): Awaitable<void>;
 	};
 	modals: {
+		onBeforeMiddlewares(context: unknown): Awaitable<void>;
 		onRunError(context: unknown, error: unknown): Awaitable<void>;
 		onMiddlewaresError(context: unknown, error: unknown): Awaitable<void>;
 		onInternalError(client: unknown, error?: unknown): Awaitable<void>;
+		onAfterRun(context: unknown, error: unknown | undefined): Awaitable<void>;
 	};
 	events: {
 		onFail(event: unknown, error: unknown): Awaitable<void>;
@@ -192,25 +217,50 @@ export function createLogger(options: LoggerOptions = {}): Logger {
 }
 
 export function createSeyfertLogger(options: SeyfertLoggerOptions = {}): Logger {
-	const { client, ...loggerOptions } = options;
+	const { client, defaults, ...loggerOptions } = options;
 	const logger = new Logger({
 		name: loggerOptions.name ?? '[Seyfert]',
 		...loggerOptions,
 		redact: loggerOptions.redact ?? ['authorization', 'token', 'botToken', 'webhookToken', 'interactionToken'],
 	});
 
-	if (client) installSeyfertLogger(client, logger);
+	if (client) installSeyfertLogger(client, logger, { defaults });
 	return logger;
 }
 
-export function installSeyfertLogger<TClient extends SeyfertClientLike>(client: TClient, logger: Logger): Logger {
+export function installSeyfertLogger<TClient extends SeyfertClientLike>(
+	client: TClient,
+	logger: Logger,
+	options: InstallSeyfertLoggerOptions = {},
+): Logger {
 	client.logger = logger;
 	setLoggerOn(client.commands, logger);
 	setLoggerOn(client.components, logger);
 	setLoggerOn(client.events, logger);
 	setLoggerOn(client.langs, logger);
 	setInternalLoggerOn(client.cache, logger);
+	if (options.defaults) installSeyfertLoggerDefaults(client, createSeyfertLoggerDefaults(logger));
 	return logger;
+}
+
+export function installSeyfertLoggerDefaults<TClient extends SeyfertClientLike>(
+	client: TClient,
+	defaults: SeyfertLoggerDefaults,
+): TClient {
+	const options = client.options ?? (client.options = {});
+	options.commands = {
+		...options.commands,
+		defaults: { ...options.commands?.defaults, ...defaults.commands },
+	};
+	options.components = {
+		...options.components,
+		defaults: { ...options.components?.defaults, ...defaults.components },
+	};
+	options.modals = {
+		...options.modals,
+		defaults: { ...options.modals?.defaults, ...defaults.modals },
+	};
+	return client;
 }
 
 export function commandLogger(logger: Logger, options: { level?: WritableLogLevel; message?: string } = {}) {
@@ -223,9 +273,22 @@ export function commandLogger(logger: Logger, options: { level?: WritableLogLeve
 	});
 }
 
+export function createSeyfertLoggerServices(
+	logger: Logger,
+	options: SeyfertLoggerServicesOptions = {},
+): SeyfertLoggerServices {
+	return {
+		middlewares: {
+			[options.commandMiddlewareName ?? 'logger']: commandLogger(logger, options.commandMiddleware),
+		},
+	};
+}
+
 export function createSeyfertLoggerDefaults(logger: Logger): SeyfertLoggerDefaults {
 	return {
 		commands: {
+			onBeforeMiddlewares: context => logger.debug(extractSeyfertLogContext(context), 'command received'),
+			onBeforeOptions: context => logger.debug(extractSeyfertLogContext(context), 'command options parsing'),
 			onRunError: (context, error) =>
 				logger.error(withError(extractSeyfertLogContext(context), error), 'command failed'),
 			onMiddlewaresError: (context, error) =>
@@ -238,19 +301,27 @@ export function createSeyfertLoggerDefaults(logger: Logger): SeyfertLoggerDefaul
 				logger.warn({ ...extractSeyfertLogContext(context), permissions }, 'bot permission denied'),
 			onInternalError: (_client, command, error) =>
 				logger.error(withError({ command: getStringField(command, 'name') }, error), 'command internal error'),
+			onAfterRun: (context, error) =>
+				logCompletion(logger, extractSeyfertLogContext(context), 'command completed', error),
 		},
 		components: {
+			onBeforeMiddlewares: context => logger.debug(extractSeyfertLogContext(context), 'component received'),
 			onRunError: (context, error) =>
 				logger.error(withError(extractSeyfertLogContext(context), error), 'component failed'),
 			onMiddlewaresError: (context, error) =>
 				logger.error(withError(extractSeyfertLogContext(context), error), 'component middleware failed'),
 			onInternalError: (_client, error) => logger.error(withError({}, error), 'component internal error'),
+			onAfterRun: (context, error) =>
+				logCompletion(logger, extractSeyfertLogContext(context), 'component completed', error),
 		},
 		modals: {
+			onBeforeMiddlewares: context => logger.debug(extractSeyfertLogContext(context), 'modal received'),
 			onRunError: (context, error) => logger.error(withError(extractSeyfertLogContext(context), error), 'modal failed'),
 			onMiddlewaresError: (context, error) =>
 				logger.error(withError(extractSeyfertLogContext(context), error), 'modal middleware failed'),
 			onInternalError: (_client, error) => logger.error(withError({}, error), 'modal internal error'),
+			onAfterRun: (context, error) =>
+				logCompletion(logger, extractSeyfertLogContext(context), 'modal completed', error),
 		},
 		events: {
 			onFail: (event, error) => logger.error(withError({ event }, error), 'event failed'),
@@ -382,6 +453,11 @@ function setInternalLoggerOn(target: unknown, logger: Logger): void {
 function withError(data: LogData, error: unknown): LogData {
 	if (error === undefined) return data;
 	return error instanceof Error ? { ...data, error: serializeError(error) } : { ...data, error };
+}
+
+function logCompletion(logger: Logger, data: LogData, message: string, error: unknown | undefined): Awaitable<void> {
+	if (error === undefined) return logger.info(data, message);
+	return logger.error(withError(data, error), `${message} with error`);
 }
 
 function getString(value: unknown): string | undefined {
