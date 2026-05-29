@@ -32,23 +32,23 @@ export class CronExpression {
 
 	matches(date: Date): boolean {
 		return (
-			this.parts.minutes.has(date.getMinutes()) &&
-			this.parts.hours.has(date.getHours()) &&
-			this.parts.daysOfMonth.has(date.getDate()) &&
-			this.parts.months.has(date.getMonth() + 1) &&
-			this.parts.daysOfWeek.has(date.getDay())
+			this.parts.minutes.has(date.getUTCMinutes()) &&
+			this.parts.hours.has(date.getUTCHours()) &&
+			this.parts.daysOfMonth.has(date.getUTCDate()) &&
+			this.parts.months.has(date.getUTCMonth() + 1) &&
+			this.parts.daysOfWeek.has(date.getUTCDay())
 		);
 	}
 
 	next(after = new Date()): Date {
 		const next = new Date(after.getTime());
-		next.setSeconds(0, 0);
-		next.setMinutes(next.getMinutes() + 1);
+		next.setUTCSeconds(0, 0);
+		next.setUTCMinutes(next.getUTCMinutes() + 1);
 
 		const maxIterations = 60 * 24 * 366 * 5;
 		for (let index = 0; index < maxIterations; index++) {
 			if (this.matches(next)) return next;
-			next.setMinutes(next.getMinutes() + 1);
+			next.setUTCMinutes(next.getUTCMinutes() + 1);
 		}
 
 		throw new RangeError(`Unable to find next date for cron expression: ${this.expression}`);
