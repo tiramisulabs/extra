@@ -18,7 +18,7 @@
 		"format": "biome format --write ./src",
 		"checkb": "biome check --write --no-errors-on-unmatched ./src",
 		"test": "vitest run --config ./test/vitest.config.mts ./test/",
-		"prepublish": "pnpm build"
+		"prepublishOnly": "pnpm build"
 	},
 	"peerDependencies": {
 		"seyfert": "4.1.0"
