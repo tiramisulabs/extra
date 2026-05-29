@@ -1,5 +1,5 @@
 {
-	"name": "@slipher/ratelimit",
+	"name": "@slipher/logger",
 	"version": "0.0.1",
 	"private": false,
 	"license": "MIT",
@@ -18,7 +18,7 @@
 		"lint": "biome lint ./src ./test",
 		"format": "biome format --write ./src ./test",
 		"checkb": "biome check --no-errors-on-unmatched ./src ./test",
-		"test": "vitest run --config ./test/vitest.config.mts ./test/",
+		"test": "pnpm build && vitest run --config ./test/vitest.config.mts ./test/",
 		"prepublish": "pnpm build"
 	},
 	"devDependencies": {

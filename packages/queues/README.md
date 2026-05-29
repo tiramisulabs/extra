@@ -52,10 +52,16 @@ console.log(reminders.getJob('1')?.snapshot());
 Pass a `LockManager` when multiple Seyfert shards may enqueue equivalent work and only one processor should run at a time.
 
 ```ts
-import { LockManager } from '@slipher/locks';
+import { LockManager, RedisLockStore } from '@slipher/locks';
 import { Queue } from '@slipher/queues';
 
-const locks = new LockManager();
+const store = new RedisLockStore({
+	redisOptions: { url: process.env.REDIS_URL },
+	namespace: 'slipher:locks',
+});
+await store.start();
+
+const locks = new LockManager({ store });
 const syncs = new Queue<{ guildId: string }>('syncs', {
 	lock: locks,
 	lockKey: job => `guild:${job.data.guildId}:sync`,
@@ -67,4 +73,4 @@ syncs.process(async job => {
 });
 ```
 
-`MemoryLockStore` only coordinates work inside one process. Use a future distributed lock adapter for cross-process or cross-host shards.
+`MemoryLockStore` only coordinates work inside one process. Use `RedisLockStore` for cross-process or cross-host shards.

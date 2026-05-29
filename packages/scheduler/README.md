@@ -57,10 +57,16 @@ scheduler.remove(task.id);
 Pass a `LockManager` when the same scheduler task is registered by multiple Seyfert shards. If another holder owns the lock, the local run emits `skipped` and is rescheduled without calling the runner.
 
 ```ts
-import { LockManager } from '@slipher/locks';
+import { LockManager, RedisLockStore } from '@slipher/locks';
 import { Scheduler } from '@slipher/scheduler';
 
-const locks = new LockManager();
+const store = new RedisLockStore({
+	redisOptions: { url: process.env.REDIS_URL },
+	namespace: 'slipher:locks',
+});
+await store.start();
+
+const locks = new LockManager({ store });
 const scheduler = new Scheduler({
 	lock: locks,
 	lockOptions: { ttl: '30s' },
@@ -78,4 +84,4 @@ scheduler.every(
 );
 ```
 
-`MemoryLockStore` only coordinates work inside one process. Use a future distributed lock adapter for cross-process or cross-host shards.
+`MemoryLockStore` only coordinates work inside one process. Use `RedisLockStore` for cross-process or cross-host shards.

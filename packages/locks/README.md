@@ -1,8 +1,8 @@
 # @slipher/locks
 
-Local lock manager for Slipher packages and bot tasks.
+Lock manager for Slipher packages and bot tasks.
 
-This package is an in-memory reference implementation for preventing duplicate work in a single process. It is useful for commands, schedulers, queues, and workers that should avoid running the same job twice at the same time.
+Use it for commands, schedulers, queues, and workers that should avoid running the same job twice at the same time.
 
 ## Install
 
@@ -63,4 +63,19 @@ await locks.release(lock);
 
 `MemoryLockStore` is local-process only. It uses owner tokens to prevent one caller from releasing or extending another caller's lock.
 
-Distributed locks should live in a separate adapter package after atomic semantics are designed. A Redis implementation should use atomic acquire, compare-and-delete release, and compare-and-expire extension.
+`RedisLockStore` coordinates locks across processes that share the same Redis instance.
+
+```ts
+import { LockManager, RedisLockStore } from '@slipher/locks';
+
+const store = new RedisLockStore({
+	redisOptions: { url: process.env.REDIS_URL },
+	namespace: 'slipher:locks',
+});
+
+await store.start();
+
+const locks = new LockManager({ store });
+```
+
+Redis lock acquisition uses atomic `SET key token NX PX ttl`. Release and extend use Lua scripts that compare the owner token before deleting or extending the key.
