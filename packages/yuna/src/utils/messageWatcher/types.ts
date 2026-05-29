@@ -47,7 +47,7 @@ export interface DecoratorWatchOptions<
 	 * It will be emitted before creating the watcher,
 	 * if you return `false` it will not be created.
 	 */
-	beforeCreate?(this: C, ctx: CommandContext<O>): Awaitable<boolean> | void;
+	beforeCreate?(this: C, ctx: CommandContext<O>): Awaitable<boolean | void>;
 	/** filters the execution of the `onChange` event */
 	filter?(...args: Parameters<WatcherOnChangeEvent<MessageWatcher<O>, O>>): boolean;
 	onStop?: WatcherOnStopEvent<M>;

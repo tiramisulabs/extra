@@ -50,7 +50,7 @@ export const addCommandsEvents = (client: UsingClient) => {
 		Object.defineProperty(client.commands, event, {
 			async value(...args: Parameters<typeof def>) {
 				const val = await def.apply(this, args);
-				prepareCommands(client);
+				await prepareCommands(client);
 				return val;
 			},
 		});
@@ -68,7 +68,12 @@ export const getCommandsMetadata = (client: AvailableClients) => {
 	});
 };
 
-export async function prepareCommands(client: UsingClient) {
+type CommandsPreparationHooks = {
+	onCommand?(command: Command): any;
+	onSubCommand?(subCommand: SubCommand): any;
+};
+
+export function prepareCommandsMetadata(client: UsingClient, hooks: CommandsPreparationHooks = {}) {
 	const metadata = getCommandsMetadata(client);
 
 	metadata.shortcuts = [];
@@ -78,11 +83,6 @@ export async function prepareCommands(client: UsingClient) {
 		return client.logger.warn(
 			'[Yuna.commands.prepare] The commands have not been loaded yet or there are none at all.',
 		);
-
-	const whilePreparing = await metadata.config?.whilePreparing?.call(client, metadata);
-
-	const onCommand = whilePreparing?.onCommand;
-	const onSubCommand = whilePreparing?.onSubCommand;
 
 	for (const command of client.commands.values) {
 		if (command.type !== ApplicationCommandType.ChatInput) continue;
@@ -110,18 +110,31 @@ export async function prepareCommands(client: UsingClient) {
 
 		let hasSubCommands = false;
 
-		onCommand?.call(client, command);
+		hooks.onCommand?.call(client, command);
 
 		for (const sub of command.options ?? []) {
 			if (!(sub instanceof SubCommand)) continue;
 			hasSubCommands = true;
 			sub.parent = command;
 			if ((sub as YunaCommandUsable)[Keys.resolverIsShortcut] === true) metadata.shortcuts.push(sub);
-			onSubCommand?.call(client, sub);
+			hooks.onSubCommand?.call(client, sub);
 		}
 
 		if (!hasSubCommands) (command as YunaCommandUsable)[Keys.resolverSubCommands] = null;
 	}
+
+	return metadata;
+}
+
+export async function prepareCommands(client: UsingClient) {
+	const metadata = getCommandsMetadata(client);
+
+	const whilePreparing = await metadata.config?.whilePreparing?.call(client, metadata);
+
+	prepareCommandsMetadata(client, {
+		onCommand: whilePreparing?.onCommand,
+		onSubCommand: whilePreparing?.onSubCommand,
+	});
 
 	metadata.config?.afterPrepare?.call(client, metadata);
 }

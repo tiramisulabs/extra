@@ -130,6 +130,34 @@ describe('CooldownManager', async () => {
 		assert.deepEqual(data, ['testCommand admin testGroupSub', cooldownData]);
 	});
 
+	test('Data should fall back when an overridden resolver throws', () => {
+		class ThrowingHandleCommand extends HandleCommand {
+			override resolveCommandFromContent(): never {
+				throw new Error('resolver failed');
+			}
+		}
+
+		client.handleCommand = new ThrowingHandleCommand(client);
+
+		const data = cooldownManager.getCommandData('testCommand');
+
+		assert.deepEqual(data, ['testCommand', cooldownData]);
+	});
+
+	test('Data should fall back when an overridden resolver returns nothing', () => {
+		class EmptyHandleCommand extends HandleCommand {
+			override resolveCommandFromContent() {
+				return undefined as never;
+			}
+		}
+
+		client.handleCommand = new EmptyHandleCommand(client);
+
+		const data = cooldownManager.getCommandData('testCommand');
+
+		assert.deepEqual(data, ['testCommand', cooldownData]);
+	});
+
 	test('Data should return undefined for subcommand if root is not provided (No Legacy)', () => {
 		const data = cooldownManager.getCommandData('testSub');
 		assert.equal(data, undefined);

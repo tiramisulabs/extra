@@ -123,7 +123,7 @@ export class MessageWatcherManager<
 
 		const oldMessage = this.ctx?.messageResponse;
 
-		const args = handleCommand.argsParser(argsContent, command, this.message);
+		const args = handleCommand.argsParser(argsContent, command, newMessage);
 
 		const resolved: MakeRequired<ContextOptionsResolved> = {
 			channels: {},

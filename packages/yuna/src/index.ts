@@ -48,7 +48,7 @@ class BaseYuna {
 	 * @example
 	 * ```ts
 	 * import { HandleCommand } from "seyfert/lib/commands/handle";
-	 * import { Yuna } from "yunaforseyfert";
+	 * import { Yuna } from "@slipher/yuna";
 	 *
 	 * class YourHandleCommand extends HandleCommand {
 	 *     argsParser = Yuna.parser(); // Here are the settings
@@ -65,7 +65,7 @@ class BaseYuna {
 	 * @example
 	 * ```ts
 	 * import { HandleCommand } from "seyfert/lib/commands/handle";
-	 * import { Yuna } from "yunaforseyfert";
+	 * import { Yuna } from "@slipher/yuna";
 	 *
 	 * class YourHandleCommand extends HandleCommand {
 	 *      resolveCommandFromContent = Yuna.resolver({
@@ -99,10 +99,7 @@ class BaseYuna {
 		isParent(command: Command | SubCommand): command is Command & { options: SubCommand[] } {
 			if (!command.options?.length) return false;
 			const [firstOption] = command.options as CommandOptionWithType[];
-			return (
-				firstOption.type === ApplicationCommandOptionType.Subcommand ||
-				firstOption.type === ApplicationCommandOptionType.SubcommandGroup
-			);
+			return firstOption.type === ApplicationCommandOptionType.Subcommand;
 		},
 	};
 

@@ -67,7 +67,7 @@ export const createRegexes = ({ syntax }: YunaParserCreateOptions) => {
 
 		const render = `${escapedLongTextTags}${extras.join('')}`;
 
-		escapeModes.All = new RegExp(`(\\\\+)([${render}\\s]|$)`);
+		escapeModes.All = new RegExp(`(\\\\+)([${render}\\s]|$)`, 'g');
 
 		checkNextChar = new RegExp(`[${render}\\s]|$`);
 
@@ -114,8 +114,8 @@ export const createRegexes = ({ syntax }: YunaParserCreateOptions) => {
 	};
 };
 
-const removeDuplicates = <A>(arr: A extends Array<infer R> ? R[] : never[]): A => {
-	return [...new Set(arr)] as A;
+const definedOnly = <A>(arr: readonly (A | null | undefined)[]): A[] => {
+	return [...new Set(arr.filter((value): value is A => value != null))];
 };
 
 export function DeclareParserConfig(config: YunaParserCreateOptions = {}) {
@@ -134,9 +134,13 @@ export const createConfig = (config: YunaParserCreateOptions, isFull = true) => 
 		newConfig.syntax ??= {};
 
 		if (isFull || config?.syntax?.longTextTags)
-			newConfig.syntax.longTextTags = removeDuplicates(config?.syntax?.longTextTags ?? ['"', "'", '`']);
+			newConfig.syntax.longTextTags = definedOnly(config?.syntax?.longTextTags ?? ['"', "'", '`']) as NonNullable<
+				YunaParserCreateOptions['syntax']
+			>['longTextTags'];
 		if (isFull || config?.syntax?.namedOptions)
-			newConfig.syntax.namedOptions = removeDuplicates(config?.syntax?.namedOptions ?? ['-', '--', ':']);
+			newConfig.syntax.namedOptions = definedOnly(config?.syntax?.namedOptions ?? ['-', '--', ':']) as NonNullable<
+				YunaParserCreateOptions['syntax']
+			>['namedOptions'];
 	}
 
 	if (isFull || 'breakSearchOnConsumeAllOptions' in config)

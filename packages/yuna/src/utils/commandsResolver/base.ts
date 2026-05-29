@@ -162,12 +162,14 @@ export function baseResolver(
 
 	if (useSubCommand && !availableInMessage(useSubCommand)) return;
 
+	const lastMatchedIdx = Math.min(padIdx, Math.max((matchs?.length ?? 1) - 1, 0));
+
 	return config && resultCommand
 		? {
 				group: groupData,
 				parent: parentCommand,
 				command: resultCommand,
-				endPad: getPadEnd(padIdx),
+				endPad: getPadEnd(lastMatchedIdx),
 			}
 		: resultCommand;
 }

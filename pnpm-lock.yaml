@@ -147,14 +147,13 @@ importers:
         version: 5.9.3
 
   packages/yuna:
-    dependencies:
-      seyfert:
-        specifier: 4.1.0
-        version: 4.1.0
     devDependencies:
       '@types/node':
         specifier: ^25.0.10
         version: 25.0.10
+      seyfert:
+        specifier: 4.1.0
+        version: 4.1.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

@@ -18,9 +18,16 @@ export class CooldownManager {
 
 	private resolveCommand(name: string) {
 		const content = name.trim();
-		const resolved = this.client.handleCommand.resolveCommandFromContent(content, '', undefined as never);
+		let resolved: CommandFromContent | undefined;
 
-		if (resolved.command) return resolved;
+		try {
+			const message = undefined as unknown as Parameters<typeof this.client.handleCommand.resolveCommandFromContent>[2];
+			resolved = this.client.handleCommand.resolveCommandFromContent(content, '', message);
+		} catch {
+			resolved = undefined;
+		}
+
+		if (resolved?.command) return resolved;
 
 		return this.client.handleCommand.getCommandFromContent(content.split(' ').filter(Boolean).slice(0, 3));
 	}

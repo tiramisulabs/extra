@@ -3,7 +3,7 @@ import type { CommandFromContent, HandleCommand } from 'seyfert/lib/commands/han
 import type { Awaitable, MakeRequired } from 'seyfert/lib/common';
 import { fullNameOf } from '../../lib/utils';
 import { baseResolver } from './base';
-import { addCommandsEvents, type GroupLink, getCommandsMetadata } from './prepare';
+import { addCommandsEvents, type GroupLink, getCommandsMetadata, prepareCommandsMetadata } from './prepare';
 
 export interface SearchPlugin {
 	findShortcut?(shortcutName: string, shortcuts?: (SubCommand | GroupLink)[]): (SubCommand | GroupLink) | undefined;
@@ -54,6 +54,7 @@ export function YunaCommandsResolver({
 
 	addCommandsEvents(client);
 	getCommandsMetadata(client).config = config;
+	prepareCommandsMetadata(client);
 
 	const baseResolverConfig = { ...config, inMessage: true };
 
@@ -82,7 +83,7 @@ export function YunaCommandsResolver({
 				logResult.mappedResult = mappedResult;
 			}
 
-			client.logger.debug('[Yuna.resolver]');
+			client.logger.debug('[Yuna.resolver]', logResult);
 		}
 
 		return mappedResult;
