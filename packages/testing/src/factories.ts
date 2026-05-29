@@ -39,7 +39,7 @@ export function mockUser(options: MockUserOptions = {}) {
 	return {
 		id: options.id ?? mockId(),
 		username: options.username ?? 'slipher-test-user',
-		globalName: options.globalName ?? options.username ?? 'Slipher Test User',
+		globalName: 'globalName' in options ? options.globalName : (options.username ?? 'Slipher Test User'),
 		bot: options.bot ?? false,
 		discriminator: options.discriminator ?? '0',
 		avatar: options.avatar ?? null,

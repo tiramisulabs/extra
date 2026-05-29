@@ -27,7 +27,8 @@ export const init = (options: AppOptions) => {
 			}
 
 			if (verify) {
-				const body = JSON.parse(rawBody);
+				const body = parseWebhookPayload(rawBody);
+				if (!body) return res.writeHead(400).end();
 				if (body.type === WebhookRequestType.Event) options.callback(body);
 				return res.writeHead(204).end();
 			}
@@ -42,6 +43,23 @@ export const init = (options: AppOptions) => {
 	server.listen(options.port, options.listen);
 	return server;
 };
+
+function parseWebhookPayload(rawBody: string): WebhookPingEventPayload | WebhookEventPayload | undefined {
+	let body: unknown;
+	try {
+		body = JSON.parse(rawBody);
+	} catch {
+		return;
+	}
+
+	if (!body || typeof body !== 'object') return;
+	const payload = body as { type?: unknown; event?: unknown };
+	if (payload.type === WebhookRequestType.PING) return body as WebhookPingEventPayload;
+	if (payload.type === WebhookRequestType.Event && payload.event && typeof payload.event === 'object') {
+		return body as WebhookEventPayload;
+	}
+	return;
+}
 
 export function verifySignature({ timestamp, body, ed25519, publicKey }: SignatureOptions) {
 	return nacl!.sign.detached.verify(

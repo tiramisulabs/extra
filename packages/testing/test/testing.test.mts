@@ -38,6 +38,22 @@ describe('entity factories', () => {
 		assert.deepEqual(member.roles, ['admin']);
 		assert.equal(member.nick, 'Soc');
 	});
+
+	test('preserve an explicit null globalName', () => {
+		const user = mockUser({ username: 'socram', globalName: null });
+
+		assert.equal(user.globalName, null);
+	});
+
+	test('reject non-integer mock ID reset values before conversion', () => {
+		assert.throws(() => resetMockIds(1.5), TypeError);
+		assert.throws(() => resetMockIds('1.5'), TypeError);
+		assert.throws(() => resetMockIds('abc'), TypeError);
+
+		resetMockIds(' 42 ');
+
+		assert.equal(mockUser().id, '42');
+	});
 });
 
 describe('mockCommandContext', () => {

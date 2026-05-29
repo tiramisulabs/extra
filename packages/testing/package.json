@@ -19,10 +19,12 @@
 		"format": "biome format --write ./src ./test",
 		"checkb": "biome check --write --no-errors-on-unmatched ./src ./test",
 		"test": "vitest run --config ./test/vitest.config.mts ./test/",
-		"prepublish": "pnpm build"
+		"prepublishOnly": "pnpm build"
 	},
 	"devDependencies": {
+		"@biomejs/biome": "2.3.11",
 		"@types/node": "^25.0.10",
-		"typescript": "^5.9.3"
+		"typescript": "^5.9.3",
+		"vitest": "^4.0.18"
 	}
 }

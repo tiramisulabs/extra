@@ -64,6 +64,10 @@ export function mockLogger(): MockLogger {
 		warn: write('warn'),
 		error: write('error'),
 		fatal: write('fatal'),
+		/**
+		 * Returns this so child loggers share the parent entries array, keeping
+		 * tests simple when code writes through parent and child loggers.
+		 */
 		child() {
 			return this;
 		},
