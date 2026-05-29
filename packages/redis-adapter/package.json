@@ -15,10 +15,10 @@
 	"scripts": {
 		"dev": "tsc --watch",
 		"build": "tsc",
-		"lint": "biome lint --write ./src",
+		"lint": "biome lint ./src",
 		"format": "biome format --write ./src",
-		"test": "vitest run --config ./test/vitest.config.mts ./test/",
-		"checkb": "biome check --write --no-errors-on-unmatched ./src",
+		"test": "pnpm build && vitest run --config ./test/vitest.config.mts ./test/",
+		"checkb": "biome check --no-errors-on-unmatched ./src",
 		"test:adapter": "node --test ./test/adapter.test.js",
 		"test:cache": "node --test ./test/cache.test.js",
 		"test:expirableadapter": "node --test ./test/expirableadapter.test.js",

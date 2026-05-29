@@ -10,7 +10,7 @@
 		"lint": "turbo lint",
 		"format": "turbo format",
 		"test": "turbo test",
-		"check": "turbo run --concurrency 32 lint format build test checkb"
+		"check": "turbo run --concurrency 32 lint build test checkb"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.3.11",

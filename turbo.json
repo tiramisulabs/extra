@@ -7,24 +7,21 @@
 			"outputs": ["lib/**"]
 		},
 		"test": {
-			"cache": false,
-			"persistent": true
+			"dependsOn": ["build"],
+			"cache": false
 		},
 		"dev": {
 			"cache": false,
 			"persistent": true
 		},
 		"lint": {
-			"cache": false,
-			"persistent": true
+			"cache": false
 		},
 		"format": {
-			"cache": false,
-			"persistent": true
+			"cache": false
 		},
 		"checkb": {
-			"cache": false,
-			"persistent": true
+			"cache": false
 		}
 	}
 }
