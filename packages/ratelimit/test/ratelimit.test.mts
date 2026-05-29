@@ -36,6 +36,7 @@ describe('RateLimiter', () => {
 	test('allows requests until the limit is exhausted', async () => {
 		let now = 1000;
 		const limiter = new RateLimiter<{ userId: string }>({
+			strategy: 'fixed-window',
 			limit: 2,
 			window: '10s',
 			key: ctx => ['user', ctx.userId],
@@ -59,6 +60,37 @@ describe('RateLimiter', () => {
 
 		assert.equal(afterReset.allowed, true);
 		assert.equal(afterReset.remaining, 1);
+	});
+
+	test('only supports the fixed-window strategy for now', () => {
+		const limiter = new RateLimiter({
+			strategy: 'fixed-window',
+			limit: 1,
+			window: '1s',
+			key: () => 'ok',
+		});
+
+		assert.equal(limiter.strategy, 'fixed-window');
+		assert.throws(
+			() =>
+				new RateLimiter({
+					strategy: 'token-bucket',
+					limit: 1,
+					window: '1s',
+					key: () => 'bad',
+				} as never),
+			RangeError,
+		);
+		assert.throws(
+			() =>
+				new RateLimiter({
+					strategy: '',
+					limit: 1,
+					window: '1s',
+					key: () => 'bad',
+				} as never),
+			RangeError,
+		);
 	});
 
 	test('supports variable consume costs', async () => {

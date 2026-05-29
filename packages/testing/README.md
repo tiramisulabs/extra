@@ -4,6 +4,8 @@ Small testing utilities for Seyfert bots and Slipher packages.
 
 The package is test-runner agnostic: it records calls and responses without depending on Vitest, Jest, or Node's test runner.
 
+Status: beta/draft. The package is usable, but public API details may change before a stable release.
+
 ## Install
 
 ```sh

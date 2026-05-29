@@ -4,6 +4,8 @@ Lock manager for Slipher packages and bot tasks.
 
 Use it for commands, schedulers, queues, and workers that should avoid running the same job twice at the same time.
 
+Status: beta/draft. The package is usable, but public API details may change before a stable release.
+
 ## Install
 
 ```sh
@@ -80,3 +82,5 @@ const locks = new LockManager({ store });
 ```
 
 Redis lock acquisition uses atomic `SET key token NX PX ttl`. Release and extend use Lua scripts that compare the owner token before deleting or extending the key.
+
+Distributed locks depend on TTLs and Redis availability. They prevent duplicate best-effort execution, but they are not fencing tokens and cannot make side effects exactly-once by themselves.

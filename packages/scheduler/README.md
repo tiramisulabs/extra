@@ -4,6 +4,8 @@ Small task scheduler for Slipher and Seyfert projects.
 
 Use it for cache cleanup, role syncs, metrics pushes, reminders, and other recurring bot tasks.
 
+Status: beta/draft. The package is usable, but public API details may change before a stable release.
+
 ## Install
 
 ```sh
@@ -53,6 +55,12 @@ scheduler.pause(task.id);
 scheduler.start(task.id);
 scheduler.remove(task.id);
 ```
+
+## Overlap and timing
+
+Tasks in the same scheduler do not run in parallel with themselves. If a run takes longer than its interval, the next run is scheduled after the current run finishes, so intervals can drift.
+
+Cross-shard or cross-process duplicate prevention requires a shared `LockManager`, usually backed by `RedisLockStore`.
 
 ## Shard-safe schedules
 

@@ -4,9 +4,11 @@ import { type Awaitable, MemoryRateLimitStore, type RateLimitStore } from './sto
 export type RateLimitKey = string | number | bigint | readonly RateLimitKey[];
 export type RateLimitResolver<TContext, TValue> = TValue | ((context: TContext) => Awaitable<TValue>);
 export type RateLimitKeyResolver<TContext> = (context: TContext) => Awaitable<RateLimitKey>;
+export type RateLimitStrategy = 'fixed-window';
 
 export interface RateLimiterOptions<TContext = unknown> {
 	name?: string;
+	strategy?: RateLimitStrategy;
 	limit: RateLimitResolver<TContext, number>;
 	window: RateLimitResolver<TContext, DurationInput>;
 	key: RateLimitKeyResolver<TContext>;
@@ -39,6 +41,7 @@ export interface RateLimitResult {
 
 export class RateLimiter<TContext = unknown> {
 	readonly name?: string;
+	readonly strategy: RateLimitStrategy;
 	readonly store: RateLimitStore;
 	readonly prefix: string;
 	private readonly getLimit: RateLimitResolver<TContext, number>;
@@ -47,7 +50,12 @@ export class RateLimiter<TContext = unknown> {
 	private readonly now: () => number;
 
 	constructor(options: RateLimiterOptions<TContext>) {
+		if (options.strategy !== undefined && options.strategy !== 'fixed-window') {
+			throw new RangeError(`Unsupported rate limit strategy: ${options.strategy}`);
+		}
+
 		this.name = options.name;
+		this.strategy = options.strategy ?? 'fixed-window';
 		this.store = options.store ?? new MemoryRateLimitStore();
 		this.prefix = options.prefix ?? 'ratelimit';
 		this.getLimit = options.limit;

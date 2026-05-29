@@ -4,6 +4,8 @@ Typed quota and traffic control for Seyfert bots, Discord services, webhooks, pr
 
 Unlike a command cooldown, a rate limiter can protect shared resources such as paid APIs, expensive image/chart rendering, guild-wide daily quotas, webhook endpoints, queues, and REST proxies.
 
+Status: beta/draft. The package is usable, but public API details may change before a stable release.
+
 ## Install
 
 ```sh
@@ -17,6 +19,7 @@ import { RateLimiter } from '@slipher/ratelimit';
 
 const limiter = new RateLimiter({
 	name: 'image-generation',
+	strategy: 'fixed-window',
 	limit: 10,
 	window: '1h',
 	key: ctx => ['guild', ctx.guildId],
@@ -51,6 +54,12 @@ const aiQuota = new RateLimiter({
 
 const result = await aiQuota.consume(ctx, { cost: estimatedTokens });
 ```
+
+## Strategy
+
+The beta API supports `strategy: 'fixed-window'` only. Each key gets one counter for the configured window, and denied requests do not increment the counter.
+
+Token bucket and sliding window strategies are intentionally not implemented yet. Add them as explicit strategies later instead of changing fixed-window behavior.
 
 ## Shared store
 

@@ -4,6 +4,8 @@ In-memory job queues for Slipher and Seyfert projects.
 
 Use it for reminders, expensive background work, retries, rate-controlled syncs, and other bot tasks that should not run directly inside command handlers.
 
+Status: beta/draft. The package is usable, but public API details may change before a stable release.
+
 ## Install
 
 ```sh
@@ -46,6 +48,12 @@ reminders.on('failed', (job, error) => {
 console.log(reminders.counts());
 console.log(reminders.getJob('1')?.snapshot());
 ```
+
+## Lifecycle
+
+`pause()` stops pulling new jobs. Jobs already marked active keep running. `clear()` removes waiting, delayed, completed, failed, and skipped jobs, but throws while any job is active.
+
+This package is an in-memory queue. It does not persist waiting jobs, recover active work after process exit, or provide a distributed queue store yet.
 
 ## Shard-safe processing
 

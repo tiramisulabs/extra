@@ -4,6 +4,8 @@ Small logger facade for Slipher infrastructure packages and Seyfert-adjacent cod
 
 Use it when package code needs structured logs, redaction, child bindings, or adapter compatibility without forcing a specific logger dependency on consumers. It is not intended to replace Seyfert's client logger; pass Seyfert, Pino, evlog, console, or any other sink through an adapter when that is the runtime logger for the app.
 
+Status: beta/draft. The package is usable, but public API details may change before a stable release.
+
 ## Install
 
 ```sh
@@ -51,3 +53,5 @@ const adapter: LoggerAdapter = {
 ```
 
 Optional compatibility should be provided by passing already-created logger instances into adapter factories. Do not wrap optional imports in `try/catch`; put Pino or evlog-specific helpers in separate optional packages if needed later.
+
+This package stays dependency-free in core. Pino, evlog, OpenTelemetry, and Seyfert-specific adapters belong in adapter helpers or separate optional packages after the facade is stable.
