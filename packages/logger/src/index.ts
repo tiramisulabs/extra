@@ -202,9 +202,14 @@ export class RootLogger {
 		return this.now();
 	}
 
-	writeEntry(entry: LogEntry): Awaitable<void> {
+	async writeEntry(entry: LogEntry): Promise<void> {
 		if (!this.isEnabled(entry.level)) return;
-		return this.adapter.write(entry);
+
+		try {
+			await this.adapter.write(entry);
+		} catch (error) {
+			console.error('[logger] adapter.write failed:', error);
+		}
 	}
 
 	private write(level: WritableLogLevel, args: readonly unknown[]): Awaitable<void> {
@@ -230,6 +235,7 @@ export class WideEventLogger {
 	private readonly records: LogRecord[] = [];
 	private data: LogData;
 	private emitted = false;
+	private emitPromise?: Promise<void>;
 
 	constructor(root: RootLogger, data: LogData = {}) {
 		this.root = root;
@@ -274,7 +280,12 @@ export class WideEventLogger {
 		return this.records.some(record => record.levelValue >= levelValues[level]);
 	}
 
-	async emit(options: WideEventEmitOptions = {}): Promise<void> {
+	emit(options: WideEventEmitOptions = {}): Promise<void> {
+		this.emitPromise ??= this.emitOnce(options);
+		return this.emitPromise;
+	}
+
+	private async emitOnce(options: WideEventEmitOptions): Promise<void> {
 		if (this.emitted) return;
 		this.emitted = true;
 

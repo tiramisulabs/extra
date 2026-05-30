@@ -26,6 +26,22 @@ class RecordingAdapter implements LoggerAdapter {
 	}
 }
 
+class BlockingAdapter extends RecordingAdapter {
+	private releaseWrite?: () => void;
+	private readonly pendingWrite = new Promise<void>(resolve => {
+		this.releaseWrite = resolve;
+	});
+
+	override write(entry: LogEntry): Promise<void> {
+		this.entries.push(entry);
+		return this.pendingWrite;
+	}
+
+	release(): void {
+		this.releaseWrite?.();
+	}
+}
+
 function commandContext(loggerInstance: WideEventLogger) {
 	return {
 		logger: loggerInstance,
@@ -127,6 +143,26 @@ describe('logger plugin', () => {
 		assert.equal(adapter.entries[0].logs.length, 1);
 		assert.equal(adapter.entries[0].logs[0].message, 'command failed');
 		assert.equal(adapter.entries[0].logs[0].data.error, error);
+	});
+
+	test('guards concurrent command emits while the adapter write is pending', async () => {
+		const adapter = new BlockingAdapter();
+		const plugin = logger({ adapter });
+		const options = plugin.options?.({});
+		const extension = options?.context?.({ id: 'interaction-1' }) as { logger: WideEventLogger };
+
+		const first = options?.commands?.defaults?.onAfterRun?.(commandContext(extension.logger), undefined);
+		const second = options?.commands?.defaults?.onAfterRun?.(commandContext(extension.logger), undefined);
+
+		await Promise.resolve();
+
+		assert.equal(adapter.entries.length, 1);
+		assert.equal(adapter.entries[0].message, 'command completed');
+
+		adapter.release();
+		await Promise.all([first, second]);
+
+		assert.equal(adapter.entries.length, 1);
 	});
 
 	test('closes terminal hooks that do not reach onAfterRun', async () => {
@@ -243,6 +279,50 @@ describe('createLogger', () => {
 		assert.deepEqual(adapter.entries[0].bindings, { app: 'bot', shardId: 1 });
 		assert.deepEqual(adapter.entries[0].data, { route: '/sync', error });
 		assert.equal(adapter.entries[0].message, 'sync failed');
+	});
+
+	test('reports adapter write failures without rejecting callers', async () => {
+		const calls: unknown[][] = [];
+		const originalError = console.error;
+		console.error = (...args: unknown[]) => {
+			calls.push(args);
+		};
+
+		try {
+			const syncError = new Error('sync sink failed');
+			const asyncError = new Error('async sink failed');
+			const syncLogger = createLogger({
+				adapter: {
+					write() {
+						throw syncError;
+					},
+				},
+			});
+			const asyncLogger = createLogger({
+				adapter: {
+					write() {
+						return Promise.reject(asyncError);
+					},
+				},
+			});
+
+			let thrown: unknown;
+			try {
+				await syncLogger.info('sync failure');
+				await asyncLogger.info('async failure');
+			} catch (error) {
+				thrown = error;
+			}
+
+			assert.equal(thrown, undefined);
+		} finally {
+			console.error = originalError;
+		}
+
+		assert.deepEqual(calls, [
+			['[logger] adapter.write failed:', new Error('sync sink failed')],
+			['[logger] adapter.write failed:', new Error('async sink failed')],
+		]);
 	});
 
 	test('extracts useful Seyfert context from interactions and contexts', () => {
