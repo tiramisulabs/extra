@@ -199,6 +199,10 @@ describe('persistent queues', () => {
 		assert.equal(processed?.queueName, 'mail');
 		assert.equal(processed?.name, 'send');
 		assert.equal(result, 'sent:hi@example.com');
+		queue.pause();
+		queue.start();
+		assert.equal(fake.queues[0].paused, true);
+		assert.equal(fake.queues[0].resumed, true);
 
 		await registry.close();
 		assert.equal(fake.queues[0].closed, true);
@@ -242,6 +246,8 @@ function createFakeBullMQ() {
 class FakeBullQueue {
 	readonly adds: { name: string; data: unknown; options: unknown }[] = [];
 	closed = false;
+	paused = false;
+	resumed = false;
 
 	constructor(
 		readonly name: string,
@@ -259,6 +265,14 @@ class FakeBullQueue {
 
 	async getJobCounts() {
 		return { active: 0, completed: 0, delayed: 0, failed: 0, waiting: 0 };
+	}
+
+	async pause() {
+		this.paused = true;
+	}
+
+	async resume() {
+		this.resumed = true;
 	}
 
 	async close() {

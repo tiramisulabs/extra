@@ -610,6 +610,7 @@ export class PersistentQueue<TData = unknown, TResult = unknown>
 	}
 
 	start(): this {
+		void this.queue.resume?.();
 		return this;
 	}
 
