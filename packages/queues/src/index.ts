@@ -424,9 +424,17 @@ export class MemoryQueue<TData = unknown, TResult = unknown>
 	}
 
 	private sortQueue(): void {
+		const now = this.now();
 		this.queue.sort((a, b) => {
-			const byRunAt = a.job.runAt.getTime() - b.job.runAt.getTime();
-			if (byRunAt !== 0) return byRunAt;
+			const aReady = a.job.runAt.getTime() <= now;
+			const bReady = b.job.runAt.getTime() <= now;
+			if (aReady !== bReady) return aReady ? -1 : 1;
+
+			if (!(aReady && bReady)) {
+				const byRunAt = a.job.runAt.getTime() - b.job.runAt.getTime();
+				if (byRunAt !== 0) return byRunAt;
+			}
+
 			const byPriority = b.job.priority - a.job.priority;
 			if (byPriority !== 0) return byPriority;
 			return a.sequence - b.sequence;
@@ -437,6 +445,7 @@ export class MemoryQueue<TData = unknown, TResult = unknown>
 		this.clearTimer();
 		if (!(this.running && this.processor)) return;
 
+		this.sortQueue();
 		this.drainReadyJobs();
 		if (this.activeJobs.size >= this.concurrency) return;
 

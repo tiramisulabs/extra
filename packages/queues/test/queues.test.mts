@@ -71,7 +71,8 @@ describe('memory queues', () => {
 
 	test('runs higher priority ready jobs before lower priority jobs', async () => {
 		const processed: string[] = [];
-		const registry = createQueues({ driver: memory() });
+		let now = 1_000;
+		const registry = createQueues({ driver: memory({ now: () => now++ }) });
 		const queue = registry.get<string, string>('priority', { autostart: false });
 		const idle = waitForEvent(queue, 'idle');
 
