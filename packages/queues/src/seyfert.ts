@@ -6,6 +6,10 @@ declare module 'seyfert' {
 		queues: QueuesRegistry;
 	}
 
+	interface HttpClient {
+		queues: QueuesRegistry;
+	}
+
 	interface WorkerClient<Ready extends boolean = boolean> {
 		queues: QueuesRegistry;
 	}
