@@ -1,3 +1,5 @@
+import './seyfert';
+
 export type Awaitable<T> = T | PromiseLike<T>;
 
 export type DurationInput = number | string;

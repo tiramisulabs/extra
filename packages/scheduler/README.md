@@ -40,9 +40,21 @@ const client = new Client({
 The plugin exposes `ctx.scheduler` and `client.scheduler`.
 
 ```ts
-ctx.scheduler.interval('refresh-cache', '30s', async task => {
-	void task.id;
-});
+import { Command, Declare, type CommandContext } from 'seyfert';
+
+@Declare({
+	name: 'refresh-cache',
+	description: 'Schedule a cache refresh',
+})
+export default class RefreshCacheCommand extends Command {
+	async run(ctx: CommandContext) {
+		ctx.scheduler.interval('refresh-cache', '30s', async task => {
+			void task.id;
+		});
+
+		await ctx.write({ content: 'Cache refresh scheduled.' });
+	}
+}
 ```
 
 ## Programmatic Usage
