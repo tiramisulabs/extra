@@ -17,7 +17,8 @@
 		"lint": "biome lint --write ./src ./test",
 		"format": "biome format --write ./src ./test",
 		"checkb": "biome check --write --no-errors-on-unmatched ./src ./test",
-		"test": "vitest run --config ./test/vitest.config.mts ./test/",
+		"typecheck": "tsc --noEmit --project ./test/tsconfig.json",
+		"test": "pnpm typecheck && vitest run --config ./test/vitest.config.mts ./test/",
 		"prepublishOnly": "pnpm build"
 	},
 	"peerDependencies": {

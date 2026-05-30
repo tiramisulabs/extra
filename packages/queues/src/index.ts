@@ -27,6 +27,28 @@ export interface QueueOptions<TData = unknown, TResult = unknown> {
 	idGenerator?: () => string;
 }
 
+export interface RegisteredQueues {}
+
+export interface QueueRegistration<TData = unknown, TResult = unknown> {
+	data: TData;
+	result: TResult;
+}
+
+export type RegisteredQueueName = Extract<keyof RegisteredQueues, string>;
+export type QueueData<TName extends string> = TName extends RegisteredQueueName
+	? RegisteredQueues[TName] extends { data: infer TData }
+		? TData
+		: unknown
+	: unknown;
+export type QueueResult<TName extends string> = TName extends RegisteredQueueName
+	? RegisteredQueues[TName] extends { result: infer TResult }
+		? TResult
+		: unknown
+	: unknown;
+export type QueueOf<TName extends string> = Queue<QueueData<TName>, QueueResult<TName>>;
+export type QueueJobOf<TName extends string> = QueueJob<QueueData<TName>, QueueResult<TName>>;
+export type QueueOptionsOf<TName extends string> = QueueOptions<QueueData<TName>, QueueResult<TName>>;
+
 export interface QueueCounts {
 	waiting: number;
 	delayed: number;
@@ -82,6 +104,7 @@ export interface Queue<TData = unknown, TResult = unknown> {
 }
 
 export interface QueueDriver {
+	get<TName extends RegisteredQueueName>(name: TName, options?: QueueOptionsOf<TName>): QueueOf<TName>;
 	get<TData = unknown, TResult = unknown>(name: string, options?: QueueOptions<TData, TResult>): Queue<TData, TResult>;
 	close?(): Awaitable<void>;
 }
@@ -169,6 +192,11 @@ export interface BullJobLike {
 export type QueueConstructor<T = object> = new (...args: unknown[]) => T;
 type QueueMethod = string | symbol;
 type QueueProcessHandler = (job: QueueJob<unknown, unknown>) => unknown;
+type DynamicQueueName<TName extends string> = string extends TName
+	? TName
+	: TName extends RegisteredQueueName
+		? never
+		: TName;
 
 interface QueueEntry<TData, TResult> {
 	job: QueueJob<TData, TResult>;
@@ -551,6 +579,8 @@ export class MemoryQueueDriver implements QueueDriver {
 
 	constructor(private readonly defaults: QueueOptions = {}) {}
 
+	get<TName extends RegisteredQueueName>(name: TName, options?: QueueOptionsOf<TName>): QueueOf<TName>;
+	get<TData = unknown, TResult = unknown>(name: string, options?: QueueOptions<TData, TResult>): Queue<TData, TResult>;
 	get<TData = unknown, TResult = unknown>(
 		name: string,
 		options: QueueOptions<TData, TResult> = {},
@@ -726,6 +756,8 @@ export class PersistentQueueDriver implements QueueDriver {
 		this.bullmq = options.bullmq ?? loadBullMQ();
 	}
 
+	get<TName extends RegisteredQueueName>(name: TName, options?: QueueOptionsOf<TName>): QueueOf<TName>;
+	get<TData = unknown, TResult = unknown>(name: string, options?: QueueOptions<TData, TResult>): Queue<TData, TResult>;
 	get<TData = unknown, TResult = unknown>(
 		name: string,
 		options: QueueOptions<TData, TResult> = {},
@@ -762,6 +794,8 @@ export class QueuesRegistry {
 		return this;
 	}
 
+	get<TName extends RegisteredQueueName>(name: TName, options?: QueueOptionsOf<TName>): QueueOf<TName>;
+	get<TData = unknown, TResult = unknown>(name: string, options?: QueueOptions<TData, TResult>): Queue<TData, TResult>;
 	get<TData = unknown, TResult = unknown>(
 		name: string,
 		options: QueueOptions<TData, TResult> = {},
@@ -769,12 +803,18 @@ export class QueuesRegistry {
 		return this.getOrCreateQueue(name, options);
 	}
 
-	async add<TData = unknown, TResult = unknown>(
-		queueName: string,
+	async add<TName extends RegisteredQueueName>(
+		queueName: TName,
+		data: QueueData<TName>,
+		options?: JobOptions,
+	): Promise<QueueJobOf<TName>>;
+	async add<const TName extends string, TData = unknown, TResult = unknown>(
+		queueName: DynamicQueueName<TName>,
 		data: TData,
 		options?: JobOptions,
-	): Promise<QueueJob<TData, TResult>> {
-		return this.get<TData, TResult>(queueName).add(data, options);
+	): Promise<QueueJob<TData, TResult>>;
+	async add(queueName: string, data: unknown, options?: JobOptions): Promise<QueueJob<unknown, unknown>> {
+		return this.get(queueName).add(data, options);
 	}
 
 	getProducer<T extends object>(producer: QueueConstructor<T>): T | undefined {
@@ -896,6 +936,14 @@ export function persistent(options: PersistentQueueOptions = {}): QueueDriver {
 	return new PersistentQueueDriver(options);
 }
 
+export function Processor<TName extends RegisteredQueueName>(
+	name: TName,
+	options?: QueueOptionsOf<TName>,
+): ClassDecorator;
+export function Processor<TData = unknown, TResult = unknown>(
+	name: string,
+	options?: QueueOptions<TData, TResult>,
+): ClassDecorator;
 export function Processor(name: string, options?: QueueOptions): ClassDecorator {
 	return target => {
 		processorMetadata.set(target, { name, options });
@@ -920,6 +968,7 @@ export function OnQueueEvent(event: QueueEventName): MethodDecorator {
 
 export const QueueEvent = OnQueueEvent;
 
+export function InjectQueue<TName extends RegisteredQueueName>(name: TName): ParameterDecorator;
 export function InjectQueue(name: string): ParameterDecorator {
 	return (target, _propertyKey, parameterIndex) => {
 		const constructor = typeof target === 'function' ? target : target.constructor;

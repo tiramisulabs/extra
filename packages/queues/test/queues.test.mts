@@ -8,11 +8,36 @@ import {
 	Processor,
 	parseDuration,
 	persistent,
-	type Queue,
 	type QueueJob,
+	type QueueOf,
 	type QueuesRegistry,
 	queues,
 } from '../src';
+
+interface MailPayload {
+	email: string;
+}
+
+interface WelcomePayload {
+	userId: string;
+}
+
+declare module '../src' {
+	interface RegisteredQueues {
+		mail: {
+			data: MailPayload;
+			result: string;
+		};
+		priority: {
+			data: string;
+			result: string;
+		};
+		welcome: {
+			data: WelcomePayload;
+			result: string;
+		};
+	}
+}
 
 function waitForEvent<TArgs extends readonly unknown[]>(
 	queue: { on(event: string, listener: (...args: TArgs) => void): () => void },
@@ -33,7 +58,7 @@ function wait(milliseconds: number): Promise<void> {
 describe('memory queues', () => {
 	test('processes delayed jobs, retries failures, and records the completed result', async () => {
 		const registry = createQueues({ driver: memory() });
-		const queue = registry.get<{ userId: string }, string>('welcome', {
+		const queue = registry.get('welcome', {
 			attempts: 2,
 			retryDelay: 0,
 		});
@@ -73,7 +98,7 @@ describe('memory queues', () => {
 		const processed: string[] = [];
 		let now = 1_000;
 		const registry = createQueues({ driver: memory({ now: () => now++ }) });
-		const queue = registry.get<string, string>('priority', { autostart: false });
+		const queue = registry.get('priority', { autostart: false });
 		const idle = waitForEvent(queue, 'idle');
 
 		await queue.add('low', { priority: 0 });
@@ -96,18 +121,18 @@ describe('decorated queues', () => {
 		const events: string[] = [];
 
 		class WelcomeProcessor {
-			greet(job: QueueJob<{ userId: string }, string>) {
+			greet(job: QueueJob<WelcomePayload, string>) {
 				processed.push(job.data.userId);
 				return `welcome:${job.data.userId}`;
 			}
 
-			completed(_job: QueueJob<{ userId: string }, string>, result: string) {
+			completed(_job: QueueJob<WelcomePayload, string>, result: string) {
 				events.push(result);
 			}
 		}
 
 		class WelcomeProducer {
-			constructor(readonly welcome: Queue<{ userId: string }, string>) {}
+			constructor(readonly welcome: QueueOf<'welcome'>) {}
 		}
 
 		Processor('welcome')(WelcomeProcessor);
@@ -159,11 +184,11 @@ describe('persistent queues', () => {
 				prefix: 'slipher-test',
 			}),
 		});
-		const queue = registry.get<{ email: string }, string>('mail', {
+		const queue = registry.get('mail', {
 			attempts: 3,
 			concurrency: 2,
 		});
-		let processed: QueueJob<{ email: string }, string> | undefined;
+		let processed: QueueJob<MailPayload, string> | undefined;
 
 		const job = await queue.add(
 			{ email: 'hi@example.com' },

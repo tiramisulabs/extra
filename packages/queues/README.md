@@ -24,7 +24,8 @@ import {
 	OnQueueEvent,
 	Process,
 	Processor,
-	type QueueJob,
+	type QueueJobOf,
+	type QueueRegistration,
 	queues,
 	memory,
 } from '@slipher/queues';
@@ -34,16 +35,22 @@ interface WelcomeJob {
 	userId: string;
 }
 
+declare module '@slipher/queues' {
+	interface RegisteredQueues {
+		welcome: QueueRegistration<WelcomeJob, string>;
+	}
+}
+
 @Processor('welcome')
 class WelcomeProcessor {
 	@Process('send')
-	async send(job: QueueJob<WelcomeJob, string>) {
+	async send(job: QueueJobOf<'welcome'>) {
 		await sendWelcomeMessage(job.data.userId);
 		return `welcome:${job.data.userId}`;
 	}
 
 	@OnQueueEvent('completed')
-	onCompleted(job: QueueJob<WelcomeJob, string>, result: string) {
+	onCompleted(job: QueueJobOf<'welcome'>, result: string) {
 		job.snapshot();
 		console.info('welcome job completed', { jobId: job.id, result });
 	}
@@ -79,32 +86,28 @@ export default class WelcomeCommand extends Command {
 		queues: QueuesRegistry;
 		write(response: { content: string }): Promise<unknown>;
 	}) {
-		await ctx.queues.add<WelcomeJob, string>(
-			'welcome',
-			{ source: 'slash-command', userId: ctx.author.id },
-			{
-				name: 'send',
-				delay: '10s',
-				priority: 10,
-			},
-		);
+		await ctx.queues.add('welcome', { source: 'slash-command', userId: ctx.author.id }, {
+			name: 'send',
+			delay: '10s',
+			priority: 10,
+		});
 
 		await ctx.write({ content: 'Welcome job queued.' });
 	}
 }
 ```
 
-That lets command code stay small: it only decides what should happen, while the processor owns the actual work, retries, and observability hooks.
+The queue name drives the types through declaration merging. `ctx.queues.add('welcome', ...)` now requires `WelcomeJob` data and returns a job with a `string` result. That keeps command code small: it only decides what should happen, while the processor owns the actual work, retries, and observability hooks.
 
 ## Inject Queues Into Producers
 
 If you prefer a service-style producer, use `@InjectQueue()` and register the producer with the plugin:
 
 ```ts
-import { InjectQueue, type Queue } from '@slipher/queues';
+import { InjectQueue, type QueueOf } from '@slipher/queues';
 
 class WelcomeProducer {
-	constructor(@InjectQueue('welcome') readonly welcome: Queue<WelcomeJob, string>) {}
+	constructor(@InjectQueue('welcome') readonly welcome: QueueOf<'welcome'>) {}
 
 	send(userId: string) {
 		return this.welcome.add({ source: 'slash-command', userId }, { name: 'send' });
@@ -157,14 +160,22 @@ Persistent queues map Slipher job options into BullMQ queue and worker options, 
 The registry also works without a Seyfert client for scripts, tests, and workers:
 
 ```ts
-import { createQueues, memory } from '@slipher/queues';
+import { createQueues, memory, type QueueJobOf, type QueueRegistration } from '@slipher/queues';
+
+declare module '@slipher/queues' {
+	interface RegisteredQueues {
+		welcome: QueueRegistration<WelcomeJob, string>;
+	}
+}
 
 const registry = createQueues({ driver: memory() });
-const welcome = registry.get<WelcomeJob, string>('welcome');
+const welcome = registry.get('welcome');
 
 welcome.process(job => `hello:${job.data.userId}`);
 
 await welcome.add({ source: 'slash-command', userId: '123' }, { name: 'send' });
+const job = await registry.add('welcome', { source: 'scheduler', userId: '456' });
+const snapshot: QueueJobOf<'welcome'> = job;
 await registry.close();
 ```
 
