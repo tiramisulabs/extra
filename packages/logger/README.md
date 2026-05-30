@@ -1,6 +1,6 @@
 # @slipher/logger
 
-Structured logging primitives and a Seyfert plugin for command, component, and modal execution logs.
+Structured command, component, and modal logs for Seyfert. The plugin keeps the whole interaction timeline in memory, lets middlewares and commands enrich the same log event, and emits one final entry when Seyfert finishes the run.
 
 ## Install
 
@@ -8,31 +8,9 @@ Structured logging primitives and a Seyfert plugin for command, component, and m
 pnpm add @slipher/logger
 ```
 
-## Standalone Usage
+## Use With Seyfert
 
-```ts
-import { createLogger } from '@slipher/logger';
-
-const logger = createLogger({
-	name: 'bot',
-	level: 'debug',
-	bindings: { shard: 0 },
-});
-
-logger.info({ guildId: '123' }, 'bot started');
-```
-
-Use `event()` when a single operation needs multiple breadcrumbs and a final outcome:
-
-```ts
-const event = logger.event({ command: 'ping', guildId: '123' });
-
-event.debug('command received');
-event.info('command completed');
-await event.emit({ outcome: 'success', message: 'command finished' });
-```
-
-## Seyfert Plugin
+Install the plugin once in the client:
 
 ```ts
 import { Client } from 'seyfert';
@@ -42,17 +20,107 @@ const client = new Client({
 	plugins: [
 		logger({
 			name: 'slipher-bot',
-			level: 'info',
+			level: 'debug',
+			bindings: { service: 'discord' },
 		}),
 	],
 });
 ```
 
-The plugin exposes `ctx.logger` for commands, components, and modals, and also installs `client.logger`.
+The plugin adds a wide event logger to every command, component, and modal context as `ctx.logger`. Seyfert lifecycle hooks close that event automatically:
+
+- `onBeforeMiddlewares` records that the command was received.
+- `onBeforeOptions` records option parsing.
+- middleware, option, permission, and runtime failures emit an error or denied event immediately.
+- `onAfterRun` emits one final success or error entry with `durationMs`.
+
+It also installs the root logger on `client.logger`, `client.commands.logger`, `client.components.logger`, `client.events.logger`, `client.langs.logger`, and `client.cache.logger` for non-interaction logs.
+
+## Carry Context Through Middlewares
+
+Everything that calls `ctx.logger.add()` or logs a breadcrumb contributes to the same final entry. That makes it useful for request-scoped context that is discovered before the command runs.
+
+```ts
+import { Command, Declare, Middlewares, createMiddleware } from 'seyfert';
+import type { WideEventLogger } from '@slipher/logger';
+
+type BotContext = {
+	author: { id: string };
+	logger: WideEventLogger;
+	write(response: { content: string }): Promise<unknown>;
+	metadata: {
+		audit: {
+			requestId: string;
+			plan: 'free' | 'pro';
+		};
+	};
+};
+
+export const auditMiddleware = createMiddleware<{ requestId: string; plan: 'free' | 'pro' }, BotContext>(
+	async ({ context, next }) => {
+		const audit = {
+			requestId: crypto.randomUUID(),
+			plan: await loadUserPlan(context.author.id),
+		} as const;
+
+		context.logger.add(audit);
+		context.logger.debug('audit context loaded');
+
+		return next(audit);
+	},
+);
+
+declare module 'seyfert' {
+	interface RegisteredMiddlewares {
+		audit: typeof auditMiddleware;
+	}
+}
+
+@Declare({
+	name: 'deploy',
+	description: 'Deploy the current project',
+})
+@Middlewares(['audit'])
+export default class DeployCommand extends Command {
+	async run(context: BotContext) {
+		context.logger.add({
+			projectId: 'web',
+			plan: context.metadata.audit.plan,
+		});
+		context.logger.info('deployment queued');
+
+		await context.write({ content: 'Deployment queued.' });
+	}
+}
+```
+
+The command does not need to call `emit()` in the happy path. When the command returns, the plugin emits one entry containing the Seyfert fields, the middleware context, the command context, the final outcome, and the breadcrumbs:
+
+```ts
+{
+	message: 'command completed',
+	data: {
+		kind: 'command',
+		command: 'deploy',
+		userId: '123',
+		requestId: '7c5d...',
+		plan: 'pro',
+		projectId: 'web',
+		outcome: 'success',
+		durationMs: 42,
+	},
+	logs: [
+		{ level: 'debug', message: 'command received' },
+		{ level: 'debug', message: 'audit context loaded' },
+		{ level: 'debug', message: 'command options parsing' },
+		{ level: 'info', message: 'deployment queued' },
+	],
+}
+```
 
 ## Adapters
 
-Use the console adapter by default, or bridge to another logger:
+The default adapter writes to `console`. Use an adapter when you want the final wide event in another logger or event stream.
 
 ```ts
 import { createPinoLoggerAdapter, logger } from '@slipher/logger';
@@ -61,17 +129,28 @@ import pino from 'pino';
 const root = pino();
 
 export default logger({
+	name: 'slipher-bot',
 	adapter: createPinoLoggerAdapter(root),
 });
 ```
 
-`createEvlogLoggerAdapter()` is available for event-log style sinks.
+`createEvlogLoggerAdapter()` is also available for event-log style sinks.
 
-## Implementation Notes
+## Outside Seyfert
 
-- Log records are sanitized so circular objects do not crash serialization.
-- Command defaults record options parsing, middleware failures, permission failures, runtime errors, and final outcome.
-- `flush()` delegates to the configured adapter when it supports flushing.
+The core logger can be used without Seyfert when you need the same wide-event behavior in scripts, workers, or tests:
+
+```ts
+import { createLogger } from '@slipher/logger';
+
+const root = createLogger({ name: 'worker', level: 'debug' });
+const event = root.event({ job: 'sync-guild', guildId: '123' });
+
+event.debug('loaded guild');
+event.info('synced commands');
+
+await event.emit({ outcome: 'success', message: 'guild sync completed' });
+```
 
 ## Development
 
