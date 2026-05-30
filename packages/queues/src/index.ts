@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import './seyfert';
 
 export type Awaitable<T> = T | Promise<T>;
 export type DurationInput = number | string;

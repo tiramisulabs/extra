@@ -73,19 +73,14 @@ const client = new Client({
 The plugin exposes the same registry on every interaction context and on the client:
 
 ```ts
-import { Command, Declare } from 'seyfert';
-import type { QueuesRegistry } from '@slipher/queues';
+import { Command, Declare, type CommandContext } from 'seyfert';
 
 @Declare({
 	name: 'welcome',
 	description: 'Queue a welcome message',
 })
 export default class WelcomeCommand extends Command {
-	async run(ctx: {
-		author: { id: string };
-		queues: QueuesRegistry;
-		write(response: { content: string }): Promise<unknown>;
-	}) {
+	async run(ctx: CommandContext) {
 		await ctx.queues.add('welcome', { source: 'slash-command', userId: ctx.author.id }, {
 			name: 'send',
 			delay: '10s',
@@ -97,7 +92,7 @@ export default class WelcomeCommand extends Command {
 }
 ```
 
-The queue name drives the types through declaration merging. `ctx.queues.add('welcome', ...)` now requires `WelcomeJob` data and returns a job with a `string` result. That keeps command code small: it only decides what should happen, while the processor owns the actual work, retries, and observability hooks.
+The package augments Seyfert's context and client types, so commands can use `CommandContext` directly. The queue name drives the types through declaration merging. `ctx.queues.add('welcome', ...)` now requires `WelcomeJob` data and returns a job with a `string` result. That keeps command code small: it only decides what should happen, while the processor owns the actual work, retries, and observability hooks.
 
 ## Inject Queues Into Producers
 

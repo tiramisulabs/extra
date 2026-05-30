@@ -1,3 +1,4 @@
+import type { Client, CommandContext, UsingClient, WorkerClient } from 'seyfert';
 import {
 	InjectQueue,
 	Processor,
@@ -28,6 +29,15 @@ declare module '../src' {
 
 declare function expectType<T>(value: T): void;
 declare const registry: QueuesRegistry;
+declare const commandContext: CommandContext;
+declare const concreteClient: Client;
+declare const workerClient: WorkerClient;
+declare const client: UsingClient;
+
+expectType<QueuesRegistry>(commandContext.queues);
+expectType<QueuesRegistry>(concreteClient.queues);
+expectType<QueuesRegistry>(workerClient.queues);
+expectType<QueuesRegistry>(client.queues);
 
 const welcomeQueue = registry.get('welcome');
 expectType<QueueOf<'welcome'>>(welcomeQueue);
