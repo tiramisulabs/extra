@@ -196,6 +196,7 @@ describe('logger plugin', () => {
 		await plugin.setup?.(client);
 		const rootLogger = client.logger as RootLogger;
 
+		assert.equal(client.slipherLogger, rootLogger);
 		assert.equal(client.commands.logger, rootLogger);
 		assert.equal(client.components.logger, rootLogger);
 		assert.equal(client.events.logger, rootLogger);

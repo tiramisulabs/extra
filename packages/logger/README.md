@@ -34,29 +34,16 @@ The plugin adds a wide event logger to every command, component, and modal conte
 - middleware, option, permission, and runtime failures emit an error or denied event immediately.
 - `onAfterRun` emits one final success or error entry with `durationMs`.
 
-It also installs the root logger on `client.logger`, `client.commands.logger`, `client.components.logger`, `client.events.logger`, `client.langs.logger`, and `client.cache.logger` for non-interaction logs.
+It also installs the root logger on `client.logger`, `client.commands.logger`, `client.components.logger`, `client.events.logger`, `client.langs.logger`, and `client.cache.logger` for non-interaction logs. Use `client.slipherLogger` when you want the same root logger with a Slipher-specific type.
 
 ## Carry Context Through Middlewares
 
 Everything that calls `ctx.logger.add()` or logs a breadcrumb contributes to the same final entry. That makes it useful for request-scoped context that is discovered before the command runs.
 
 ```ts
-import { Command, Declare, Middlewares, createMiddleware } from 'seyfert';
-import type { WideEventLogger } from '@slipher/logger';
+import { Command, Declare, Middlewares, createMiddleware, type CommandContext } from 'seyfert';
 
-type BotContext = {
-	author: { id: string };
-	logger: WideEventLogger;
-	write(response: { content: string }): Promise<unknown>;
-	metadata: {
-		audit: {
-			requestId: string;
-			plan: 'free' | 'pro';
-		};
-	};
-};
-
-export const auditMiddleware = createMiddleware<{ requestId: string; plan: 'free' | 'pro' }, BotContext>(
+export const auditMiddleware = createMiddleware<{ requestId: string; plan: 'free' | 'pro' }, CommandContext>(
 	async ({ context, next }) => {
 		const audit = {
 			requestId: crypto.randomUUID(),
@@ -82,7 +69,7 @@ declare module 'seyfert' {
 })
 @Middlewares(['audit'])
 export default class DeployCommand extends Command {
-	async run(context: BotContext) {
+	async run(context: CommandContext<{}, 'audit'>) {
 		context.logger.add({
 			projectId: 'web',
 			plan: context.metadata.audit.plan,

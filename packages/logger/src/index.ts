@@ -1,3 +1,5 @@
+import './seyfert';
+
 export type Awaitable<T> = T | Promise<T>;
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'silent';
 export type WritableLogLevel = Exclude<LogLevel, 'silent'>;
@@ -77,6 +79,7 @@ export interface ComponentLoggerDefaults {
 
 export interface SeyfertClientLike {
 	logger?: unknown;
+	slipherLogger?: unknown;
 	commands?: unknown;
 	components?: unknown;
 	events?: unknown;
@@ -372,6 +375,7 @@ export function installSeyfertLogger<TClient extends SeyfertClientLike>(
 	client: TClient,
 	rootLogger: RootLogger,
 ): RootLogger {
+	client.slipherLogger = rootLogger;
 	client.logger = rootLogger;
 	setLoggerOn(client.commands, rootLogger);
 	setLoggerOn(client.components, rootLogger);
