@@ -146,7 +146,7 @@ export default logger({
 });
 ```
 
-Any evlog drain works here, including Axiom, OTLP, Sentry, fs, memory, or your own pipeline. `createEvlogLoggerAdapter` remains as an alias when you prefer the older helper name.
+Any evlog drain works here, including Axiom, OTLP, Sentry, fs, memory, or your own pipeline.
 
 ## Outside Seyfert
 

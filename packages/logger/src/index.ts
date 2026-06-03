@@ -430,8 +430,6 @@ export function createEvlogDrainAdapter(drain: EvlogDrain, options: EvlogAdapter
 	};
 }
 
-export const createEvlogLoggerAdapter = createEvlogDrainAdapter;
-
 export function extractSeyfertLogContext(context: unknown): SeyfertLogContext {
 	const source = asRecord(context);
 	const interaction = asRecord(source.interaction ?? source);

@@ -2,7 +2,6 @@ import { assert, describe, test } from 'vitest';
 import {
 	ConsoleLoggerAdapter,
 	createEvlogDrainAdapter,
-	createEvlogLoggerAdapter,
 	createLogger,
 	createPinoLoggerAdapter,
 	extractSeyfertLogContext,
@@ -320,10 +319,6 @@ describe('logger adapters', () => {
 				timestamp: '2026-05-29T10:00:00.000Z',
 			},
 		});
-	});
-
-	test('createEvlogLoggerAdapter is an alias for the drain adapter', () => {
-		assert.equal(createEvlogLoggerAdapter, createEvlogDrainAdapter);
 	});
 });
 
