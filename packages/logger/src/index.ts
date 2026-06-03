@@ -221,7 +221,7 @@ export class RootLogger {
 	}
 
 	event(data: LogData = {}): WideEventLogger {
-		return new WideEventLogger(this, data);
+		return new WideEventLogger(this, data, { bindings: this.bindings, name: this.name });
 	}
 
 	flush(): Awaitable<void> {
@@ -266,14 +266,18 @@ export class RootLogger {
 export class WideEventLogger {
 	private readonly root: RootLogger;
 	private readonly startedAt: Date;
+	private readonly bindings: LogBindings;
+	private readonly name?: string;
 	private readonly records: LogRecord[] = [];
 	private data: LogData;
 	private emitted = false;
 	private emitPromise?: Promise<void>;
 
-	constructor(root: RootLogger, data: LogData = {}) {
+	constructor(root: RootLogger, data: LogData = {}, metadata: Pick<LogEntry, 'bindings' | 'name'> = { bindings: {} }) {
 		this.root = root;
 		this.startedAt = root.timestamp();
+		this.bindings = metadata.bindings;
+		this.name = metadata.name;
 		this.data = data;
 	}
 
@@ -336,10 +340,11 @@ export class WideEventLogger {
 		const level = options.level ?? selectWideEventLevel(outcome, this.records);
 		const kind = getString(data.kind) ?? 'event';
 		await this.root.writeEntry({
+			name: this.name,
 			level,
 			levelValue: levelValues[level],
 			time,
-			bindings: {},
+			bindings: this.bindings,
 			data,
 			logs: [...this.records],
 			message: options.message ?? defaultWideEventMessage(kind, outcome),

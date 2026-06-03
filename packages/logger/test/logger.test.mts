@@ -389,6 +389,18 @@ describe('createLogger', () => {
 		assert.equal(adapter.entries[0].message, 'sync failed');
 	});
 
+	test('preserves root metadata on wide event entries', async () => {
+		const adapter = new RecordingAdapter();
+		const root = createLogger({ adapter, bindings: { app: 'bot' }, name: 'slipher-bot' }).child({ shardId: 1 });
+		const event = root.event({ job: 'sync-guild' });
+
+		await event.emit({ message: 'guild sync completed' });
+
+		assert.equal(adapter.entries.length, 1);
+		assert.equal(adapter.entries[0].name, 'slipher-bot');
+		assert.deepEqual(adapter.entries[0].bindings, { app: 'bot', shardId: 1 });
+	});
+
 	test('reports adapter write failures without rejecting callers', async () => {
 		const calls: unknown[][] = [];
 		const originalError = console.error;
