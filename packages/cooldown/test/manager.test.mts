@@ -1,8 +1,19 @@
-import { Cache, Client, Command, Logger, MemoryAdapter, SubCommand } from 'seyfert';
+import { Cache, Client, Command, Logger, MemoryAdapter, SubCommand, type AnyContext } from 'seyfert';
 import { HandleCommand } from 'seyfert/lib/commands/handle';
 import { CommandHandler } from 'seyfert/lib/commands/handler.js';
 import { assert, beforeEach, describe, test } from 'vitest';
-import { CooldownManager, type CooldownProps, CooldownType } from '../lib';
+import { CooldownManager, type CooldownProps, CooldownType, cooldown, runWithCooldownContext, useCooldownContext } from '../lib';
+
+function commandContext(overrides: Record<string, unknown> = {}) {
+	return {
+		command: {},
+		fullCommandName: 'testCommand',
+		author: { id: 'user1' },
+		guildId: 'guild1',
+		channelId: 'channel1',
+		...overrides,
+	} as unknown as AnyContext;
+}
 
 describe('CooldownManager', async () => {
 	let client: Client;
@@ -137,5 +148,51 @@ describe('CooldownManager', async () => {
 		const updatedResource = cooldownManager.resource.get(`${name}:user:${target}`);
 
 		assert.ok(updatedResource !== undefined);
+	});
+
+	test('context still accepts an explicit command context', async () => {
+		const result = await cooldownManager.context(commandContext());
+
+		assert.equal(result, true);
+		assert.equal(cooldownManager.resource.get('testCommand:user:user1')?.remaining, 2);
+	});
+
+	test('context throws a clear error when called without an active cooldown scope', () => {
+		assert.throws(() => cooldownManager.context(), /outside of a Seyfert cooldown scope/);
+	});
+
+	test('context uses the current scoped command context when omitted', async () => {
+		const result = await runWithCooldownContext(commandContext(), async () => cooldownManager.context());
+
+		assert.equal(result, true);
+		assert.equal(cooldownManager.resource.get('testCommand:user:user1')?.remaining, 2);
+	});
+
+	test('context accepts scoped options without manually passing the context', async () => {
+		const result = await runWithCooldownContext(commandContext({ fullCommandName: 'commandWithfakeGuildId' }), async () =>
+			cooldownManager.context({ guildId: '124' }),
+		);
+
+		assert.equal(result, true);
+		assert.equal(cooldownManager.resource.get('commandWithfakeGuildId:user:user1')?.remaining, 2);
+	});
+
+	test('cooldown plugin attaches a manager and registers a current context scope', async () => {
+		const plugin = cooldown();
+		const pluginOptions = plugin.options();
+		const clientWithCooldown = client as Client & { cooldown?: CooldownManager };
+
+		await plugin.setup(clientWithCooldown);
+
+		assert.equal(plugin.name, '@slipher/cooldown');
+		assert.ok(clientWithCooldown.cooldown instanceof CooldownManager);
+		assert.equal(pluginOptions?.context?.({}).cooldown, clientWithCooldown.cooldown);
+
+		const scope = pluginOptions?.contextScopes?.[0];
+		assert.equal(typeof scope, 'function');
+
+		await scope?.(commandContext(), async () => {
+			assert.equal(useCooldownContext().fullCommandName, 'testCommand');
+		});
 	});
 });

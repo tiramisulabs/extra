@@ -1,8 +1,29 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { AnyContext } from 'seyfert';
 import { CacheFrom, type ReturnCache } from 'seyfert/lib/cache';
 import type { BaseClient } from 'seyfert/lib/client/base';
 import { fakePromise, type PickPartial } from 'seyfert/lib/common';
 import { type CooldownData, CooldownResource, type CooldownType } from './resource';
+
+const cooldownContexts = new AsyncLocalStorage<AnyContext>();
+
+export type CooldownContextScope = <T>(context: unknown, run: () => T | Promise<T>) => T | Promise<T>;
+
+export interface CooldownContextOptions {
+	use?: keyof UsesProps;
+	guildId?: string;
+}
+
+export function runWithCooldownContext<T>(context: AnyContext, run: () => T | Promise<T>) {
+	return cooldownContexts.run(context, run);
+}
+
+export function useCooldownContext() {
+	const context = cooldownContexts.getStore();
+	if (!context) throw new Error('Cannot access cooldown context outside of a Seyfert cooldown scope.');
+
+	return context;
+}
 
 export class CooldownManager {
 	resource: CooldownResource;
@@ -71,7 +92,16 @@ export class CooldownManager {
 		});
 	}
 
-	context(context: AnyContext, use?: keyof UsesProps, guildId?: string) {
+	context(context: AnyContext, use?: keyof UsesProps, guildId?: string): ReturnCache<number | true>;
+	context(options?: CooldownContextOptions): ReturnCache<number | true>;
+	context(contextOrOptions?: AnyContext | CooldownContextOptions, use?: keyof UsesProps, guildId?: string) {
+		if (isCooldownContext(contextOrOptions)) return this.contextFrom(contextOrOptions, use, guildId);
+
+		const options = contextOrOptions ?? {};
+		return this.contextFrom(useCooldownContext(), options.use, options.guildId);
+	}
+
+	private contextFrom(context: AnyContext, use?: keyof UsesProps, guildId?: string) {
 		if (!('command' in context)) return true;
 		if (!('fullCommandName' in context)) return true;
 		const name = context.fullCommandName;
@@ -184,6 +214,14 @@ export class CooldownManager {
 	}
 }
 
+function isCooldownContext(context: unknown): context is AnyContext {
+	return (
+		typeof context === 'object' &&
+		context !== null &&
+		('author' in context || 'command' in context || 'fullCommandName' in context)
+	);
+}
+
 export interface CooldownProps {
 	/** target type */
 	type: `${CooldownType}`;
@@ -220,6 +258,21 @@ export interface UsesProps {
 }
 
 declare module 'seyfert' {
+	interface ExtendContext {
+		cooldown: CooldownManager;
+	}
+	interface UsingClient {
+		cooldown?: CooldownManager;
+	}
+	interface Client<Ready extends boolean = boolean> {
+		cooldown: CooldownManager;
+	}
+	interface HttpClient {
+		cooldown: CooldownManager;
+	}
+	interface WorkerClient<Ready extends boolean = boolean> {
+		cooldown: CooldownManager;
+	}
 	interface Command {
 		cooldown?: CooldownProps;
 	}
