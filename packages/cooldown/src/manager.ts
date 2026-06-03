@@ -3,8 +3,61 @@ import { CacheFrom, type ReturnCache } from 'seyfert/lib/cache';
 import type { BaseClient } from 'seyfert/lib/client/base';
 import type { UsingClient } from 'seyfert/lib/commands';
 import type { CommandFromContent } from 'seyfert/lib/commands/handle';
-import { fakePromise, type PickPartial } from 'seyfert/lib/common';
+import { type Awaitable, Formatter, fakePromise, type PickPartial, TimestampStyle } from 'seyfert/lib/common';
 import { type CooldownData, CooldownResource, type CooldownType } from './resource';
+
+export type CooldownTargetType = `${CooldownType}` | 'global';
+export type CooldownTargetResolver = (context: AnyContext) => string | undefined;
+
+export interface UsesProps {
+	default: number;
+	[variant: string]: number;
+}
+
+export interface CooldownProps {
+	/** Cooldown target. Either a built-in scope or a resolver invoked with the active context. */
+	type?: CooldownTargetType | CooldownTargetResolver;
+	/** Interval in ms before a token refills. */
+	interval: number;
+	/** Available tokens per variant. `default` is required. */
+	uses: UsesProps;
+	/** Shared bucket name. When set, the cache key uses this name instead of the resolved command. */
+	group?: string;
+}
+
+export interface CooldownResult {
+	allowed: boolean;
+	/** Milliseconds left until the bucket allows another consume. Always 0 when allowed. */
+	remainingMs: number;
+	/** Absolute timestamp at which the bucket allows another consume. */
+	retryAfter: Date;
+	/** Maximum tokens for the resolved variant. */
+	limit: number;
+	/** Tokens still available after the operation. */
+	remainingUses: number;
+	/** Cache key used by this operation, useful for logging and metrics. */
+	key: string;
+}
+
+export interface CooldownCheckOptions {
+	name: string;
+	target: string;
+	use?: keyof UsesProps;
+	guildId?: string;
+	tokens?: number;
+}
+
+export type CooldownConsumeOptions = CooldownCheckOptions;
+
+export interface CooldownSetOptions extends PickPartial<CooldownData, 'lastDrip'> {
+	key: string;
+}
+
+interface ResolvedBucket {
+	props: CooldownProps;
+	resolvedName: string;
+	key: string;
+}
 
 export class CooldownManager {
 	private _client?: BaseClient;
@@ -86,149 +139,259 @@ export class CooldownManager {
 		return [resolvedName, cooldown];
 	}
 
-	has(options: CooldownHasOptions): ReturnCache<boolean> {
-		const [resolve, data] = this.getCommandData(options.name, options.guildId) ?? [];
-		if (!(data && resolve)) return false;
+	private buildKey(props: CooldownProps, resolvedName: string, target: string): string {
+		const namespace = props.group ?? resolvedName;
+		const typeLabel = typeof props.type === 'function' ? 'custom' : (props.type ?? 'user');
+		return `${namespace}:${typeLabel}:${target}`;
+	}
 
-		return fakePromise(this.resource.get(`${resolve}:${data.type}:${options.target}`)).then(cooldown => {
-			if ((options.tokens ?? 1) > data.uses[options.use ?? 'default']) return true;
-			if (!cooldown) {
-				return fakePromise(
-					this.set({
-						name: resolve,
-						target: options.target,
-						type: data.type,
-						interval: data.interval,
-						remaining: data.uses[options.use ?? 'default'],
-					}),
-				).then(() => false);
+	private resolveBucket(options: CooldownCheckOptions): ResolvedBucket | undefined {
+		const [resolvedName, props] = this.getCommandData(options.name, options.guildId) ?? [];
+		if (!(resolvedName && props)) return undefined;
+		return { props, resolvedName, key: this.buildKey(props, resolvedName, options.target) };
+	}
+
+	/**
+	 * Inspect the bucket without consuming a token.
+	 * Returns `undefined` when the command resolves to no cooldown.
+	 */
+	check(options: CooldownCheckOptions): ReturnCache<CooldownResult | undefined> {
+		const resolved = this.resolveBucket(options);
+		if (!resolved) return undefined;
+
+		const { props, key } = resolved;
+		const use = options.use ?? 'default';
+		const tokens = options.tokens ?? 1;
+		const limit = props.uses[use];
+
+		return fakePromise(this.resource.get(key)).then(data => {
+			const now = Date.now();
+
+			if (tokens > limit) {
+				return {
+					allowed: false,
+					remainingMs: props.interval,
+					retryAfter: new Date(now + props.interval),
+					limit,
+					remainingUses: data?.remaining ?? limit,
+					key,
+				};
 			}
 
-			const remaining = Math.max(cooldown.remaining - (options.tokens ?? 1), 0);
+			if (!data) {
+				return {
+					allowed: true,
+					remainingMs: 0,
+					retryAfter: new Date(now),
+					limit,
+					remainingUses: limit,
+					key,
+				};
+			}
 
-			return remaining === 0;
+			const elapsed = now - data.lastDrip;
+			if (elapsed >= props.interval) {
+				return {
+					allowed: true,
+					remainingMs: 0,
+					retryAfter: new Date(now),
+					limit,
+					remainingUses: limit,
+					key,
+				};
+			}
+
+			const allowed = data.remaining - tokens >= 0;
+			const remainingMs = Math.max(props.interval - elapsed, 0);
+			return {
+				allowed,
+				remainingMs: allowed ? 0 : remainingMs,
+				retryAfter: new Date(now + (allowed ? 0 : remainingMs)),
+				limit,
+				remainingUses: data.remaining,
+				key,
+			};
 		});
 	}
 
-	set(options: CooldownSetOptions) {
-		return this.resource.set(CacheFrom.Gateway, `${options.name}:${options.type}:${options.target}`, {
+	/**
+	 * Consume a token from the bucket.
+	 * Returns `undefined` when the command resolves to no cooldown.
+	 */
+	consume(options: CooldownConsumeOptions): ReturnCache<CooldownResult | undefined> {
+		const resolved = this.resolveBucket(options);
+		if (!resolved) return undefined;
+
+		const { props, key } = resolved;
+		const use = options.use ?? 'default';
+		const tokens = options.tokens ?? 1;
+		const limit = props.uses[use];
+
+		this.debugger?.info(`Consuming cooldown ${key} (tokens=${tokens})`);
+
+		return fakePromise(this.resource.get(key)).then(data => {
+			const now = Date.now();
+
+			if (tokens > limit) {
+				return {
+					allowed: false,
+					remainingMs: props.interval,
+					retryAfter: new Date(now + props.interval),
+					limit,
+					remainingUses: data?.remaining ?? limit,
+					key,
+				};
+			}
+
+			if (!data) {
+				const remaining = limit - tokens;
+				return fakePromise(this.set({ key, interval: props.interval, remaining })).then(() => ({
+					allowed: true,
+					remainingMs: 0,
+					retryAfter: new Date(now),
+					limit,
+					remainingUses: remaining,
+					key,
+				}));
+			}
+
+			const elapsed = now - data.lastDrip;
+			if (elapsed >= props.interval) {
+				const remaining = limit - tokens;
+				return fakePromise(
+					this.resource.patch(CacheFrom.Gateway, key, {
+						lastDrip: now,
+						remaining,
+					}),
+				).then(() => ({
+					allowed: true,
+					remainingMs: 0,
+					retryAfter: new Date(now),
+					limit,
+					remainingUses: remaining,
+					key,
+				}));
+			}
+
+			if (data.remaining - tokens < 0) {
+				const remainingMs = props.interval - elapsed;
+				return {
+					allowed: false,
+					remainingMs,
+					retryAfter: new Date(now + remainingMs),
+					limit,
+					remainingUses: data.remaining,
+					key,
+				};
+			}
+
+			const remaining = data.remaining - tokens;
+			return fakePromise(this.resource.patch(CacheFrom.Gateway, key, { remaining })).then(() => ({
+				allowed: true,
+				remainingMs: 0,
+				retryAfter: new Date(now),
+				limit,
+				remainingUses: remaining,
+				key,
+			}));
+		});
+	}
+
+	/** Milliseconds remaining before the bucket allows another consume. 0 when free or unconfigured. */
+	remaining(options: CooldownCheckOptions): ReturnCache<number> {
+		return fakePromise(this.check(options)).then(result => result?.remainingMs ?? 0);
+	}
+
+	/** Clear the bucket for a given command/target. Returns false when no cooldown is configured. */
+	reset(name: string, target: string, use: keyof UsesProps = 'default'): ReturnCache<boolean> {
+		const resolved = this.resolveBucket({ name, target });
+		if (!resolved) return false;
+		const { props, key } = resolved;
+		this.debugger?.info(`Resetting cooldown ${key}`);
+		return fakePromise(this.resource.patch(CacheFrom.Gateway, key, { remaining: props.uses[use] })).then(() => true);
+	}
+
+	/** Low-level: write a bucket directly by its cache key. */
+	set(options: CooldownSetOptions): Awaitable<void> {
+		return this.resource.set(CacheFrom.Gateway, options.key, {
 			interval: options.interval,
 			remaining: options.remaining,
 			lastDrip: options.lastDrip,
 		});
 	}
 
-	context(context: AnyContext, use?: keyof UsesProps, guildId?: string) {
-		if (!('command' in context)) return true;
-		if (!('fullCommandName' in context)) return true;
+	/**
+	 * Resolve target from the current interaction context and consume a token.
+	 * Returns `undefined` when the command resolves to no cooldown or when a custom resolver yields no target.
+	 */
+	context(context: AnyContext, use?: keyof UsesProps, guildId?: string): ReturnCache<CooldownResult | undefined> {
+		if (!('command' in context)) return undefined;
+		if (!('fullCommandName' in context)) return undefined;
 		const name = context.fullCommandName;
 
-		const [resolve, data] = this.getCommandData(name, guildId) ?? [];
-		if (!(data && resolve)) return true;
+		const [resolvedName, props] = this.getCommandData(name, guildId) ?? [];
+		if (!(resolvedName && props)) return undefined;
 
-		let target: string | undefined;
-		switch (data.type) {
-			case 'user':
-				target = context.author.id;
-				break;
+		const target = this.resolveContextTarget(context, props);
+		if (target === undefined) return undefined;
+
+		this.debugger?.info(`Using target ${target} for cooldown of command ${resolvedName}`);
+		return this.consume({ name, target, use, guildId });
+	}
+
+	private resolveContextTarget(context: AnyContext, props: CooldownProps): string | undefined {
+		const type = props.type;
+		if (typeof type === 'function') return type(context);
+		switch (type) {
 			case 'guild':
-				target = context.guildId;
-				break;
+				return context.guildId ?? context.author.id;
 			case 'channel':
-				target = context.channelId;
-				break;
+				return context.channelId ?? context.author.id;
+			case 'global':
+				return 'global';
+			default:
+				return context.author.id;
 		}
+	}
+}
 
-		target ??= context.author.id;
-		this.debugger?.info(`Using target ${target} for cooldown of type ${data.type}`);
-		return this.use({ name, target, use, guildId }, [resolve, data]);
+export interface FormatRemainingOptions {
+	/** Output format. Defaults to `'text'`. */
+	style?: 'text' | 'discord';
+	/** Discord timestamp style. Only used when `style === 'discord'`. Defaults to `TimestampStyle.RelativeTime`. */
+	discordStyle?: TimestampStyle;
+	/** Override the reference "now" timestamp. Useful for tests. */
+	now?: () => number;
+}
+
+/**
+ * Format a cooldown duration as either a short human string or a Discord timestamp tag built with Seyfert's `Formatter`.
+ *
+ * Accepts either a millisecond duration (`number`) or an absolute target timestamp (`Date`).
+ *
+ * Text examples: `500 → "1s"`, `5000 → "5s"`, `90000 → "1m 30s"`, `3_600_000 → "1h"`.
+ * Discord examples: `5000 → "<t:1717372805:R>"`, `result.retryAfter → "<t:1717372805:R>"`.
+ */
+export function formatRemaining(input: number | Date, options: FormatRemainingOptions = {}): string {
+	const now = options.now?.() ?? Date.now();
+	const targetMs = input instanceof Date ? input.getTime() : now + (Number.isFinite(input) ? Math.max(input, 0) : 0);
+
+	if (options.style === 'discord') {
+		return Formatter.timestamp(new Date(Math.max(0, targetMs)), options.discordStyle ?? TimestampStyle.RelativeTime);
 	}
 
-	/**
-	 * Use a cooldown
-	 * @returns The remaining cooldown in seconds or true if successful
-	 */
-	use(options: CooldownUseOptions, resolveData?: [string, CooldownProps]): ReturnCache<number | true> {
-		const [resolve, data] = resolveData ?? this.getCommandData(options.name, options.guildId) ?? [];
-		if (!(data && resolve)) return true;
-
-		this.debugger?.info(`Using cooldown for command ${options.name} and target ${options.target}`);
-		return fakePromise(this.resource.get(`${resolve}:${data.type}:${options.target}`)).then(cooldown => {
-			if (!cooldown) {
-				this.debugger?.info(
-					`No existing cooldown found for command ${options.name} and target ${options.target}, setting new cooldown`,
-				);
-				return fakePromise(
-					this.set({
-						name: resolve,
-						target: options.target,
-						type: data.type,
-						interval: data.interval,
-						remaining: data.uses[options.use ?? 'default'] - 1,
-					}),
-				).then(() => true);
-			}
-
-			this.debugger?.info(`Found existing cooldown for command ${options.name} and target ${options.target}`);
-			return fakePromise(
-				this.drip({
-					name: resolve,
-					props: data,
-					data: cooldown,
-					target: options.target,
-					use: options.use,
-				}),
-			).then(drip => {
-				return typeof drip === 'number' ? data.interval - drip : true;
-			});
-		});
+	const diffMs = Math.max(targetMs - now, 0);
+	if (diffMs <= 0) return '0s';
+	const totalSeconds = Math.ceil(diffMs / 1000);
+	if (totalSeconds < 60) return `${totalSeconds}s`;
+	const totalMinutes = Math.floor(totalSeconds / 60);
+	const remSeconds = totalSeconds % 60;
+	if (totalMinutes < 60) {
+		return remSeconds ? `${totalMinutes}m ${remSeconds}s` : `${totalMinutes}m`;
 	}
-
-	/**
-	 * Drip the cooldown
-	 * @returns The cooldown was processed
-	 */
-	drip(options: CooldownDripOptions): ReturnCache<boolean | number> {
-		const now = Date.now();
-		const deltaMS = now - options.data.lastDrip;
-		if (deltaMS >= options.props.interval) {
-			this.debugger?.info(`Cooldown expired for ${options.name} and target ${options.target}, resetting cooldown`);
-			return fakePromise(
-				this.resource.patch(CacheFrom.Gateway, `${options.name}:${options.props.type}:${options.target}`, {
-					lastDrip: now,
-					remaining: options.props.uses[options.use ?? 'default'] - 1,
-				}),
-			).then(() => true);
-		}
-
-		if (options.data.remaining - 1 < 0) {
-			this.debugger?.info(`Cooldown still active for ${options.name} and target ${options.target}, cannot drip`);
-			return deltaMS;
-		}
-
-		this.debugger?.info(`Dripping cooldown for ${options.name} and target ${options.target}`);
-		return fakePromise(
-			this.resource.patch(CacheFrom.Gateway, `${options.name}:${options.props.type}:${options.target}`, {
-				remaining: options.data.remaining - 1,
-			}),
-		).then(() => true);
-	}
-
-	/**
-	 * Refill the cooldown
-	 * @param name - The name of the command
-	 * @param target - The target of the cooldown
-	 * @returns Whether the cooldown was refilled
-	 */
-	refill(name: string, target: string, use: keyof UsesProps = 'default') {
-		const [resolve, data] = this.getCommandData(name) ?? [];
-		if (!(data && resolve)) return false;
-
-		this.debugger?.info(`Refilling cooldown for command ${name} and target ${target}`);
-		return fakePromise(
-			this.resource.patch(CacheFrom.Gateway, `${resolve}:${data.type}:${target}`, { remaining: data.uses[use] }),
-		).then(() => true);
-	}
+	const hours = Math.floor(totalMinutes / 60);
+	const remMinutes = totalMinutes % 60;
+	return remMinutes ? `${hours}h ${remMinutes}m` : `${hours}h`;
 }
 
 export interface CooldownPluginOptions {
@@ -273,39 +436,4 @@ export function installCooldown<TClient extends BaseClient>(
 ): CooldownManager {
 	manager.attach(client);
 	return manager;
-}
-
-export interface CooldownProps {
-	/** target type */
-	type: `${CooldownType}`;
-	/** interval in ms */
-	interval: number;
-	/** refill amount */
-	uses: UsesProps;
-}
-
-export interface CooldownUseOptions {
-	name: string;
-	target: string;
-	use?: keyof UsesProps;
-	guildId?: string;
-}
-
-export interface CooldownDripOptions extends Omit<CooldownUseOptions, 'guildId'> {
-	props: CooldownProps;
-	data: CooldownData;
-}
-
-export interface CooldownHasOptions extends CooldownUseOptions {
-	tokens?: number;
-}
-
-export interface CooldownSetOptions extends PickPartial<CooldownData, 'lastDrip'> {
-	name: string;
-	target: string;
-	type: `${CooldownType}`;
-}
-
-export interface UsesProps {
-	default: number;
 }
