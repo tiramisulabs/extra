@@ -105,6 +105,29 @@ The command does not need to call `emit()` in the happy path. When the command r
 }
 ```
 
+## Use The Current Logger
+
+Use `useLogger()` when a service or helper needs the current interaction logger but should not receive the whole Seyfert context:
+
+```ts
+import { useLogger } from '@slipher/logger';
+
+export async function findPlan(userId: string) {
+	const log = useLogger();
+
+	log.add({ userId });
+
+	const plan = await database.plans.findByUser(userId);
+
+	log.add({ plan: plan.name });
+	log.info('plan loaded');
+
+	return plan;
+}
+```
+
+`useLogger()` reads the logger for the active Seyfert command, component, or modal scope. It contributes to the same final entry as `ctx.logger`, so middleware context, service context, command breadcrumbs, and the final outcome are emitted together.
+
 ## Adapters
 
 The default adapter writes to `console`. Use an adapter when you want the final wide event in another logger or event stream.

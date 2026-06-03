@@ -10,6 +10,7 @@ import {
 	type LoggerPlugin,
 	logger,
 	type RootLogger,
+	useLogger,
 	type WideEventLogger,
 } from '../src';
 
@@ -209,6 +210,58 @@ describe('logger plugin', () => {
 		assert.equal(adapter.entries.length, 1);
 		assert.equal(adapter.entries[0].message, 'member joined');
 		assert.deepEqual(adapter.entries[0].data, { memberId: 'user-1' });
+	});
+
+	test('useLogger exposes the current command logger without passing context', async () => {
+		const adapter = new RecordingAdapter();
+		const plugin = logger({ adapter, level: 'debug' });
+		const options = plugin.options?.({});
+		const extension = options?.context?.({ id: 'interaction-1' }) as { logger: WideEventLogger };
+		const context = commandContext(extension.logger);
+
+		assert.throws(() => useLogger(), /outside of a Seyfert logger scope/);
+
+		await options?.contextScopes?.[0]?.(context, async () => {
+			await options?.commands?.defaults?.onBeforeMiddlewares?.(context);
+			const scopedLogger = useLogger();
+
+			assert.equal(scopedLogger, extension.logger);
+
+			scopedLogger.add({ serviceUser: 'user-1' });
+			scopedLogger.info('loaded user service');
+
+			await options?.commands?.defaults?.onAfterRun?.(context, undefined);
+		});
+
+		assert.equal(adapter.entries.length, 1);
+		assert.equal(adapter.entries[0].data.serviceUser, 'user-1');
+		assert.deepEqual(
+			adapter.entries[0].logs.map(record => record.message),
+			['command received', 'loaded user service'],
+		);
+		assert.throws(() => useLogger(), /outside of a Seyfert logger scope/);
+	});
+
+	test('useLogger keeps concurrent command scopes isolated', async () => {
+		const adapter = new RecordingAdapter();
+		const plugin = logger({ adapter });
+		const options = plugin.options?.({});
+
+		async function runScopedCommand(id: string) {
+			const extension = options?.context?.({ id }) as { logger: WideEventLogger };
+			const context = commandContext(extension.logger);
+
+			await options?.contextScopes?.[0]?.(context, async () => {
+				await options?.commands?.defaults?.onBeforeMiddlewares?.(context);
+				await Promise.resolve();
+				useLogger().add({ interaction: id });
+				await options?.commands?.defaults?.onAfterRun?.(context, undefined);
+			});
+		}
+
+		await Promise.all([runScopedCommand('interaction-1'), runScopedCommand('interaction-2')]);
+
+		assert.deepEqual(adapter.entries.map(entry => entry.data.interaction).sort(), ['interaction-1', 'interaction-2']);
 	});
 });
 

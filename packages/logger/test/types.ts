@@ -14,6 +14,7 @@ import {
 	type EvlogLevel,
 	type LoggerAdapter,
 	type RootLogger,
+	useLogger,
 	type WideEventLogger,
 } from '../src';
 
@@ -44,6 +45,7 @@ const evlogAdapter = createEvlogDrainAdapter(
 );
 
 expectType<LoggerAdapter>(evlogAdapter);
+expectType<WideEventLogger>(useLogger());
 
 const auditMiddleware = createMiddleware<{ requestId: string }, CommandContext>(async ({ context, next }) => {
 	context.logger.add({ requestId: 'request-1' });

@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 import './seyfert';
 
 export type Awaitable<T> = T | Promise<T>;
@@ -51,11 +53,14 @@ export interface LoggerPlugin {
 }
 
 export interface LoggerPluginOptionsFragment {
+	contextScopes?: readonly LoggerContextScope[];
 	context?(source: unknown): Record<string, unknown>;
 	commands?: { defaults?: CommandLoggerDefaults };
 	components?: { defaults?: ComponentLoggerDefaults };
 	modals?: { defaults?: ComponentLoggerDefaults };
 }
+
+export type LoggerContextScope = <T>(context: unknown, run: () => Awaitable<T>) => Awaitable<T>;
 
 export interface CommandLoggerDefaults {
 	onBeforeMiddlewares(context: unknown): Awaitable<void>;
@@ -153,6 +158,8 @@ export interface EvlogAdapterOptions {
 	commitHash?: string;
 	region?: string;
 }
+
+const loggerScope = new AsyncLocalStorage<WideEventLogger>();
 
 const levelValues: Record<LogLevel, number> = {
 	trace: 10,
@@ -378,6 +385,14 @@ export function createLogger(options: LoggerOptions = {}): RootLogger {
 	return new RootLogger(options);
 }
 
+export function useLogger(): WideEventLogger {
+	const current = loggerScope.getStore();
+	if (!current) {
+		throw new Error('Cannot access logger outside of a Seyfert logger scope.');
+	}
+	return current;
+}
+
 export function logger(options: LoggerPluginOptions = {}): LoggerPlugin {
 	const root = createLogger(options);
 
@@ -385,6 +400,7 @@ export function logger(options: LoggerPluginOptions = {}): LoggerPlugin {
 		name: options.pluginName ?? '@slipher/logger',
 		options: () => ({
 			context: source => ({ logger: root.event(extractSeyfertLogContext(source)) }),
+			contextScopes: [(context, run) => loggerScope.run(getContextLogger(root, context, 'command'), run)],
 			commands: { defaults: createCommandDefaults(root) },
 			components: { defaults: createComponentDefaults(root, 'component') },
 			modals: { defaults: createComponentDefaults(root, 'modal') },
@@ -474,7 +490,11 @@ function createCommandDefaults(root: RootLogger): CommandLoggerDefaults {
 		onOptionsError: (context, metadata) => {
 			const contextLogger = getContextLogger(root, context, 'command');
 			contextLogger.error({ metadata }, 'command options failed');
-			return contextLogger.emit({ outcome: 'error', message: 'command options failed', data: { metadata } });
+			return contextLogger.emit({
+				outcome: 'error',
+				message: 'command options failed',
+				data: { metadata },
+			});
 		},
 		onPermissionsFail: (context, permissions) => {
 			const contextLogger = getContextLogger(root, context, 'command');
