@@ -2,7 +2,7 @@ import { Cache, Client, Command, Logger, MemoryAdapter, SubCommand } from 'seyfe
 import { HandleCommand } from 'seyfert/lib/commands/handle';
 import { CommandHandler } from 'seyfert/lib/commands/handler.js';
 import { assert, beforeEach, describe, test } from 'vitest';
-import { CooldownManager, type CooldownProps, CooldownType } from '../lib';
+import { CooldownManager, type CooldownProps, CooldownType } from '../src';
 
 describe('CooldownManager', async () => {
 	let client: Client;

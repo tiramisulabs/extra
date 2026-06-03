@@ -1,3 +1,4 @@
+import './seyfert';
 import type { CooldownProps } from './manager';
 
 export * from './manager';

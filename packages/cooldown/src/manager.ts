@@ -1,15 +1,40 @@
 import type { AnyContext } from 'seyfert';
 import { CacheFrom, type ReturnCache } from 'seyfert/lib/cache';
 import type { BaseClient } from 'seyfert/lib/client/base';
+import type { UsingClient } from 'seyfert/lib/commands';
 import type { CommandFromContent } from 'seyfert/lib/commands/handle';
 import { fakePromise, type PickPartial } from 'seyfert/lib/common';
 import { type CooldownData, CooldownResource, type CooldownType } from './resource';
 
 export class CooldownManager {
-	resource: CooldownResource;
+	private _client?: BaseClient;
+	private _resource?: CooldownResource;
 
-	constructor(public readonly client: BaseClient) {
-		this.resource = new CooldownResource(client.cache, client);
+	constructor(client?: BaseClient) {
+		if (client) this.attach(client);
+	}
+
+	attach(client: BaseClient): this {
+		this._client = client;
+		(client as BaseClient & { cooldown: CooldownManager }).cooldown = this;
+		this._resource = new CooldownResource(client.cache, client as unknown as UsingClient);
+		return this;
+	}
+
+	get client(): BaseClient {
+		if (!this._client)
+			throw new Error(
+				'CooldownManager is not attached to a client. Use the cooldown() plugin or pass a client to the constructor.',
+			);
+		return this._client;
+	}
+
+	get resource(): CooldownResource {
+		if (!this._resource)
+			throw new Error(
+				'CooldownManager is not attached to a client. Use the cooldown() plugin or pass a client to the constructor.',
+			);
+		return this._resource;
 	}
 
 	private get debugger() {
@@ -206,6 +231,50 @@ export class CooldownManager {
 	}
 }
 
+export interface CooldownPluginOptions {
+	manager?: CooldownManager;
+}
+
+export interface CooldownPlugin {
+	name: '@slipher/cooldown';
+	manager: CooldownManager;
+	options(): {
+		context(): { cooldown: CooldownManager };
+	};
+	setup(client: BaseClient): void;
+}
+
+export function createCooldown(options: CooldownPluginOptions = {}): CooldownManager {
+	return options.manager ?? new CooldownManager();
+}
+
+export function cooldown(options: CooldownPluginOptions = {}): CooldownPlugin {
+	const manager = createCooldown(options);
+
+	return {
+		name: '@slipher/cooldown',
+		manager,
+		options() {
+			return {
+				context() {
+					return { cooldown: manager };
+				},
+			};
+		},
+		setup(client) {
+			installCooldown(client, manager);
+		},
+	};
+}
+
+export function installCooldown<TClient extends BaseClient>(
+	client: TClient,
+	manager: CooldownManager,
+): CooldownManager {
+	manager.attach(client);
+	return manager;
+}
+
 export interface CooldownProps {
 	/** target type */
 	type: `${CooldownType}`;
@@ -239,19 +308,4 @@ export interface CooldownSetOptions extends PickPartial<CooldownData, 'lastDrip'
 
 export interface UsesProps {
 	default: number;
-}
-
-declare module 'seyfert' {
-	interface Command {
-		cooldown?: CooldownProps;
-	}
-	interface SubCommand {
-		cooldown?: CooldownProps;
-	}
-	interface ContextMenuCommand {
-		cooldown?: CooldownProps;
-	}
-	interface EntryPointCommand {
-		cooldown?: CooldownProps;
-	}
 }

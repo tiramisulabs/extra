@@ -15,10 +15,11 @@
 	"scripts": {
 		"dev": "tsc --watch",
 		"build": "tsc",
-		"lint": "biome lint --write ./src",
-		"format": "biome format --write ./src",
-		"checkb": "biome check --write --no-errors-on-unmatched ./src",
-		"test": "vitest run --config ./test/vitest.config.mts ./test/",
+		"lint": "biome lint --write ./src ./test",
+		"format": "biome format --write ./src ./test",
+		"checkb": "biome check --write --no-errors-on-unmatched ./src ./test",
+		"typecheck": "tsc --noEmit --project ./test/tsconfig.json",
+		"test": "pnpm typecheck && vitest run --config ./test/vitest.config.mts ./test/",
 		"prepublish": "pnpm build"
 	},
 	"devDependencies": {
