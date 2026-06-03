@@ -1,4 +1,4 @@
-import { Cache, Client, Command, Logger, MemoryAdapter, SubCommand } from 'seyfert';
+import { type AnyContext, Cache, Client, Command, Logger, MemoryAdapter, SubCommand } from 'seyfert';
 import { HandleCommand } from 'seyfert/lib/commands/handle';
 import { CommandHandler } from 'seyfert/lib/commands/handler.js';
 import { TimestampStyle } from 'seyfert/lib/common';
@@ -10,6 +10,8 @@ import {
 	CooldownType,
 	cooldown as cooldownPlugin,
 	formatRemaining,
+	runWithCooldownContext,
+	useCooldownContext,
 } from '../src';
 
 function makeCommand(overrides: Record<string, unknown>) {
@@ -18,6 +20,17 @@ function makeCommand(overrides: Record<string, unknown>) {
 
 function makeSub(overrides: Record<string, unknown>) {
 	return Object.assign(new (class extends SubCommand {})(), overrides);
+}
+
+function commandContext(overrides: Record<string, unknown> = {}) {
+	return {
+		command: {},
+		fullCommandName: 'testCommand',
+		author: { id: 'user1' },
+		guildId: 'guild1',
+		channelId: 'channel1',
+		...overrides,
+	} as unknown as AnyContext;
 }
 
 describe('CooldownManager — getCommandData', () => {
@@ -386,6 +399,76 @@ describe('CooldownManager — custom target resolver and shared groups', () => {
 	});
 });
 
+describe('CooldownManager — context scope', () => {
+	let client: Client;
+	let manager: CooldownManager;
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date(0));
+
+		client = new Client({
+			getRC: () => ({ debug: false, intents: 0, token: '', locations: { base: '', output: '' } }),
+		});
+		const handler = new CommandHandler(new Logger({ active: false }), client);
+		handler.values = [
+			makeCommand({
+				name: 'commandWithfakeGuildId',
+				description: 'Command with specific guild cooldown test',
+				cooldown: { type: CooldownType.User, interval: 1_000, uses: { default: 3 } },
+				guildId: ['124'],
+			}),
+			makeCommand({
+				name: 'testCommand',
+				description: 'Root command cooldown test',
+				cooldown: { type: CooldownType.User, interval: 1_000, uses: { default: 3 } },
+			}),
+		];
+		client.commands = handler;
+		client.handleCommand = new HandleCommand(client);
+		client.cache = new Cache(0, new MemoryAdapter(), {}, client);
+		manager = new CooldownManager(client);
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	test('context still accepts an explicit command context', async () => {
+		const result = await manager.context(commandContext());
+
+		assert.ok(result);
+		assert.equal(result.allowed, true);
+		assert.equal(result.key, 'testCommand:user:user1');
+		assert.equal(manager.resource.get('testCommand:user:user1')?.remaining, 2);
+	});
+
+	test('context throws a clear error when called without an active cooldown scope', () => {
+		assert.throws(() => manager.context(), /outside of a Seyfert cooldown scope/);
+	});
+
+	test('context uses the current scoped command context when omitted', async () => {
+		const result = await runWithCooldownContext(commandContext(), async () => manager.context());
+
+		assert.ok(result);
+		assert.equal(result.allowed, true);
+		assert.equal(result.key, 'testCommand:user:user1');
+		assert.equal(manager.resource.get('testCommand:user:user1')?.remaining, 2);
+	});
+
+	test('context accepts scoped options without manually passing the context', async () => {
+		const result = await runWithCooldownContext(
+			commandContext({ fullCommandName: 'commandWithfakeGuildId' }),
+			async () => manager.context({ guildId: '124' }),
+		);
+
+		assert.ok(result);
+		assert.equal(result.allowed, true);
+		assert.equal(result.key, 'commandWithfakeGuildId:user:user1');
+		assert.equal(manager.resource.get('commandWithfakeGuildId:user:user1')?.remaining, 2);
+	});
+});
+
 describe('Cooldown decorator shortcuts', () => {
 	test('Cooldown.user assigns a user-scoped CooldownProps', () => {
 		@Cooldown.user(5_000)
@@ -468,15 +551,22 @@ describe('formatRemaining', () => {
 });
 
 describe('cooldown() plugin', () => {
-	test('builds a plugin with manager and seyfert lifecycle hooks', () => {
+	test('builds a plugin with manager and seyfert lifecycle hooks', async () => {
 		const plugin = cooldownPlugin();
 		assert.equal(plugin.name, '@slipher/cooldown');
 		assert.ok(plugin.manager instanceof CooldownManager);
 		assert.equal(typeof plugin.setup, 'function');
 		assert.equal(typeof plugin.options, 'function');
 
-		const ctx = plugin.options().context();
+		const options = plugin.options();
+		const ctx = options.context();
 		assert.equal(ctx.cooldown, plugin.manager);
+
+		const scope = options.contextScopes[0];
+		assert.equal(typeof scope, 'function');
+		await scope(commandContext(), async () => {
+			assert.equal(useCooldownContext().fullCommandName, 'testCommand');
+		});
 	});
 
 	test('setup attaches the manager to the client', () => {

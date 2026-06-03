@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { AnyContext } from 'seyfert';
 import { CacheFrom, type ReturnCache } from 'seyfert/lib/cache';
 import type { BaseClient } from 'seyfert/lib/client/base';
@@ -8,6 +9,26 @@ import { type CooldownData, CooldownResource, type CooldownType } from './resour
 
 export type CooldownTargetType = `${CooldownType}` | 'global';
 export type CooldownTargetResolver = (context: AnyContext) => string | undefined;
+
+const cooldownContexts = new AsyncLocalStorage<AnyContext>();
+
+export type CooldownContextScope = <T>(context: unknown, run: () => Awaitable<T>) => Awaitable<T>;
+
+export interface CooldownContextOptions {
+	use?: keyof UsesProps;
+	guildId?: string;
+}
+
+export function runWithCooldownContext<T>(context: AnyContext, run: () => Awaitable<T>) {
+	return cooldownContexts.run(context, run);
+}
+
+export function useCooldownContext() {
+	const context = cooldownContexts.getStore();
+	if (!context) throw new Error('Cannot access cooldown context outside of a Seyfert cooldown scope.');
+
+	return context;
+}
 
 export interface UsesProps {
 	default: number;
@@ -331,7 +352,16 @@ export class CooldownManager {
 	 * Resolve target from the current interaction context and consume a token.
 	 * Returns `undefined` when the command resolves to no cooldown or when a custom resolver yields no target.
 	 */
-	context(context: AnyContext, use?: keyof UsesProps, guildId?: string): ReturnCache<CooldownResult | undefined> {
+	context(context: AnyContext, use?: keyof UsesProps, guildId?: string): ReturnCache<CooldownResult | undefined>;
+	context(options?: CooldownContextOptions): ReturnCache<CooldownResult | undefined>;
+	context(contextOrOptions?: AnyContext | CooldownContextOptions, use?: keyof UsesProps, guildId?: string) {
+		if (isCooldownContext(contextOrOptions)) return this.contextFrom(contextOrOptions, use, guildId);
+
+		const options = contextOrOptions ?? {};
+		return this.contextFrom(useCooldownContext(), options.use, options.guildId);
+	}
+
+	private contextFrom(context: AnyContext, use?: keyof UsesProps, guildId?: string) {
 		if (!('command' in context)) return undefined;
 		if (!('fullCommandName' in context)) return undefined;
 		const name = context.fullCommandName;
@@ -360,6 +390,14 @@ export class CooldownManager {
 				return context.author.id;
 		}
 	}
+}
+
+function isCooldownContext(context: unknown): context is AnyContext {
+	return (
+		typeof context === 'object' &&
+		context !== null &&
+		('author' in context || 'command' in context || 'fullCommandName' in context)
+	);
 }
 
 export interface FormatRemainingOptions {
@@ -410,6 +448,7 @@ export interface CooldownPlugin {
 	manager: CooldownManager;
 	options(): {
 		context(): { cooldown: CooldownManager };
+		contextScopes: readonly CooldownContextScope[];
 	};
 	setup(client: BaseClient): void;
 }
@@ -420,6 +459,7 @@ export function createCooldown(options: CooldownPluginOptions = {}): CooldownMan
 
 export function cooldown(options: CooldownPluginOptions = {}): CooldownPlugin {
 	const manager = createCooldown(options);
+	const contextScope: CooldownContextScope = (context, run) => runWithCooldownContext(context as AnyContext, run);
 
 	return {
 		name: '@slipher/cooldown',
@@ -429,6 +469,7 @@ export function cooldown(options: CooldownPluginOptions = {}): CooldownPlugin {
 				context() {
 					return { cooldown: manager };
 				},
+				contextScopes: [contextScope],
 			};
 		},
 		setup(client) {
