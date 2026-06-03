@@ -156,6 +156,8 @@ describe('CooldownManager — getCommandData', () => {
 	});
 
 	test('filters by guildId correctly', () => {
+		assert.equal(manager.getCommandData('testCommand', '123')?.[0], 'testCommand');
+		assert.equal(manager.getCommandData('testCommand testSub', '123')?.[0], 'testCommand testSub');
 		assert.equal(manager.getCommandData('commandWithfakeGuildId', '123'), undefined);
 		assert.equal(manager.getCommandData('commandWithfakeGuildId', '124')?.[0], 'commandWithfakeGuildId');
 		assert.equal(manager.getCommandData('commandWithfakeGuildId')?.[0], 'commandWithfakeGuildId');
@@ -217,14 +219,32 @@ describe('CooldownManager — check / consume / remaining / reset', () => {
 		assert.equal(blocked.retryAfter.getTime(), 1_000);
 	});
 
-	test('check does not mutate bucket state', async () => {
+	test('check does not mutate bucket state and reports post-consume counts', async () => {
 		const before = await manager.check({ name: 'ping', target: 'u1' });
 		const after = await manager.check({ name: 'ping', target: 'u1' });
 		assert.ok(before && after);
 		assert.equal(before.allowed, true);
-		assert.equal(before.remainingUses, 2);
-		assert.equal(after.remainingUses, 2);
+		assert.equal(before.remainingUses, 1);
+		assert.equal(after.remainingUses, 1);
 		assert.equal(manager.resource.get('ping:user:u1'), undefined);
+	});
+
+	test('check reports post-consume counts with explicit token counts and existing buckets', async () => {
+		const fresh = await manager.check({ name: 'ping', target: 'u1', tokens: 2 });
+		assert.ok(fresh);
+		assert.equal(fresh.allowed, true);
+		assert.equal(fresh.remainingUses, 0);
+
+		await manager.consume({ name: 'ping', target: 'u1' });
+		const existing = await manager.check({ name: 'ping', target: 'u1' });
+		assert.ok(existing);
+		assert.equal(existing.allowed, true);
+		assert.equal(existing.remainingUses, 0);
+
+		const blocked = await manager.check({ name: 'ping', target: 'u1', tokens: 2 });
+		assert.ok(blocked);
+		assert.equal(blocked.allowed, false);
+		assert.equal(blocked.remainingUses, 1);
 	});
 
 	test('remaining returns 0 when free and ms when blocked', async () => {
@@ -308,6 +328,15 @@ describe('CooldownManager — custom target resolver and shared groups', () => {
 					group: 'mod',
 				},
 			}),
+			makeCommand({
+				name: 'broadcast',
+				description: 'Bot-wide cooldown',
+				cooldown: {
+					type: 'global',
+					interval: 1_000,
+					uses: { default: 1 },
+				},
+			}),
 		];
 
 		client.commands = handler;
@@ -332,6 +361,28 @@ describe('CooldownManager — custom target resolver and shared groups', () => {
 		assert.ok(second);
 		assert.equal(second.allowed, false);
 		assert.equal(second.key, 'mod:user:u1');
+	});
+
+	test('global type collapses the cache key regardless of the supplied target', async () => {
+		const first = await manager.consume({ name: 'broadcast', target: 'u1' });
+		assert.ok(first);
+		assert.equal(first.allowed, true);
+		assert.equal(first.key, 'broadcast:global:global');
+
+		const otherUser = await manager.consume({ name: 'broadcast', target: 'u2' });
+		assert.ok(otherUser);
+		assert.equal(otherUser.allowed, false);
+		assert.equal(otherUser.key, 'broadcast:global:global');
+
+		const peek = await manager.check({ name: 'broadcast', target: 'u999' });
+		assert.ok(peek);
+		assert.equal(peek.key, 'broadcast:global:global');
+
+		const cleared = await manager.reset('broadcast', 'u-arbitrary');
+		assert.equal(cleared, true);
+		const afterReset = await manager.consume({ name: 'broadcast', target: 'u3' });
+		assert.ok(afterReset);
+		assert.equal(afterReset.allowed, true);
 	});
 });
 

@@ -130,9 +130,15 @@ export class CooldownManager {
 		this.debugger?.info(`Found command ${command.name} for cooldown data resolution`);
 		if (guildId) {
 			this.debugger?.info(`Checking guild-specific cooldown for command ${command.name} and guildId ${guildId}`);
-			if (command.guildId?.includes(guildId) || parent?.guildId?.includes(guildId)) return [resolvedName, cooldown];
-			this.debugger?.info(`No guild-specific cooldown found for command ${command.name} and guildId ${guildId}`);
-			return undefined;
+			const commandExcludesGuild = command.guildId && !command.guildId.includes(guildId);
+			const parentExcludesGuild = parent?.guildId && !parent.guildId.includes(guildId);
+
+			if (commandExcludesGuild || parentExcludesGuild) {
+				this.debugger?.info(`No guild-specific cooldown found for command ${command.name} and guildId ${guildId}`);
+				return undefined;
+			}
+
+			return [resolvedName, cooldown];
 		}
 
 		this.debugger?.info(`No guildId provided, checking for global cooldown for command ${command.name}`);
@@ -141,6 +147,7 @@ export class CooldownManager {
 
 	private buildKey(props: CooldownProps, resolvedName: string, target: string): string {
 		const namespace = props.group ?? resolvedName;
+		if (props.type === 'global') return `${namespace}:global:global`;
 		const typeLabel = typeof props.type === 'function' ? 'custom' : (props.type ?? 'user');
 		return `${namespace}:${typeLabel}:${target}`;
 	}
@@ -184,7 +191,7 @@ export class CooldownManager {
 					remainingMs: 0,
 					retryAfter: new Date(now),
 					limit,
-					remainingUses: limit,
+					remainingUses: limit - tokens,
 					key,
 				};
 			}
@@ -196,7 +203,7 @@ export class CooldownManager {
 					remainingMs: 0,
 					retryAfter: new Date(now),
 					limit,
-					remainingUses: limit,
+					remainingUses: limit - tokens,
 					key,
 				};
 			}
@@ -208,7 +215,7 @@ export class CooldownManager {
 				remainingMs: allowed ? 0 : remainingMs,
 				retryAfter: new Date(now + (allowed ? 0 : remainingMs)),
 				limit,
-				remainingUses: data.remaining,
+				remainingUses: allowed ? data.remaining - tokens : data.remaining,
 				key,
 			};
 		});
