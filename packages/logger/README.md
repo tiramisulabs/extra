@@ -121,7 +121,32 @@ export default logger({
 });
 ```
 
-`createEvlogLoggerAdapter()` is also available for event-log style sinks.
+For evlog, pass a drain pipeline to `createEvlogDrainAdapter()`. The Slipher logger keeps the Seyfert command timeline and evlog receives the final wide event:
+
+```sh
+pnpm add evlog
+```
+
+```ts
+import type { DrainContext } from 'evlog';
+import { createFsDrain } from 'evlog/fs';
+import { createDrainPipeline } from 'evlog/pipeline';
+import { createEvlogDrainAdapter, logger } from '@slipher/logger';
+
+const drain = createDrainPipeline<DrainContext>({
+	batch: { size: 50, intervalMs: 5_000 },
+})(createFsDrain());
+
+export default logger({
+	name: 'slipher-bot',
+	adapter: createEvlogDrainAdapter(drain, {
+		environment: process.env.NODE_ENV ?? 'development',
+		version: process.env.npm_package_version,
+	}),
+});
+```
+
+Any evlog drain works here, including Axiom, OTLP, Sentry, fs, memory, or your own pipeline. `createEvlogLoggerAdapter` remains as an alias when you prefer the older helper name.
 
 ## Outside Seyfert
 

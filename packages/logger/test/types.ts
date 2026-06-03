@@ -8,7 +8,14 @@ import {
 	type UsingClient,
 	type WorkerClient,
 } from 'seyfert';
-import type { RootLogger, WideEventLogger } from '../src';
+import {
+	createEvlogDrainAdapter,
+	type EvlogDrainContext,
+	type EvlogLevel,
+	type LoggerAdapter,
+	type RootLogger,
+	type WideEventLogger,
+} from '../src';
 
 declare function expectType<T>(value: T): void;
 declare const context: CommandContext;
@@ -22,6 +29,21 @@ expectType<RootLogger>(client.slipherLogger);
 expectType<RootLogger>(httpClient.slipherLogger);
 expectType<RootLogger>(workerClient.slipherLogger);
 expectType<RootLogger>(usingClient.slipherLogger);
+
+const evlogAdapter = createEvlogDrainAdapter(
+	Object.assign(
+		(context: EvlogDrainContext) => {
+			expectType<EvlogLevel>(context.event.level);
+			expectType<string>(context.event.service);
+			expectType<string>(context.event.environment);
+		},
+		{
+			flush() {},
+		},
+	),
+);
+
+expectType<LoggerAdapter>(evlogAdapter);
 
 const auditMiddleware = createMiddleware<{ requestId: string }, CommandContext>(async ({ context, next }) => {
 	context.logger.add({ requestId: 'request-1' });

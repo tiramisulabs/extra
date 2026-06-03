@@ -1,6 +1,7 @@
 import { assert, describe, test } from 'vitest';
 import {
 	ConsoleLoggerAdapter,
+	createEvlogDrainAdapter,
 	createEvlogLoggerAdapter,
 	createLogger,
 	createPinoLoggerAdapter,
@@ -247,24 +248,82 @@ describe('logger adapters', () => {
 		assert.equal(calls[0][1], 'ready');
 	});
 
-	test('createEvlogLoggerAdapter delegates to emit with an event name', async () => {
-		const calls: unknown[][] = [];
-		const adapter = createEvlogLoggerAdapter({
-			emit: (...args: unknown[]) => calls.push(args),
+	test('createEvlogDrainAdapter converts entries into evlog drain contexts', async () => {
+		const contexts: unknown[] = [];
+		let flushes = 0;
+		const drain = Object.assign((context: unknown) => contexts.push(context), {
+			flush: () => {
+				flushes++;
+			},
+		});
+		const adapter = createEvlogDrainAdapter(drain, {
+			environment: 'test',
+			version: '1.2.3',
 		});
 
 		await adapter.write({
-			bindings: {},
-			data: { ready: true },
-			level: 'info',
-			levelValue: 30,
+			bindings: { shardId: 1 },
+			data: { guildId: 'guild-1', ready: true },
+			level: 'fatal',
+			levelValue: 60,
+			logs: [{ data: { step: 'boot' }, level: 'trace', levelValue: 10, time: new Date('2026-05-29T10:00:00.010Z') }],
+			message: 'ready',
+			name: 'slipher-bot',
+			time: new Date('2026-05-29T10:00:00.000Z'),
+		});
+		await adapter.flush?.();
+
+		assert.equal(contexts.length, 1);
+		assert.deepEqual(contexts[0], {
+			event: {
+				environment: 'test',
+				guildId: 'guild-1',
+				level: 'error',
+				logs: [
+					{
+						data: { step: 'boot' },
+						level: 'trace',
+						levelValue: 10,
+						time: new Date('2026-05-29T10:00:00.010Z'),
+					},
+				],
+				message: 'ready',
+				ready: true,
+				service: 'slipher-bot',
+				shardId: 1,
+				timestamp: '2026-05-29T10:00:00.000Z',
+				version: '1.2.3',
+			},
+		});
+		assert.equal(flushes, 1);
+	});
+
+	test('createEvlogDrainAdapter can use evlog fields from bindings', async () => {
+		const contexts: unknown[] = [];
+		const adapter = createEvlogDrainAdapter(context => contexts.push(context));
+
+		await adapter.write({
+			bindings: { environment: 'production', service: 'discord-worker' },
+			data: {},
+			level: 'trace',
+			levelValue: 10,
 			logs: [],
 			time: new Date('2026-05-29T10:00:00.000Z'),
 		});
 
-		assert.equal(calls.length, 1);
-		assert.equal(calls[0][0], 'slipher.log');
-		assert.equal((calls[0][1] as LogEntry).data.ready, true);
+		assert.deepEqual(contexts[0], {
+			event: {
+				environment: 'production',
+				level: 'debug',
+				logs: [],
+				service: 'discord-worker',
+				timestamp: '2026-05-29T10:00:00.000Z',
+			},
+		});
+	});
+
+	test('createEvlogLoggerAdapter is an alias for the drain adapter', () => {
+		assert.equal(createEvlogLoggerAdapter, createEvlogDrainAdapter);
 	});
 });
 

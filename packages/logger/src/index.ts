@@ -119,15 +119,39 @@ export interface PinoLoggerLike {
 
 export type PinoLogMethod = (payload: Record<string, unknown>, message?: string) => unknown;
 
-export interface EvlogLike {
-	write?(entry: LogEntry): Awaitable<void>;
-	log?(entry: LogEntry): Awaitable<void>;
-	emit?(name: string, entry: LogEntry): Awaitable<void>;
+export type EvlogLevel = 'debug' | 'info' | 'warn' | 'error';
+
+export interface EvlogWideEvent extends LogData {
+	timestamp: string;
+	level: EvlogLevel;
+	service: string;
+	environment: string;
+	version?: string;
+	commitHash?: string;
+	region?: string;
+}
+
+export interface EvlogDrainContext {
+	event: EvlogWideEvent;
+	request?: {
+		method?: string;
+		path?: string;
+		requestId?: string;
+	};
+	headers?: Record<string, string>;
+}
+
+export interface EvlogDrain {
+	(context: EvlogDrainContext): Awaitable<void>;
 	flush?(): Awaitable<void>;
 }
 
 export interface EvlogAdapterOptions {
-	eventName?: string;
+	service?: string;
+	environment?: string;
+	version?: string;
+	commitHash?: string;
+	region?: string;
 }
 
 const levelValues: Record<LogLevel, number> = {
@@ -397,17 +421,16 @@ export function createPinoLoggerAdapter(target: PinoLoggerLike): LoggerAdapter {
 	};
 }
 
-export function createEvlogLoggerAdapter(target: EvlogLike, options: EvlogAdapterOptions = {}): LoggerAdapter {
-	const eventName = options.eventName ?? 'slipher.log';
+export function createEvlogDrainAdapter(drain: EvlogDrain, options: EvlogAdapterOptions = {}): LoggerAdapter {
 	return {
 		write(entry) {
-			if (target.write) return target.write(entry);
-			if (target.log) return target.log(entry);
-			if (target.emit) return target.emit(eventName, entry);
+			return drain(entryToEvlogDrainContext(entry, options));
 		},
-		flush: target.flush ? () => target.flush?.() : undefined,
+		flush: drain.flush ? () => drain.flush?.() : undefined,
 	};
 }
+
+export const createEvlogLoggerAdapter = createEvlogDrainAdapter;
 
 export function extractSeyfertLogContext(context: unknown): SeyfertLogContext {
 	const source = asRecord(context);
@@ -603,6 +626,43 @@ function withError(data: LogData, error: unknown): LogData {
 function entryToAdapterPayload(entry: LogEntry): Record<string, unknown> {
 	const { message: _message, ...payload } = entry;
 	return stripUndefined(payload);
+}
+
+function entryToEvlogDrainContext(entry: LogEntry, options: EvlogAdapterOptions): EvlogDrainContext {
+	return {
+		event: stripUndefined({
+			...entry.bindings,
+			...entry.data,
+			logs: entry.logs,
+			message: entry.message,
+			timestamp: entry.time.toISOString(),
+			level: toEvlogLevel(entry.level),
+			service:
+				options.service ??
+				getString(entry.bindings.service) ??
+				getString(entry.data.service) ??
+				entry.name ??
+				'seyfert',
+			environment:
+				options.environment ??
+				getString(entry.bindings.environment) ??
+				getString(entry.data.environment) ??
+				getDefaultEnvironment(),
+			version: options.version ?? getString(entry.bindings.version) ?? getString(entry.data.version),
+			commitHash: options.commitHash ?? getString(entry.bindings.commitHash) ?? getString(entry.data.commitHash),
+			region: options.region ?? getString(entry.bindings.region) ?? getString(entry.data.region),
+		}),
+	};
+}
+
+function toEvlogLevel(level: WritableLogLevel): EvlogLevel {
+	if (level === 'trace') return 'debug';
+	if (level === 'fatal') return 'error';
+	return level;
+}
+
+function getDefaultEnvironment(): string {
+	return typeof process !== 'undefined' ? (process.env.NODE_ENV ?? 'development') : 'development';
 }
 
 function setLoggerOn(target: unknown, rootLogger: RootLogger): void {
