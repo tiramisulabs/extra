@@ -23,6 +23,7 @@
 		"prepublish": "pnpm build"
 	},
 	"dependencies": {
+		"@slipher/internal": "workspace:*",
 		"croner": "^9.1.0"
 	},
 	"peerDependencies": {
@@ -35,6 +36,7 @@
 		}
 	},
 	"devDependencies": {
+		"@slipher/types": "workspace:*",
 		"@types/node": "^25.0.10",
 		"seyfert": "4.3.1-dev-26915701713.0",
 		"typescript": "^5.9.3"

@@ -1,5 +1,6 @@
+import type { SchedulerLike } from '@slipher/types';
 import type { Client, CommandContext, HttpClient, UsingClient, WorkerClient } from 'seyfert';
-import type { SchedulerRegistry } from '../src';
+import { createScheduler, memory, type ScheduledTask, type SchedulerRegistry, scheduler } from '../src';
 
 declare function expectType<T>(value: T): void;
 declare const context: CommandContext;
@@ -9,7 +10,17 @@ declare const workerClient: WorkerClient;
 declare const usingClient: UsingClient;
 
 expectType<SchedulerRegistry>(context.scheduler);
-expectType<SchedulerRegistry>(client.scheduler);
-expectType<SchedulerRegistry>(httpClient.scheduler);
-expectType<SchedulerRegistry>(workerClient.scheduler);
-expectType<SchedulerRegistry>(usingClient.scheduler);
+expectType<SchedulerRegistry | undefined>(client.scheduler);
+expectType<SchedulerRegistry | undefined>(httpClient.scheduler);
+expectType<SchedulerRegistry | undefined>(workerClient.scheduler);
+expectType<SchedulerRegistry | undefined>(usingClient.scheduler);
+
+createScheduler({ driver: memory() });
+scheduler({ driver: memory() });
+expectType<SchedulerLike<ScheduledTask>>(createScheduler({ driver: memory() }));
+
+// @ts-expect-error scheduler driver is required
+createScheduler({});
+
+// @ts-expect-error scheduler plugin driver is required
+scheduler({});

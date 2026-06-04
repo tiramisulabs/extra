@@ -1,17 +1,17 @@
 import type {} from 'seyfert';
-import type { SchedulerRegistry } from './index';
+import type { SchedulerRegistry } from './manager';
 
 declare module 'seyfert' {
 	interface Client<Ready extends boolean = boolean> {
-		scheduler: SchedulerRegistry;
+		scheduler?: SchedulerRegistry;
 	}
 
 	interface HttpClient {
-		scheduler: SchedulerRegistry;
+		scheduler?: SchedulerRegistry;
 	}
 
 	interface WorkerClient<Ready extends boolean = boolean> {
-		scheduler: SchedulerRegistry;
+		scheduler?: SchedulerRegistry;
 	}
 
 	interface ExtendContext {
@@ -19,6 +19,6 @@ declare module 'seyfert' {
 	}
 
 	interface UsingClient {
-		scheduler: SchedulerRegistry;
+		scheduler?: SchedulerRegistry;
 	}
 }

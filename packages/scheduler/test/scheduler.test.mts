@@ -1,14 +1,6 @@
+import { parseDuration } from '@slipher/internal';
 import { assert, describe, test } from 'vitest';
-import {
-	Cron,
-	createScheduler,
-	Interval,
-	memory,
-	parseDuration,
-	persistent,
-	type ScheduledTask,
-	scheduler,
-} from '../src';
+import { Cron, createScheduler, Interval, memory, persistent, type ScheduledTask, scheduler } from '../src';
 
 class FakeCronerJob {
 	paused = false;
@@ -54,11 +46,14 @@ function createFakeCroner() {
 
 function createFakeBullMQ() {
 	const state = {
+		jobSchedulers: [] as Array<{ id: string }>,
+		queueEvents: [] as FakeQueueEvents[],
 		queues: [] as FakeQueue[],
 		workers: [] as FakeWorker[],
 	};
 
 	class FakeQueue {
+		adds: Array<{ name: string; data: Record<string, unknown>; options: Record<string, unknown> }> = [];
 		closed = false;
 		schedulers: Array<{ id: string; repeat: Record<string, unknown>; template: Record<string, unknown> }> = [];
 		removed: string[] = [];
@@ -74,8 +69,40 @@ function createFakeBullMQ() {
 			this.schedulers.push({ id, repeat, template });
 		}
 
+		add(name: string, data: Record<string, unknown>, options: Record<string, unknown>) {
+			this.adds.push({ name, data, options });
+		}
+
+		getJobSchedulers() {
+			return state.jobSchedulers;
+		}
+
 		removeJobScheduler(id: string) {
 			this.removed.push(id);
+		}
+
+		close() {
+			this.closed = true;
+		}
+	}
+
+	class FakeQueueEvents {
+		closed = false;
+		listeners = new Map<string, ((payload: Record<string, unknown>) => void)[]>();
+
+		constructor(
+			readonly name: string,
+			readonly options: Record<string, unknown>,
+		) {
+			state.queueEvents.push(this);
+		}
+
+		on(event: string, listener: (payload: Record<string, unknown>) => void) {
+			this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]);
+		}
+
+		emit(event: string, payload: Record<string, unknown>) {
+			for (const listener of this.listeners.get(event) ?? []) listener(payload);
 		}
 
 		close() {
@@ -100,7 +127,7 @@ function createFakeBullMQ() {
 	}
 
 	return {
-		module: { Queue: FakeQueue, Worker: FakeWorker },
+		module: { Queue: FakeQueue, QueueEvents: FakeQueueEvents, Worker: FakeWorker },
 		state,
 	};
 }
@@ -109,6 +136,18 @@ function waitForEvent<T>(registry: { once(event: string, listener: (payload: T) 
 	return new Promise<T>(resolve => {
 		registry.once(event, resolve);
 	});
+}
+
+async function assertRejects(run: () => Promise<unknown>, expected: RegExp) {
+	let thrown: unknown;
+	try {
+		await run();
+	} catch (error) {
+		thrown = error;
+	}
+
+	assert.instanceOf(thrown, Error);
+	assert.match((thrown as Error).message, expected);
 }
 
 describe('scheduler', () => {
@@ -263,10 +302,15 @@ describe('scheduler', () => {
 			return 'interval-result';
 		});
 
+		assert.equal(bullmq.state.queues.length, 0);
+
+		await registry.setup({ initialized: true });
+
 		assert.equal(bullmq.state.queues[0]!.name, 'scheduler');
 		assert.deepEqual(bullmq.state.queues[0]!.options, { connection, prefix: 'slipher-test' });
 		assert.equal(bullmq.state.workers[0]!.name, 'scheduler');
 		assert.deepEqual(bullmq.state.workers[0]!.options, { connection, prefix: 'slipher-test' });
+		assert.equal(bullmq.state.queueEvents[0]!.name, 'scheduler');
 		assert.deepEqual(bullmq.state.queues[0]!.schedulers, [
 			{
 				id: 'daily',
@@ -288,7 +332,93 @@ describe('scheduler', () => {
 		await registry.close();
 
 		assert.equal(bullmq.state.queues[0]!.closed, true);
+		assert.equal(bullmq.state.queueEvents[0]!.closed, true);
 		assert.equal(bullmq.state.workers[0]!.closed, true);
+	});
+
+	test('persistent pause removes the job scheduler and start re-upserts its template', async () => {
+		const bullmq = createFakeBullMQ();
+		const registry = createScheduler({
+			driver: persistent({ bullmq: bullmq.module }),
+		});
+
+		registry.cron('daily', '0 0 * * *', () => undefined);
+		await registry.setup({ initialized: true });
+
+		await registry.pause('daily');
+		await registry.start('daily');
+
+		assert.deepEqual(bullmq.state.queues[0]!.removed, ['daily']);
+		assert.deepEqual(
+			bullmq.state.queues[0]!.schedulers.map(item => item.id),
+			['daily', 'daily'],
+		);
+		assert.equal(registry.get('daily')?.status, 'scheduled');
+	});
+
+	test('persistent runImmediately enqueues one immediate job per setup version', async () => {
+		const bullmq = createFakeBullMQ();
+		const registry = createScheduler({
+			driver: persistent({ bullmq: bullmq.module }),
+		});
+
+		registry.interval('boot', '30s', () => undefined, { runImmediately: true });
+		await registry.setup({ initialized: true });
+
+		assert.deepEqual(bullmq.state.queues[0]!.adds, [
+			{
+				name: 'boot',
+				data: { taskId: 'boot' },
+				options: { delay: 0, jobId: 'boot:immediate:1' },
+			},
+		]);
+	});
+
+	test('persistent setup warns about or purges orphaned schedulers', async () => {
+		const warned: unknown[] = [];
+		const purged = createFakeBullMQ();
+		const warnedBullmq = createFakeBullMQ();
+		warnedBullmq.state.jobSchedulers.push({ id: 'old-task' }, { id: 'daily' });
+		purged.state.jobSchedulers.push({ id: 'old-task' });
+
+		const warnRegistry = createScheduler({
+			driver: persistent({ bullmq: warnedBullmq.module }),
+			logger: {
+				warn: (...args: unknown[]) => warned.push(args),
+			},
+		});
+		warnRegistry.cron('daily', '0 0 * * *', () => undefined);
+		await warnRegistry.setup({ initialized: true });
+
+		assert.equal(warned.length, 1);
+		assert.deepEqual(warnedBullmq.state.queues[0]!.removed, []);
+
+		const purgeRegistry = createScheduler({
+			driver: persistent({ bullmq: purged.module, purgeOrphansOnStartup: true }),
+		});
+		purgeRegistry.cron('daily', '0 0 * * *', () => undefined);
+		await purgeRegistry.setup({ initialized: true });
+
+		assert.deepEqual(purged.state.queues[0]!.removed, ['old-task']);
+	});
+
+	test('persistent decorated tasks require explicit stable ids', async () => {
+		const bullmq = createFakeBullMQ();
+
+		class Tasks {
+			implicit() {}
+			explicit() {}
+		}
+
+		Interval('5m')(Tasks.prototype, 'implicit');
+		Interval('5m', { id: 'stable-explicit' })(Tasks.prototype, 'explicit');
+
+		const registry = createScheduler({
+			driver: persistent({ bullmq: bullmq.module }),
+			tasks: [Tasks],
+		});
+
+		await assertRejects(() => registry.setup({ initialized: true }), /requires explicit task ids.*Tasks\.implicit/);
 	});
 
 	test('parses human interval durations for scheduler definitions', () => {
