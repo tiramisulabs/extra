@@ -28,11 +28,13 @@ test('command replies', async () => {
 
 `mockCommandContext()` includes:
 
-- `author`, `user`, `guild`, `channel`, and `member`
+- `author`, `user`, `guild()`, `channel()`, `me()`, and `member`
 - `options` and `metadata`
 - `write`, `editOrReply`, `followup`, and `deferReply`
-- `logger`, `queues`, and `scheduler` stubs
+- `logger`, `queues`, and `scheduler` stubs, plus `client` with the same stub instances
 - `responses`, `lastResponse()`, and `clearResponses()`
+
+`ctx.client.logger === ctx.logger`, `ctx.client.queues === ctx.queues`, and `ctx.client.scheduler === ctx.scheduler`. Use `mockClient({ extra })` when a command touches client surfaces that this package does not model.
 
 ## Factories
 
@@ -51,12 +53,49 @@ const member = mockMember({ user });
 const ctx = mockCommandContext();
 
 ctx.logger.info('queued');
-await ctx.queues.get('welcome').add({ userId: ctx.author.id });
+ctx.client.logger.info('also queued');
+ctx.logger.add({ command: 'welcome' });
+await ctx.queues.get('welcome').add('send', { userId: ctx.author.id });
 ctx.scheduler.add('reminder', '30m', () => undefined);
 
-expect(ctx.logger.entries).toHaveLength(1);
+expect(ctx.logger.entries).toHaveLength(2);
+expect(ctx.logger.currentContext.command).toBe('welcome');
 expect(ctx.queues.get('welcome').jobs).toHaveLength(1);
 expect(ctx.scheduler.tasks).toHaveLength(1);
+```
+
+## Behavior Recipes
+
+Attach runner-specific behavior by replacing the method or nested surface you need:
+
+```ts
+import { vi } from 'vitest';
+import { mockCommandContext, mockGuild, mockMember } from '@slipher/testing';
+
+const ctx = mockCommandContext();
+ctx.guild = vi.fn(async () => ({
+	...mockGuild(),
+	members: { fetch: vi.fn(async () => mockMember()) },
+}));
+```
+
+```ts
+import { mockCommandContext, mockGuild, mockMember } from '@slipher/testing';
+
+const ctx = mockCommandContext();
+ctx.guild = jest.fn(async () => ({
+	...mockGuild(),
+	members: { fetch: jest.fn(async () => mockMember()) },
+}));
+```
+
+For commands with large entity graphs, use `vitest-mock-extended` or `jest-mock-extended` in the app test suite:
+
+```ts
+import { mockDeep } from 'vitest-mock-extended';
+import type { CommandContext } from 'seyfert';
+
+const ctx = mockDeep<CommandContext>();
 ```
 
 ## Implementation Notes

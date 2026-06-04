@@ -1,6 +1,7 @@
 import { assert, describe, test } from 'vitest';
 import {
 	mockChannel,
+	mockClient,
 	mockCommandContext,
 	mockGuild,
 	mockMember,
@@ -86,10 +87,32 @@ describe('mockCommandContext', () => {
 		const member = mockMember();
 		const ctx = mockCommandContext({ guild: null, guildId: '2', member });
 
-		assert.equal(ctx.guild, null);
 		assert.equal(ctx.guildId, undefined);
 		assert.equal(ctx.member, null);
-		assert.equal(ctx.channel.guildId, null);
+		assert.equal(typeof ctx.guild, 'function');
+		assert.equal(typeof ctx.channel, 'function');
+	});
+
+	test('guild and channel use Seyfert method shape', async () => {
+		const guild = mockGuild({ id: 'guild-1' });
+		const channel = mockChannel({ id: 'channel-1', guildId: guild.id });
+		const ctx = mockCommandContext({ guild, channel });
+
+		assert.equal(typeof ctx.guild, 'function');
+		assert.equal(await ctx.guild(), guild);
+		assert.equal(ctx.guild() instanceof Promise, true);
+		assert.equal(typeof ctx.channel, 'function');
+		assert.equal(await ctx.channel(), channel);
+		assert.equal(ctx.channel() instanceof Promise, true);
+	});
+
+	test('guild method resolves null in direct-message-like contexts', async () => {
+		const ctx = mockCommandContext({ guild: null });
+
+		assert.equal(await ctx.guild(), null);
+		assert.equal(ctx.guildId, undefined);
+		assert.equal(ctx.member, null);
+		assert.equal((await ctx.channel()).guildId, null);
 	});
 
 	test('provides integration stubs for logger, queues, and scheduler', async () => {
@@ -97,10 +120,27 @@ describe('mockCommandContext', () => {
 
 		ctx.logger.add({ command: 'ping' });
 		ctx.logger.info('ran');
-		await ctx.queues.get('welcome').add({ userId: ctx.author.id }, { delay: '5s' });
+		await ctx.queues.get('welcome').add('send', { userId: ctx.author.id }, { delay: '5s' });
 		ctx.scheduler.add('reminder', '30m', () => undefined);
 
 		assert.deepEqual(ctx.logger.entries.at(-1), { level: 'info', args: ['ran'] });
+		assert.deepEqual(ctx.logger.currentContext, { command: 'ping' });
+		assert.equal(ctx.queues.get('welcome').jobs.at(-1)?.name, 'send');
+		assert.deepEqual(ctx.queues.get('welcome').jobs.at(-1)?.payload, { userId: ctx.author.id });
+		assert.equal(ctx.scheduler.tasks.at(-1)?.name, 'reminder');
+	});
+
+	test('provides a minimal client with shared Slipher stubs', async () => {
+		const ctx = mockCommandContext();
+
+		ctx.client.logger.info('through-client');
+		await ctx.client.queues.get('welcome').add({ userId: ctx.author.id });
+		ctx.client.scheduler.add('reminder', '30m', () => undefined);
+
+		assert.equal(ctx.client.logger, ctx.logger);
+		assert.equal(ctx.client.queues, ctx.queues);
+		assert.equal(ctx.client.scheduler, ctx.scheduler);
+		assert.deepEqual(ctx.logger.entries.at(-1), { level: 'info', args: ['through-client'] });
 		assert.deepEqual(ctx.queues.get('welcome').jobs.at(-1)?.payload, { userId: ctx.author.id });
 		assert.equal(ctx.scheduler.tasks.at(-1)?.name, 'reminder');
 	});
@@ -112,10 +152,11 @@ describe('standalone stubs', () => {
 		const first = queues.get('email');
 		const second = queues.get('email');
 
-		await first.add({ to: 'a@example.com' });
+		await first.add('send', { to: 'a@example.com' });
 
 		assert.equal(first, second);
 		assert.equal(second.jobs.length, 1);
+		assert.equal(second.jobs[0]?.name, 'send');
 	});
 
 	test('mockScheduler records dynamic tasks', () => {
@@ -124,5 +165,17 @@ describe('standalone stubs', () => {
 
 		assert.equal(task.name, 'heartbeat');
 		assert.equal(scheduler.tasks.length, 1);
+	});
+
+	test('mockClient defaults and explicit overrides are reachable', () => {
+		const queues = mockQueues();
+		const client = mockClient({ queues, botId: 'bot-1', applicationId: 'app-1', extra: { custom: 1 } });
+
+		assert.equal(client.queues, queues);
+		assert.equal(client.botId, 'bot-1');
+		assert.equal(client.applicationId, 'app-1');
+		assert.equal(client.custom, 1);
+		assert.ok(client.logger);
+		assert.ok(client.scheduler);
 	});
 });
