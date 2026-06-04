@@ -23,11 +23,19 @@
 		"prepublish": "pnpm build"
 	},
 	"devDependencies": {
+		"@slipher/types": "workspace:*",
 		"@types/node": "^25.0.10",
+		"evlog": "^2.18.1",
 		"seyfert": "4.3.1-dev-26915701713.0",
 		"typescript": "^5.9.3"
 	},
 	"peerDependencies": {
+		"evlog": "^2.18.1",
 		"seyfert": ">=4.3.0-0"
+	},
+	"peerDependenciesMeta": {
+		"evlog": {
+			"optional": true
+		}
 	}
 }

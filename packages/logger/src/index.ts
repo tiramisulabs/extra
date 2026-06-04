@@ -1,4 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { Logger as SeyfertLogger } from 'seyfert';
+import { LogLevels as SeyfertLogLevels } from 'seyfert/lib/common';
 
 import './seyfert';
 
@@ -9,23 +11,12 @@ export type LogData = Record<string, unknown>;
 export type LogBindings = Record<string, unknown>;
 export type LogOutcome = 'success' | 'error' | 'denied' | 'skipped';
 
-export interface LogRecord {
-	level: WritableLogLevel;
-	levelValue: number;
-	time: Date;
-	data: LogData;
-	message?: string;
-}
-
 export interface LogEntry {
 	level: WritableLogLevel;
-	levelValue: number;
 	time: Date;
 	bindings: LogBindings;
 	data: LogData;
-	logs: LogRecord[];
 	message?: string;
-	name?: string;
 }
 
 export interface LoggerAdapter {
@@ -44,6 +35,8 @@ export interface LoggerOptions {
 
 export interface LoggerPluginOptions extends LoggerOptions {
 	pluginName?: string;
+	context?: AutoContextConfig;
+	interceptInternal?: boolean;
 }
 
 export interface LoggerPlugin {
@@ -99,10 +92,20 @@ export interface SeyfertLogContext extends LogData {
 	channelId?: string;
 	shardId?: number;
 	userId?: string;
-	username?: string;
 	interactionId?: string;
-	locale?: string;
 }
+
+export type AutoContextField =
+	| 'kind'
+	| 'command'
+	| 'customId'
+	| 'guildId'
+	| 'channelId'
+	| 'userId'
+	| 'interactionId'
+	| 'shardId';
+
+export type AutoContextConfig = Partial<Record<AutoContextField, boolean>>;
 
 export interface WideEventEmitOptions {
 	outcome?: LogOutcome;
@@ -119,6 +122,7 @@ export interface PinoLoggerLike {
 	warn?: PinoLogMethod;
 	error?: PinoLogMethod;
 	fatal?: PinoLogMethod;
+	child?(bindings: LogBindings): PinoLoggerLike;
 	flush?(): Awaitable<void>;
 }
 
@@ -126,18 +130,15 @@ export type PinoLogMethod = (payload: Record<string, unknown>, message?: string)
 
 export type EvlogLevel = 'debug' | 'info' | 'warn' | 'error';
 
-export interface EvlogWideEvent extends LogData {
-	timestamp: string;
-	level: EvlogLevel;
-	service: string;
-	environment: string;
-	version?: string;
-	commitHash?: string;
-	region?: string;
+export interface EvlogRedactConfig {
+	paths?: string[];
+	patterns?: RegExp[];
+	builtins?: false | Array<'creditCard' | 'email' | 'ipv4' | 'phone' | 'jwt' | 'bearer' | 'iban'>;
+	replacement?: string;
 }
 
-export interface EvlogDrainContext {
-	event: EvlogWideEvent;
+export interface EvlogPipelineContext {
+	event: Record<string, unknown>;
 	request?: {
 		method?: string;
 		path?: string;
@@ -146,18 +147,64 @@ export interface EvlogDrainContext {
 	headers?: Record<string, string>;
 }
 
-export interface EvlogDrain {
-	(context: EvlogDrainContext): Awaitable<void>;
-	flush?(): Awaitable<void>;
+export interface EvlogTailSamplingContext extends EvlogPipelineContext {
+	shouldKeep: boolean;
 }
 
 export interface EvlogAdapterOptions {
-	service?: string;
-	environment?: string;
-	version?: string;
-	commitHash?: string;
-	region?: string;
+	include?: string[];
+	exclude?: string[];
+	routes?: Record<string, unknown>;
+	drain?: (context: EvlogPipelineContext) => Awaitable<void>;
+	enrich?: (context: EvlogPipelineContext) => Awaitable<void>;
+	keep?: (context: EvlogTailSamplingContext) => Awaitable<void>;
+	redact?: boolean | EvlogRedactConfig;
+	plugins?: unknown[];
 }
+
+interface EvlogAdapterContext {
+	entry: LogEntry;
+	logger?: EvlogRequestLogger;
+}
+
+interface EvlogRequestLogger {
+	set(context: Record<string, unknown>): void;
+	setLevel(level: EvlogLevel): void;
+	error(error: Error | string, context?: Record<string, unknown>): void;
+	info(message: string, context?: Record<string, unknown>): void;
+	warn(message: string, context?: Record<string, unknown>): void;
+}
+
+interface EvlogRequestHandle {
+	logger?: EvlogRequestLogger;
+	skipped: boolean;
+	finish(options?: { status?: number; error?: Error }): Promise<unknown>;
+	runWith<T>(run: () => T | Promise<T>): Promise<T>;
+}
+
+interface EvlogFrameworkIntegration {
+	start(context: EvlogAdapterContext, options?: EvlogToolkitOptions): EvlogRequestHandle;
+}
+
+interface EvlogToolkitModule {
+	defineFrameworkIntegration<TContext>(spec: {
+		name: string;
+		extractRequest(context: TContext): {
+			method: string;
+			path: string;
+			headers?: Headers | Record<string, string | string[] | undefined>;
+			requestId?: string;
+		};
+		attachLogger(context: TContext, logger: EvlogRequestLogger): void;
+	}): EvlogFrameworkIntegration;
+}
+
+type EvlogToolkitOptions = Omit<EvlogAdapterOptions, 'drain' | 'enrich' | 'keep' | 'plugins'> & {
+	drain?: (context: EvlogPipelineContext) => Awaitable<void>;
+	enrich?: (context: EvlogPipelineContext) => Awaitable<void>;
+	keep?: (context: EvlogTailSamplingContext) => Awaitable<void>;
+	plugins?: unknown[];
+};
 
 const loggerScope = new AsyncLocalStorage<WideEventLogger>();
 
@@ -171,17 +218,26 @@ const levelValues: Record<LogLevel, number> = {
 	silent: Number.POSITIVE_INFINITY,
 };
 
+const defaultContextConfig: Record<AutoContextField, boolean> = {
+	kind: true,
+	command: true,
+	customId: true,
+	guildId: true,
+	channelId: true,
+	userId: true,
+	interactionId: true,
+	shardId: false,
+};
+
 export class RootLogger {
-	private readonly name?: string;
 	private readonly level: LogLevel;
 	private readonly bindings: LogBindings;
 	private readonly adapter: LoggerAdapter;
 	private readonly now: () => Date;
 
 	constructor(options: LoggerOptions = {}) {
-		this.name = options.name;
 		this.level = options.level ?? 'info';
-		this.bindings = options.bindings ?? {};
+		this.bindings = stripUndefined({ name: options.name, ...(options.bindings ?? {}) });
 		this.adapter = options.adapter ?? new ConsoleLoggerAdapter();
 		this.now = options.now ?? (() => new Date());
 	}
@@ -212,7 +268,6 @@ export class RootLogger {
 
 	child(bindings: LogBindings): RootLogger {
 		return new RootLogger({
-			name: this.name,
 			level: this.level,
 			bindings: { ...this.bindings, ...bindings },
 			adapter: this.adapter.child?.(bindings) ?? this.adapter,
@@ -221,7 +276,7 @@ export class RootLogger {
 	}
 
 	event(data: LogData = {}): WideEventLogger {
-		return new WideEventLogger(this, data, { bindings: this.bindings, name: this.name });
+		return new WideEventLogger(this, data, { bindings: this.bindings });
 	}
 
 	flush(): Awaitable<void> {
@@ -246,20 +301,21 @@ export class RootLogger {
 		}
 	}
 
-	private write(level: WritableLogLevel, args: readonly unknown[]): Awaitable<void> {
+	writeLevel(level: WritableLogLevel, args: readonly unknown[]): Awaitable<void> {
 		if (!this.isEnabled(level)) return;
 
 		const normalized = normalizeLogArguments(args);
 		return this.writeEntry({
-			name: this.name,
 			level,
-			levelValue: levelValues[level],
 			time: this.timestamp(),
 			bindings: this.bindings,
 			data: normalized.data,
-			logs: [],
 			message: normalized.message,
 		});
+	}
+
+	private write(level: WritableLogLevel, args: readonly unknown[]): Awaitable<void> {
+		return this.writeLevel(level, args);
 	}
 }
 
@@ -267,17 +323,15 @@ export class WideEventLogger {
 	private readonly root: RootLogger;
 	private readonly startedAt: Date;
 	private readonly bindings: LogBindings;
-	private readonly name?: string;
-	private readonly records: LogRecord[] = [];
+	private highestLevel?: WritableLogLevel;
 	private data: LogData;
 	private emitted = false;
 	private emitPromise?: Promise<void>;
 
-	constructor(root: RootLogger, data: LogData = {}, metadata: Pick<LogEntry, 'bindings' | 'name'> = { bindings: {} }) {
+	constructor(root: RootLogger, data: LogData = {}, metadata: Pick<LogEntry, 'bindings'> = { bindings: {} }) {
 		this.root = root;
 		this.startedAt = root.timestamp();
 		this.bindings = metadata.bindings;
-		this.name = metadata.name;
 		this.data = data;
 	}
 
@@ -286,28 +340,32 @@ export class WideEventLogger {
 		return this;
 	}
 
-	trace(...args: readonly unknown[]): void {
-		this.record('trace', args);
+	get currentContext(): Readonly<LogData> {
+		return Object.freeze({ ...this.data });
 	}
 
-	debug(...args: readonly unknown[]): void {
-		this.record('debug', args);
+	trace(...args: readonly unknown[]): Awaitable<void> {
+		return this.writeImmediate('trace', args);
 	}
 
-	info(...args: readonly unknown[]): void {
-		this.record('info', args);
+	debug(...args: readonly unknown[]): Awaitable<void> {
+		return this.writeImmediate('debug', args);
 	}
 
-	warn(...args: readonly unknown[]): void {
-		this.record('warn', args);
+	info(...args: readonly unknown[]): Awaitable<void> {
+		return this.writeImmediate('info', args);
 	}
 
-	error(...args: readonly unknown[]): void {
-		this.record('error', args);
+	warn(...args: readonly unknown[]): Awaitable<void> {
+		return this.writeImmediate('warn', args);
 	}
 
-	fatal(...args: readonly unknown[]): void {
-		this.record('fatal', args);
+	error(...args: readonly unknown[]): Awaitable<void> {
+		return this.writeImmediate('error', args);
+	}
+
+	fatal(...args: readonly unknown[]): Awaitable<void> {
+		return this.writeImmediate('fatal', args);
 	}
 
 	flush(): Awaitable<void> {
@@ -315,7 +373,7 @@ export class WideEventLogger {
 	}
 
 	hasLogAtLeast(level: WritableLogLevel): boolean {
-		return this.records.some(record => record.levelValue >= levelValues[level]);
+		return this.highestLevel !== undefined && levelValues[this.highestLevel] >= levelValues[level];
 	}
 
 	emit(options: WideEventEmitOptions = {}): Promise<void> {
@@ -337,32 +395,21 @@ export class WideEventLogger {
 		};
 		if (options.error !== undefined) data.error = options.error;
 
-		const level = options.level ?? selectWideEventLevel(outcome, this.records);
+		const level = options.level ?? selectWideEventLevel(outcome);
 		const kind = getString(data.kind) ?? 'event';
 		await this.root.writeEntry({
-			name: this.name,
 			level,
-			levelValue: levelValues[level],
 			time,
 			bindings: this.bindings,
 			data,
-			logs: [...this.records],
 			message: options.message ?? defaultWideEventMessage(kind, outcome),
 		});
 	}
 
-	private record(level: WritableLogLevel, args: readonly unknown[]): void {
+	private writeImmediate(level: WritableLogLevel, args: readonly unknown[]): Awaitable<void> {
 		if (!this.root.isEnabled(level)) return;
-
-		const normalized = normalizeLogArguments(args);
-		this.add(normalized.data);
-		this.records.push({
-			level,
-			levelValue: levelValues[level],
-			time: this.root.timestamp(),
-			data: normalized.data,
-			message: normalized.message,
-		});
+		if (!this.highestLevel || levelValues[level] > levelValues[this.highestLevel]) this.highestLevel = level;
+		return this.root.writeLevel(level, args);
 	}
 }
 
@@ -370,19 +417,16 @@ export { RootLogger as Logger };
 
 export class ConsoleLoggerAdapter implements LoggerAdapter {
 	write(entry: LogEntry): void {
-		const payload = {
+		const payload = stripUndefined({
 			time: entry.time.toISOString(),
 			level: entry.level,
-			levelValue: entry.levelValue,
-			name: entry.name,
-			bindings: entry.bindings,
-			data: entry.data,
-			logs: entry.logs,
-		};
+			message: entry.message,
+			...entry.bindings,
+			...entry.data,
+		});
 		const writer = getConsoleWriter(entry.level);
 
-		if (entry.message) writer(entry.message, stripUndefined(payload));
-		else writer(stripUndefined(payload));
+		writer(payload);
 	}
 }
 
@@ -400,18 +444,22 @@ export function useLogger(): WideEventLogger {
 
 export function logger(options: LoggerPluginOptions = {}): LoggerPlugin {
 	const root = createLogger(options);
+	const contextConfig = resolveContextConfig(options.context);
 
 	return {
 		name: options.pluginName ?? '@slipher/logger',
 		options: () => ({
-			context: source => ({ logger: root.event(extractSeyfertLogContext(source)) }),
-			contextScopes: [(context, run) => loggerScope.run(getContextLogger(root, context, 'command'), run)],
-			commands: { defaults: createCommandDefaults(root) },
-			components: { defaults: createComponentDefaults(root, 'component') },
-			modals: { defaults: createComponentDefaults(root, 'modal') },
+			context: source => ({ logger: root.event(buildSeyfertEventContext(source, 'command', contextConfig)) }),
+			contextScopes: [
+				(context, run) => loggerScope.run(getContextLogger(root, context, 'command', contextConfig), run),
+			],
+			commands: { defaults: createCommandDefaults(root, contextConfig) },
+			components: { defaults: createComponentDefaults(root, 'component', contextConfig) },
+			modals: { defaults: createComponentDefaults(root, 'modal', contextConfig) },
 		}),
 		setup: client => {
 			installSeyfertLogger(client, root);
+			if (options.interceptInternal ?? true) installSeyfertInternalLogger(root);
 		},
 	};
 }
@@ -438,20 +486,40 @@ export function createPinoLoggerAdapter(target: PinoLoggerLike): LoggerAdapter {
 			if (!method) return;
 			method.call(target, entryToAdapterPayload(entry), entry.message);
 		},
+		child: target.child ? bindings => createPinoLoggerAdapter(target.child?.(bindings) ?? target) : undefined,
 		flush: target.flush ? () => target.flush?.() : undefined,
 	};
 }
 
-export function createEvlogDrainAdapter(drain: EvlogDrain, options: EvlogAdapterOptions = {}): LoggerAdapter {
+export function createEvlogAdapter(options: EvlogAdapterOptions = {}): LoggerAdapter {
+	const integration = createEvlogIntegration();
+
 	return {
-		write(entry) {
-			return drain(entryToEvlogDrainContext(entry, options));
+		async write(entry) {
+			const context: EvlogAdapterContext = { entry };
+			const handle = (await integration).start(context, options as EvlogToolkitOptions);
+			if (handle.skipped) return;
+
+			const logger = context.logger ?? handle.logger;
+			if (!logger) return;
+
+			const message = entry.message ?? defaultWideEventMessage(getString(entry.data.kind) ?? 'event', 'success');
+			logger.set(
+				stripUndefined({
+					...entry.bindings,
+					...entry.data,
+					message,
+				}),
+			);
+			logger.setLevel(toEvlogLevel(entry.level));
+
+			await handle.finish(createEvlogFinishOptions(entry));
 		},
-		flush: drain.flush ? () => drain.flush?.() : undefined,
 	};
 }
 
-export function extractSeyfertLogContext(context: unknown): SeyfertLogContext {
+export function extractSeyfertLogContext(context: unknown, config: AutoContextConfig = {}): SeyfertLogContext {
+	const resolvedConfig = resolveContextConfig(config);
 	const source = asRecord(context);
 	const interaction = asRecord(source.interaction ?? source);
 	const member = asRecord(source.member ?? interaction.member);
@@ -459,41 +527,52 @@ export function extractSeyfertLogContext(context: unknown): SeyfertLogContext {
 	const resolver = asRecord(source.resolver);
 
 	return stripUndefined({
-		command: getString(
-			source.fullCommandName ??
-				resolver.fullCommandName ??
-				source.commandName ??
-				getStringField(source.command, 'name'),
-		),
-		customId: getString(source.customId ?? source.custom_id ?? interaction.customId ?? interaction.custom_id),
-		guildId: getString(source.guildId ?? source.guild_id ?? interaction.guildId ?? interaction.guild_id),
-		channelId: getString(source.channelId ?? source.channel_id ?? interaction.channelId ?? interaction.channel_id),
-		shardId: getNumber(source.shardId ?? interaction.shardId),
-		userId: getString(author.id),
-		username: getString(author.username),
-		interactionId: getString(source.interactionId ?? interaction.id ?? source.id),
-		locale: getString(source.locale ?? interaction.locale ?? interaction.guildLocale ?? interaction.guild_locale),
+		command: resolvedConfig.command
+			? getString(
+					source.fullCommandName ??
+						resolver.fullCommandName ??
+						source.commandName ??
+						getStringField(source.command, 'name'),
+				)
+			: undefined,
+		customId: resolvedConfig.customId
+			? getString(source.customId ?? source.custom_id ?? interaction.customId ?? interaction.custom_id)
+			: undefined,
+		guildId: resolvedConfig.guildId
+			? getString(source.guildId ?? source.guild_id ?? interaction.guildId ?? interaction.guild_id)
+			: undefined,
+		channelId: resolvedConfig.channelId
+			? getString(source.channelId ?? source.channel_id ?? interaction.channelId ?? interaction.channel_id)
+			: undefined,
+		shardId: resolvedConfig.shardId ? getNumber(source.shardId ?? interaction.shardId) : undefined,
+		userId: resolvedConfig.userId ? getString(author.id) : undefined,
+		interactionId: resolvedConfig.interactionId
+			? getString(source.interactionId ?? interaction.id ?? source.id)
+			: undefined,
 	});
 }
 
-function createCommandDefaults(root: RootLogger): CommandLoggerDefaults {
+function createCommandDefaults(
+	root: RootLogger,
+	contextConfig: Record<AutoContextField, boolean>,
+): CommandLoggerDefaults {
 	return {
 		onBeforeMiddlewares: context => {
-			getContextLogger(root, context, 'command').debug('command received');
+			getContextLogger(root, context, 'command', contextConfig).debug('command received');
 		},
 		onBeforeOptions: context => {
-			getContextLogger(root, context, 'command').debug('command options parsing');
+			getContextLogger(root, context, 'command', contextConfig).debug('command options parsing');
 		},
 		onRunError: (context, error) => {
-			getContextLogger(root, context, 'command').error(error, 'command failed');
+			getContextLogger(root, context, 'command', contextConfig).error(error, 'command failed');
 		},
 		onMiddlewaresError: (context, error) => {
-			const contextLogger = getContextLogger(root, context, 'command');
+			const contextLogger = getContextLogger(root, context, 'command', contextConfig);
 			contextLogger.error(error, 'command middleware failed');
 			return contextLogger.emit({ outcome: 'error', message: 'command middleware failed', error });
 		},
 		onOptionsError: (context, metadata) => {
-			const contextLogger = getContextLogger(root, context, 'command');
+			const contextLogger = getContextLogger(root, context, 'command', contextConfig);
 			contextLogger.error({ metadata }, 'command options failed');
 			return contextLogger.emit({
 				outcome: 'error',
@@ -502,7 +581,7 @@ function createCommandDefaults(root: RootLogger): CommandLoggerDefaults {
 			});
 		},
 		onPermissionsFail: (context, permissions) => {
-			const contextLogger = getContextLogger(root, context, 'command');
+			const contextLogger = getContextLogger(root, context, 'command', contextConfig);
 			contextLogger.warn('command permission denied', { permissions });
 			return contextLogger.emit({
 				outcome: 'denied',
@@ -512,7 +591,7 @@ function createCommandDefaults(root: RootLogger): CommandLoggerDefaults {
 			});
 		},
 		onBotPermissionsFail: (context, permissions) => {
-			const contextLogger = getContextLogger(root, context, 'command');
+			const contextLogger = getContextLogger(root, context, 'command', contextConfig);
 			contextLogger.warn('bot permission denied', { permissions });
 			return contextLogger.emit({
 				outcome: 'denied',
@@ -523,25 +602,29 @@ function createCommandDefaults(root: RootLogger): CommandLoggerDefaults {
 		},
 		onInternalError: (_client, command, error) =>
 			root.error(withError({ command: getStringField(command, 'name') }, error), 'command internal error'),
-		onAfterRun: (context, error) => closeRun(root, context, 'command', error),
+		onAfterRun: (context, error) => closeRun(root, context, 'command', error, contextConfig),
 	};
 }
 
-function createComponentDefaults(root: RootLogger, kind: 'component' | 'modal'): ComponentLoggerDefaults {
+function createComponentDefaults(
+	root: RootLogger,
+	kind: 'component' | 'modal',
+	contextConfig: Record<AutoContextField, boolean>,
+): ComponentLoggerDefaults {
 	return {
 		onBeforeMiddlewares: context => {
-			getContextLogger(root, context, kind).debug(`${kind} received`);
+			getContextLogger(root, context, kind, contextConfig).debug(`${kind} received`);
 		},
 		onRunError: (context, error) => {
-			getContextLogger(root, context, kind).error(error, `${kind} failed`);
+			getContextLogger(root, context, kind, contextConfig).error(error, `${kind} failed`);
 		},
 		onMiddlewaresError: (context, error) => {
-			const contextLogger = getContextLogger(root, context, kind);
+			const contextLogger = getContextLogger(root, context, kind, contextConfig);
 			contextLogger.error(error, `${kind} middleware failed`);
 			return contextLogger.emit({ outcome: 'error', message: `${kind} middleware failed`, error });
 		},
 		onInternalError: (_client, error) => root.error(withError({ kind }, error), `${kind} internal error`),
-		onAfterRun: (context, error) => closeRun(root, context, kind, error),
+		onAfterRun: (context, error) => closeRun(root, context, kind, error, contextConfig),
 	};
 }
 
@@ -550,8 +633,9 @@ function closeRun(
 	context: unknown,
 	kind: 'command' | 'component' | 'modal',
 	error: unknown | undefined,
+	contextConfig: Record<AutoContextField, boolean>,
 ): Awaitable<void> {
-	const contextLogger = getContextLogger(root, context, kind);
+	const contextLogger = getContextLogger(root, context, kind, contextConfig);
 	if (error !== undefined) {
 		if (!contextLogger.hasLogAtLeast('error')) contextLogger.error(error, `${kind} failed`);
 		return contextLogger.emit({ outcome: 'error', message: `${kind} failed`, error });
@@ -563,9 +647,10 @@ function getContextLogger(
 	root: RootLogger,
 	context: unknown,
 	kind: 'command' | 'component' | 'modal',
+	contextConfig: Record<AutoContextField, boolean>,
 ): WideEventLogger {
 	const source = asRecord(context) as { logger?: unknown };
-	const data = { kind, ...extractSeyfertLogContext(context) };
+	const data = buildSeyfertEventContext(context, kind, contextConfig);
 	if (source.logger instanceof WideEventLogger) {
 		source.logger.add(data);
 		return source.logger;
@@ -576,12 +661,23 @@ function getContextLogger(
 	return contextLogger;
 }
 
-function selectWideEventLevel(outcome: LogOutcome, records: readonly LogRecord[]): WritableLogLevel {
-	let level: WritableLogLevel = outcome === 'error' ? 'error' : outcome === 'denied' ? 'warn' : 'info';
-	for (const record of records) {
-		if (record.levelValue > levelValues[level]) level = record.level;
-	}
-	return level;
+function buildSeyfertEventContext(
+	context: unknown,
+	kind: 'command' | 'component' | 'modal',
+	contextConfig: Record<AutoContextField, boolean>,
+): LogData {
+	return {
+		...(contextConfig.kind ? { kind } : {}),
+		...extractSeyfertLogContext(context, contextConfig),
+	};
+}
+
+function resolveContextConfig(config: AutoContextConfig = {}): Record<AutoContextField, boolean> {
+	return { ...defaultContextConfig, ...config };
+}
+
+function selectWideEventLevel(outcome: LogOutcome): WritableLogLevel {
+	return outcome === 'error' ? 'error' : outcome === 'denied' ? 'warn' : 'info';
 }
 
 function defaultWideEventMessage(kind: string, outcome: LogOutcome): string {
@@ -647,45 +743,83 @@ function withError(data: LogData, error: unknown): LogData {
 }
 
 function entryToAdapterPayload(entry: LogEntry): Record<string, unknown> {
-	const { message: _message, ...payload } = entry;
-	return stripUndefined(payload);
+	return stripUndefined({ ...entry.data });
 }
 
-function entryToEvlogDrainContext(entry: LogEntry, options: EvlogAdapterOptions): EvlogDrainContext {
-	return {
-		event: stripUndefined({
-			...entry.bindings,
-			...entry.data,
-			logs: entry.logs,
-			message: entry.message,
-			timestamp: entry.time.toISOString(),
-			level: toEvlogLevel(entry.level),
-			service:
-				options.service ??
-				getString(entry.bindings.service) ??
-				getString(entry.data.service) ??
-				entry.name ??
-				'seyfert',
-			environment:
-				options.environment ??
-				getString(entry.bindings.environment) ??
-				getString(entry.data.environment) ??
-				getDefaultEnvironment(),
-			version: options.version ?? getString(entry.bindings.version) ?? getString(entry.data.version),
-			commitHash: options.commitHash ?? getString(entry.bindings.commitHash) ?? getString(entry.data.commitHash),
-			region: options.region ?? getString(entry.bindings.region) ?? getString(entry.data.region),
+async function createEvlogIntegration(): Promise<EvlogFrameworkIntegration> {
+	const toolkit = await importEvlogToolkit();
+
+	return toolkit.defineFrameworkIntegration<EvlogAdapterContext>({
+		name: '@slipher/logger',
+		extractRequest: context => ({
+			method: getString(context.entry.data.kind)?.toUpperCase() ?? 'LOG',
+			path: getEvlogPath(context.entry),
+			requestId: getString(context.entry.data.requestId) ?? getString(context.entry.data.interactionId),
 		}),
+		attachLogger(context, logger) {
+			context.logger = logger;
+		},
+	});
+}
+
+async function importEvlogToolkit(): Promise<EvlogToolkitModule> {
+	try {
+		return await importEsmModule<EvlogToolkitModule>('evlog/toolkit');
+	} catch (error) {
+		const missing = error instanceof Error && 'code' in error && error.code === 'MODULE_NOT_FOUND';
+		if (missing) {
+			throw new Error('@slipher/logger createEvlogAdapter() requires "evlog"; install it in your application.');
+		}
+		throw error;
+	}
+}
+
+function importEsmModule<TModule>(specifier: string): Promise<TModule> {
+	const importer = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<TModule>;
+	return importer(specifier).catch(error => {
+		if (error instanceof TypeError && error.message.includes('dynamic import callback')) {
+			return import(specifier) as Promise<TModule>;
+		}
+
+		throw error;
+	});
+}
+
+function getEvlogPath(entry: LogEntry): string {
+	const kind = getString(entry.data.kind) ?? 'log';
+	const name = getString(entry.data.command) ?? getString(entry.data.customId) ?? getString(entry.message);
+	const segments = [kind, name].filter((segment): segment is string => Boolean(segment));
+	return `/${segments.map(slugPathSegment).join('/')}`;
+}
+
+function slugPathSegment(value: string): string {
+	return value
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z0-9._-]+/g, '-')
+		.replace(/^-+|-+$/g, '');
+}
+
+function createEvlogFinishOptions(entry: LogEntry): { status?: number; error?: Error } {
+	if (entry.level !== 'error' && entry.level !== 'fatal') {
+		return { status: entry.level === 'warn' ? 400 : 200 };
+	}
+
+	return {
+		error: toError(entry.data.error ?? entry.message ?? 'Log entry failed'),
+		status: 500,
 	};
+}
+
+function toError(value: unknown): Error {
+	if (value instanceof Error) return value;
+	return new Error(String(value));
 }
 
 function toEvlogLevel(level: WritableLogLevel): EvlogLevel {
 	if (level === 'trace') return 'debug';
 	if (level === 'fatal') return 'error';
 	return level;
-}
-
-function getDefaultEnvironment(): string {
-	return typeof process !== 'undefined' ? (process.env.NODE_ENV ?? 'development') : 'development';
 }
 
 function setLoggerOn(target: unknown, rootLogger: RootLogger): void {
@@ -696,6 +830,59 @@ function setLoggerOn(target: unknown, rootLogger: RootLogger): void {
 function setInternalLoggerOn(target: unknown, rootLogger: RootLogger): void {
 	if (!target || typeof target !== 'object') return;
 	(target as { __logger__?: RootLogger }).__logger__ = rootLogger;
+}
+
+type SeyfertCustomizeLoggerCallback = (
+	self: SeyfertLogger,
+	level: SeyfertLogLevels,
+	args: unknown[],
+) => unknown[] | undefined;
+
+function installSeyfertInternalLogger(root: RootLogger): void {
+	const previous = (SeyfertLogger as unknown as { __callback?: SeyfertCustomizeLoggerCallback }).__callback;
+
+	SeyfertLogger.customize((self, level, args) => {
+		const mappedLevel = mapSeyfertLogLevel(level);
+		void root.writeEntry({
+			level: mappedLevel,
+			time: root.timestamp(),
+			bindings: {},
+			data: {
+				source: 'seyfert',
+				logger: self.name,
+				args,
+			},
+			message: args.map(formatSeyfertLogArg).join(' '),
+		});
+
+		previous?.(self, level, args);
+		return undefined;
+	});
+}
+
+function mapSeyfertLogLevel(level: SeyfertLogLevels): WritableLogLevel {
+	switch (level) {
+		case SeyfertLogLevels.Debug:
+			return 'debug';
+		case SeyfertLogLevels.Warn:
+			return 'warn';
+		case SeyfertLogLevels.Error:
+			return 'error';
+		case SeyfertLogLevels.Fatal:
+			return 'fatal';
+		default:
+			return 'info';
+	}
+}
+
+function formatSeyfertLogArg(value: unknown): string {
+	if (typeof value === 'string') return value;
+	if (value instanceof Error) return value.message;
+	try {
+		return JSON.stringify(value);
+	} catch {
+		return String(value);
+	}
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

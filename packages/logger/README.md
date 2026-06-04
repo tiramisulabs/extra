@@ -1,6 +1,6 @@
 # @slipher/logger
 
-Structured command, component, and modal logs for Seyfert. The plugin keeps the whole interaction timeline in memory, lets middlewares and commands enrich the same log event, and emits one final entry when Seyfert finishes the run.
+Structured command, component, and modal logs for Seyfert. The plugin gives each interaction a request-scoped wide event and also lets normal level methods emit immediately.
 
 ## Install
 
@@ -27,18 +27,22 @@ const client = new Client({
 });
 ```
 
-The plugin adds a wide event logger to every command, component, and modal context as `ctx.logger`. Seyfert lifecycle hooks close that event automatically:
+The plugin adds a wide event logger to every command, component, and modal context as `ctx.logger`. Seyfert lifecycle hooks close that wide event automatically:
 
-- `onBeforeMiddlewares` records that the command was received.
-- `onBeforeOptions` records option parsing.
+- `onBeforeMiddlewares` logs that the command was received.
+- `onBeforeOptions` logs option parsing.
 - middleware, option, permission, and runtime failures emit an error or denied event immediately.
 - `onAfterRun` emits one final success or error entry with `durationMs`.
 
-It also installs the root logger on `client.logger`, `client.commands.logger`, `client.components.logger`, `client.events.logger`, `client.langs.logger`, and `client.cache.logger` for non-interaction logs. Use `client.slipherLogger` when you want the same root logger with a Slipher-specific type.
+Use `client.slipherLogger` when you want the root logger with a Slipher-specific type.
+
+Seyfert internal logs are intercepted by default and routed through the configured adapter with `source: 'seyfert'`. Set `interceptInternal: false` only if you intentionally want Seyfert's pretty console output; doing so means internal gateway/API lines bypass your adapter redaction policy.
+
+Until the upstream Seyfert hook-composition fix lands, some Seyfert default error hooks may still duplicate logs outside this package.
 
 ## Carry Context Through Middlewares
 
-Everything that calls `ctx.logger.add()` or logs a breadcrumb contributes to the same final entry. That makes it useful for request-scoped context that is discovered before the command runs.
+`ctx.logger.add()` enriches the final wide event. Level methods such as `info()` and `warn()` emit immediately as ordinary log entries. That split keeps normal logger behavior predictable while preserving one final wide event per interaction.
 
 ```ts
 import { Command, Declare, Middlewares, createMiddleware, type CommandContext } from 'seyfert';
@@ -51,7 +55,7 @@ export const auditMiddleware = createMiddleware<{ requestId: string; plan: 'free
 		} as const;
 
 		context.logger.add(audit);
-		context.logger.debug('audit context loaded');
+		context.logger.debug('audit context loaded', context.logger.currentContext);
 
 		return next(audit);
 	},
@@ -81,28 +85,47 @@ export default class DeployCommand extends Command {
 }
 ```
 
-The command does not need to call `emit()` in the happy path. When the command returns, the plugin emits one entry containing the Seyfert fields, the middleware context, the command context, the final outcome, and the breadcrumbs:
+The command does not need to call `emit()` in the happy path. When the command returns, the plugin emits one wide event containing the auto-extracted Seyfert fields, the middleware context, the command context, the final outcome, and `durationMs`:
 
 ```ts
 {
 	message: 'command completed',
-	data: {
-		kind: 'command',
-		command: 'deploy',
-		userId: '123',
-		requestId: '7c5d...',
-		plan: 'pro',
-		projectId: 'web',
-		outcome: 'success',
-		durationMs: 42,
-	},
-	logs: [
-		{ level: 'debug', message: 'command received' },
-		{ level: 'debug', message: 'audit context loaded' },
-		{ level: 'debug', message: 'command options parsing' },
-		{ level: 'info', message: 'deployment queued' },
-	],
+	kind: 'command',
+	command: 'deploy',
+	userId: '123',
+	requestId: '7c5d...',
+	plan: 'pro',
+	projectId: 'web',
+	outcome: 'success',
+	durationMs: 42,
 }
+```
+
+Immediate level entries are separate:
+
+```ts
+{
+	time: '2026-05-29T10:00:00.000Z',
+	level: 'info',
+	message: 'deployment queued',
+}
+```
+
+Use `ctx.logger.currentContext` when an immediate entry should include the accumulated wide-event context.
+
+## Auto-extracted Context
+
+By default, wide events include `kind`, `command` or `customId`, `guildId`, `channelId`, `userId`, and `interactionId`. Do not add these by hand; the plugin already includes them.
+
+`username` and `locale` are not auto-extracted. Add them manually with `ctx.logger.add({ username, locale })` if they matter for a specific bot. `shardId` is off by default; opt in when running sharded deployments:
+
+```ts
+logger({
+	context: {
+		shardId: true,
+		channelId: false,
+	},
+});
 ```
 
 ## Use The Current Logger
@@ -126,11 +149,11 @@ export async function findPlan(userId: string) {
 }
 ```
 
-`useLogger()` reads the logger for the active Seyfert command, component, or modal scope. It contributes to the same final entry as `ctx.logger`, so middleware context, service context, command breadcrumbs, and the final outcome are emitted together.
+`useLogger()` reads the logger for the active Seyfert command, component, or modal scope. `add()` contributes to the same final wide event as `ctx.logger`; level methods emit immediately.
 
 ## Adapters
 
-The default adapter writes to `console`. Use an adapter when you want the final wide event in another logger or event stream.
+The default adapter writes one flat object to `console`. Use an adapter when you want entries in another logger or event stream. On field collisions, user data from `add()` or level-method data wins over envelope and binding fields.
 
 ```ts
 import { createPinoLoggerAdapter, logger } from '@slipher/logger';
@@ -144,32 +167,41 @@ export default logger({
 });
 ```
 
-For evlog, pass a drain pipeline to `createEvlogDrainAdapter()`. The Slipher logger keeps the Seyfert command timeline and evlog receives the final wide event:
+For evlog, initialize evlog with the service envelope and pass evlog middleware options to `createEvlogAdapter()`:
 
 ```sh
 pnpm add evlog
 ```
 
 ```ts
-import type { DrainContext } from 'evlog';
+import { initLogger } from 'evlog';
 import { createFsDrain } from 'evlog/fs';
 import { createDrainPipeline } from 'evlog/pipeline';
-import { createEvlogDrainAdapter, logger } from '@slipher/logger';
+import { createEvlogAdapter, logger } from '@slipher/logger';
 
-const drain = createDrainPipeline<DrainContext>({
+initLogger({
+	env: {
+		service: 'slipher-bot',
+		environment: process.env.NODE_ENV ?? 'development',
+		version: process.env.npm_package_version,
+	},
+	silent: true,
+});
+
+const drain = createDrainPipeline({
 	batch: { size: 50, intervalMs: 5_000 },
 })(createFsDrain());
 
 export default logger({
 	name: 'slipher-bot',
-	adapter: createEvlogDrainAdapter(drain, {
-		environment: process.env.NODE_ENV ?? 'development',
-		version: process.env.npm_package_version,
+	adapter: createEvlogAdapter({
+		drain,
+		redact: true,
 	}),
 });
 ```
 
-Any evlog drain works here, including Axiom, OTLP, Sentry, fs, memory, or your own pipeline.
+Any evlog drain works here, including Axiom, OTLP, Sentry, fs, memory, or your own pipeline. `createEvlogAdapter()` loads `evlog/toolkit` lazily, so `evlog` is only required when this adapter is used. Set `silent: true` in `initLogger()` when drains own the output channel.
 
 ## Outside Seyfert
 
@@ -181,7 +213,7 @@ import { createLogger } from '@slipher/logger';
 const root = createLogger({ name: 'worker', level: 'debug' });
 const event = root.event({ job: 'sync-guild', guildId: '123' });
 
-event.debug('loaded guild');
+event.debug('loaded guild', event.currentContext);
 event.info('synced commands');
 
 await event.emit({ outcome: 'success', message: 'guild sync completed' });

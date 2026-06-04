@@ -1,3 +1,4 @@
+import type { LoggerLike } from '@slipher/types';
 import {
 	type Client,
 	Command,
@@ -8,15 +9,7 @@ import {
 	type UsingClient,
 	type WorkerClient,
 } from 'seyfert';
-import {
-	createEvlogDrainAdapter,
-	type EvlogDrainContext,
-	type EvlogLevel,
-	type LoggerAdapter,
-	type RootLogger,
-	useLogger,
-	type WideEventLogger,
-} from '../src';
+import { createEvlogAdapter, type LoggerAdapter, type RootLogger, useLogger, type WideEventLogger } from '../src';
 
 declare function expectType<T>(value: T): void;
 declare const context: CommandContext;
@@ -30,21 +23,9 @@ expectType<RootLogger>(client.slipherLogger);
 expectType<RootLogger>(httpClient.slipherLogger);
 expectType<RootLogger>(workerClient.slipherLogger);
 expectType<RootLogger>(usingClient.slipherLogger);
+expectType<LoggerLike>({} as WideEventLogger);
 
-const evlogAdapter = createEvlogDrainAdapter(
-	Object.assign(
-		(context: EvlogDrainContext) => {
-			expectType<EvlogLevel>(context.event.level);
-			expectType<string>(context.event.service);
-			expectType<string>(context.event.environment);
-		},
-		{
-			flush() {},
-		},
-	),
-);
-
-expectType<LoggerAdapter>(evlogAdapter);
+expectType<LoggerAdapter>(createEvlogAdapter({ drain() {} }));
 expectType<WideEventLogger>(useLogger());
 
 const auditMiddleware = createMiddleware<{ requestId: string }, CommandContext>(async ({ context, next }) => {

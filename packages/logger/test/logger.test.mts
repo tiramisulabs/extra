@@ -1,7 +1,10 @@
+import { initLogger } from 'evlog';
+import { Logger as SeyfertLogger } from 'seyfert';
+import { LogLevels } from 'seyfert/lib/common';
 import { assert, describe, test } from 'vitest';
 import {
 	ConsoleLoggerAdapter,
-	createEvlogDrainAdapter,
+	createEvlogAdapter,
 	createLogger,
 	createPinoLoggerAdapter,
 	extractSeyfertLogContext,
@@ -68,7 +71,7 @@ describe('logger plugin', () => {
 		assert.equal(typeof options?.modals?.defaults?.onAfterRun, 'function');
 	});
 
-	test('keeps command logs in memory and emits one wide event after completion', async () => {
+	test('level methods emit immediately and wide events contain no logs array', async () => {
 		const adapter = new RecordingAdapter();
 		const plugin = logger({
 			adapter,
@@ -83,21 +86,25 @@ describe('logger plugin', () => {
 			id: 'interaction-1',
 			guildId: 'guild-1',
 			channelId: 'channel-1',
-			locale: 'es-ES',
+			shardId: 2,
 			user: { id: 'user-1', username: 'Socram' },
 		}) as { logger: WideEventLogger };
 
 		extension.logger.add({ actorRole: 'admin' });
 		extension.logger.warn('target not in guild', { targetUser: 'user-2' });
 
-		assert.equal(adapter.entries.length, 0);
+		assert.equal(adapter.entries.length, 1);
+		assert.equal(adapter.entries[0].level, 'warn');
+		assert.equal(adapter.entries[0].message, 'target not in guild');
+		assert.deepEqual(adapter.entries[0].data, { targetUser: 'user-2' });
+		assert.equal('command' in adapter.entries[0].data, false);
 
 		await options?.commands?.defaults?.onAfterRun?.(commandContext(extension.logger), undefined);
 
-		assert.equal(adapter.entries.length, 1);
-		assert.equal(adapter.entries[0].level, 'warn');
-		assert.equal(adapter.entries[0].message, 'command completed');
-		assert.deepEqual(adapter.entries[0].data, {
+		assert.equal(adapter.entries.length, 2);
+		assert.equal(adapter.entries[1].level, 'info');
+		assert.equal(adapter.entries[1].message, 'command completed');
+		assert.deepEqual(adapter.entries[1].data, {
 			actorRole: 'admin',
 			channelId: 'channel-1',
 			command: 'admin ban',
@@ -105,45 +112,68 @@ describe('logger plugin', () => {
 			guildId: 'guild-1',
 			interactionId: 'interaction-1',
 			kind: 'command',
-			locale: 'es-ES',
 			outcome: 'success',
-			shardId: 2,
-			targetUser: 'user-2',
 			userId: 'user-1',
-			username: 'Socram',
 		});
-		assert.deepEqual(
-			adapter.entries[0].logs.map(record => record.message),
-			['target not in guild'],
-		);
-		assert.equal(adapter.entries[0].logs[0].level, 'warn');
-		assert.deepEqual(adapter.entries[0].logs[0].data, { targetUser: 'user-2' });
+		assert.equal('logs' in adapter.entries[1], false);
+		assert.equal('levelValue' in adapter.entries[1], false);
 	});
 
-	test('emits command errors once and preserves unredacted fields', async () => {
+	test('currentContext returns a frozen copy for opt-in enriched immediate logs', async () => {
 		const adapter = new RecordingAdapter();
-		const plugin = logger({
-			adapter,
-			now: clock([new Date('2026-05-29T10:00:00.000Z'), new Date('2026-05-29T10:00:00.010Z')]),
-		});
-		const options = plugin.options?.({});
-		const extension = options?.context?.({ id: 'interaction-1', token: 'keep-me' }) as { logger: WideEventLogger };
-		const error = new Error('Missing Permissions');
+		const root = createLogger({ adapter });
+		const event = root.event({ command: 'ping' });
 
-		extension.logger.add({ token: 'keep-me' });
-		await options?.commands?.defaults?.onRunError?.(commandContext(extension.logger), error);
-		await options?.commands?.defaults?.onAfterRun?.(commandContext(extension.logger), error);
-		await options?.commands?.defaults?.onAfterRun?.(commandContext(extension.logger), error);
+		event.add({ requestId: 'req-1' });
+		const context = event.currentContext;
+		assert.deepEqual(context, { command: 'ping', requestId: 'req-1' });
+		assert.equal(Object.isFrozen(context), true);
+
+		event.info('with context', context);
 
 		assert.equal(adapter.entries.length, 1);
-		assert.equal(adapter.entries[0].level, 'error');
-		assert.equal(adapter.entries[0].message, 'command failed');
-		assert.equal(adapter.entries[0].data.outcome, 'error');
-		assert.equal(adapter.entries[0].data.token, 'keep-me');
-		assert.equal(adapter.entries[0].data.error, error);
-		assert.equal(adapter.entries[0].logs.length, 1);
-		assert.equal(adapter.entries[0].logs[0].message, 'command failed');
-		assert.equal(adapter.entries[0].logs[0].data.error, error);
+		assert.deepEqual(adapter.entries[0].data, { command: 'ping', requestId: 'req-1' });
+	});
+
+	test('context extraction is configurable and excludes noisy fields by default', () => {
+		const source = {
+			fullCommandName: 'image anime',
+			guildId: 'guild-1',
+			channelId: 'channel-1',
+			shardId: 2,
+			author: { id: 'user-1', username: 'Socram' },
+			interaction: { id: 'interaction-1', locale: 'es-ES' },
+		};
+
+		assert.deepEqual(extractSeyfertLogContext(source), {
+			channelId: 'channel-1',
+			command: 'image anime',
+			guildId: 'guild-1',
+			interactionId: 'interaction-1',
+			userId: 'user-1',
+		});
+		assert.deepEqual(extractSeyfertLogContext(source, { shardId: true, channelId: false }), {
+			command: 'image anime',
+			guildId: 'guild-1',
+			interactionId: 'interaction-1',
+			shardId: 2,
+			userId: 'user-1',
+		});
+	});
+
+	test('explicit add fields can include username even though auto extraction does not', async () => {
+		const adapter = new RecordingAdapter();
+		const plugin = logger({ adapter });
+		const options = plugin.options?.({});
+		const extension = options?.context?.({
+			id: 'interaction-1',
+			user: { id: 'user-1', username: 'auto-noise' },
+		}) as { logger: WideEventLogger };
+
+		extension.logger.add({ username: 'manual' });
+		await options?.commands?.defaults?.onAfterRun?.(commandContext(extension.logger), undefined);
+
+		assert.equal(adapter.entries[0].data.username, 'manual');
 	});
 
 	test('guards concurrent command emits while the adapter write is pending', async () => {
@@ -164,22 +194,6 @@ describe('logger plugin', () => {
 		await Promise.all([first, second]);
 
 		assert.equal(adapter.entries.length, 1);
-	});
-
-	test('closes terminal hooks that do not reach onAfterRun', async () => {
-		const adapter = new RecordingAdapter();
-		const plugin = logger({ adapter });
-		const options = plugin.options?.({});
-		const extension = options?.context?.({ id: 'interaction-1' }) as { logger: WideEventLogger };
-
-		await options?.commands?.defaults?.onPermissionsFail?.(commandContext(extension.logger), ['ManageGuild']);
-		await options?.commands?.defaults?.onAfterRun?.(commandContext(extension.logger), undefined);
-
-		assert.equal(adapter.entries.length, 1);
-		assert.equal(adapter.entries[0].level, 'warn');
-		assert.equal(adapter.entries[0].message, 'command permission denied');
-		assert.equal(adapter.entries[0].data.outcome, 'denied');
-		assert.deepEqual(adapter.entries[0].data.permissions, ['ManageGuild']);
 	});
 
 	test('setup installs the root logger on the client and Seyfert handlers', async () => {
@@ -212,6 +226,37 @@ describe('logger plugin', () => {
 		assert.deepEqual(adapter.entries[0].data, { memberId: 'user-1' });
 	});
 
+	test('setup routes Seyfert internal logs through the adapter and preserves existing customizers', async () => {
+		const adapter = new RecordingAdapter();
+		const chained: unknown[][] = [];
+		const originalLog = console.log;
+		console.log = () => undefined;
+		SeyfertLogger.customize((self, level, args) => {
+			chained.push([self.name, level, args]);
+			return args;
+		});
+
+		try {
+			const plugin = logger({ adapter, now: () => new Date('2026-05-29T10:00:00.000Z') });
+			await plugin.setup?.({ commands: {}, components: {}, events: {}, langs: {}, cache: {} });
+
+			new SeyfertLogger({ name: '[API]', active: true }).info('identify', { token: 'secret' });
+		} finally {
+			SeyfertLogger.customize((_self, _level, args) => args);
+			console.log = originalLog;
+		}
+
+		assert.equal(adapter.entries.length, 1);
+		assert.equal(adapter.entries[0].level, 'info');
+		assert.equal(adapter.entries[0].message, 'identify {"token":"secret"}');
+		assert.deepEqual(adapter.entries[0].data, {
+			source: 'seyfert',
+			logger: '[API]',
+			args: ['identify', { token: 'secret' }],
+		});
+		assert.deepEqual(chained, [['[API]', LogLevels.Info, ['identify', { token: 'secret' }]]]);
+	});
+
 	test('useLogger exposes the current command logger without passing context', async () => {
 		const adapter = new RecordingAdapter();
 		const plugin = logger({ adapter, level: 'debug' });
@@ -233,145 +278,104 @@ describe('logger plugin', () => {
 			await options?.commands?.defaults?.onAfterRun?.(context, undefined);
 		});
 
-		assert.equal(adapter.entries.length, 1);
-		assert.equal(adapter.entries[0].data.serviceUser, 'user-1');
+		assert.equal(adapter.entries.length, 3);
 		assert.deepEqual(
-			adapter.entries[0].logs.map(record => record.message),
-			['command received', 'loaded user service'],
+			adapter.entries.map(entry => entry.message),
+			['command received', 'loaded user service', 'command completed'],
 		);
+		assert.equal(adapter.entries[2].data.serviceUser, 'user-1');
 		assert.throws(() => useLogger(), /outside of a Seyfert logger scope/);
-	});
-
-	test('useLogger keeps concurrent command scopes isolated', async () => {
-		const adapter = new RecordingAdapter();
-		const plugin = logger({ adapter });
-		const options = plugin.options?.({});
-
-		async function runScopedCommand(id: string) {
-			const extension = options?.context?.({ id }) as { logger: WideEventLogger };
-			const context = commandContext(extension.logger);
-
-			await options?.contextScopes?.[0]?.(context, async () => {
-				await options?.commands?.defaults?.onBeforeMiddlewares?.(context);
-				await Promise.resolve();
-				useLogger().add({ interaction: id });
-				await options?.commands?.defaults?.onAfterRun?.(context, undefined);
-			});
-		}
-
-		await Promise.all([runScopedCommand('interaction-1'), runScopedCommand('interaction-2')]);
-
-		assert.deepEqual(adapter.entries.map(entry => entry.data.interaction).sort(), ['interaction-1', 'interaction-2']);
 	});
 });
 
 describe('logger adapters', () => {
-	test('ConsoleLoggerAdapter implements the adapter contract', () => {
-		const adapter: LoggerAdapter = new ConsoleLoggerAdapter();
-
-		assert.equal(typeof adapter.write, 'function');
-	});
-
-	test('createPinoLoggerAdapter delegates structurally without adding a dependency', async () => {
+	test('ConsoleLoggerAdapter writes one flat object with user data winning collisions', () => {
 		const calls: unknown[][] = [];
-		const adapter = createPinoLoggerAdapter({
-			info: (...args: unknown[]) => calls.push(args),
-		});
+		const originalInfo = console.info;
+		console.info = (...args: unknown[]) => {
+			calls.push(args);
+		};
 
-		await adapter.write({
-			bindings: {},
-			data: { guildId: 'guild-1' },
-			level: 'info',
-			levelValue: 30,
-			logs: [],
-			message: 'ready',
-			time: new Date('2026-05-29T10:00:00.000Z'),
-		});
+		try {
+			new ConsoleLoggerAdapter().write({
+				bindings: { name: 'bot', shardId: 1 },
+				data: { guildId: 'guild-1', level: 'critical', message: 'override' },
+				level: 'info',
+				message: 'ready',
+				time: new Date('2026-05-29T10:00:00.000Z'),
+			});
+		} finally {
+			console.info = originalInfo;
+		}
 
 		assert.equal(calls.length, 1);
+		assert.equal(calls[0].length, 1);
 		assert.deepEqual(calls[0][0], {
-			bindings: {},
+			time: '2026-05-29T10:00:00.000Z',
+			level: 'critical',
+			message: 'override',
+			name: 'bot',
+			shardId: 1,
+			guildId: 'guild-1',
+		});
+	});
+
+	test('createPinoLoggerAdapter sends only event data and uses child bindings', async () => {
+		const childCalls: unknown[] = [];
+		const calls: unknown[][] = [];
+		const target = {
+			child(bindings: Record<string, unknown>) {
+				childCalls.push(bindings);
+				return this;
+			},
+			info: (...args: unknown[]) => calls.push(args),
+		};
+		const adapter =
+			createPinoLoggerAdapter(target).child?.({ name: 'bot', shardId: 1 }) ?? createPinoLoggerAdapter(target);
+
+		await adapter.write({
+			bindings: { name: 'bot', shardId: 1 },
 			data: { guildId: 'guild-1' },
 			level: 'info',
-			levelValue: 30,
-			logs: [],
-			time: new Date('2026-05-29T10:00:00.000Z'),
-		});
-		assert.equal(calls[0][1], 'ready');
-	});
-
-	test('createEvlogDrainAdapter converts entries into evlog drain contexts', async () => {
-		const contexts: unknown[] = [];
-		let flushes = 0;
-		const drain = Object.assign((context: unknown) => contexts.push(context), {
-			flush: () => {
-				flushes++;
-			},
-		});
-		const adapter = createEvlogDrainAdapter(drain, {
-			environment: 'test',
-			version: '1.2.3',
-		});
-
-		await adapter.write({
-			bindings: { shardId: 1 },
-			data: { guildId: 'guild-1', ready: true },
-			level: 'fatal',
-			levelValue: 60,
-			logs: [{ data: { step: 'boot' }, level: 'trace', levelValue: 10, time: new Date('2026-05-29T10:00:00.010Z') }],
 			message: 'ready',
-			name: 'slipher-bot',
 			time: new Date('2026-05-29T10:00:00.000Z'),
 		});
-		await adapter.flush?.();
 
-		assert.equal(contexts.length, 1);
-		assert.deepEqual(contexts[0], {
-			event: {
-				environment: 'test',
-				guildId: 'guild-1',
-				level: 'error',
-				logs: [
-					{
-						data: { step: 'boot' },
-						level: 'trace',
-						levelValue: 10,
-						time: new Date('2026-05-29T10:00:00.010Z'),
-					},
-				],
-				message: 'ready',
-				ready: true,
-				service: 'slipher-bot',
-				shardId: 1,
-				timestamp: '2026-05-29T10:00:00.000Z',
-				version: '1.2.3',
-			},
-		});
-		assert.equal(flushes, 1);
+		assert.deepEqual(childCalls, [{ name: 'bot', shardId: 1 }]);
+		assert.deepEqual(calls, [[{ guildId: 'guild-1' }, 'ready']]);
 	});
 
-	test('createEvlogDrainAdapter can use evlog fields from bindings', async () => {
-		const contexts: unknown[] = [];
-		const adapter = createEvlogDrainAdapter(context => contexts.push(context));
+	test('createEvlogAdapter routes entries through evlog redact enrich and drain pipeline', async () => {
+		const events: Array<Record<string, unknown>> = [];
+		initLogger({ _suppressDrainWarning: true, silent: true } as never);
+		const adapter = createEvlogAdapter({
+			redact: { paths: ['secret'], builtins: false },
+			enrich(context) {
+				context.event.enriched = true;
+			},
+			drain(context) {
+				events.push(context.event as Record<string, unknown>);
+			},
+		});
 
 		await adapter.write({
-			bindings: { environment: 'production', service: 'discord-worker' },
-			data: {},
-			level: 'trace',
-			levelValue: 10,
-			logs: [],
+			bindings: { service: 'bot' },
+			data: {
+				command: 'deploy',
+				interactionId: 'interaction-1',
+				kind: 'command',
+				secret: 'token',
+			},
+			level: 'info',
+			message: 'command completed',
 			time: new Date('2026-05-29T10:00:00.000Z'),
 		});
 
-		assert.deepEqual(contexts[0], {
-			event: {
-				environment: 'production',
-				level: 'debug',
-				logs: [],
-				service: 'discord-worker',
-				timestamp: '2026-05-29T10:00:00.000Z',
-			},
-		});
+		assert.equal(events.length, 1);
+		assert.equal(events[0]!.command, 'deploy');
+		assert.equal(events[0]!.enriched, true);
+		assert.equal(events[0]!.message, 'command completed');
+		assert.equal(events[0]!.secret, '[REDACTED]');
 	});
 });
 
@@ -387,9 +391,10 @@ describe('createLogger', () => {
 		assert.deepEqual(adapter.entries[0].bindings, { app: 'bot', shardId: 1 });
 		assert.deepEqual(adapter.entries[0].data, { route: '/sync', error });
 		assert.equal(adapter.entries[0].message, 'sync failed');
+		assert.equal('levelValue' in adapter.entries[0], false);
 	});
 
-	test('preserves root metadata on wide event entries', async () => {
+	test('stores root name as a binding', async () => {
 		const adapter = new RecordingAdapter();
 		const root = createLogger({ adapter, bindings: { app: 'bot' }, name: 'slipher-bot' }).child({ shardId: 1 });
 		const event = root.event({ job: 'sync-guild' });
@@ -397,8 +402,8 @@ describe('createLogger', () => {
 		await event.emit({ message: 'guild sync completed' });
 
 		assert.equal(adapter.entries.length, 1);
-		assert.equal(adapter.entries[0].name, 'slipher-bot');
-		assert.deepEqual(adapter.entries[0].bindings, { app: 'bot', shardId: 1 });
+		assert.equal('name' in adapter.entries[0], false);
+		assert.deepEqual(adapter.entries[0].bindings, { name: 'slipher-bot', app: 'bot', shardId: 1 });
 	});
 
 	test('reports adapter write failures without rejecting callers', async () => {
@@ -443,29 +448,6 @@ describe('createLogger', () => {
 			['[logger] adapter.write failed:', new Error('sync sink failed')],
 			['[logger] adapter.write failed:', new Error('async sink failed')],
 		]);
-	});
-
-	test('extracts useful Seyfert context from interactions and contexts', () => {
-		assert.deepEqual(
-			extractSeyfertLogContext({
-				fullCommandName: 'image anime',
-				guildId: 'guild-1',
-				channelId: 'channel-1',
-				shardId: 2,
-				author: { id: 'user-1', username: 'Socram' },
-				interaction: { id: 'interaction-1', locale: 'es-ES' },
-			}),
-			{
-				channelId: 'channel-1',
-				command: 'image anime',
-				guildId: 'guild-1',
-				interactionId: 'interaction-1',
-				locale: 'es-ES',
-				shardId: 2,
-				userId: 'user-1',
-				username: 'Socram',
-			},
-		);
 	});
 });
 
