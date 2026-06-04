@@ -21,6 +21,40 @@ const client = new Client({
 
 The plugin attaches a `CooldownManager` to the client (`client.cooldown`) and exposes it on every interaction context (`ctx.cooldown`). Storage is backed by `client.cache`.
 
+## TypeScript Setup
+
+The package augments Seyfert's types via `declare module 'seyfert'` in `src/seyfert.ts` (loaded as a side-effect import by `src/index.ts`). For TypeScript to pick up `client.cooldown` / `ctx.cooldown` and the `cooldown?: CooldownProps` field on commands, the augmentation file must be in the compilation graph.
+
+In practice this means **at least one file in your project must import from `@slipher/cooldown`** — for example the file where you register the plugin:
+
+```ts
+import { Client } from 'seyfert';
+import { cooldown } from '@slipher/cooldown'; // <- side-effect loads the augmentations
+
+const client = new Client({
+  plugins: [cooldown()],
+});
+```
+
+If you only register the plugin via configuration and never import the package in any TypeScript file (rare, but possible with split bot/loader setups), add a one-line side-effect import anywhere in your sources:
+
+```ts
+// src/types/slipher.d.ts (or any .ts/.d.ts file in your build)
+import '@slipher/cooldown';
+```
+
+Alternatively, list the package in your `tsconfig.json` so it is always included:
+
+```json
+{
+  "compilerOptions": {
+    "types": ["@slipher/cooldown"]
+  }
+}
+```
+
+Once the augmentation is loaded, `client.cooldown`, `ctx.cooldown`, and `cooldown?: CooldownProps` on every command class are typed automatically across `Client`, `HttpClient`, `WorkerClient`, `UsingClient` and `ExtendContext`.
+
 ## Declaring a Cooldown
 
 The simplest way is the `@Cooldown` class decorator, with typed shortcuts per scope.
