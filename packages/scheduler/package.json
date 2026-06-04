@@ -23,11 +23,11 @@
 		"prepublish": "pnpm build"
 	},
 	"dependencies": {
-		"croner": "^9.1.0",
-		"seyfert": "4.1.0"
+		"croner": "^9.1.0"
 	},
 	"peerDependencies": {
-		"bullmq": "^5.0.0"
+		"bullmq": "^5.0.0",
+		"seyfert": ">=4.3.0-0"
 	},
 	"peerDependenciesMeta": {
 		"bullmq": {
@@ -36,6 +36,7 @@
 	},
 	"devDependencies": {
 		"@types/node": "^25.0.10",
+		"seyfert": "4.3.1-dev-26915701713.0",
 		"typescript": "^5.9.3"
 	}
 }
