@@ -3,15 +3,15 @@ import type { QueuesRegistry } from './index';
 
 declare module 'seyfert' {
 	interface Client<Ready extends boolean = boolean> {
-		queues: QueuesRegistry;
+		queues?: QueuesRegistry;
 	}
 
 	interface HttpClient {
-		queues: QueuesRegistry;
+		queues?: QueuesRegistry;
 	}
 
 	interface WorkerClient<Ready extends boolean = boolean> {
-		queues: QueuesRegistry;
+		queues?: QueuesRegistry;
 	}
 
 	interface ExtendContext {
@@ -19,6 +19,6 @@ declare module 'seyfert' {
 	}
 
 	interface UsingClient {
-		queues: QueuesRegistry;
+		queues?: QueuesRegistry;
 	}
 }

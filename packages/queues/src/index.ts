@@ -1,22 +1,30 @@
 import { createRequire } from 'node:module';
+import { type DurationInput, parseDuration } from '@slipher/internal';
 import './seyfert';
 
 export type Awaitable<T> = T | Promise<T>;
-export type DurationInput = number | string;
 export type JobStatus = 'waiting' | 'delayed' | 'active' | 'completed' | 'failed';
 export type QueueEventName = keyof QueueEventMap<unknown, unknown>;
+export type WorkerEventName = keyof QueueWorkerEventMap<unknown, unknown>;
 export type QueueListener<TArgs extends readonly unknown[]> = (...args: TArgs) => void;
-export type QueueProcessor<TData, TResult> = (job: QueueJob<TData, TResult>) => Awaitable<TResult>;
+export type QueueProcessor<TData, TResult> = (job: QueueJob<TData, TResult, string>) => Awaitable<TResult>;
+export type QueueListenerErrorReporter = (event: string, error: unknown) => void;
+export interface BackoffOptions {
+	type: string;
+	delay?: DurationInput;
+	[key: string]: unknown;
+}
 export type RetryDelayResolver<TData, TResult> =
 	| DurationInput
+	| BackoffOptions
 	| ((job: QueueJob<TData, TResult>, error: unknown) => DurationInput);
 
-export interface JobOptions {
+export interface JobOptions<TData = unknown, TResult = unknown> {
 	id?: string;
-	name?: string;
 	delay?: DurationInput;
 	attempts?: number;
 	priority?: number;
+	retryDelay?: RetryDelayResolver<TData, TResult>;
 }
 
 export interface QueueOptions<TData = unknown, TResult = unknown> {
@@ -26,6 +34,7 @@ export interface QueueOptions<TData = unknown, TResult = unknown> {
 	autostart?: boolean;
 	now?: () => number;
 	idGenerator?: () => string;
+	reportListenerError?: QueueListenerErrorReporter;
 }
 
 export interface RegisteredQueues {}
@@ -36,10 +45,16 @@ export interface QueueRegistration<TData = unknown, TResult = unknown> {
 }
 
 export type RegisteredQueueName = Extract<keyof RegisteredQueues, string>;
-export type QueueData<TName extends string> = TName extends RegisteredQueueName
+type QueueRegisteredData<TName extends string> = TName extends RegisteredQueueName
 	? RegisteredQueues[TName] extends { data: infer TData }
 		? TData
 		: unknown
+	: unknown;
+type QueueJobName<TData> = TData extends { job: infer TJob extends string } ? TJob : never;
+type QueuePayloadFor<TData, TJob extends string> = TData extends { job: TJob } ? Omit<TData, 'job'> : never;
+type QueuePayloadUnion<TData> = TData extends { job: string } ? Omit<TData, 'job'> : TData;
+export type QueueData<TName extends string> = TName extends RegisteredQueueName
+	? QueuePayloadUnion<QueueRegisteredData<TName>>
 	: unknown;
 export type QueueResult<TName extends string> = TName extends RegisteredQueueName
 	? RegisteredQueues[TName] extends { result: infer TResult }
@@ -47,7 +62,19 @@ export type QueueResult<TName extends string> = TName extends RegisteredQueueNam
 		: unknown
 	: unknown;
 export type QueueOf<TName extends string> = Queue<QueueData<TName>, QueueResult<TName>>;
-export type QueueJobOf<TName extends string> = QueueJob<QueueData<TName>, QueueResult<TName>>;
+export type JobNameOf<TName extends string> = QueueJobName<QueueRegisteredData<TName>>;
+export type QueueJobOf<TName extends string> =
+	JobNameOf<TName> extends never
+		? QueueJob<QueueData<TName>, QueueResult<TName>>
+		: {
+				[TJob in JobNameOf<TName>]: QueueJob<
+					QueuePayloadFor<QueueRegisteredData<TName>, TJob>,
+					QueueResult<TName>,
+					TJob
+				> & {
+					readonly name: TJob;
+				};
+			}[JobNameOf<TName>];
 export type QueueOptionsOf<TName extends string> = QueueOptions<QueueData<TName>, QueueResult<TName>>;
 
 export interface QueueCounts {
@@ -70,7 +97,7 @@ export interface QueueJobSnapshot<TData, TResult = unknown> {
 	createdAt: Date;
 	updatedAt: Date;
 	runAt: Date;
-	name?: string;
+	name: string;
 	result?: TResult;
 	error?: unknown;
 }
@@ -84,9 +111,36 @@ export interface QueueEventMap<TData, TResult> {
 	idle: [];
 }
 
+export interface QueueWorkerEventMap<TData, TResult> {
+	active: [job: QueueJob<TData, TResult>];
+	completed: [job: QueueJob<TData, TResult>, result: TResult];
+	failed: [job: QueueJob<TData, TResult>, error: unknown];
+	retrying: [job: QueueJob<TData, TResult>, error: unknown, delay: number];
+	idle: [];
+}
+
+export interface QueueGlobalEventMap<TData, TResult> {
+	added: [job: QueueJob<TData, TResult>];
+	completed: [job: QueueJob<TData, TResult>, result: TResult];
+	failed: [job: QueueJob<TData, TResult>, error: unknown];
+}
+
 export interface Queue<TData = unknown, TResult = unknown> {
 	readonly name: string;
-	add(data: TData, options?: JobOptions): Awaitable<QueueJob<TData, TResult>>;
+	add<TJobName extends QueueJobName<TData>>(
+		name: TJobName,
+		data: QueuePayloadFor<TData, TJobName>,
+		options?: JobOptions<TData, TResult>,
+	): Awaitable<QueueJob<QueuePayloadFor<TData, TJobName>, TResult, TJobName>>;
+	add(
+		data: QueueJobName<TData> extends never ? TData : never,
+		options?: JobOptions<TData, TResult>,
+	): Awaitable<QueueJob<TData, TResult>>;
+	add<TDynamicData = unknown, TDynamicResult = unknown>(
+		name: string,
+		data: TDynamicData,
+		options?: JobOptions<TDynamicData, TDynamicResult>,
+	): Awaitable<QueueJob<TDynamicData, TDynamicResult, string>>;
 	process(processor: QueueProcessor<TData, TResult>): this;
 	start(): this;
 	pause(): this;
@@ -107,6 +161,7 @@ export interface Queue<TData = unknown, TResult = unknown> {
 export interface QueueDriver {
 	get<TName extends RegisteredQueueName>(name: TName, options?: QueueOptionsOf<TName>): QueueOf<TName>;
 	get<TData = unknown, TResult = unknown>(name: string, options?: QueueOptions<TData, TResult>): Queue<TData, TResult>;
+	setup?(client?: QueuesClientLike): Awaitable<void>;
 	close?(): Awaitable<void>;
 }
 
@@ -114,13 +169,12 @@ export interface CreateQueuesOptions {
 	driver: QueueDriver;
 	queueDefaults?: QueueOptions;
 	processors?: readonly QueueConstructor[];
-	producers?: readonly QueueConstructor[];
 	resolve?: <T extends object>(target: QueueConstructor<T>) => T;
+	reportListenerError?: QueueListenerErrorReporter;
 }
 
 export interface QueuesRegisterOptions {
 	processors?: readonly QueueConstructor[];
-	producers?: readonly QueueConstructor[];
 }
 
 export interface QueuesPluginOptions extends CreateQueuesOptions {}
@@ -130,6 +184,7 @@ export interface QueuesPlugin {
 	registry: QueuesRegistry;
 	options?(current: Readonly<Record<string, unknown>>): QueuesPluginOptionsFragment;
 	setup?(client: QueuesClientLike): Awaitable<void>;
+	teardown?(client: QueuesClientLike): Awaitable<void>;
 }
 
 export interface QueuesPluginOptionsFragment {
@@ -137,6 +192,7 @@ export interface QueuesPluginOptionsFragment {
 }
 
 export interface QueuesClientLike {
+	initialized?: boolean;
 	queues?: unknown;
 }
 
@@ -145,6 +201,7 @@ export interface PersistentQueueOptions {
 	connection?: unknown;
 	prefix?: string;
 	queueOptions?: Record<string, unknown>;
+	defaultJobOptions?: Record<string, unknown>;
 	workerOptions?: Record<string, unknown>;
 }
 
@@ -155,6 +212,7 @@ export interface BullMQModuleLike {
 		processor: (job: BullJobLike) => Awaitable<unknown>,
 		options?: Record<string, unknown>,
 	) => BullWorkerLike;
+	QueueEvents?: new (name: string, options?: Record<string, unknown>) => BullQueueEventsLike;
 }
 
 export interface BullQueueLike {
@@ -172,6 +230,12 @@ export interface BullWorkerLike {
 	close?(): Awaitable<void>;
 }
 
+export interface BullQueueEventsLike {
+	on?(event: string, listener: (...args: unknown[]) => void): unknown;
+	off?(event: string, listener: (...args: unknown[]) => void): unknown;
+	close?(): Awaitable<void>;
+}
+
 export interface BullJobLike {
 	id?: string | number;
 	name?: string;
@@ -181,6 +245,7 @@ export interface BullJobLike {
 		delay?: number;
 		jobId?: string;
 		priority?: number;
+		backoff?: unknown;
 	};
 	attemptsMade?: number;
 	timestamp?: number;
@@ -192,7 +257,6 @@ export interface BullJobLike {
 
 export type QueueConstructor<T = object> = new (...args: unknown[]) => T;
 type QueueMethod = string | symbol;
-type QueueProcessHandler = (job: QueueJob<unknown, unknown>) => unknown;
 type DynamicQueueName<TName extends string> = string extends TName
 	? TName
 	: TName extends RegisteredQueueName
@@ -200,7 +264,7 @@ type DynamicQueueName<TName extends string> = string extends TName
 		: TName;
 
 interface QueueEntry<TData, TResult> {
-	job: QueueJob<TData, TResult>;
+	job: QueueJob<TData, TResult, string>;
 	sequence: number;
 }
 
@@ -209,41 +273,17 @@ interface ProcessorMetadata {
 	options?: QueueOptions;
 }
 
-interface ProcessMetadata {
-	name?: string;
-	method: QueueMethod;
-}
-
 interface EventMetadata {
-	event: QueueEventName;
+	event: QueueEventName | WorkerEventName;
 	method: QueueMethod;
+	scope: 'queue' | 'worker';
 }
-
-const durationPattern = /(-?\d+(?:\.\d+)?)\s*(ms|milliseconds?|s|sec|seconds?|m|min|minutes?|h|hr|hours?)/gi;
-const durationUnits = new Map<string, number>([
-	['ms', 1],
-	['millisecond', 1],
-	['milliseconds', 1],
-	['s', 1000],
-	['sec', 1000],
-	['second', 1000],
-	['seconds', 1000],
-	['m', 60_000],
-	['min', 60_000],
-	['minute', 60_000],
-	['minutes', 60_000],
-	['h', 3_600_000],
-	['hr', 3_600_000],
-	['hour', 3_600_000],
-	['hours', 3_600_000],
-]);
 
 const processorMetadata = new WeakMap<Function, ProcessorMetadata>();
-const processMetadata = new WeakMap<object, ProcessMetadata[]>();
+const processMetadata = new WeakMap<object, QueueMethod[]>();
 const eventMetadata = new WeakMap<object, EventMetadata[]>();
-const injectionMetadata = new WeakMap<Function, Map<number, string>>();
 
-export class QueueJob<TData, TResult = unknown> {
+export class QueueJob<TData, TResult = unknown, TName extends string = string> {
 	status: JobStatus;
 	attemptsMade = 0;
 	updatedAt: Date;
@@ -259,7 +299,7 @@ export class QueueJob<TData, TResult = unknown> {
 		readonly priority: number,
 		readonly createdAt: Date,
 		runAt: Date,
-		readonly name?: string,
+		readonly name: TName,
 	) {
 		this.runAt = runAt;
 		this.updatedAt = createdAt;
@@ -288,6 +328,8 @@ export class QueueJob<TData, TResult = unknown> {
 export class QueueEmitter<TData, TResult> {
 	private readonly listeners = new Map<QueueEventName, Set<QueueListener<readonly unknown[]>>>();
 
+	constructor(private readonly reportListenerError: QueueListenerErrorReporter = defaultReportListenerError) {}
+
 	on<TEvent extends keyof QueueEventMap<TData, TResult>>(
 		event: TEvent,
 		listener: QueueListener<QueueEventMap<TData, TResult>[TEvent]>,
@@ -310,7 +352,13 @@ export class QueueEmitter<TData, TResult> {
 		event: TEvent,
 		...args: QueueEventMap<TData, TResult>[TEvent]
 	): void {
-		for (const listener of this.listeners.get(event) ?? []) listener(...args);
+		for (const listener of this.listeners.get(event) ?? []) {
+			try {
+				listener(...args);
+			} catch (error) {
+				this.reportListenerError(String(event), error);
+			}
+		}
 	}
 
 	removeAllListeners(): void {
@@ -341,7 +389,7 @@ export class MemoryQueue<TData = unknown, TResult = unknown>
 		readonly name: string,
 		options: QueueOptions<TData, TResult> = {},
 	) {
-		super();
+		super(options.reportListenerError);
 		this.concurrency = options.concurrency ?? 1;
 		this.defaultAttempts = options.attempts ?? 1;
 		this.retryDelay = options.retryDelay ?? 0;
@@ -357,7 +405,22 @@ export class MemoryQueue<TData = unknown, TResult = unknown>
 		this.running = options.autostart ?? true;
 	}
 
-	add(data: TData, options: JobOptions = {}): QueueJob<TData, TResult> {
+	add<TJobName extends QueueJobName<TData>>(
+		name: TJobName,
+		data: QueuePayloadFor<TData, TJobName>,
+		options?: JobOptions<TData, TResult>,
+	): QueueJob<QueuePayloadFor<TData, TJobName>, TResult, TJobName>;
+	add(
+		data: QueueJobName<TData> extends never ? TData : never,
+		options?: JobOptions<TData, TResult>,
+	): QueueJob<TData, TResult>;
+	add<TDynamicData = unknown, TDynamicResult = unknown>(
+		name: string,
+		data: TDynamicData,
+		options?: JobOptions<TDynamicData, TDynamicResult>,
+	): QueueJob<TDynamicData, TDynamicResult, string>;
+	add(nameOrData: unknown, dataOrOptions?: unknown, maybeOptions?: JobOptions): QueueJob<any, any, string> {
+		const { data, name, options } = parseQueueAddArgs<TData, TResult>(nameOrData, dataOrOptions, maybeOptions);
 		const now = this.now();
 		const delay = parseDuration(options.delay ?? 0);
 		const attempts = options.attempts ?? this.defaultAttempts;
@@ -365,7 +428,7 @@ export class MemoryQueue<TData = unknown, TResult = unknown>
 		const jobId = options.id ?? this.generateJobId();
 		if (this.getJob(jobId)) throw new RangeError(`Job with id "${jobId}" already exists.`);
 
-		const job = new QueueJob<TData, TResult>(
+		const job = new QueueJob<TData, TResult, string>(
 			this.name,
 			jobId,
 			data,
@@ -373,7 +436,7 @@ export class MemoryQueue<TData = unknown, TResult = unknown>
 			options.priority ?? 0,
 			new Date(now),
 			new Date(now + delay),
-			options.name,
+			name,
 		);
 
 		this.idle = false;
@@ -508,15 +571,19 @@ export class MemoryQueue<TData = unknown, TResult = unknown>
 		job.updatedAt = new Date(this.now());
 		this.activeJobs.set(job.id, job);
 		this.emit('active', job);
+		let completedResult: TResult | undefined;
+		let completed = false;
+		let failedError: unknown;
 
 		try {
 			const result = await this.processor(job);
+			completedResult = result;
+			completed = true;
 			job.error = undefined;
 			job.result = result;
 			job.status = 'completed';
 			job.updatedAt = new Date(this.now());
 			this.completedJobs.set(job.id, job);
-			this.emit('completed', job, result);
 		} catch (error) {
 			job.error = error;
 			job.updatedAt = new Date(this.now());
@@ -526,10 +593,11 @@ export class MemoryQueue<TData = unknown, TResult = unknown>
 				try {
 					delay = this.resolveRetryDelay(job, error);
 				} catch (retryError) {
-					this.failJob(
-						job,
-						new AggregateError([error, retryError], 'Queue job failed and retry delay resolution also failed.'),
+					failedError = new AggregateError(
+						[error, retryError],
+						'Queue job failed and retry delay resolution also failed.',
 					);
+					this.failJob(job, failedError);
 					return;
 				}
 
@@ -539,16 +607,19 @@ export class MemoryQueue<TData = unknown, TResult = unknown>
 				this.enqueue(job);
 			} else {
 				this.failJob(job, error);
+				failedError = error;
 			}
 		} finally {
 			this.activeJobs.delete(job.id);
+			if (completed) this.emit('completed', job, completedResult as TResult);
+			else if (failedError !== undefined) this.emit('failed', job, failedError);
 			this.schedule();
 		}
 	}
 
 	private resolveRetryDelay(job: QueueJob<TData, TResult>, error: unknown): number {
 		const delay = typeof this.retryDelay === 'function' ? this.retryDelay(job, error) : this.retryDelay;
-		return parseDuration(delay);
+		return resolveRetryDelayValue(delay, job.attemptsMade);
 	}
 
 	private failJob(job: QueueJob<TData, TResult>, error: unknown): void {
@@ -556,7 +627,6 @@ export class MemoryQueue<TData = unknown, TResult = unknown>
 		job.status = 'failed';
 		job.updatedAt = new Date(this.now());
 		this.failedJobs.set(job.id, job);
-		this.emit('failed', job, error);
 	}
 
 	private generateJobId(): string {
@@ -604,9 +674,11 @@ export class PersistentQueue<TData = unknown, TResult = unknown>
 	extends QueueEmitter<TData, TResult>
 	implements Queue<TData, TResult>
 {
-	private readonly queue: BullQueueLike;
+	private queue?: BullQueueLike;
 	private worker?: BullWorkerLike;
+	private queueEvents?: BullQueueEventsLike;
 	private processor?: QueueProcessor<TData, TResult>;
+	private state: 'pending' | 'ready' | 'closed' = 'pending';
 
 	constructor(
 		readonly name: string,
@@ -614,54 +686,83 @@ export class PersistentQueue<TData = unknown, TResult = unknown>
 		private readonly baseOptions: PersistentQueueOptions,
 		private readonly options: QueueOptions<TData, TResult> = {},
 	) {
-		super();
-		this.queue = new bullmq.Queue(name, this.baseQueueOptions());
+		super(options.reportListenerError);
 	}
 
-	async add(data: TData, options: JobOptions = {}): Promise<QueueJob<TData, TResult>> {
-		const jobName = options.name ?? 'default';
-		const bullOptions = stripUndefined({
-			...this.baseOptions.queueOptions,
-			attempts: options.attempts ?? this.options.attempts,
-			delay: parseDuration(options.delay ?? 0),
-			jobId: options.id,
-			priority: options.priority,
-		});
-		const bullJob = await this.queue.add(jobName, data, bullOptions);
-		const job = this.fromBullJob(bullJob, data, options);
+	setup(client?: QueuesClientLike): void {
+		if (this.state === 'ready') return;
+		this.rejectUnsupportedRetryDelay(this.options.retryDelay);
+		this.state = 'ready';
+		this.queue = new this.bullmq.Queue(this.name, this.baseQueueOptions());
+		if (this.bullmq.QueueEvents) {
+			this.queueEvents = new this.bullmq.QueueEvents(this.name, this.baseQueueOptions());
+			this.wireQueueEvents();
+		}
+		if (this.processor) this.createWorker(client);
+	}
+
+	add<TJobName extends QueueJobName<TData>>(
+		name: TJobName,
+		data: QueuePayloadFor<TData, TJobName>,
+		options?: JobOptions<TData, TResult>,
+	): Promise<QueueJob<QueuePayloadFor<TData, TJobName>, TResult, TJobName>>;
+	add(
+		data: QueueJobName<TData> extends never ? TData : never,
+		options?: JobOptions<TData, TResult>,
+	): Promise<QueueJob<TData, TResult>>;
+	add<TDynamicData = unknown, TDynamicResult = unknown>(
+		name: string,
+		data: TDynamicData,
+		options?: JobOptions<TDynamicData, TDynamicResult>,
+	): Promise<QueueJob<TDynamicData, TDynamicResult, string>>;
+	async add(
+		nameOrData: unknown,
+		dataOrOptions?: unknown,
+		maybeOptions?: JobOptions,
+	): Promise<QueueJob<any, any, string>> {
+		const queue = this.requireQueue();
+		const { data, name, options } = parseQueueAddArgs<TData, TResult>(nameOrData, dataOrOptions, maybeOptions);
+		this.rejectUnsupportedRetryDelay(options.retryDelay);
+		const bullOptions = this.buildJobOptions(options);
+		const bullJob = await queue.add(name, data, bullOptions);
+		const job = this.fromBullJob(bullJob, data, name, options);
 		this.emit('added', job);
 		return job;
 	}
 
 	process(processor: QueueProcessor<TData, TResult>): this {
 		this.processor = processor;
-		this.worker?.close?.();
-		this.worker = new this.bullmq.Worker(this.name, job => this.processBullJob(job), this.baseWorkerOptions());
+		if (this.state === 'ready') this.createWorker();
 		return this;
 	}
 
 	start(): this {
-		void this.queue.resume?.();
+		void this.requireQueue().resume?.();
 		return this;
 	}
 
 	pause(): this {
-		void this.queue.pause?.();
+		void this.requireQueue().pause?.();
 		return this;
 	}
 
 	async clear(): Promise<void> {
-		await this.queue.obliterate?.({ force: true });
+		await this.requireQueue().obliterate?.({ force: true });
 	}
 
 	async close(): Promise<void> {
 		await this.worker?.close?.();
-		await this.queue.close?.();
+		await this.queueEvents?.close?.();
+		await this.queue?.close?.();
+		this.worker = undefined;
+		this.queueEvents = undefined;
+		this.queue = undefined;
+		this.state = 'closed';
 		this.removeAllListeners();
 	}
 
 	async counts(): Promise<QueueCounts> {
-		const counts = (await this.queue.getJobCounts?.()) ?? {};
+		const counts = (await this.requireQueue().getJobCounts?.()) ?? {};
 		const waiting = counts.waiting ?? 0;
 		const delayed = counts.delayed ?? 0;
 		const active = counts.active ?? 0;
@@ -679,7 +780,7 @@ export class PersistentQueue<TData = unknown, TResult = unknown>
 	}
 
 	async getJob(id: string): Promise<QueueJob<TData, TResult> | undefined> {
-		const bullJob = await this.queue.getJob?.(id);
+		const bullJob = await this.requireQueue().getJob?.(id);
 		return bullJob ? this.fromBullJob(bullJob) : undefined;
 	}
 
@@ -689,27 +790,41 @@ export class PersistentQueue<TData = unknown, TResult = unknown>
 		const job = this.fromBullJob(bullJob);
 		job.status = 'active';
 		this.emit('active', job);
+		let completedResult: TResult | undefined;
+		let completed = false;
+		let failedError: unknown;
 
 		try {
 			const result = await this.processor(job);
+			completedResult = result;
+			completed = true;
 			job.status = 'completed';
 			job.result = result;
 			job.updatedAt = new Date();
-			this.emit('completed', job, result);
 			return result;
 		} catch (error) {
+			failedError = error;
 			job.status = 'failed';
 			job.error = error;
 			job.updatedAt = new Date();
-			this.emit('failed', job, error);
 			throw error;
+		} finally {
+			if (!this.queueEvents) {
+				if (completed) this.emit('completed', job, completedResult as TResult);
+				else if (failedError !== undefined) this.emit('failed', job, failedError);
+			}
 		}
 	}
 
-	private fromBullJob(bullJob: BullJobLike, data?: TData, options: JobOptions = {}): QueueJob<TData, TResult> {
+	private fromBullJob(
+		bullJob: BullJobLike,
+		data?: TData,
+		name = bullJob.name ?? 'default',
+		options: JobOptions<TData, TResult> = {},
+	): QueueJob<TData, TResult, string> {
 		const createdAt = new Date(bullJob.timestamp ?? Date.now());
 		const runAt = new Date(createdAt.getTime() + (bullJob.opts?.delay ?? parseDuration(options.delay ?? 0)));
-		const job = new QueueJob<TData, TResult>(
+		const job = new QueueJob<TData, TResult, string>(
 			this.name,
 			String(options.id ?? bullJob.id ?? bullJob.opts?.jobId ?? ''),
 			(data ?? bullJob.data) as TData,
@@ -717,7 +832,7 @@ export class PersistentQueue<TData = unknown, TResult = unknown>
 			options.priority ?? bullJob.opts?.priority ?? 0,
 			createdAt,
 			runAt,
-			options.name ?? bullJob.name,
+			name,
 		);
 		job.attemptsMade = bullJob.attemptsMade ?? 0;
 		job.updatedAt = new Date(bullJob.finishedOn ?? bullJob.processedOn ?? bullJob.timestamp ?? Date.now());
@@ -736,6 +851,8 @@ export class PersistentQueue<TData = unknown, TResult = unknown>
 		return stripUndefined({
 			connection: this.baseOptions.connection,
 			prefix: this.baseOptions.prefix,
+			...this.baseOptions.queueOptions,
+			defaultJobOptions: this.baseOptions.defaultJobOptions,
 		});
 	}
 
@@ -746,6 +863,103 @@ export class PersistentQueue<TData = unknown, TResult = unknown>
 			prefix: this.baseOptions.prefix,
 			...this.baseOptions.workerOptions,
 		});
+	}
+
+	private buildJobOptions(options: JobOptions<TData, TResult>): Record<string, unknown> {
+		const retryDelay = options.retryDelay ?? this.options.retryDelay;
+		const backoff = retryDelay === undefined ? undefined : this.resolvePersistentBackoff(retryDelay);
+		return stripUndefined({
+			...this.baseOptions.defaultJobOptions,
+			attempts: options.attempts ?? this.options.attempts,
+			delay: parseDuration(options.delay ?? 0),
+			jobId: options.id,
+			priority: options.priority,
+			backoff,
+		});
+	}
+
+	private resolvePersistentBackoff(retryDelay: RetryDelayResolver<TData, TResult>): unknown {
+		if (typeof retryDelay === 'function') this.rejectUnsupportedRetryDelay(retryDelay);
+		if (typeof retryDelay === 'object') return normalizeBackoffOptions(retryDelay);
+		return { type: 'fixed', delay: parseDuration(retryDelay) };
+	}
+
+	private rejectUnsupportedRetryDelay(
+		retryDelay: RetryDelayResolver<TData, TResult> | undefined,
+	): asserts retryDelay is Exclude<RetryDelayResolver<TData, TResult>, Function> {
+		if (typeof retryDelay !== 'function') return;
+		throw new Error(
+			`@slipher/queues persistent driver does not support function-form retryDelay on queue "${this.name}". Use a static duration or a BullMQ backoff config object.`,
+		);
+	}
+
+	private createWorker(client?: QueuesClientLike): void {
+		void this.worker?.close?.();
+		this.worker = new this.bullmq.Worker(
+			this.name,
+			job => {
+				if (client?.initialized === false) {
+					defaultReportListenerError(
+						`${this.name}:worker`,
+						new Error(`Skipped queue job for "${this.name}" because the Seyfert client is not initialized.`),
+					);
+					return undefined;
+				}
+				return this.processBullJob(job);
+			},
+			this.baseWorkerOptions(),
+		);
+	}
+
+	private wireQueueEvents(): void {
+		this.queueEvents?.on?.('completed', event => {
+			void this.emitQueueCompleted(event);
+		});
+		this.queueEvents?.on?.('failed', event => {
+			void this.emitQueueFailed(event);
+		});
+	}
+
+	private async emitQueueCompleted(event: unknown): Promise<void> {
+		try {
+			const record = eventRecord(event);
+			const job = await this.jobFromQueueEvent(record);
+			const result = (record.returnvalue ?? job.result) as TResult;
+			this.emit('completed', job, result);
+		} catch (error) {
+			defaultReportListenerError(`${this.name}:completed`, error);
+		}
+	}
+
+	private async emitQueueFailed(event: unknown): Promise<void> {
+		try {
+			const record = eventRecord(event);
+			const job = await this.jobFromQueueEvent(record);
+			const error = job.error ?? new Error(String(record.failedReason ?? 'Queue job failed.'));
+			this.emit('failed', job, error);
+		} catch (error) {
+			defaultReportListenerError(`${this.name}:failed`, error);
+		}
+	}
+
+	private async jobFromQueueEvent(record: Record<string, unknown>): Promise<QueueJob<TData, TResult, string>> {
+		const id = String(record.jobId ?? record.id ?? '');
+		const bullJob = id ? await this.queue?.getJob?.(id) : undefined;
+		if (bullJob) return this.fromBullJob(bullJob);
+
+		return this.fromBullJob({
+			data: record.data,
+			failedReason: typeof record.failedReason === 'string' ? record.failedReason : undefined,
+			id,
+			name: typeof record.name === 'string' ? record.name : 'default',
+			returnvalue: record.returnvalue,
+		});
+	}
+
+	private requireQueue(): BullQueueLike {
+		if (this.queue) return this.queue;
+		if (this.state === 'closed') throw new Error(`Queue "${this.name}" has been stopped.`);
+		throw new Error(`Queue "${this.name}" is not initialized; await client.start() before producing jobs.`);
 	}
 }
 
@@ -771,6 +985,10 @@ export class PersistentQueueDriver implements QueueDriver {
 		return queue;
 	}
 
+	setup(client?: QueuesClientLike): void {
+		for (const queue of this.queues.values()) queue.setup(client);
+	}
+
 	async close(): Promise<void> {
 		await Promise.all([...this.queues.values()].map(queue => queue.close()));
 		this.queues.clear();
@@ -779,31 +997,29 @@ export class PersistentQueueDriver implements QueueDriver {
 
 export class QueuesRegistry {
 	private readonly queues = new Map<string, Queue<unknown, unknown>>();
-	private readonly queueOptionFingerprints = new Map<string, string>();
-	private readonly handlers = new Map<string, QueueProcessHandler>();
-	private readonly producers = new Map<QueueConstructor, object>();
+	private readonly queueOptionFingerprints = new Map<string, string | undefined>();
 
 	constructor(private readonly options: CreateQueuesOptions) {
-		if (options.processors?.length || options.producers?.length) {
-			this.register({ processors: options.processors, producers: options.producers });
-		}
+		if (options.processors?.length) this.register({ processors: options.processors });
 	}
 
 	register(options: QueuesRegisterOptions): this {
 		for (const processor of options.processors ?? []) this.registerProcessor(processor);
-		for (const producer of options.producers ?? []) this.registerProducer(producer);
 		return this;
 	}
 
 	get<TName extends RegisteredQueueName>(name: TName, options?: QueueOptionsOf<TName>): QueueOf<TName>;
 	get<TData = unknown, TResult = unknown>(name: string, options?: QueueOptions<TData, TResult>): Queue<TData, TResult>;
-	get<TData = unknown, TResult = unknown>(
-		name: string,
-		options: QueueOptions<TData, TResult> = {},
-	): Queue<TData, TResult> {
+	get<TData = unknown, TResult = unknown>(name: string, options?: QueueOptions<TData, TResult>): Queue<TData, TResult> {
 		return this.getOrCreateQueue(name, options);
 	}
 
+	async add<TName extends RegisteredQueueName, TJobName extends JobNameOf<TName>>(
+		queueName: TName,
+		name: TJobName,
+		data: QueuePayloadFor<QueueRegisteredData<TName>, TJobName>,
+		options?: JobOptions,
+	): Promise<QueueJobOf<TName>>;
 	async add<TName extends RegisteredQueueName>(
 		queueName: TName,
 		data: QueueData<TName>,
@@ -814,21 +1030,31 @@ export class QueuesRegistry {
 		data: TData,
 		options?: JobOptions,
 	): Promise<QueueJob<TData, TResult>>;
-	async add(queueName: string, data: unknown, options?: JobOptions): Promise<QueueJob<unknown, unknown>> {
-		return this.get(queueName).add(data, options);
-	}
-
-	getProducer<T extends object>(producer: QueueConstructor<T>): T | undefined {
-		return this.producers.get(producer) as T | undefined;
+	async add(
+		queueName: string,
+		nameOrData: unknown,
+		dataOrOptions?: unknown,
+		maybeOptions?: JobOptions,
+	): Promise<QueueJob<any, any, string>> {
+		if (
+			typeof nameOrData === 'string' &&
+			dataOrOptions !== undefined &&
+			(maybeOptions !== undefined || !isJobOptionsLike(dataOrOptions))
+		) {
+			return this.get(queueName).add(nameOrData, dataOrOptions, maybeOptions);
+		}
+		return this.get(queueName).add(nameOrData as never, dataOrOptions as JobOptions | undefined);
 	}
 
 	async close(): Promise<void> {
 		if (this.options.driver.close) await this.options.driver.close();
 		else await Promise.all([...this.queues.values()].map(queue => queue.close()));
 		this.queues.clear();
-		this.handlers.clear();
-		this.producers.clear();
 		this.queueOptionFingerprints.clear();
+	}
+
+	async setup(client?: QueuesClientLike): Promise<void> {
+		await this.options.driver.setup?.(client);
 	}
 
 	private registerProcessor(processor: QueueConstructor): void {
@@ -838,11 +1064,12 @@ export class QueuesRegistry {
 		const instance = this.instantiate(processor);
 		const prototype = processor.prototype;
 		const queue = this.getOrCreateQueue(metadata.name, metadata.options);
-
-		for (const process of processMetadata.get(prototype) ?? []) {
-			const handler = this.getMethod(instance, process.method);
-			this.handlers.set(this.getHandlerKey(metadata.name, process.name), handler.bind(instance) as QueueProcessHandler);
+		const processes = processMetadata.get(prototype) ?? [];
+		if (processes.length !== 1) {
+			throw new RangeError(`Queue processor "${metadata.name}" must declare exactly one @Process() handler.`);
 		}
+
+		const handler = this.getMethod(instance, processes[0]);
 
 		for (const event of eventMetadata.get(prototype) ?? []) {
 			const handler = this.getMethod(instance, event.method);
@@ -852,25 +1079,20 @@ export class QueuesRegistry {
 		}
 
 		queue.process(job => {
-			const handler = this.handlers.get(this.getHandlerKey(metadata.name, job.name));
-			if (!handler) throw new RangeError(`Queue process not found: ${metadata.name}:${job.name ?? 'default'}`);
 			return handler(job as QueueJob<unknown, unknown>);
 		});
 	}
 
-	private registerProducer(producer: QueueConstructor): void {
-		this.producers.set(producer, this.instantiate(producer));
-	}
-
 	private getOrCreateQueue<TData = unknown, TResult = unknown>(
 		name: string,
-		options: QueueOptions<TData, TResult> = {},
+		options?: QueueOptions<TData, TResult>,
 	): Queue<TData, TResult> {
-		const mergedOptions = { ...this.options.queueDefaults, ...options };
+		const mergedOptions = { ...this.options.queueDefaults, ...(options ?? {}) };
 		const fingerprint = fingerprintQueueOptions(mergedOptions);
 		const existing = this.queues.get(name);
 		if (existing) {
-			if (this.queueOptionFingerprints.get(name) !== fingerprint) {
+			const existingFingerprint = this.queueOptionFingerprints.get(name);
+			if (options !== undefined && existingFingerprint !== undefined && existingFingerprint !== fingerprint) {
 				throw new RangeError(`Queue already registered with different options: ${name}`);
 			}
 			return existing as Queue<TData, TResult>;
@@ -878,27 +1100,20 @@ export class QueuesRegistry {
 
 		const queue = this.options.driver.get<TData, TResult>(name, mergedOptions as QueueOptions<TData, TResult>);
 		this.queues.set(name, queue as Queue<unknown, unknown>);
-		this.queueOptionFingerprints.set(name, fingerprint);
+		this.queueOptionFingerprints.set(name, options === undefined ? undefined : fingerprint);
 		return queue;
 	}
 
 	private instantiate<T extends object>(target: QueueConstructor<T>): T {
 		if (this.options.resolve) return this.options.resolve(target);
 
-		const injections = injectionMetadata.get(target) ?? new Map<number, string>();
-		const args: unknown[] = [];
-		for (const [index, name] of injections) args[index] = this.get(name);
-		return new target(...args);
+		return new target();
 	}
 
 	private getMethod(instance: object, method: QueueMethod): (...args: readonly unknown[]) => unknown {
 		const value = (instance as Record<QueueMethod, unknown>)[method];
 		if (typeof value !== 'function') throw new TypeError(`Queue method is not callable: ${String(method)}`);
 		return value as (...args: readonly unknown[]) => unknown;
-	}
-
-	private getHandlerKey(queueName: string, processName?: string): string {
-		return `${queueName}:${processName ?? 'default'}`;
 	}
 }
 
@@ -915,8 +1130,12 @@ export function queues(options: QueuesPluginOptions): QueuesPlugin {
 		options: () => ({
 			context: () => ({ queues: registry }),
 		}),
-		setup: client => {
+		setup: async client => {
 			installQueues(client, registry);
+			await registry.setup(client);
+		},
+		teardown: async () => {
+			await registry.close();
 		},
 	};
 }
@@ -951,10 +1170,10 @@ export function Processor(name: string, options?: QueueOptions): ClassDecorator 
 	};
 }
 
-export function Process(name?: string): MethodDecorator {
+export function Process(): MethodDecorator {
 	return (target, key) => {
 		const metadata = processMetadata.get(target) ?? [];
-		metadata.push({ name, method: key });
+		metadata.push(key);
 		processMetadata.set(target, metadata);
 	};
 }
@@ -962,59 +1181,19 @@ export function Process(name?: string): MethodDecorator {
 export function OnQueueEvent(event: QueueEventName): MethodDecorator {
 	return (target, key) => {
 		const metadata = eventMetadata.get(target) ?? [];
-		metadata.push({ event, method: key });
+		metadata.push({ event, method: key, scope: 'queue' });
 		eventMetadata.set(target, metadata);
 	};
 }
 
 export const QueueEvent = OnQueueEvent;
 
-export function InjectQueue<TName extends RegisteredQueueName>(name: TName): ParameterDecorator;
-export function InjectQueue(name: string): ParameterDecorator {
-	return (target, _propertyKey, parameterIndex) => {
-		const constructor = typeof target === 'function' ? target : target.constructor;
-		const metadata = injectionMetadata.get(constructor) ?? new Map<number, string>();
-		metadata.set(parameterIndex, name);
-		injectionMetadata.set(constructor, metadata);
+export function OnWorkerEvent(event: WorkerEventName): MethodDecorator {
+	return (target, key) => {
+		const metadata = eventMetadata.get(target) ?? [];
+		metadata.push({ event, method: key, scope: 'worker' });
+		eventMetadata.set(target, metadata);
 	};
-}
-
-export function parseDuration(value: DurationInput): number {
-	if (typeof value === 'number') {
-		if (!Number.isFinite(value) || value < 0) throw new RangeError('Duration must be a finite non-negative number.');
-		return value;
-	}
-
-	const normalized = value.trim();
-	if (!normalized) throw new RangeError('Duration string cannot be empty.');
-
-	const numeric = Number(normalized);
-	if (Number.isFinite(numeric) && numeric >= 0) return numeric;
-
-	let total = 0;
-	let lastIndex = 0;
-	let matched = false;
-
-	for (const match of normalized.matchAll(durationPattern)) {
-		const gap = normalized.slice(lastIndex, match.index);
-		if (gap.trim()) throw new RangeError(`Invalid duration segment: ${gap.trim()}`);
-
-		matched = true;
-		lastIndex = match.index + match[0].length;
-
-		const amount = Number(match[1]);
-		const unit = durationUnits.get(match[2].toLowerCase());
-
-		if (!Number.isFinite(amount) || amount < 0 || !unit) throw new RangeError(`Invalid duration segment: ${match[0]}`);
-
-		total += amount * unit;
-	}
-
-	const tail = normalized.slice(lastIndex);
-	if (tail.trim()) throw new RangeError(`Invalid duration segment: ${tail.trim()}`);
-	if (!matched || total < 0) throw new RangeError(`Invalid duration: ${value}`);
-
-	return total;
 }
 
 function createJobIdGenerator() {
@@ -1034,6 +1213,67 @@ function loadBullMQ(): BullMQModuleLike {
 			},
 		);
 	}
+}
+
+function parseQueueAddArgs<TData, TResult>(
+	nameOrData: unknown,
+	dataOrOptions?: unknown,
+	maybeOptions?: JobOptions<TData, TResult>,
+): { data: TData; name: string; options: JobOptions<TData, TResult> } {
+	const hasJobName =
+		typeof nameOrData === 'string' &&
+		dataOrOptions !== undefined &&
+		(maybeOptions !== undefined || !isJobOptionsLike(dataOrOptions));
+
+	if (hasJobName) {
+		return {
+			data: dataOrOptions as TData,
+			name: nameOrData,
+			options: maybeOptions ?? {},
+		};
+	}
+
+	return {
+		data: nameOrData as TData,
+		name: 'default',
+		options: (dataOrOptions ?? {}) as JobOptions<TData, TResult>,
+	};
+}
+
+function isJobOptionsLike(value: unknown): value is JobOptions {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+	const keys = Object.keys(value);
+	if (!keys.length) return false;
+	return keys.every(key => ['id', 'delay', 'attempts', 'priority', 'retryDelay'].includes(key));
+}
+
+function resolveRetryDelayValue(
+	value: Exclude<RetryDelayResolver<unknown, unknown>, Function>,
+	attemptsMade: number,
+): number {
+	if (typeof value !== 'object') return parseDuration(value);
+	const backoff = normalizeBackoffOptions(value);
+	const delay = parseDuration(backoff.delay ?? 0);
+	if (backoff.type === 'exponential') return delay * 2 ** Math.max(attemptsMade - 1, 0);
+	return delay;
+}
+
+function normalizeBackoffOptions(value: BackoffOptions): BackoffOptions {
+	return {
+		...value,
+		delay: value.delay === undefined ? undefined : parseDuration(value.delay),
+	};
+}
+
+function defaultReportListenerError(event: string, error: unknown): void {
+	const reason = error instanceof Error ? error.message : String(error);
+	process.emitWarning?.(`Queue listener for "${event}" failed: ${reason}`, {
+		code: 'SLIPHER_QUEUE_LISTENER_ERROR',
+	});
+}
+
+function eventRecord(event: unknown): Record<string, unknown> {
+	return event && typeof event === 'object' ? (event as Record<string, unknown>) : {};
 }
 
 function fingerprintQueueOptions(options: QueueOptions<any, any>): string {

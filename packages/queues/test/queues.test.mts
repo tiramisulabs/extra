@@ -1,22 +1,21 @@
+import { parseDuration as parseInternalDuration } from '@slipher/internal';
 import { assert, describe, test } from 'vitest';
 import {
 	createQueues,
-	InjectQueue,
 	memory,
 	OnQueueEvent,
+	OnWorkerEvent,
 	Process,
 	Processor,
-	parseDuration,
 	persistent,
 	type QueueJob,
-	type QueueOf,
+	type QueueJobOf,
+	type QueueRegistration,
 	type QueuesRegistry,
 	queues,
 } from '../src';
 
-interface MailPayload {
-	email: string;
-}
+type MailJob = { job: 'send'; email: string } | { job: 'digest'; email: string; window: 'daily' | 'weekly' };
 
 interface WelcomePayload {
 	userId: string;
@@ -24,18 +23,9 @@ interface WelcomePayload {
 
 declare module '../src' {
 	interface RegisteredQueues {
-		mail: {
-			data: MailPayload;
-			result: string;
-		};
-		priority: {
-			data: string;
-			result: string;
-		};
-		welcome: {
-			data: WelcomePayload;
-			result: string;
-		};
+		mail: QueueRegistration<MailJob, string>;
+		priority: QueueRegistration<string, string>;
+		welcome: QueueRegistration<WelcomePayload, string>;
 	}
 }
 
@@ -51,11 +41,11 @@ function waitForEvent<TArgs extends readonly unknown[]>(
 	});
 }
 
-function wait(milliseconds: number): Promise<void> {
-	return new Promise(resolve => setTimeout(resolve, milliseconds));
-}
-
 describe('memory queues', () => {
+	test('shares the internal duration parser', () => {
+		assert.equal(parseInternalDuration('1s 5ms'), 1005);
+	});
+
 	test('processes delayed jobs, retries failures, and records the completed result', async () => {
 		const registry = createQueues({ driver: memory() });
 		const queue = registry.get('welcome', {
@@ -71,7 +61,7 @@ describe('memory queues', () => {
 		});
 		const retrying = waitForEvent(queue, 'retrying');
 		const completed = waitForEvent(queue, 'completed');
-		const job = await queue.add({ userId: 'user-1' }, { delay: '25ms', id: 'welcome-1', name: 'greet' });
+		const job = await queue.add({ userId: 'user-1' }, { delay: '25ms', id: 'welcome-1' });
 
 		assert.equal(job.status, 'delayed');
 		assert.equal(queue.counts().delayed, 1);
@@ -84,7 +74,7 @@ describe('memory queues', () => {
 		assert.equal(retryDelay, 0);
 		assert.equal(completedJob, job);
 		assert.equal(result, 'hello:user-1');
-		assert.equal(job.name, 'greet');
+		assert.equal(job.name, 'default');
 		assert.equal(job.attemptsMade, 2);
 		assert.equal(job.status, 'completed');
 		assert.equal(job.result, 'hello:user-1');
@@ -113,48 +103,111 @@ describe('memory queues', () => {
 		assert.deepEqual(processed, ['high', 'low']);
 		await registry.close();
 	});
+
+	test('isolates listener errors from completed job state and later listeners', async () => {
+		const reported: { event: string; error: unknown }[] = [];
+		const registry = createQueues({
+			driver: memory({
+				reportListenerError: (event, error) => reported.push({ event, error }),
+			}),
+		});
+		const queue = registry.get('welcome');
+		const events: string[] = [];
+
+		queue.process(job => `welcome:${job.data.userId}`);
+		queue.on('completed', () => {
+			throw new Error('listener failed');
+		});
+		queue.on('completed', () => events.push('second'));
+
+		const completed = waitForEvent(queue, 'completed');
+		const job = await queue.add({ userId: 'user-1' });
+		await completed;
+
+		assert.equal(job.status, 'completed');
+		assert.equal(job.attemptsMade, 1);
+		assert.deepEqual(events, ['second']);
+		assert.equal(reported[0].event, 'completed');
+		assert.instanceOf(reported[0].error, Error);
+
+		await registry.close();
+	});
 });
 
 describe('decorated queues', () => {
-	test('registers processors, queue events, and injected producers without an external DI container', async () => {
+	test('registers one handler per queue and positional named jobs', async () => {
 		const processed: string[] = [];
 		const events: string[] = [];
+		const workerEvents: string[] = [];
 
-		class WelcomeProcessor {
-			greet(job: QueueJob<WelcomePayload, string>) {
-				processed.push(job.data.userId);
-				return `welcome:${job.data.userId}`;
+		class MailProcessor {
+			handle(job: QueueJobOf<'mail'>) {
+				processed.push(`${job.name}:${job.data.email}`);
+				switch (job.name) {
+					case 'send':
+						return `sent:${job.data.email}`;
+					case 'digest':
+						return `digest:${job.data.window}:${job.data.email}`;
+				}
 			}
 
-			completed(_job: QueueJob<WelcomePayload, string>, result: string) {
+			completed(_job: QueueJobOf<'mail'>, result: string) {
 				events.push(result);
 			}
+
+			active(job: QueueJobOf<'mail'>) {
+				workerEvents.push(job.name);
+			}
 		}
 
-		class WelcomeProducer {
-			constructor(readonly welcome: QueueOf<'welcome'>) {}
-		}
-
-		Processor('welcome')(WelcomeProcessor);
-		Process('greet')(WelcomeProcessor.prototype, 'greet');
-		OnQueueEvent('completed')(WelcomeProcessor.prototype, 'completed');
-		InjectQueue('welcome')(WelcomeProducer, undefined, 0);
+		Processor('mail')(MailProcessor);
+		Process()(MailProcessor.prototype, 'handle');
+		OnQueueEvent('completed')(MailProcessor.prototype, 'completed');
+		OnWorkerEvent('active')(MailProcessor.prototype, 'active');
 
 		const registry = createQueues({ driver: memory() });
-		registry.register({ processors: [WelcomeProcessor], producers: [WelcomeProducer] });
-		const producer = registry.getProducer(WelcomeProducer);
-		const completed = waitForEvent(registry.get('welcome'), 'completed');
+		registry.register({ processors: [MailProcessor] });
+		const completed = waitForEvent(registry.get('mail'), 'completed');
 
-		const job = await producer?.welcome.add({ userId: 'user-1' }, { name: 'greet' });
+		const job = await registry.add('mail', 'send', { email: 'hi@example.com' });
 		const [completedJob, result] = await completed;
 
 		assert.equal(completedJob, job);
-		assert.equal(result, 'welcome:user-1');
-		assert.deepEqual(processed, ['user-1']);
-		assert.deepEqual(events, ['welcome:user-1']);
-		assert.equal(producer?.welcome, registry.get('welcome'));
+		assert.equal(result, 'sent:hi@example.com');
+		assert.deepEqual(processed, ['send:hi@example.com']);
+		assert.deepEqual(events, ['sent:hi@example.com']);
+		assert.deepEqual(workerEvents, ['send']);
 
 		await registry.close();
+	});
+
+	test('rejects multiple process handlers on the same processor', () => {
+		class BadProcessor {
+			one() {}
+			two() {}
+		}
+
+		Processor('welcome')(BadProcessor);
+		Process()(BadProcessor.prototype, 'one');
+		Process()(BadProcessor.prototype, 'two');
+
+		assert.throws(
+			() => createQueues({ driver: memory(), processors: [BadProcessor] }),
+			/declare exactly one @Process\(\) handler/,
+		);
+	});
+
+	test('get(name) without options reuses an optioned queue without fingerprint conflict', () => {
+		const registry = createQueues({ driver: memory() });
+
+		const optioned = registry.get('welcome', { attempts: 3 });
+
+		assert.equal(registry.get('welcome'), optioned);
+		assert.equal(registry.get('welcome', { attempts: 3 }), optioned);
+		assert.throws(() => registry.get('welcome', { attempts: 4 }), /different options/);
+
+		const dynamic = registry.get('dynamic');
+		assert.equal(registry.get('dynamic', { attempts: 2 }), dynamic);
 	});
 });
 
@@ -170,12 +223,12 @@ describe('queues plugin', () => {
 		assert.equal(plugin.name, '@slipher/queues');
 		assert.equal(extension.queues, plugin.registry);
 		assert.equal((client as { queues?: QueuesRegistry }).queues, plugin.registry);
-		await plugin.registry.close();
+		await plugin.teardown?.(client);
 	});
 });
 
 describe('persistent queues', () => {
-	test('delegates queue operations and processors to a structural BullMQ module', async () => {
+	test('defers BullMQ construction to setup and closes queue resources during teardown', async () => {
 		const fake = createFakeBullMQ();
 		const registry = createQueues({
 			driver: persistent({
@@ -184,20 +237,46 @@ describe('persistent queues', () => {
 				prefix: 'slipher-test',
 			}),
 		});
+		const queue = registry.get('mail', { concurrency: 2 });
+
+		queue.process(job => `sent:${job.data.email}`);
+
+		assert.equal(fake.queues.length, 0);
+		await assertRejects(() => queue.add('send', { email: 'hi@example.com' }), /not initialized/);
+
+		await registry.setup({ initialized: true });
+
+		assert.equal(fake.queues.length, 1);
+		assert.equal(fake.workers.length, 1);
+		assert.equal(fake.queueEvents.length, 1);
+		assert.equal(fake.workers[0].options.concurrency, 2);
+
+		await registry.close();
+
+		assert.equal(fake.workers[0].closed, true);
+		assert.equal(fake.queueEvents[0].closed, true);
+		assert.equal(fake.queues[0].closed, true);
+	});
+
+	test('sends queue options to the queue constructor and job defaults to add options', async () => {
+		const fake = createFakeBullMQ();
+		const registry = createQueues({
+			driver: persistent({
+				bullmq: fake.module,
+				connection: { host: '127.0.0.1', port: 6379 },
+				defaultJobOptions: { removeOnComplete: true },
+				prefix: 'slipher-test',
+				queueOptions: { settings: { stalledInterval: 1_000 } },
+			}),
+		});
 		const queue = registry.get('mail', {
 			attempts: 3,
-			concurrency: 2,
+			retryDelay: '5s',
 		});
-		let processed: QueueJob<MailPayload, string> | undefined;
+		queue.process(job => `sent:${job.data.email}`);
 
-		const job = await queue.add(
-			{ email: 'hi@example.com' },
-			{ attempts: 4, delay: '5s', id: 'job-1', name: 'send', priority: 7 },
-		);
-		queue.process(async nextJob => {
-			processed = nextJob;
-			return `sent:${nextJob.data.email}`;
-		});
+		await registry.setup({ initialized: true });
+		const job = await queue.add('send', { email: 'hi@example.com' }, { attempts: 4, delay: '1s', id: 'job-1' });
 		const result = await fake.workers[0].processor({
 			attemptsMade: 1,
 			data: { email: 'hi@example.com' },
@@ -209,46 +288,61 @@ describe('persistent queues', () => {
 		});
 
 		assert.equal(job.id, 'job-1');
+		assert.deepEqual(fake.queues[0].options, {
+			connection: { host: '127.0.0.1', port: 6379 },
+			defaultJobOptions: { removeOnComplete: true },
+			prefix: 'slipher-test',
+			settings: { stalledInterval: 1_000 },
+		});
 		assert.deepEqual(fake.queues[0].adds[0], {
 			data: { email: 'hi@example.com' },
 			name: 'send',
-			options: { attempts: 4, delay: 5000, jobId: 'job-1', priority: 7 },
+			options: {
+				attempts: 4,
+				backoff: { delay: 5000, type: 'fixed' },
+				delay: 1000,
+				jobId: 'job-1',
+				removeOnComplete: true,
+			},
 		});
-		assert.equal(fake.workers[0].name, 'mail');
-		assert.deepEqual(fake.workers[0].options, {
-			connection: { host: '127.0.0.1', port: 6379 },
-			concurrency: 2,
-			prefix: 'slipher-test',
-		});
-		assert.equal(processed?.id, 'bull-job-1');
-		assert.equal(processed?.queueName, 'mail');
-		assert.equal(processed?.name, 'send');
 		assert.equal(result, 'sent:hi@example.com');
-		queue.pause();
-		queue.start();
-		assert.equal(fake.queues[0].paused, true);
-		assert.equal(fake.queues[0].resumed, true);
 
 		await registry.close();
-		assert.equal(fake.queues[0].closed, true);
-		assert.equal(fake.workers[0].closed, true);
+	});
+
+	test('rejects function retryDelay on the persistent driver during setup', async () => {
+		const fake = createFakeBullMQ();
+		const registry = createQueues({
+			driver: persistent({ bullmq: fake.module }),
+		});
+
+		registry.get('mail', {
+			retryDelay: () => 100,
+		});
+
+		await assertRejects(() => registry.setup({ initialized: true }), /does not support function-form retryDelay/);
 	});
 });
 
-describe('parseDuration', () => {
-	test('parses queue delay inputs', () => {
-		assert.equal(parseDuration(0), 0);
-		assert.equal(parseDuration('10ms'), 10);
-		assert.equal(parseDuration('1s 5ms'), 1005);
-		assert.throws(() => parseDuration('soon'), RangeError);
-	});
-});
+async function assertRejects(run: () => Promise<unknown>, expected: RegExp) {
+	let thrown: unknown;
+	try {
+		await run();
+	} catch (error) {
+		thrown = error;
+	}
+
+	assert.instanceOf(thrown, Error);
+	assert.match((thrown as Error).message, expected);
+}
 
 function createFakeBullMQ() {
 	const queues: FakeBullQueue[] = [];
 	const workers: FakeBullWorker[] = [];
+	const queueEvents: FakeBullQueueEvents[] = [];
 
 	return {
+		queueEvents,
 		queues,
 		workers,
 		module: {
@@ -256,6 +350,12 @@ function createFakeBullMQ() {
 				constructor(name: string, options: Record<string, unknown>) {
 					super(name, options);
 					queues.push(this);
+				}
+			},
+			QueueEvents: class extends FakeBullQueueEvents {
+				constructor(name: string, options: Record<string, unknown>) {
+					super(name, options);
+					queueEvents.push(this);
 				}
 			},
 			Worker: class extends FakeBullWorker {
@@ -298,6 +398,23 @@ class FakeBullQueue {
 
 	async resume() {
 		this.resumed = true;
+	}
+
+	async close() {
+		this.closed = true;
+	}
+}
+
+class FakeBullQueueEvents {
+	closed = false;
+
+	constructor(
+		readonly name: string,
+		readonly options: Record<string, unknown>,
+	) {}
+
+	on() {
+		return this;
 	}
 
 	async close() {

@@ -1,6 +1,9 @@
+import type { QueueLike } from '@slipher/types';
 import type { Client, CommandContext, HttpClient, UsingClient, WorkerClient } from 'seyfert';
 import {
-	InjectQueue,
+	type JobNameOf,
+	OnQueueEvent,
+	OnWorkerEvent,
 	Processor,
 	type Queue,
 	type QueueData,
@@ -12,10 +15,9 @@ import {
 	type QueuesRegistry,
 } from '../src';
 
-interface WelcomeJob {
-	source: 'slash-command' | 'scheduler';
-	userId: string;
-}
+type WelcomeJob =
+	| { job: 'send'; source: 'slash-command' | 'scheduler'; userId: string }
+	| { job: 'audit'; action: string };
 
 type AuditQueue = QueueRegistration<{ action: string }, void>;
 type WelcomeQueue = QueueRegistration<WelcomeJob, string>;
@@ -36,42 +38,54 @@ declare const workerClient: WorkerClient;
 declare const client: UsingClient;
 
 expectType<QueuesRegistry>(commandContext.queues);
-expectType<QueuesRegistry>(concreteClient.queues);
-expectType<QueuesRegistry>(httpClient.queues);
-expectType<QueuesRegistry>(workerClient.queues);
-expectType<QueuesRegistry>(client.queues);
+expectType<QueuesRegistry | undefined>(concreteClient.queues);
+expectType<QueuesRegistry | undefined>(httpClient.queues);
+expectType<QueuesRegistry | undefined>(workerClient.queues);
+expectType<QueuesRegistry | undefined>(client.queues);
 
 const welcomeQueue = registry.get('welcome');
 expectType<QueueOf<'welcome'>>(welcomeQueue);
-expectType<Queue<WelcomeJob, string>>(welcomeQueue);
+expectType<Queue<{ source: 'slash-command' | 'scheduler'; userId: string } | { action: string }, string>>(welcomeQueue);
 expectType<ClassDecorator>(
 	Processor('welcome', {
 		retryDelay(job) {
-			expectType<WelcomeJob>(job.data);
+			expectType<QueueData<'welcome'>>(job.data);
 			return 0;
 		},
 	}),
 );
-expectType<ParameterDecorator>(InjectQueue('welcome'));
 
-const welcomeJob = registry.add('welcome', { source: 'slash-command', userId: 'user-1' });
+expectType<MethodDecorator>(OnQueueEvent('completed'));
+expectType<MethodDecorator>(OnWorkerEvent('active'));
+
+const welcomeJob = registry.add('welcome', 'send', { source: 'slash-command', userId: 'user-1' });
 expectType<Promise<QueueJobOf<'welcome'>>>(welcomeJob);
-expectType<Promise<QueueJob<WelcomeJob, string>>>(welcomeJob);
+expectType<
+	Promise<
+		| QueueJob<{ source: 'slash-command' | 'scheduler'; userId: string }, string, 'send'>
+		| QueueJob<{ action: string }, string, 'audit'>
+	>
+>(welcomeJob);
 
 registry.add('audit', { action: 'deploy' });
 
 // @ts-expect-error registered queues require their declared payload shape
-registry.add('welcome', { source: 'slash-command' });
+registry.add('welcome', 'send', { source: 'slash-command' });
 
 // @ts-expect-error registered queue names cannot fall through to the dynamic overload
-registry.add('welcome', { source: 'text-command', userId: 'user-1' });
+registry.add('welcome', 'send', { source: 'text-command', userId: 'user-1' });
+
+// @ts-expect-error job-space queues require a known job name
+registry.add('welcome', 'unknown', { userId: 'user-1' });
 
 const dynamicJob = registry.add('dynamic', { ok: true });
 expectType<Promise<QueueJob<{ ok: boolean }, unknown>>>(dynamicJob);
 
 const dynamicQueue = registry.get<{ value: number }, boolean>('dynamic');
 expectType<Queue<{ value: number }, boolean>>(dynamicQueue);
+expectType<QueueLike<{ value: number }, boolean>>(dynamicQueue);
 
-expectType<WelcomeJob>({} as QueueData<'welcome'>);
+expectType<'send' | 'audit'>({} as JobNameOf<'welcome'>);
+expectType<{ source: 'slash-command' | 'scheduler'; userId: string } | { action: string }>({} as QueueData<'welcome'>);
 expectType<string>({} as QueueResult<'welcome'>);
 expectType<unknown>({} as QueueData<'missing'>);
