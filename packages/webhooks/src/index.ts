@@ -1,6 +1,31 @@
 import { createServer } from 'node:http';
 import nacl from 'tweetnacl';
 
+export interface BadWebhookPayloadResult {
+	ok: false;
+	status: 400;
+	message: string;
+}
+
+export type WebhookPayload = WebhookPingEventPayload | WebhookEventPayload;
+export type WebhookPayloadResult = { ok: true; body: WebhookPayload } | BadWebhookPayloadResult;
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export function parseWebhookPayload(rawBody: string): WebhookPayloadResult {
+	let body: unknown;
+	try {
+		body = JSON.parse(rawBody);
+	} catch {
+		return { ok: false, status: 400, message: 'Malformed JSON body.' };
+	}
+
+	if (!isJsonObject(body)) return { ok: false, status: 400, message: 'Expected a JSON object body.' };
+	return { ok: true, body: body as unknown as WebhookPayload };
+}
+
 export const init = (options: AppOptions) => {
 	const server = createServer((req, res) => {
 		if (req.method !== 'POST') return res.writeHead(405).end();
@@ -27,7 +52,9 @@ export const init = (options: AppOptions) => {
 			}
 
 			if (verify) {
-				const body = JSON.parse(rawBody);
+				const parsed = parseWebhookPayload(rawBody);
+				if (!parsed.ok) return res.writeHead(parsed.status).end(JSON.stringify({ message: parsed.message }));
+				const body = parsed.body;
 				if (body.type === WebhookRequestType.Event) options.callback(body);
 				return res.writeHead(204).end();
 			}
