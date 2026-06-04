@@ -46,12 +46,9 @@ export interface CooldownProps {
 	group?: string;
 }
 
-export interface CooldownResult {
-	allowed: boolean;
-	/** Milliseconds left until the bucket allows another consume. Always 0 when allowed. */
-	remainingMs: number;
-	/** Absolute timestamp at which the bucket allows another consume. */
-	retryAfter: Date;
+export type CooldownDenyReason = 'rate_limited' | 'over_capacity';
+
+interface CooldownResultBase {
 	/** Maximum tokens for the resolved variant. */
 	limit: number;
 	/** Tokens still available after the operation. */
@@ -59,6 +56,26 @@ export interface CooldownResult {
 	/** Cache key used by this operation, useful for logging and metrics. */
 	key: string;
 }
+
+export type CooldownResult =
+	| (CooldownResultBase & {
+			allowed: true;
+			reason?: undefined;
+			remainingMs: 0;
+			retryAfter: Date;
+	  })
+	| (CooldownResultBase & {
+			allowed: false;
+			reason: 'rate_limited';
+			remainingMs: number;
+			retryAfter: Date;
+	  })
+	| (CooldownResultBase & {
+			allowed: false;
+			reason: 'over_capacity';
+			remainingMs: number;
+			retryAfter: null;
+	  });
 
 export interface CooldownCheckOptions {
 	name: string;
@@ -79,6 +96,55 @@ interface ResolvedBucket {
 	resolvedName: string;
 	key: string;
 }
+
+type AtomicCooldownResult = [
+	allowed: number,
+	remainingMs: number,
+	retryAfterMs: number,
+	limit: number,
+	remainingUses: number,
+	reasonCode: number,
+];
+
+interface AtomicCooldownAdapter {
+	eval<T = unknown>(script: string, keys: string[], args: string[]): Awaitable<T>;
+}
+
+const ATOMIC_CONSUME_SCRIPT = `
+local hashKey = KEYS[1]
+local namespaceKey = KEYS[2]
+local now = tonumber(ARGV[1])
+local interval = tonumber(ARGV[2])
+local limit = tonumber(ARGV[3])
+local tokens = tonumber(ARGV[4])
+local memberKey = ARGV[5]
+
+local remaining = tonumber(redis.call('HGET', hashKey, 'N_remaining'))
+local lastDrip = tonumber(redis.call('HGET', hashKey, 'N_lastDrip'))
+
+if tokens > limit then
+	if remaining == nil then remaining = limit end
+	return {0, -1, -1, limit, remaining, 2}
+end
+
+if remaining == nil or lastDrip == nil or now - lastDrip >= interval then
+	local newRemaining = limit - tokens
+	redis.call('SADD', namespaceKey .. ':set', memberKey)
+	redis.call('HSET', hashKey, 'N_interval', tostring(interval), 'N_remaining', tostring(newRemaining), 'N_lastDrip', tostring(now))
+	return {1, 0, now, limit, newRemaining, 0}
+end
+
+local elapsed = now - lastDrip
+local newRemaining = remaining - tokens
+if newRemaining < 0 then
+	local remainingMs = interval - elapsed
+	return {0, remainingMs, now + remainingMs, limit, remaining, 1}
+end
+
+redis.call('SADD', namespaceKey .. ':set', memberKey)
+redis.call('HSET', hashKey, 'N_interval', tostring(interval), 'N_remaining', tostring(newRemaining))
+return {1, 0, now, limit, newRemaining, 0}
+`;
 
 export class CooldownManager {
 	private _client?: BaseClient;
@@ -179,6 +245,111 @@ export class CooldownManager {
 		return { props, resolvedName, key: this.buildKey(props, resolvedName, options.target) };
 	}
 
+	private resolveLimit(props: CooldownProps, use?: keyof UsesProps) {
+		const variant = use ?? 'default';
+		const limit = props.uses[variant];
+		if (typeof limit === 'number' && Number.isFinite(limit)) return { variant, limit };
+
+		this.debugger?.warn(
+			`Unknown cooldown use variant "${String(variant)}"; falling back to the "default" cooldown limit.`,
+		);
+		return { variant: 'default', limit: props.uses.default };
+	}
+
+	private overCapacityResult(key: string, limit: number, remainingUses: number): CooldownResult {
+		return {
+			allowed: false,
+			reason: 'over_capacity',
+			remainingMs: Infinity,
+			retryAfter: null,
+			limit,
+			remainingUses,
+			key,
+		};
+	}
+
+	private rateLimitedResult(
+		key: string,
+		limit: number,
+		remainingUses: number,
+		now: number,
+		remainingMs: number,
+	): CooldownResult {
+		return {
+			allowed: false,
+			reason: 'rate_limited',
+			remainingMs,
+			retryAfter: new Date(now + remainingMs),
+			limit,
+			remainingUses,
+			key,
+		};
+	}
+
+	private allowedResult(key: string, limit: number, remainingUses: number, now: number): CooldownResult {
+		return {
+			allowed: true,
+			remainingMs: 0,
+			retryAfter: new Date(now),
+			limit,
+			remainingUses,
+			key,
+		};
+	}
+
+	private getAtomicAdapter(): AtomicCooldownAdapter | undefined {
+		const adapter = this.resource.adapter as Partial<AtomicCooldownAdapter>;
+		return typeof adapter.eval === 'function' ? (adapter as AtomicCooldownAdapter) : undefined;
+	}
+
+	private consumeAtomic(
+		adapter: AtomicCooldownAdapter,
+		key: string,
+		props: CooldownProps,
+		limit: number,
+		tokens: number,
+	): ReturnCache<CooldownResult> {
+		const now = Date.now();
+		return fakePromise(
+			adapter.eval<AtomicCooldownResult>(
+				ATOMIC_CONSUME_SCRIPT,
+				[this.resource.hashId(key), this.resource.namespace],
+				[String(now), String(props.interval), String(limit), String(tokens), key],
+			),
+		).then(result => this.fromAtomicResult(key, result));
+	}
+
+	private fromAtomicResult(key: string, result: AtomicCooldownResult): CooldownResult {
+		const allowed = Number(result[0]) === 1;
+		const remainingMs = Number(result[1]);
+		const retryAfterMs = Number(result[2]);
+		const limit = Number(result[3]);
+		const remainingUses = Number(result[4]);
+		const reasonCode = Number(result[5]);
+
+		if (reasonCode === 2) return this.overCapacityResult(key, limit, remainingUses);
+		if (!allowed) {
+			return {
+				allowed: false,
+				reason: 'rate_limited',
+				remainingMs,
+				retryAfter: new Date(retryAfterMs),
+				limit,
+				remainingUses,
+				key,
+			};
+		}
+
+		return {
+			allowed: true,
+			remainingMs: 0,
+			retryAfter: new Date(retryAfterMs),
+			limit,
+			remainingUses,
+			key,
+		};
+	}
+
 	/**
 	 * Inspect the bucket without consuming a token.
 	 * Returns `undefined` when the command resolves to no cooldown.
@@ -190,55 +361,28 @@ export class CooldownManager {
 		const { props, key } = resolved;
 		const use = options.use ?? 'default';
 		const tokens = options.tokens ?? 1;
-		const limit = props.uses[use];
+		const { limit } = this.resolveLimit(props, use);
 
 		return fakePromise(this.resource.get(key)).then(data => {
 			const now = Date.now();
 
 			if (tokens > limit) {
-				return {
-					allowed: false,
-					remainingMs: props.interval,
-					retryAfter: new Date(now + props.interval),
-					limit,
-					remainingUses: data?.remaining ?? limit,
-					key,
-				};
+				return this.overCapacityResult(key, limit, data?.remaining ?? limit);
 			}
 
 			if (!data) {
-				return {
-					allowed: true,
-					remainingMs: 0,
-					retryAfter: new Date(now),
-					limit,
-					remainingUses: limit - tokens,
-					key,
-				};
+				return this.allowedResult(key, limit, limit - tokens, now);
 			}
 
 			const elapsed = now - data.lastDrip;
 			if (elapsed >= props.interval) {
-				return {
-					allowed: true,
-					remainingMs: 0,
-					retryAfter: new Date(now),
-					limit,
-					remainingUses: limit - tokens,
-					key,
-				};
+				return this.allowedResult(key, limit, limit - tokens, now);
 			}
 
 			const allowed = data.remaining - tokens >= 0;
 			const remainingMs = Math.max(props.interval - elapsed, 0);
-			return {
-				allowed,
-				remainingMs: allowed ? 0 : remainingMs,
-				retryAfter: new Date(now + (allowed ? 0 : remainingMs)),
-				limit,
-				remainingUses: allowed ? data.remaining - tokens : data.remaining,
-				key,
-			};
+			if (!allowed) return this.rateLimitedResult(key, limit, data.remaining, now, remainingMs);
+			return this.allowedResult(key, limit, data.remaining - tokens, now);
 		});
 	}
 
@@ -253,34 +397,25 @@ export class CooldownManager {
 		const { props, key } = resolved;
 		const use = options.use ?? 'default';
 		const tokens = options.tokens ?? 1;
-		const limit = props.uses[use];
+		const { limit } = this.resolveLimit(props, use);
 
 		this.debugger?.info(`Consuming cooldown ${key} (tokens=${tokens})`);
+
+		const atomicAdapter = this.getAtomicAdapter();
+		if (atomicAdapter && tokens <= limit) return this.consumeAtomic(atomicAdapter, key, props, limit, tokens);
 
 		return fakePromise(this.resource.get(key)).then(data => {
 			const now = Date.now();
 
 			if (tokens > limit) {
-				return {
-					allowed: false,
-					remainingMs: props.interval,
-					retryAfter: new Date(now + props.interval),
-					limit,
-					remainingUses: data?.remaining ?? limit,
-					key,
-				};
+				return this.overCapacityResult(key, limit, data?.remaining ?? limit);
 			}
 
 			if (!data) {
 				const remaining = limit - tokens;
-				return fakePromise(this.set({ key, interval: props.interval, remaining })).then(() => ({
-					allowed: true,
-					remainingMs: 0,
-					retryAfter: new Date(now),
-					limit,
-					remainingUses: remaining,
-					key,
-				}));
+				return fakePromise(this.set({ key, interval: props.interval, remaining })).then(() =>
+					this.allowedResult(key, limit, remaining, now),
+				);
 			}
 
 			const elapsed = now - data.lastDrip;
@@ -291,37 +426,18 @@ export class CooldownManager {
 						lastDrip: now,
 						remaining,
 					}),
-				).then(() => ({
-					allowed: true,
-					remainingMs: 0,
-					retryAfter: new Date(now),
-					limit,
-					remainingUses: remaining,
-					key,
-				}));
+				).then(() => this.allowedResult(key, limit, remaining, now));
 			}
 
 			if (data.remaining - tokens < 0) {
 				const remainingMs = props.interval - elapsed;
-				return {
-					allowed: false,
-					remainingMs,
-					retryAfter: new Date(now + remainingMs),
-					limit,
-					remainingUses: data.remaining,
-					key,
-				};
+				return this.rateLimitedResult(key, limit, data.remaining, now, remainingMs);
 			}
 
 			const remaining = data.remaining - tokens;
-			return fakePromise(this.resource.patch(CacheFrom.Gateway, key, { remaining })).then(() => ({
-				allowed: true,
-				remainingMs: 0,
-				retryAfter: new Date(now),
-				limit,
-				remainingUses: remaining,
-				key,
-			}));
+			return fakePromise(this.resource.patch(CacheFrom.Gateway, key, { remaining })).then(() =>
+				this.allowedResult(key, limit, remaining, now),
+			);
 		});
 	}
 
@@ -335,8 +451,9 @@ export class CooldownManager {
 		const resolved = this.resolveBucket({ name, target });
 		if (!resolved) return false;
 		const { props, key } = resolved;
+		const { limit } = this.resolveLimit(props, use);
 		this.debugger?.info(`Resetting cooldown ${key}`);
-		return fakePromise(this.resource.patch(CacheFrom.Gateway, key, { remaining: props.uses[use] })).then(() => true);
+		return fakePromise(this.resource.patch(CacheFrom.Gateway, key, { remaining: limit })).then(() => true);
 	}
 
 	/** Low-level: write a bucket directly by its cache key. */

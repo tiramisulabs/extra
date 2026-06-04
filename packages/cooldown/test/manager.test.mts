@@ -13,6 +13,7 @@ import {
 	runWithCooldownContext,
 	useCooldownContext,
 } from '../src';
+import type { CooldownData } from '../src/resource';
 
 function makeCommand(overrides: Record<string, unknown>) {
 	return Object.assign(new (class extends Command {})(), overrides);
@@ -31,6 +32,42 @@ function commandContext(overrides: Record<string, unknown> = {}) {
 		channelId: 'channel1',
 		...overrides,
 	} as unknown as AnyContext;
+}
+
+class AtomicMemoryAdapter extends MemoryAdapter {
+	evalCalls = 0;
+
+	async eval(_script: string, keys: string[], args: string[]) {
+		this.evalCalls++;
+		const [hashKey, namespace] = keys;
+		const [nowArg, intervalArg, limitArg, tokensArg, memberKey] = args;
+		const now = Number(nowArg);
+		const interval = Number(intervalArg);
+		const limit = Number(limitArg);
+		const tokens = Number(tokensArg);
+		const data = this.get(hashKey) as CooldownData | null;
+
+		if (tokens > limit) {
+			return [0, -1, -1, limit, data?.remaining ?? limit, 2];
+		}
+
+		if (!data || now - data.lastDrip >= interval) {
+			const remaining = limit - tokens;
+			this.addToRelationship(namespace, memberKey);
+			this.set(hashKey, { interval, remaining, lastDrip: now });
+			return [1, 0, now, limit, remaining, 0];
+		}
+
+		const remainingMs = interval - (now - data.lastDrip);
+		if (data.remaining - tokens < 0) {
+			return [0, remainingMs, now + remainingMs, limit, data.remaining, 1];
+		}
+
+		const remaining = data.remaining - tokens;
+		this.addToRelationship(namespace, memberKey);
+		this.patch(hashKey, { interval, remaining });
+		return [1, 0, now, limit, remaining, 0];
+	}
 }
 
 describe('CooldownManager — getCommandData', () => {
@@ -227,6 +264,7 @@ describe('CooldownManager — check / consume / remaining / reset', () => {
 		const blocked = await manager.consume({ name: 'ping', target: 'u1' });
 		assert.ok(blocked);
 		assert.equal(blocked.allowed, false);
+		assert.equal(blocked.reason, 'rate_limited');
 		assert.equal(blocked.remainingUses, 0);
 		assert.equal(blocked.remainingMs, 1_000);
 		assert.equal(blocked.retryAfter.getTime(), 1_000);
@@ -277,6 +315,38 @@ describe('CooldownManager — check / consume / remaining / reset', () => {
 		assert.equal(result.allowed, true);
 	});
 
+	test('unknown use variant falls back to default limit and warns once', async () => {
+		const warn = vi.fn();
+		(client as Client & { debugger: { info: () => void; warn: typeof warn } }).debugger = {
+			info: () => undefined,
+			warn,
+		};
+
+		const result = await manager.consume({ name: 'ping', target: 'u1', use: 'missing' });
+
+		assert.ok(result);
+		assert.equal(result.allowed, true);
+		assert.equal(result.limit, 2);
+		assert.equal(result.remainingUses, 1);
+		assert.equal(manager.resource.get('ping:user:u1')?.remaining, 1);
+		assert.equal(Number.isNaN(manager.resource.get('ping:user:u1')?.remaining), false);
+		assert.equal(warn.mock.calls.length, 1);
+	});
+
+	test('reset with an unknown use variant restores the default bucket', async () => {
+		await manager.consume({ name: 'ping', target: 'u1' });
+		await manager.consume({ name: 'ping', target: 'u1' });
+
+		const reset = await manager.reset('ping', 'u1', 'missing');
+		const next = await manager.consume({ name: 'ping', target: 'u1' });
+
+		assert.equal(reset, true);
+		assert.ok(next);
+		assert.equal(next.allowed, true);
+		assert.equal(next.limit, 2);
+		assert.equal(next.remainingUses, 1);
+	});
+
 	test('consume refills after the interval elapses', async () => {
 		await manager.consume({ name: 'ping', target: 'u1' });
 		await manager.consume({ name: 'ping', target: 'u1' });
@@ -291,7 +361,38 @@ describe('CooldownManager — check / consume / remaining / reset', () => {
 		const result = await manager.consume({ name: 'ping', target: 'u1', tokens: 5 });
 		assert.ok(result);
 		assert.equal(result.allowed, false);
+		assert.equal(result.reason, 'over_capacity');
+		assert.equal(result.remainingMs, Infinity);
+		assert.equal(result.retryAfter, null);
 		assert.equal(manager.resource.get('ping:user:u1'), undefined);
+	});
+
+	test('check reports over-capacity without mutating', async () => {
+		const result = await manager.check({ name: 'ping', target: 'u1', tokens: 5 });
+		assert.ok(result);
+		assert.equal(result.allowed, false);
+		assert.equal(result.reason, 'over_capacity');
+		assert.equal(result.remainingMs, Infinity);
+		assert.equal(result.retryAfter, null);
+		assert.equal(manager.resource.get('ping:user:u1'), undefined);
+	});
+
+	test('consume uses an atomic adapter path when eval is available', async () => {
+		const adapter = new AtomicMemoryAdapter();
+		client.cache = new Cache(0, adapter, {}, client);
+		manager = new CooldownManager(client);
+
+		const first = await manager.consume({ name: 'ping', target: 'u1' });
+		const second = await manager.consume({ name: 'ping', target: 'u1' });
+		const third = await manager.consume({ name: 'ping', target: 'u1' });
+
+		assert.equal(adapter.evalCalls, 3);
+		assert.ok(first && second && third);
+		assert.equal(first.allowed, true);
+		assert.equal(second.allowed, true);
+		assert.equal(third.allowed, false);
+		assert.equal(third.reason, 'rate_limited');
+		assert.equal((adapter.get('cooldowns.ping:user:u1') as CooldownData | null)?.remaining, 0);
 	});
 
 	test('returns undefined when the command resolves to no cooldown', async () => {

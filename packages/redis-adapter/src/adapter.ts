@@ -101,6 +101,13 @@ export class RedisAdapter implements Adapter {
 		await this.client.hSet(this.buildKey(id), toDb(data));
 	}
 
+	async eval<T = unknown>(script: string, keys: string[] = [], args: string[] = []): Promise<T> {
+		return this.client.eval(script, {
+			keys: keys.map(key => this.buildKey(key)),
+			arguments: args,
+		}) as Promise<T>;
+	}
+
 	async values(to: string): Promise<any[]> {
 		const array: unknown[] = [];
 		const data = await this.keys(to);

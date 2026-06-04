@@ -8,8 +8,8 @@ declare const httpClient: HttpClient;
 declare const workerClient: WorkerClient;
 declare const usingClient: UsingClient;
 
-expectType<CooldownManager>(context.cooldown);
-expectType<CooldownManager>(client.cooldown);
-expectType<CooldownManager>(httpClient.cooldown);
-expectType<CooldownManager>(workerClient.cooldown);
-expectType<CooldownManager>(usingClient.cooldown);
+expectType<CooldownManager | undefined>(context.cooldown);
+expectType<CooldownManager | undefined>(client.cooldown);
+expectType<CooldownManager | undefined>(httpClient.cooldown);
+expectType<CooldownManager | undefined>(workerClient.cooldown);
+expectType<CooldownManager | undefined>(usingClient.cooldown);

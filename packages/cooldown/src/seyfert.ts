@@ -3,23 +3,23 @@ import type { CooldownManager, CooldownProps } from './manager';
 
 declare module 'seyfert' {
 	interface Client<Ready extends boolean = boolean> {
-		cooldown: CooldownManager;
+		cooldown?: CooldownManager;
 	}
 
 	interface HttpClient {
-		cooldown: CooldownManager;
+		cooldown?: CooldownManager;
 	}
 
 	interface WorkerClient<Ready extends boolean = boolean> {
-		cooldown: CooldownManager;
+		cooldown?: CooldownManager;
 	}
 
 	interface ExtendContext {
-		cooldown: CooldownManager;
+		cooldown?: CooldownManager;
 	}
 
 	interface UsingClient {
-		cooldown: CooldownManager;
+		cooldown?: CooldownManager;
 	}
 
 	interface Command {

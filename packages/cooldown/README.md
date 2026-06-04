@@ -70,6 +70,10 @@ export default class PingCommand extends Command {
 		const result = await ctx.cooldown.context(ctx);
 
 		if (result && !result.allowed) {
+			if (result.reason === 'over_capacity') {
+				return ctx.write({ content: 'This command cannot consume that many cooldown tokens.' });
+			}
+
 			return ctx.write({
 				content: `Try again ${formatRemaining(result.retryAfter, { style: 'discord' })}.`,
 			});
@@ -129,13 +133,19 @@ Every state-changing call returns a `CooldownResult`. Methods return `undefined`
 ```ts
 interface CooldownResult {
 	allowed: boolean;
+	reason?: 'rate_limited' | 'over_capacity';
 	remainingMs: number;     // 0 when allowed
-	retryAfter: Date;        // absolute timestamp at which the bucket frees
+	retryAfter: Date | null; // null when reason is 'over_capacity'
 	limit: number;           // max tokens for the resolved variant
 	remainingUses: number;   // tokens left after this call
 	key: string;             // cache key, useful for logs and metrics
 }
 ```
+
+`reason` is only present when `allowed` is `false`.
+
+- `rate_limited` means the bucket is temporarily empty. `remainingMs` is finite and `retryAfter` is a `Date`.
+- `over_capacity` means the call asked for more tokens than the configured limit. It can never fit in this bucket, so `remainingMs` is `Infinity` and `retryAfter` is `null`.
 
 ## Manager API
 
@@ -154,6 +164,20 @@ ctx.cooldown.reset('ping', ctx.author.id);
 - `context` resolves the target from the active interaction context (using `type`), then calls `consume`.
 
 Both `check` and `consume` accept an optional `tokens?: number` to model multi-token consumption.
+
+If `use` references an unknown variant, the manager falls back to the `default` limit and emits a warning through `client.debugger`. This keeps the bucket rate-limited instead of writing `NaN` to cache.
+
+For `type: 'guild'`, DMs fall back to `author.id` because there is no `guildId`. `ctx.cooldown.context()` returns `undefined` for component and modal interactions because the command resolver only runs for commands.
+
+### Storage atomicity
+
+`consume` is atomic when the cache adapter supports the Slipher Redis `eval` escape hatch. The default in-memory adapter is also safe for normal single-process usage because operations run synchronously on one event loop. Other adapters use the best-effort read-decide-write path.
+
+| Adapter | Consume atomicity |
+| --- | --- |
+| Default memory adapter | Yes, single-process event-loop semantics |
+| `@slipher/redis-adapter` | Yes, Lua script through `eval` |
+| Worker / third-party adapters without `eval` | Best effort |
 
 ## Shared Buckets (`group`)
 
