@@ -6,7 +6,7 @@ export type LoggerLevelMethod = (...args: readonly unknown[]) => Awaitable<void>
 
 export interface LoggerLike {
 	readonly currentContext: Readonly<DataLike>;
-	add(data: DataLike): unknown;
+	add(data: DataLike): this;
 	trace: LoggerLevelMethod;
 	debug: LoggerLevelMethod;
 	info: LoggerLevelMethod;
@@ -21,7 +21,14 @@ export interface QueueJobOptionsLike extends DataLike {}
 export interface QueueJobLike<TData = unknown, TResult = unknown, TName extends string = string> {
 	readonly id?: string | number;
 	readonly name: TName;
+	/**
+	 * Canonical job payload field. Consumers should read this first.
+	 */
 	readonly data?: TData;
+	/**
+	 * Compatibility alias for queue libraries that expose payload instead of data.
+	 * When both are present, data takes precedence.
+	 */
 	readonly payload?: TData;
 	readonly result?: TResult;
 	readonly options?: QueueJobOptionsLike;
