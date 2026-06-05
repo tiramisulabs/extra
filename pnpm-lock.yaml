@@ -93,9 +93,6 @@ importers:
 
   packages/queues:
     dependencies:
-      '@slipher/internal':
-        specifier: workspace:*
-        version: link:../internal
       bullmq:
         specifier: ^5.0.0
         version: 5.77.6
