@@ -23,8 +23,11 @@ function decorate(props: CooldownProps) {
  *  - `Cooldown.global(interval, uses?)`
  *  - `Cooldown.custom(resolver, interval, uses?)` for custom target resolvers
  *
- * All shortcuts accept an optional `group` field via the third argument:
+ * Scoped shortcuts accept an optional `group` field via the third argument:
  * `Cooldown.user(5_000, { default: 1 }, { group: 'moderation' })`
+ *
+ * `Cooldown.custom` accepts `group` through its fourth `extras` argument:
+ * `Cooldown.custom(resolver, 5_000, undefined, { group: 'moderation' })`
  */
 export function Cooldown(props: CooldownProps) {
 	return decorate(props);

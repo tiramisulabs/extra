@@ -624,6 +624,13 @@ describe('Cooldown decorator shortcuts', () => {
 		class Cmd {}
 		assert.equal((new Cmd() as Cmd & { cooldown: CooldownProps }).cooldown.type, resolver);
 	});
+
+	test('Cooldown.custom accepts a shared group via extras', () => {
+		const resolver = () => 'k';
+		@Cooldown.custom(resolver, 1_000, undefined, { group: 'mod' })
+		class Cmd {}
+		assert.equal((new Cmd() as Cmd & { cooldown: CooldownProps }).cooldown.group, 'mod');
+	});
 });
 
 describe('formatRemaining', () => {
