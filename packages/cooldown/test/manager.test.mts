@@ -212,6 +212,23 @@ describe('CooldownManager — getCommandData', () => {
 		assert.equal(manager.getCommandData('commandWithfakeGuildId', '124')?.[0], 'commandWithfakeGuildId');
 		assert.equal(manager.getCommandData('commandWithfakeGuildId')?.[0], 'commandWithfakeGuildId');
 	});
+
+	test('uses Seyfert parser guild candidates for metadata lookup without guildId', () => {
+		class TrackingHandleCommand extends HandleCommand {
+			guildIds: (string | undefined)[] = [];
+
+			override resolveCommandFromContent(content: string, prefix: string, message: never) {
+				this.guildIds.push((message as { guild_id?: string }).guild_id);
+				return super.resolveCommandFromContent(content, prefix, message);
+			}
+		}
+
+		const handle = new TrackingHandleCommand(client);
+		client.handleCommand = handle;
+
+		assert.equal(manager.getCommandData('commandWithfakeGuildId')?.[0], 'commandWithfakeGuildId');
+		assert.deepEqual(handle.guildIds, [undefined, '124']);
+	});
 });
 
 describe('CooldownManager — check / consume / remaining / reset', () => {
