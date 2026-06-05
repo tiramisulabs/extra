@@ -395,6 +395,25 @@ describe('CooldownManager — check / consume / remaining / reset', () => {
 		assert.equal((adapter.get('cooldowns.ping:user:u1') as CooldownData | null)?.remaining, 0);
 	});
 
+	test('atomic adapter path does not overspend under concurrent consumes', async () => {
+		const adapter = new AtomicMemoryAdapter();
+		client.cache = new Cache(0, adapter, {}, client);
+		manager = new CooldownManager(client);
+
+		const results = await Promise.all(Array.from({ length: 5 }, () => manager.consume({ name: 'ping', target: 'u1' })));
+		const allowed = results.filter(result => result?.allowed);
+		const blocked = results.filter(result => result && !result.allowed);
+
+		assert.equal(adapter.evalCalls, 5);
+		assert.equal(allowed.length, 2);
+		assert.equal(blocked.length, 3);
+		assert.deepEqual(
+			allowed.map(result => result?.remainingUses),
+			[1, 0],
+		);
+		assert.equal((adapter.get('cooldowns.ping:user:u1') as CooldownData | null)?.remaining, 0);
+	});
+
 	test('returns undefined when the command resolves to no cooldown', async () => {
 		assert.equal(await manager.consume({ name: 'unbounded', target: 'u1' }), undefined);
 		assert.equal(await manager.check({ name: 'unbounded', target: 'u1' }), undefined);
