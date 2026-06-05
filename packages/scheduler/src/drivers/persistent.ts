@@ -49,6 +49,7 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 
 	async setup(client?: SchedulerClientLike) {
 		if (this.state === 'ready') return;
+		if (this.state === 'closed') throw new Error('Scheduler persistent driver has been stopped.');
 		this.state = 'ready';
 		this.schedulerVersion += 1;
 		this.queue = new this.bullmq.Queue(this.queueName, this.queueOptions);

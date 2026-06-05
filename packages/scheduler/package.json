@@ -26,7 +26,7 @@
 		"croner": "^9.1.0"
 	},
 	"peerDependencies": {
-		"bullmq": "^5.0.0",
+		"bullmq": "^5.23.0",
 		"seyfert": ">=4.3.0-0"
 	},
 	"peerDependenciesMeta": {

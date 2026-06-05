@@ -1,5 +1,16 @@
 import { assert, describe, test } from 'vitest';
-import { Cron, createScheduler, Interval, memory, persistent, type ScheduledTask, scheduler } from '../src';
+import {
+	Cron,
+	createScheduler,
+	Interval,
+	memory,
+	persistent,
+	type ScheduledTask,
+	type SchedulerEventName,
+	type SchedulerEventPayloads,
+	type SchedulerRegistry,
+	scheduler,
+} from '../src';
 import { parseDuration } from '../src/duration';
 
 class FakeCronerJob {
@@ -60,7 +71,7 @@ function createFakeBullMQ() {
 
 		constructor(
 			readonly name: string,
-			readonly options: Record<string, unknown>,
+			readonly options: Record<string, unknown> = {},
 		) {
 			state.queues.push(this);
 		}
@@ -92,7 +103,7 @@ function createFakeBullMQ() {
 
 		constructor(
 			readonly name: string,
-			readonly options: Record<string, unknown>,
+			readonly options: Record<string, unknown> = {},
 		) {
 			state.queueEvents.push(this);
 		}
@@ -116,7 +127,7 @@ function createFakeBullMQ() {
 		constructor(
 			readonly name: string,
 			readonly processor: (job: { name: string; data?: Record<string, unknown> }) => unknown,
-			readonly options: Record<string, unknown>,
+			readonly options: Record<string, unknown> = {},
 		) {
 			state.workers.push(this);
 		}
@@ -132,8 +143,8 @@ function createFakeBullMQ() {
 	};
 }
 
-function waitForEvent<T>(registry: { once(event: string, listener: (payload: T) => void): () => void }, event: string) {
-	return new Promise<T>(resolve => {
+function waitForEvent<TEvent extends SchedulerEventName>(registry: SchedulerRegistry, event: TEvent) {
+	return new Promise<SchedulerEventPayloads[TEvent]>(resolve => {
 		registry.once(event, resolve);
 	});
 }
@@ -150,14 +161,20 @@ async function assertRejects(run: () => Promise<unknown>, expected: RegExp) {
 	assert.match((thrown as Error).message, expected);
 }
 
+function applyMethodDecorator(decorator: MethodDecorator, target: object, propertyKey: string) {
+	const descriptor = Object.getOwnPropertyDescriptor(target, propertyKey);
+	if (!descriptor) throw new Error(`Missing method descriptor for ${propertyKey}`);
+	decorator(target, propertyKey, descriptor);
+}
+
 describe('scheduler', () => {
 	test('runs interval tasks with the Croner memory driver and emits lifecycle events', async () => {
 		const croner = createFakeCroner();
 		const registry = createScheduler({
 			driver: memory({ croner: croner.factory }),
 		});
-		const started = waitForEvent<{ task: ScheduledTask }>(registry, 'started');
-		const completed = waitForEvent<{ task: ScheduledTask; result: string }>(registry, 'completed');
+		const started = waitForEvent(registry, 'started');
+		const completed = waitForEvent(registry, 'completed');
 		const runs: string[] = [];
 
 		const task = registry.interval('heartbeat', '5m', current => {
@@ -205,8 +222,8 @@ describe('scheduler', () => {
 			}
 		}
 
-		Interval('5m', { id: 'heartbeat' })(MaintenanceTasks.prototype, 'heartbeat');
-		Cron('0 0 * * *', { id: 'daily' })(MaintenanceTasks.prototype, 'daily');
+		applyMethodDecorator(Interval('5m', { id: 'heartbeat' }), MaintenanceTasks.prototype, 'heartbeat');
+		applyMethodDecorator(Cron('0 0 * * *', { id: 'daily' }), MaintenanceTasks.prototype, 'daily');
 
 		const plugin = scheduler({
 			driver: memory({ croner: croner.factory }),
@@ -330,7 +347,9 @@ describe('scheduler', () => {
 		assert.deepEqual(runs, ['daily']);
 
 		const queueEventCompletions: string[] = [];
-		registry.once('completed', ({ task }) => queueEventCompletions.push(task.id));
+		registry.once('completed', ({ task }) => {
+			queueEventCompletions.push(task.id);
+		});
 		bullmq.state.queueEvents[0]!.emit('completed', {
 			jobId: 'repeat:heartbeat:1770000000000',
 			returnvalue: 'queue-event-result',
@@ -343,6 +362,22 @@ describe('scheduler', () => {
 		assert.equal(bullmq.state.queues[0]!.closed, true);
 		assert.equal(bullmq.state.queueEvents[0]!.closed, true);
 		assert.equal(bullmq.state.workers[0]!.closed, true);
+	});
+
+	test('persistent setup rejects after close without reopening resources', async () => {
+		const bullmq = createFakeBullMQ();
+		const registry = createScheduler({
+			driver: persistent({ bullmq: bullmq.module }),
+		});
+
+		registry.cron('daily', '0 0 * * *', () => undefined);
+		await registry.setup({ initialized: true });
+		await registry.close();
+
+		await assertRejects(() => registry.setup({ initialized: true }), /has been stopped/);
+		assert.equal(bullmq.state.queues.length, 1);
+		assert.equal(bullmq.state.queueEvents.length, 1);
+		assert.equal(bullmq.state.workers.length, 1);
 	});
 
 	test('persistent pause removes the job scheduler and start re-upserts its template', async () => {
@@ -420,8 +455,8 @@ describe('scheduler', () => {
 			explicit() {}
 		}
 
-		Interval('5m')(Tasks.prototype, 'implicit');
-		Interval('5m', { id: 'stable-explicit' })(Tasks.prototype, 'explicit');
+		applyMethodDecorator(Interval('5m'), Tasks.prototype, 'implicit');
+		applyMethodDecorator(Interval('5m', { id: 'stable-explicit' }), Tasks.prototype, 'explicit');
 
 		const registry = createScheduler({
 			driver: persistent({ bullmq: bullmq.module }),
