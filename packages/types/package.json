@@ -6,7 +6,7 @@
 	"files": [
 		"lib/**"
 	],
-	"types": "./src/index.ts",
+	"types": "./lib/index.d.ts",
 	"scripts": {
 		"dev": "tsc --watch",
 		"build": "tsc",

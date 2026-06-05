@@ -132,6 +132,14 @@ export function mockQueues(): MockQueues {
 				queue = {
 					name,
 					jobs: [],
+					/**
+					 * Runtime overload disambiguation for add checks isJobOptionsLike(payloadOrOptions).
+					 * When the 2-arg form sees job-options-like data, maybeOptions is undefined and
+					 * the second argument becomes options, so the job name falls back to "default".
+					 * For example, add('send', { delay: '5s' }) records name="default" and
+					 * payload="send". To force a named job, use the 3-arg form:
+					 * add('send', { payload: true }, { delay: '5s' }).
+					 */
 					async add(nameOrPayload: unknown, payloadOrOptions?: unknown, maybeOptions?: Record<string, unknown>) {
 						const hasJobName =
 							typeof nameOrPayload === 'string' &&
@@ -157,6 +165,9 @@ export function mockQueues(): MockQueues {
 	};
 }
 
+// isJobOptionsLike uses the ['id', 'delay', 'attempts', 'priority', 'retryDelay']
+// whitelist to disambiguate add overloads. Update these keys if queue job
+// options grow, for example backoff, timeout, or jobId.
 function isJobOptionsLike(value: unknown): value is Record<string, unknown> {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
 	const keys = Object.keys(value);

@@ -52,7 +52,7 @@ function parseWebhookPayload(rawBody: string): WebhookPingEventPayload | Webhook
 		return;
 	}
 
-	if (!body || typeof body !== 'object') return;
+	if (!body || typeof body !== 'object' || Array.isArray(body)) return;
 	const payload = body as { type?: unknown; event?: unknown };
 	if (payload.type === WebhookRequestType.PING) return body as WebhookPingEventPayload;
 	if (payload.type === WebhookRequestType.Event && payload.event && typeof payload.event === 'object') {

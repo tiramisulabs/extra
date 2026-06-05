@@ -6,7 +6,7 @@ export type LoggerLevelMethod = (...args: readonly unknown[]) => Awaitable<void>
 
 export interface LoggerLike {
 	readonly currentContext: Readonly<DataLike>;
-	add(data: DataLike): unknown;
+	add(data: DataLike): void;
 	trace: LoggerLevelMethod;
 	debug: LoggerLevelMethod;
 	info: LoggerLevelMethod;
