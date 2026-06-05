@@ -212,16 +212,18 @@ export class CooldownManager {
 		return this.client.handleCommand.getCommandFromContent(parts, guildId);
 	}
 
-	private commandResolverGuildIds(guildId?: string): (string | undefined)[] {
-		if (guildId) return [guildId];
+	private *commandResolverGuildIds(guildId?: string): Iterable<string | undefined> {
+		if (guildId) {
+			yield guildId;
+			return;
+		}
 
-		const ids: (string | undefined)[] = [undefined];
+		yield undefined;
 		for (const command of this.client.commands.values) {
 			for (const commandGuildId of command.guildId ?? []) {
-				if (!ids.includes(commandGuildId)) ids.push(commandGuildId);
+				yield commandGuildId;
 			}
 		}
-		return ids;
 	}
 
 	private getFullCommandName({ command, parent, fullCommandName }: CommandFromContent) {
