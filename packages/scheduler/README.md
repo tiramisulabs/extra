@@ -8,10 +8,10 @@ Task scheduling helpers for Seyfert projects.
 pnpm add @slipher/scheduler
 ```
 
-Install BullMQ only when you need persistent, cluster-aware schedules:
+Install BullMQ only when you need persistent, cluster-aware schedules. The persistent driver uses BullMQ job schedulers, so it requires BullMQ `^5.23.0` or newer:
 
 ```sh
-pnpm add bullmq
+pnpm add bullmq@^5.23.0
 ```
 
 ## Seyfert Plugin
@@ -139,7 +139,7 @@ const registry = createScheduler({
 });
 ```
 
-Persistent schedules open BullMQ `Queue`, `Worker`, and `QueueEvents` during plugin `setup()`, not module load. `schedulerPlugin.teardown()` or `registry.close()` closes worker, queue-events, and queue resources. Until your Seyfert version includes plugin teardown, wire your process signals manually:
+Persistent schedules open BullMQ `Queue`, `Worker`, and `QueueEvents` during plugin `setup()`, not module load. `schedulerPlugin.teardown()` or `registry.close()` closes worker, queue-events, and queue resources. A closed persistent driver cannot be started again; create a new scheduler plugin or registry for a new process lifecycle. Until your Seyfert version includes plugin teardown, wire your process signals manually:
 
 ```ts
 process.on('SIGTERM', () => {
