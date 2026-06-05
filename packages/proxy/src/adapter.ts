@@ -7,7 +7,7 @@ import {
 	type us_listen_socket,
 } from 'uWebSockets.js';
 import { ApiHandler, type HttpMethods, type RawFile } from 'seyfert';
-import { parseJsonObject, parseMultipartBody } from './parsing';
+import { isMultipartContentType, parseJsonObject, parseMultipartBody } from './parsing';
 
 function writeBadRequest(res: HttpResponse, message: string) {
 	if (!res.aborted)
@@ -54,7 +54,7 @@ export function createProxy(options: {
 		const reason = req.getHeader('x-audit-log-reason');
 		if (method !== 'GET' && method !== 'DELETE') {
 			const contentType = req.getHeader('content-type');
-			if (contentType.includes('multipart/form-data')) {
+			if (isMultipartContentType(contentType)) {
 				const form = await readBody(res, req, contentType);
 				if (form) {
 					const parsed = parseMultipartBody(form);

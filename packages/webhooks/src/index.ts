@@ -9,6 +9,7 @@ export interface BadWebhookPayloadResult {
 
 export type WebhookPayload = WebhookPingEventPayload | WebhookEventPayload;
 export type WebhookPayloadResult = { ok: true; body: WebhookPayload } | BadWebhookPayloadResult;
+export const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -32,12 +33,23 @@ export const init = (options: AppOptions) => {
 		if (req.url !== options.path) return res.writeHead(401).end();
 
 		let rawBody = '';
+		let bodySize = 0;
+		let bodyTooLarge = false;
 
 		req.on('data', chunk => {
+			if (bodyTooLarge) return;
+			bodySize += Buffer.byteLength(chunk);
+			if (bodySize > MAX_WEBHOOK_BODY_BYTES) {
+				bodyTooLarge = true;
+				rawBody = '';
+				res.writeHead(413).end();
+				return;
+			}
 			rawBody += chunk.toString(); // Append each chunk of data
 		});
 
 		req.on('end', () => {
+			if (bodyTooLarge) return;
 			let verify: boolean;
 			try {
 				verify = verifySignature({

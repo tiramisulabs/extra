@@ -21,6 +21,10 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+export function isMultipartContentType(contentType: string | undefined): contentType is string {
+	return contentType?.includes('multipart/form-data') === true;
+}
+
 export function parseJsonObject(input: string | Buffer | ArrayBuffer): JsonObjectResult {
 	const raw =
 		typeof input === 'string'

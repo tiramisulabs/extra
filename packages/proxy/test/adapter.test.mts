@@ -1,11 +1,17 @@
 import { assert, describe, test } from 'vitest';
-import { parseJsonObject, parseMultipartBody } from '../src/parsing';
+import { isMultipartContentType, parseJsonObject, parseMultipartBody } from '../src/parsing';
 
 function bytes(value: string) {
 	return new TextEncoder().encode(value).buffer;
 }
 
 describe('@slipher/proxy request parsing', () => {
+	test('isMultipartContentType rejects missing headers', () => {
+		assert.equal(isMultipartContentType(undefined), false);
+		assert.equal(isMultipartContentType('application/json'), false);
+		assert.equal(isMultipartContentType('multipart/form-data; boundary=body'), true);
+	});
+
 	test('parseJsonObject accepts only JSON objects', () => {
 		assert.deepEqual(parseJsonObject('{"content":"hello"}'), { ok: true, value: { content: 'hello' } });
 		assert.deepEqual(parseJsonObject('[]'), { ok: false, status: 400, message: 'Expected a JSON object body.' });
