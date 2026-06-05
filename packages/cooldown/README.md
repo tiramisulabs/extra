@@ -94,10 +94,21 @@ export default class PingCommand extends Command {
 @Cooldown.custom(ctx => `${ctx.guildId}:${ctx.author.id}`, 5_000)
 ```
 
-All shortcuts accept an `extras` argument for advanced features:
+Scoped shortcuts accept an `extras` argument as the third parameter:
 
 ```ts
 @Cooldown.user(5_000, { default: 1 }, { group: 'moderation' })
+```
+
+`Cooldown.custom` receives `extras` as the fourth parameter because the first argument is the resolver:
+
+```ts
+@Cooldown.custom(
+	ctx => `${ctx.guildId}:${ctx.author.id}`,
+	5_000,
+	{ default: 1 },
+	{ group: 'moderation' },
+)
 ```
 
 ### Raw decorator
@@ -206,6 +217,18 @@ class HeavyCommand extends Command { /* ... */ }
 ```
 
 The resolved string is used verbatim as the target portion of the cache key. The type label in the key is `custom`. Returning `undefined` skips the cooldown.
+
+To share a custom resolver bucket with other commands, pass `group` through the fourth `extras` argument:
+
+```ts
+@Cooldown.custom(
+	ctx => `${ctx.guildId}:${ctx.author.id}`,
+	30_000,
+	{ default: 2 },
+	{ group: 'heavy' },
+)
+class HeavyCommand extends Command { /* ... */ }
+```
 
 ## `formatRemaining` Helper
 
