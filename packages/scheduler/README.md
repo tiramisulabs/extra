@@ -139,11 +139,11 @@ const registry = createScheduler({
 });
 ```
 
-Persistent schedules open BullMQ `Queue`, `Worker`, and `QueueEvents` during plugin `setup()`, not module load. `schedulerPlugin.teardown()` or `registry.close()` closes worker, queue-events, and queue resources. A closed persistent driver cannot be started again; create a new scheduler plugin or registry for a new process lifecycle. Until your Seyfert version includes plugin teardown, wire your process signals manually:
+Persistent schedules open BullMQ `Queue`, `Worker`, and `QueueEvents` during plugin `setup()`, not module load. `client.close()` runs `schedulerPlugin.teardown()` and closes worker, queue-events, and queue resources. Outside Seyfert, call `registry.close()` directly. A closed persistent driver cannot be started again; create a new scheduler plugin or registry for a new process lifecycle. Wire process signals to close whichever lifecycle owner you use:
 
 ```ts
 process.on('SIGTERM', () => {
-	void registry.close().then(() => process.exit(0));
+	void client.close().then(() => process.exit(0));
 });
 ```
 
