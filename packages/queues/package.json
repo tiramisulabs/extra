@@ -33,7 +33,7 @@
 	"devDependencies": {
 		"@slipher/types": "workspace:*",
 		"@types/node": "^25.0.10",
-		"seyfert": "4.3.1-dev-26915701713.0",
+		"seyfert": "4.3.1-dev-27001512861.0",
 		"typescript": "^5.9.3"
 	}
 }

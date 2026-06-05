@@ -188,11 +188,11 @@ export default queues({
 
 Static `retryDelay` values map to BullMQ `backoff: { type: 'fixed', delay }`. BullMQ backoff objects pass through. Function-form `retryDelay` is memory-only; the persistent driver rejects it during setup or at the `add()` call site because BullMQ owns retry timing.
 
-Persistent queues open BullMQ `Queue`, `Worker`, and `QueueEvents` during plugin `setup()`, not module load. `queuesPlugin.teardown()` or `registry.close()` closes worker, queue-events, and queue resources. Until your Seyfert version includes plugin teardown, wire your process signals manually:
+Persistent queues open BullMQ `Queue`, `Worker`, and `QueueEvents` during plugin `setup()`, not module load. `client.close()` runs `queuesPlugin.teardown()` and closes worker, queue-events, and queue resources. Outside Seyfert, call `registry.close()` directly. Wire process signals to close whichever lifecycle owner you use:
 
 ```ts
 process.on('SIGTERM', () => {
-	void registry.close().then(() => process.exit(0));
+	void client.close().then(() => process.exit(0));
 });
 ```
 
