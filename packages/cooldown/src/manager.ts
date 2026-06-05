@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type { AnyContext } from 'seyfert';
 import { CacheFrom, type ReturnCache } from 'seyfert/lib/cache';
 import type { BaseClient } from 'seyfert/lib/client/base';
-import type { UsingClient } from 'seyfert/lib/commands';
+import { Command, IgnoreCommand, SubCommand, type UsingClient } from 'seyfert/lib/commands';
 import type { CommandFromContent } from 'seyfert/lib/commands/handle';
 import { type Awaitable, Formatter, fakePromise, type PickPartial, TimestampStyle } from 'seyfert/lib/common';
 import { type CooldownData, CooldownResource, type CooldownType } from './resource';
@@ -181,12 +181,14 @@ export class CooldownManager {
 		return this.client.debugger;
 	}
 
-	private resolveCommand(name: string) {
+	private resolveCommand(name: string, guildId?: string) {
 		const content = name.trim();
 		let resolved: CommandFromContent | undefined;
 
 		try {
-			const message = undefined as unknown as Parameters<typeof this.client.handleCommand.resolveCommandFromContent>[2];
+			const message = (guildId ? { guild_id: guildId } : undefined) as Parameters<
+				typeof this.client.handleCommand.resolveCommandFromContent
+			>[2];
 			resolved = this.client.handleCommand.resolveCommandFromContent(content, '', message);
 		} catch {
 			resolved = undefined;
@@ -194,7 +196,66 @@ export class CooldownManager {
 
 		if (resolved?.command) return resolved;
 
-		return this.client.handleCommand.getCommandFromContent(content.split(' ').filter(Boolean).slice(0, 3));
+		const parts = content.split(' ').filter(Boolean).slice(0, 3);
+		if (guildId) {
+			resolved = this.client.handleCommand.getCommandFromContent(parts, guildId);
+			if (resolved.command) return resolved;
+		}
+
+		return this.resolveCommandForMetadata(parts);
+	}
+
+	private resolveCommandForMetadata(commandRaw: string[]): CommandFromContent {
+		if (!commandRaw.length) return { fullCommandName: '' };
+
+		const rawParentName = commandRaw[0]!;
+		const rawGroupName = commandRaw.length === 3 ? commandRaw[1] : undefined;
+		const rawSubcommandName = rawGroupName ? commandRaw[2] : commandRaw[1];
+		const parent = this.getMetadataParentCommand(rawParentName);
+		const fullCommandName = `${rawParentName}${
+			rawGroupName ? ` ${rawGroupName} ${rawSubcommandName}` : `${rawSubcommandName ? ` ${rawSubcommandName}` : ''}`
+		}`;
+
+		if (!(parent instanceof Command)) return { fullCommandName };
+
+		if (rawGroupName && !parent.groups?.[rawGroupName] && !parent.groupsAliases?.[rawGroupName]) {
+			return this.resolveCommandForMetadata([rawParentName, rawGroupName]);
+		}
+		if (
+			rawSubcommandName &&
+			!parent.options?.some(
+				option =>
+					option instanceof SubCommand &&
+					(option.name === rawSubcommandName || option.aliases?.includes(rawSubcommandName)),
+			)
+		) {
+			return this.resolveCommandForMetadata([rawParentName]);
+		}
+
+		const groupName = rawGroupName ? parent.groupsAliases?.[rawGroupName] || rawGroupName : undefined;
+		const command =
+			groupName || rawSubcommandName
+				? (parent.options?.find(option => {
+						if (!(option instanceof SubCommand)) return false;
+						if (groupName && option.group !== groupName) return false;
+						if (option.group && !groupName) return false;
+						return rawSubcommandName === option.name || option.aliases?.includes(rawSubcommandName);
+					}) as SubCommand | undefined)
+				: parent;
+
+		return {
+			command,
+			fullCommandName,
+			parent,
+		};
+	}
+
+	private getMetadataParentCommand(rawParentName: string) {
+		return this.client.commands.values.find(
+			command =>
+				(!('ignore' in command) || command.ignore !== IgnoreCommand.Message) &&
+				(command.name === rawParentName || ('aliases' in command && command.aliases?.includes(rawParentName))),
+		);
 	}
 
 	private getFullCommandName({ command, parent, fullCommandName }: CommandFromContent) {
@@ -207,7 +268,7 @@ export class CooldownManager {
 	getCommandData(name: string, guildId?: string): [name: string, data: CooldownProps | undefined] | undefined {
 		this.debugger?.info(`Resolving cooldown data for command ${name} with guildId ${guildId}`);
 
-		const { command, parent, fullCommandName } = this.resolveCommand(name);
+		const { command, parent, fullCommandName } = this.resolveCommand(name, guildId);
 
 		if (!command) return undefined;
 
