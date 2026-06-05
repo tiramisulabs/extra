@@ -1,4 +1,4 @@
-import { type DurationInput, InvalidDurationError, parseDuration } from '@slipher/internal';
+import { type DurationInput, InvalidDurationError, parseDuration } from './duration';
 import { SchedulerEmitter } from './events';
 import { getTaskMetadata, instantiateTaskSource } from './metadata';
 import { ScheduledTask } from './task';

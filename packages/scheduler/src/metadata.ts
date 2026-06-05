@@ -1,5 +1,10 @@
-import type { DurationInput } from '@slipher/internal';
-import type { ScheduleKind, SchedulerDecoratorOptions, SchedulerTaskConstructor, SchedulerTaskSource } from './types';
+import type {
+	DurationInput,
+	ScheduleKind,
+	SchedulerDecoratorOptions,
+	SchedulerTaskConstructor,
+	SchedulerTaskSource,
+} from './types';
 
 interface TaskMetadata {
 	kind: ScheduleKind;

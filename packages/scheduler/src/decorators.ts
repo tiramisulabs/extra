@@ -1,6 +1,5 @@
-import type { DurationInput } from '@slipher/internal';
 import { addTaskMetadata } from './metadata';
-import type { SchedulerDecoratorOptions } from './types';
+import type { DurationInput, SchedulerDecoratorOptions } from './types';
 
 export function Interval(schedule: DurationInput, options?: SchedulerDecoratorOptions): MethodDecorator {
 	return (target, propertyKey) => {

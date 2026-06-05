@@ -1,6 +1,6 @@
 import type { SchedulerLike } from '@slipher/types';
 import type { Client, CommandContext, HttpClient, UsingClient, WorkerClient } from 'seyfert';
-import { createScheduler, memory, type ScheduledTask, type SchedulerRegistry, scheduler } from '../src';
+import { createScheduler, memory, persistent, type ScheduledTask, type SchedulerRegistry, scheduler } from '../src';
 
 declare function expectType<T>(value: T): void;
 declare const context: CommandContext;
@@ -24,3 +24,8 @@ createScheduler({});
 
 // @ts-expect-error scheduler plugin driver is required
 scheduler({});
+
+// @ts-expect-error orphan purging belongs to persistent driver options
+createScheduler({ driver: memory(), purgeOrphansOnStartup: true });
+
+createScheduler({ driver: persistent({ purgeOrphansOnStartup: true }) });

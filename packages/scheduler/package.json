@@ -23,7 +23,6 @@
 		"prepublish": "pnpm build"
 	},
 	"dependencies": {
-		"@slipher/internal": "workspace:*",
 		"croner": "^9.1.0"
 	},
 	"peerDependencies": {

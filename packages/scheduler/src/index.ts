@@ -15,6 +15,7 @@ export type {
 	CreateSchedulerOptions,
 	CronerFactory,
 	CronerJob,
+	DurationInput,
 	MemorySchedulerOptions,
 	PersistentSchedulerOptions,
 	ScheduledTaskDefinition,

@@ -1,6 +1,6 @@
-import { parseDuration } from '@slipher/internal';
 import { assert, describe, test } from 'vitest';
 import { Cron, createScheduler, Interval, memory, persistent, type ScheduledTask, scheduler } from '../src';
+import { parseDuration } from '../src/duration';
 
 class FakeCronerJob {
 	paused = false;
@@ -329,6 +329,15 @@ describe('scheduler', () => {
 		assert.equal(result, 'cron-result');
 		assert.deepEqual(runs, ['daily']);
 
+		const queueEventCompletions: string[] = [];
+		registry.once('completed', ({ task }) => queueEventCompletions.push(task.id));
+		bullmq.state.queueEvents[0]!.emit('completed', {
+			jobId: 'repeat:heartbeat:1770000000000',
+			returnvalue: 'queue-event-result',
+		});
+
+		assert.deepEqual(queueEventCompletions, ['heartbeat']);
+
 		await registry.close();
 
 		assert.equal(bullmq.state.queues[0]!.closed, true);
@@ -391,6 +400,7 @@ describe('scheduler', () => {
 		await warnRegistry.setup({ initialized: true });
 
 		assert.equal(warned.length, 1);
+		assert.match(String((warned[0] as unknown[])[1]), /persistent\(\{ purgeOrphansOnStartup: true \}\)/);
 		assert.deepEqual(warnedBullmq.state.queues[0]!.removed, []);
 
 		const purgeRegistry = createScheduler({

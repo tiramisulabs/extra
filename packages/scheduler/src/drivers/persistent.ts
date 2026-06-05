@@ -199,7 +199,7 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 			} else {
 				this.host?.logger?.warn?.(
 					{ taskId: id },
-					`Orphaned scheduler "${id}" found in Redis. To remove: scheduler.remove('${id}'). To auto-purge on startup: scheduler({ purgeOrphansOnStartup: true }).`,
+					`Orphaned scheduler "${id}" found in Redis. To remove: scheduler.remove('${id}'). To auto-purge on startup: persistent({ purgeOrphansOnStartup: true }).`,
 				);
 			}
 		}
@@ -223,9 +223,40 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 
 	private taskFromQueueEvent(event: unknown) {
 		const record = eventRecord(event);
-		const taskId =
-			typeof record.taskId === 'string' ? record.taskId : typeof record.jobId === 'string' ? record.jobId : undefined;
+		const taskId = this.taskIdFromQueueEventRecord(record);
 		return taskId ? this.tasks.get(taskId) : undefined;
+	}
+
+	private taskIdFromQueueEventRecord(record: Record<string, unknown>) {
+		if (typeof record.taskId === 'string') return record.taskId;
+		if (typeof record.name === 'string' && this.tasks.has(record.name)) return record.name;
+		if (typeof record.jobId !== 'string') return undefined;
+
+		return this.taskIdFromJobId(record.jobId);
+	}
+
+	private taskIdFromJobId(jobId: string) {
+		if (this.tasks.has(jobId)) return jobId;
+
+		if (jobId.startsWith('repeat:')) {
+			const repeated = jobId.slice('repeat:'.length);
+			const timestampSeparator = repeated.lastIndexOf(':');
+			const schedulerId = timestampSeparator === -1 ? repeated : repeated.slice(0, timestampSeparator);
+			if (this.tasks.has(schedulerId)) return schedulerId;
+		}
+
+		if (jobId.startsWith('scheduler:')) {
+			const schedulerId = jobId.slice('scheduler:'.length);
+			if (this.tasks.has(schedulerId)) return schedulerId;
+		}
+
+		const immediateRunSeparator = jobId.lastIndexOf(':immediate:');
+		if (immediateRunSeparator > 0) {
+			const taskId = jobId.slice(0, immediateRunSeparator);
+			if (this.tasks.has(taskId)) return taskId;
+		}
+
+		return undefined;
 	}
 
 	private requireTask(id: string) {

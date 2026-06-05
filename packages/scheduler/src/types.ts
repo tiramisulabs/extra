@@ -1,6 +1,8 @@
 import type { SchedulerRegistry } from './manager';
 import type { ScheduledTask } from './task';
 
+export type { DurationInput } from './duration';
+
 export type Awaitable<T> = T | PromiseLike<T>;
 
 export type ScheduleKind = 'cron' | 'interval';
@@ -78,7 +80,6 @@ export interface ScheduledTaskDefinition extends ScheduledTaskOptions {
 export interface CreateSchedulerOptions {
 	driver: SchedulerDriver;
 	logger?: SchedulerLogger;
-	purgeOrphansOnStartup?: boolean;
 	tasks?: SchedulerTaskSource[];
 	resolveTask?: (source: SchedulerTaskSource) => object;
 }
