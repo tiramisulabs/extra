@@ -1,6 +1,7 @@
 import type { QueueLike } from '@slipher/types';
 import type { Client, CommandContext, HttpClient, UsingClient, WorkerClient } from 'seyfert';
 import {
+	type Awaitable,
 	type JobNameOf,
 	OnQueueEvent,
 	OnWorkerEvent,
@@ -46,6 +47,21 @@ expectType<QueuesRegistry | undefined>(client.queues);
 const welcomeQueue = registry.get('welcome');
 expectType<QueueOf<'welcome'>>(welcomeQueue);
 expectType<Queue<{ source: 'slash-command' | 'scheduler'; userId: string } | { action: string }, string>>(welcomeQueue);
+const directWelcomeJob = welcomeQueue.add('send', { source: 'slash-command', userId: 'user-1' });
+expectType<Awaitable<QueueJob<{ source: 'slash-command' | 'scheduler'; userId: string }, string, 'send'>>>(
+	directWelcomeJob,
+);
+
+welcomeQueue.add('audit', { action: 'deploy' });
+
+// @ts-expect-error direct registered queue access keeps named job payloads narrow
+welcomeQueue.add('send', { source: 'text-command', userId: 'user-1' });
+
+// @ts-expect-error direct registered queue access requires known job names
+welcomeQueue.add('unknown', { userId: 'user-1' });
+
+// @ts-expect-error job-space queues require a named job
+welcomeQueue.add({ source: 'slash-command', userId: 'user-1' });
 expectType<ClassDecorator>(
 	Processor('welcome', {
 		retryDelay(job) {

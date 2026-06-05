@@ -21,9 +21,6 @@
 		"test": "pnpm typecheck && vitest run --config ./test/vitest.config.mts ./test/",
 		"prepublishOnly": "pnpm build"
 	},
-	"dependencies": {
-		"@slipher/internal": "workspace:*"
-	},
 	"peerDependencies": {
 		"bullmq": "^5.0.0",
 		"seyfert": ">=4.3.0-0"

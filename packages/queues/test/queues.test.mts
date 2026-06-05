@@ -1,4 +1,3 @@
-import { parseDuration as parseInternalDuration } from '@slipher/internal';
 import { assert, describe, test } from 'vitest';
 import {
 	createQueues,
@@ -42,8 +41,17 @@ function waitForEvent<TArgs extends readonly unknown[]>(
 }
 
 describe('memory queues', () => {
-	test('shares the internal duration parser', () => {
-		assert.equal(parseInternalDuration('1s 5ms'), 1005);
+	test('parses compound duration strings for delayed jobs', async () => {
+		const now = 1_000;
+		const registry = createQueues({ driver: memory({ autostart: false, now: () => now }) });
+		const queue = registry.get('welcome');
+
+		const job = await queue.add({ userId: 'user-1' }, { delay: '1s 5ms' });
+
+		assert.equal(job.runAt.getTime() - job.createdAt.getTime(), 1005);
+		assert.equal(queue.counts().delayed, 1);
+
+		await registry.close();
 	});
 
 	test('processes delayed jobs, retries failures, and records the completed result', async () => {
@@ -322,6 +330,57 @@ describe('persistent queues', () => {
 
 		await assertRejects(() => registry.setup({ initialized: true }), /does not support function-form retryDelay/);
 	});
+
+	test('keeps worker handlers separate from QueueEvents lifecycle events', async () => {
+		const fake = createFakeBullMQ();
+		const queueEvents: string[] = [];
+		const workerEvents: string[] = [];
+
+		class MailProcessor {
+			handle(job: QueueJobOf<'mail'>) {
+				return `worker:${job.name}:${job.data.email}`;
+			}
+
+			queueCompleted(_job: QueueJobOf<'mail'>, result: string) {
+				queueEvents.push(result);
+			}
+
+			workerCompleted(_job: QueueJobOf<'mail'>, result: string) {
+				workerEvents.push(result);
+			}
+		}
+
+		Processor('mail')(MailProcessor);
+		Process()(MailProcessor.prototype, 'handle');
+		OnQueueEvent('completed')(MailProcessor.prototype, 'queueCompleted');
+		OnWorkerEvent('completed')(MailProcessor.prototype, 'workerCompleted');
+
+		const registry = createQueues({
+			driver: persistent({ bullmq: fake.module }),
+			processors: [MailProcessor],
+		});
+
+		await registry.setup({ initialized: true });
+		await fake.workers[0].processor({
+			data: { email: 'hi@example.com' },
+			id: 'job-1',
+			name: 'send',
+		});
+
+		assert.deepEqual(queueEvents, []);
+		assert.deepEqual(workerEvents, ['worker:send:hi@example.com']);
+
+		fake.queueEvents[0].emit('completed', {
+			jobId: 'job-1',
+			returnvalue: 'queue:send:hi@example.com',
+		});
+		await flushQueueEvents();
+
+		assert.deepEqual(queueEvents, ['queue:send:hi@example.com']);
+		assert.deepEqual(workerEvents, ['worker:send:hi@example.com']);
+
+		await registry.close();
+	});
 });
 
 async function assertRejects(run: () => Promise<unknown>, expected: RegExp) {
@@ -334,6 +393,11 @@ async function assertRejects(run: () => Promise<unknown>, expected: RegExp) {
 
 	assert.instanceOf(thrown, Error);
 	assert.match((thrown as Error).message, expected);
+}
+
+async function flushQueueEvents() {
+	await Promise.resolve();
+	await Promise.resolve();
 }
 
 function createFakeBullMQ() {
@@ -406,6 +470,7 @@ class FakeBullQueue {
 }
 
 class FakeBullQueueEvents {
+	readonly listeners = new Map<string, ((event: unknown) => void)[]>();
 	closed = false;
 
 	constructor(
@@ -413,8 +478,13 @@ class FakeBullQueueEvents {
 		readonly options: Record<string, unknown>,
 	) {}
 
-	on() {
+	on(event: string, listener: (event: unknown) => void) {
+		this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]);
 		return this;
+	}
+
+	emit(event: string, payload: unknown) {
+		for (const listener of this.listeners.get(event) ?? []) listener(payload);
 	}
 
 	async close() {
