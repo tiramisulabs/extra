@@ -248,7 +248,7 @@ describe('logger plugin', () => {
 
 		assert.equal(adapter.entries.length, 1);
 		assert.equal(adapter.entries[0].level, 'info');
-		assert.equal(adapter.entries[0].message, 'identify {"token":"secret"}');
+		assert.equal(adapter.entries[0].message, 'identify');
 		assert.deepEqual(adapter.entries[0].data, {
 			source: 'seyfert',
 			logger: '[API]',
@@ -375,7 +375,34 @@ describe('logger adapters', () => {
 		assert.equal(events[0]!.command, 'deploy');
 		assert.equal(events[0]!.enriched, true);
 		assert.equal(events[0]!.message, 'command completed');
+		assert.equal('method' in events[0]!, false);
 		assert.equal(events[0]!.secret, '[REDACTED]');
+		assert.equal('status' in events[0]!, false);
+	});
+
+	test('createEvlogAdapter keeps warn lifecycle entries out of HTTP error status', async () => {
+		const events: Array<Record<string, unknown>> = [];
+		initLogger({ _suppressDrainWarning: true, silent: true } as never);
+		const adapter = createEvlogAdapter({
+			drain(context) {
+				events.push(context.event as Record<string, unknown>);
+			},
+		});
+
+		await adapter.write({
+			bindings: {},
+			data: {
+				durationMs: 12,
+				kind: 'command',
+				outcome: 'denied',
+			},
+			level: 'warn',
+			message: 'command permission denied',
+			time: new Date('2026-05-29T10:00:00.000Z'),
+		});
+
+		assert.equal(events.length, 1);
+		assert.equal(events[0]!.status, 200);
 	});
 });
 
