@@ -14,15 +14,16 @@
 	"types": "./lib/index.d.ts",
 	"scripts": {
 		"dev": "tsc --watch",
-		"build": "tsc",
+		"build": "pnpm --filter @slipher/internal build && tsc && node ../../scripts/vendor-internal.mjs testing",
 		"lint": "biome lint --write ./src ./test",
 		"format": "biome format --write ./src ./test",
 		"checkb": "biome check --write --no-errors-on-unmatched ./src ./test",
-		"typecheck": "tsc --noEmit --project ./test/tsconfig.json",
+		"typecheck": "pnpm --filter @slipher/internal build && tsc --noEmit --project ./test/tsconfig.json",
 		"test": "pnpm typecheck && vitest run --config ./test/vitest.config.mts ./test/",
 		"prepublishOnly": "pnpm build"
 	},
 	"devDependencies": {
+		"@slipher/internal": "workspace:*",
 		"@slipher/types": "workspace:*",
 		"@biomejs/biome": "2.3.11",
 		"@types/node": "^25.0.10",

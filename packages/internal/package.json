@@ -1,0 +1,21 @@
+{
+	"name": "@slipher/internal",
+	"version": "0.0.0",
+	"private": true,
+	"license": "MIT",
+	"files": [
+		"lib/**"
+	],
+	"main": "./lib/index.js",
+	"types": "./lib/index.d.ts",
+	"scripts": {
+		"build": "tsc",
+		"checkb": "biome check --write --no-errors-on-unmatched ./src ./test",
+		"test": "vitest run --config ./test/vitest.config.mts ./test/"
+	},
+	"devDependencies": {
+		"@types/node": "^25.0.10",
+		"typescript": "^5.9.3",
+		"vitest": "^4.0.18"
+	}
+}

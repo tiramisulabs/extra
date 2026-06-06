@@ -63,6 +63,18 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  packages/internal:
+    devDependencies:
+      '@types/node':
+        specifier: ^25.0.10
+        version: 25.0.10
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.18
+        version: 4.0.18(@types/node@25.0.10)
+
   packages/proxy:
     dependencies:
       seyfert:
@@ -100,6 +112,9 @@ importers:
       '@biomejs/biome':
         specifier: 2.3.11
         version: 2.3.11
+      '@slipher/internal':
+        specifier: workspace:*
+        version: link:../internal
       '@slipher/types':
         specifier: workspace:*
         version: link:../types

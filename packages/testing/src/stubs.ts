@@ -1,3 +1,4 @@
+import { isAmbiguousQueueAddArgs, queueAddAmbiguityMessage } from '@slipher/internal';
 import type {
 	LoggerLike,
 	QueueEventMapLike,
@@ -120,13 +121,6 @@ export interface MockClient extends Record<string, unknown> {
 	applicationId: string;
 }
 
-const AMBIGUOUS_QUEUE_ADD_MESSAGE = [
-	'Ambiguous queue.add() call: a string first argument plus an options-shaped second argument can be either data/options or name/data.',
-	'Use add(name, data, options) for named jobs, or pass non-string data to add(data, options).',
-].join(' ');
-const QUEUE_JOB_OPTION_KEYS = ['id', 'delay', 'attempts', 'priority', 'retryDelay'] as const;
-const QUEUE_JOB_OPTION_KEY_SET = new Set<string>(QUEUE_JOB_OPTION_KEYS);
-
 export function mockLogger(): MockLogger {
 	const entries: MockLogEntry[] = [];
 	const context: Record<string, unknown> = {};
@@ -175,14 +169,14 @@ export function mockQueues(): MockQueues {
 					jobs: [],
 					/**
 					 * Runtime overload disambiguation for add uses maybeOptions plus
-					 * isJobOptionsLike. The two-argument form add('send', { delay: '5s' })
-					 * is ambiguous, so it throws instead of guessing. Use
-					 * add('send', { payload: true }, { delay: '5s' }) to force
-					 * name="send".
+					 * @slipher/internal's isJobOptionsLike. The two-argument form
+					 * add('send', { delay: '5s' }) is ambiguous, so it throws instead
+					 * of guessing. Use add('send', { payload: true }, { delay: '5s' })
+					 * to force name="send".
 					 */
 					async add(nameOrPayload: unknown, payloadOrOptions?: unknown, maybeOptions?: Record<string, unknown>) {
 						if (isAmbiguousQueueAddArgs(nameOrPayload, payloadOrOptions, maybeOptions)) {
-							throw new TypeError(AMBIGUOUS_QUEUE_ADD_MESSAGE);
+							throw new TypeError(queueAddAmbiguityMessage);
 						}
 
 						const hasJobName = typeof nameOrPayload === 'string' && payloadOrOptions !== undefined;
@@ -210,25 +204,6 @@ export function mockQueues(): MockQueues {
 			return queue;
 		},
 	};
-}
-
-function isAmbiguousQueueAddArgs(nameOrPayload: unknown, payloadOrOptions: unknown, maybeOptions: unknown): boolean {
-	return (
-		typeof nameOrPayload === 'string' &&
-		payloadOrOptions !== undefined &&
-		maybeOptions === undefined &&
-		isJobOptionsLike(payloadOrOptions)
-	);
-}
-
-// isJobOptionsLike owns the overload-disambiguation whitelist. If job options
-// grow, update QUEUE_JOB_OPTION_KEYS here too. Kept local to avoid making
-// @slipher/testing depend on @slipher/queues at runtime.
-function isJobOptionsLike(value: unknown): value is Record<string, unknown> {
-	if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-	const keys = Object.keys(value);
-	if (!keys.length) return false;
-	return keys.every(key => QUEUE_JOB_OPTION_KEY_SET.has(key));
 }
 
 export function mockScheduler(): MockScheduler {
