@@ -120,6 +120,13 @@ export interface MockClient extends Record<string, unknown> {
 	applicationId: string;
 }
 
+const AMBIGUOUS_QUEUE_ADD_MESSAGE = [
+	'Ambiguous queue.add() call: a string first argument plus an options-shaped second argument can be either data/options or name/data.',
+	'Use add(name, data, options) for named jobs, or pass non-string data to add(data, options).',
+].join(' ');
+const QUEUE_JOB_OPTION_KEYS = ['id', 'delay', 'attempts', 'priority', 'retryDelay'] as const;
+const QUEUE_JOB_OPTION_KEY_SET = new Set<string>(QUEUE_JOB_OPTION_KEYS);
+
 export function mockLogger(): MockLogger {
 	const entries: MockLogEntry[] = [];
 	const context: Record<string, unknown> = {};
@@ -175,7 +182,7 @@ export function mockQueues(): MockQueues {
 					 */
 					async add(nameOrPayload: unknown, payloadOrOptions?: unknown, maybeOptions?: Record<string, unknown>) {
 						if (isAmbiguousQueueAddArgs(nameOrPayload, payloadOrOptions, maybeOptions)) {
-							throw new TypeError(createAmbiguousQueueAddMessage());
+							throw new TypeError(AMBIGUOUS_QUEUE_ADD_MESSAGE);
 						}
 
 						const hasJobName = typeof nameOrPayload === 'string' && payloadOrOptions !== undefined;
@@ -214,20 +221,14 @@ function isAmbiguousQueueAddArgs(nameOrPayload: unknown, payloadOrOptions: unkno
 	);
 }
 
-function createAmbiguousQueueAddMessage(): string {
-	return [
-		'Ambiguous queue.add() call: a string first argument plus an options-shaped second argument can be either data/options or name/data.',
-		'Use add(name, data, options) for named jobs, or pass non-string data to add(data, options).',
-	].join(' ');
-}
-
 // isJobOptionsLike owns the overload-disambiguation whitelist. If job options
-// grow, update ['id', 'delay', 'attempts', 'priority', 'retryDelay'] here too.
+// grow, update QUEUE_JOB_OPTION_KEYS here too. Kept local to avoid making
+// @slipher/testing depend on @slipher/queues at runtime.
 function isJobOptionsLike(value: unknown): value is Record<string, unknown> {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
 	const keys = Object.keys(value);
 	if (!keys.length) return false;
-	return keys.every(key => ['id', 'delay', 'attempts', 'priority', 'retryDelay'].includes(key));
+	return keys.every(key => QUEUE_JOB_OPTION_KEY_SET.has(key));
 }
 
 export function mockScheduler(): MockScheduler {
