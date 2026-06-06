@@ -125,6 +125,8 @@ When using `persistent()`, every decorated task must provide an explicit non-emp
 
 `memory()` intervals tick at 1-second resolution. Values below or between whole seconds, such as `'500ms'` or `'1.5s'`, pass duration parsing but Croner rounds them to the next whole-second tick. If you need sub-second precision, use a different scheduling mechanism.
 
+Cron timezone follows the selected driver. `memory()` delegates cron evaluation to Croner with its default runtime timezone. `persistent()` delegates repeated cron scheduling to BullMQ with no Slipher timezone override. If timezone matters, run workers with an explicit process timezone such as `TZ=UTC` and write cron expressions for that timezone; a first-class scheduler timezone option can be added later without changing task definitions.
+
 `persistent()` uses BullMQ job schedulers so repeated jobs are coordinated outside a single process:
 
 ```ts
@@ -137,6 +139,26 @@ const registry = createScheduler({
 		prefix: 'slipher',
 	}),
 });
+```
+
+For a Seyfert bot, create the plugin, register it on the client, and start the client so plugin setup opens Redis/BullMQ resources:
+
+```ts
+import { Client } from 'seyfert';
+import { persistent, scheduler } from '@slipher/scheduler';
+
+const schedulerPlugin = scheduler({
+	driver: persistent({
+		connection: { host: '127.0.0.1', port: 6379 },
+	}),
+	tasks: [MaintenanceTasks],
+});
+
+const client = new Client({
+	plugins: [schedulerPlugin],
+});
+
+await client.start();
 ```
 
 Persistent schedules open BullMQ `Queue`, `Worker`, and `QueueEvents` during plugin `setup()`, not module load. `client.close()` runs `schedulerPlugin.teardown()` and closes worker, queue-events, and queue resources. Outside Seyfert, call `registry.close()` directly. A closed persistent driver cannot be started again; create a new scheduler plugin or registry for a new process lifecycle. Wire process signals to close whichever lifecycle owner you use:
@@ -157,7 +179,7 @@ await registry.remove('old-task-id');
 
 On startup, the persistent driver compares Redis job schedulers against registered tasks. Orphans are warned by default. Use `persistent({ purgeOrphansOnStartup: true })` to remove them during setup.
 
-`pause(id)` removes the BullMQ job scheduler. `start(id)` re-creates it with the captured template.
+`pause(id)` removes the BullMQ job scheduler. `resume(id)` re-creates it with the captured template and emits `resumed`. `start(id)` remains as a compatibility alias for `resume(id)`.
 
 `runImmediately: true` enqueues one immediate job during setup with a deterministic job id: `${taskId}:immediate:${schedulerVersion}`. That deduplicates the immediate run across replicas in the same process-start wave and runs again on the next start, matching memory-driver behavior.
 
@@ -179,9 +201,10 @@ Listener errors are isolated and reported through the configured logger.
 ## Implementation Notes
 
 - `add()` treats duration strings as intervals and cron strings as cron expressions.
+- If a string is neither a valid duration nor accepted by the cron driver, `add()` throws an error that includes the original input and says it is not a valid duration or cron expression.
 - `ScheduledTask.snapshot()` returns state for health checks or dashboards.
 - The memory driver stores Croner jobs in-process.
-- The persistent driver maps tasks into BullMQ job schedulers.
+- The persistent driver maps tasks into BullMQ job schedulers and stores `taskId` in every BullMQ job payload. QueueEvents resolve task identity from `job.data.taskId` or BullMQ's `repeatJobKey` via `Job.fromId(queue, jobId)`, not by parsing BullMQ's internal jobId string format.
 
 ## Development
 

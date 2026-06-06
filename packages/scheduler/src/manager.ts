@@ -52,7 +52,14 @@ export class SchedulerRegistry extends SchedulerEmitter {
 				throw error;
 			}
 
-			return this.cron(id, schedule, runner, options);
+			try {
+				return this.cron(id, schedule, runner, options);
+			} catch (cronError) {
+				throw new Error(
+					`Scheduler schedule "${String(schedule)}" for task "${id}" is not a valid duration or cron expression.`,
+					{ cause: cronError },
+				);
+			}
 		}
 	}
 
@@ -136,11 +143,16 @@ export class SchedulerRegistry extends SchedulerEmitter {
 		}
 	}
 
-	async start(id: string) {
+	async resume(id: string) {
 		const task = this.requireTask(id);
 		await this.driver.start?.(id);
 		task.status = 'scheduled';
 		this.emit('resumed', { task });
+	}
+
+	/** @deprecated Use resume(id), which matches the emitted "resumed" event. */
+	async start(id: string) {
+		return this.resume(id);
 	}
 
 	async pause(id: string) {

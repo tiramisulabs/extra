@@ -27,6 +27,7 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 	private readonly bullmq: BullMQModule;
 	private readonly queueName: string;
 	private readonly queueOptions: Record<string, unknown>;
+	private readonly jobTaskIds = new Map<string, string>();
 	private readonly purgeOrphansOnStartup: boolean;
 	private queue?: BullMQQueue;
 	private queueEvents?: BullMQQueueEvents;
@@ -150,21 +151,25 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 		const queue = this.requireQueue();
 
 		if (queue.upsertJobScheduler) {
-			return queue.upsertJobScheduler(task.id, schedule.repeat, schedule.template);
+			const result = await queue.upsertJobScheduler(task.id, schedule.repeat, schedule.template);
+			this.rememberJobTaskId(result, task.id);
+			return result;
 		}
 
 		if (queue.add) {
-			return queue.add(task.id, schedule.template.data as Record<string, unknown>, {
+			const result = await queue.add(task.id, schedule.template.data as Record<string, unknown>, {
 				jobId: `scheduler:${task.id}`,
 				repeat: schedule.repeat,
 			});
+			this.rememberJobTaskId(result, task.id);
+			return result;
 		}
 
 		throw new Error('BullMQ Queue must expose upsertJobScheduler or add');
 	}
 
 	private async enqueueImmediateRun(task: ScheduledTask) {
-		await this.requireQueue().add?.(
+		const result = await this.requireQueue().add?.(
 			task.id,
 			{ taskId: task.id },
 			{
@@ -172,6 +177,7 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 				jobId: `${task.id}:immediate:${this.schedulerVersion}`,
 			},
 		);
+		this.rememberJobTaskId(result, task.id);
 	}
 
 	private enforceExplicitIds() {
@@ -208,56 +214,84 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 
 	private wireQueueEvents() {
 		this.queueEvents?.on?.('active', event => {
-			const task = this.taskFromQueueEvent(event);
-			if (task) this.host?.emit('started', { task });
+			void this.emitQueueEventStarted(event);
 		});
 		this.queueEvents?.on?.('completed', event => {
-			const task = this.taskFromQueueEvent(event);
-			if (task) this.host?.emit('completed', { task, result: eventRecord(event).returnvalue });
+			void this.emitQueueEventCompleted(event);
 		});
 		this.queueEvents?.on?.('failed', event => {
-			const task = this.taskFromQueueEvent(event);
-			if (task)
-				this.host?.emit('failed', { task, error: new Error(String(eventRecord(event).failedReason ?? 'failed')) });
+			void this.emitQueueEventFailed(event);
 		});
 	}
 
-	private taskFromQueueEvent(event: unknown) {
+	private async emitQueueEventStarted(event: unknown) {
+		try {
+			const task = await this.taskFromQueueEvent(event);
+			if (task) this.host?.emit('started', { task });
+		} catch (error) {
+			this.reportQueueEventFailure('active', error);
+		}
+	}
+
+	private async emitQueueEventCompleted(event: unknown) {
+		try {
+			const record = eventRecord(event);
+			const task = await this.taskFromQueueEvent(record);
+			if (task) this.host?.emit('completed', { task, result: record.returnvalue });
+		} catch (error) {
+			this.reportQueueEventFailure('completed', error);
+		}
+	}
+
+	private async emitQueueEventFailed(event: unknown) {
+		try {
+			const record = eventRecord(event);
+			const task = await this.taskFromQueueEvent(record);
+			if (task) this.host?.emit('failed', { task, error: new Error(String(record.failedReason ?? 'failed')) });
+		} catch (error) {
+			this.reportQueueEventFailure('failed', error);
+		}
+	}
+
+	private async taskFromQueueEvent(event: unknown) {
 		const record = eventRecord(event);
-		const taskId = this.taskIdFromQueueEventRecord(record);
+		const taskId = await this.taskIdFromQueueEventRecord(record);
 		return taskId ? this.tasks.get(taskId) : undefined;
 	}
 
-	private taskIdFromQueueEventRecord(record: Record<string, unknown>) {
+	private async taskIdFromQueueEventRecord(record: Record<string, unknown>) {
 		if (typeof record.taskId === 'string') return record.taskId;
 		if (typeof record.name === 'string' && this.tasks.has(record.name)) return record.name;
 		if (typeof record.jobId !== 'string') return undefined;
 
-		return this.taskIdFromJobId(record.jobId);
+		const localTaskId = this.jobTaskIds.get(record.jobId);
+		if (localTaskId) return localTaskId;
+
+		const job = await this.jobFromId(record.jobId);
+		return this.taskIdFromJob(job);
 	}
 
-	private taskIdFromJobId(jobId: string) {
-		if (this.tasks.has(jobId)) return jobId;
+	private async jobFromId(jobId: string) {
+		const queue = this.queue;
+		const fromId = this.bullmq.Job?.fromId;
+		if (!queue || !fromId) return undefined;
+		return fromId(queue, jobId);
+	}
 
-		if (jobId.startsWith('repeat:')) {
-			const repeated = jobId.slice('repeat:'.length);
-			const timestampSeparator = repeated.lastIndexOf(':');
-			const schedulerId = timestampSeparator === -1 ? repeated : repeated.slice(0, timestampSeparator);
-			if (this.tasks.has(schedulerId)) return schedulerId;
-		}
-
-		if (jobId.startsWith('scheduler:')) {
-			const schedulerId = jobId.slice('scheduler:'.length);
-			if (this.tasks.has(schedulerId)) return schedulerId;
-		}
-
-		const immediateRunSeparator = jobId.lastIndexOf(':immediate:');
-		if (immediateRunSeparator > 0) {
-			const taskId = jobId.slice(0, immediateRunSeparator);
-			if (this.tasks.has(taskId)) return taskId;
-		}
-
+	private taskIdFromJob(job: BullMQJob | null | undefined) {
+		if (typeof job?.data?.taskId === 'string') return job.data.taskId;
+		if (typeof job?.repeatJobKey === 'string' && this.tasks.has(job.repeatJobKey)) return job.repeatJobKey;
+		if (typeof job?.name === 'string' && this.tasks.has(job.name)) return job.name;
 		return undefined;
+	}
+
+	private rememberJobTaskId(job: unknown, taskId: string) {
+		const id = eventRecord(job).id;
+		if (typeof id === 'string') this.jobTaskIds.set(id, taskId);
+	}
+
+	private reportQueueEventFailure(event: string, error: unknown) {
+		this.host?.logger?.error?.({ error, event }, 'Scheduler persistent driver failed to resolve QueueEvents task');
 	}
 
 	private requireTask(id: string) {

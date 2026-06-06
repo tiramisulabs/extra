@@ -140,6 +140,9 @@ export interface PersistentSchedulerOptions {
 }
 
 export interface BullMQModule {
+	Job?: {
+		fromId(queue: BullMQQueue, id: string): Awaitable<BullMQJob | null | undefined>;
+	};
 	Queue: new (name: string, options?: Record<string, unknown>) => BullMQQueue;
 	QueueEvents?: new (name: string, options?: Record<string, unknown>) => BullMQQueueEvents;
 	Worker: new (
@@ -171,6 +174,8 @@ export interface BullMQQueueEvents {
 }
 
 export interface BullMQJob {
+	id?: string;
 	name: string;
 	data?: Record<string, unknown>;
+	repeatJobKey?: string;
 }

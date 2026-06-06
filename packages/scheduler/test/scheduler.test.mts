@@ -57,6 +57,7 @@ function createFakeCroner() {
 
 function createFakeBullMQ() {
 	const state = {
+		jobs: new Map<string, { id: string; name: string; data?: Record<string, unknown>; repeatJobKey?: string }>(),
 		jobSchedulers: [] as Array<{ id: string }>,
 		queueEvents: [] as FakeQueueEvents[],
 		queues: [] as FakeQueue[],
@@ -82,6 +83,10 @@ function createFakeBullMQ() {
 
 		add(name: string, data: Record<string, unknown>, options: Record<string, unknown>) {
 			this.adds.push({ name, data, options });
+			const id = String(options.jobId ?? `${name}:${this.adds.length}`);
+			const job = { id, name, data };
+			state.jobs.set(id, job);
+			return job;
 		}
 
 		getJobSchedulers() {
@@ -138,9 +143,21 @@ function createFakeBullMQ() {
 	}
 
 	return {
-		module: { Queue: FakeQueue, QueueEvents: FakeQueueEvents, Worker: FakeWorker },
+		module: {
+			Job: {
+				fromId: (_queue: unknown, id: string) => state.jobs.get(id) ?? null,
+			},
+			Queue: FakeQueue,
+			QueueEvents: FakeQueueEvents,
+			Worker: FakeWorker,
+		},
 		state,
 	};
+}
+
+async function flushMicrotasks() {
+	await Promise.resolve();
+	await Promise.resolve();
 }
 
 function waitForEvent<TEvent extends SchedulerEventName>(registry: SchedulerRegistry, event: TEvent) {
@@ -268,6 +285,22 @@ describe('scheduler', () => {
 		);
 	});
 
+	test('reports a clear error when add receives neither duration nor cron', () => {
+		const registry = createScheduler({
+			driver: memory({
+				croner(expression, options, runner) {
+					if (expression === 'soon') throw new Error('Croner opaque parse failure');
+					return new FakeCronerJob(expression, options, runner);
+				},
+			}),
+		});
+
+		assert.throws(
+			() => registry.add('bad-schedule', 'soon', () => undefined),
+			/Scheduler schedule "soon" for task "bad-schedule" is not a valid duration or cron expression/,
+		);
+	});
+
 	test('emits scheduled before running an immediate memory task', async () => {
 		const croner = createFakeCroner();
 		const registry = createScheduler({
@@ -350,10 +383,16 @@ describe('scheduler', () => {
 		registry.once('completed', ({ task }) => {
 			queueEventCompletions.push(task.id);
 		});
+		bullmq.state.jobs.set('opaque-job-id', {
+			data: { taskId: 'heartbeat' },
+			id: 'opaque-job-id',
+			name: 'opaque',
+		});
 		bullmq.state.queueEvents[0]!.emit('completed', {
-			jobId: 'repeat:heartbeat:1770000000000',
+			jobId: 'opaque-job-id',
 			returnvalue: 'queue-event-result',
 		});
+		await flushMicrotasks();
 
 		assert.deepEqual(queueEventCompletions, ['heartbeat']);
 
@@ -380,7 +419,7 @@ describe('scheduler', () => {
 		assert.equal(bullmq.state.workers.length, 1);
 	});
 
-	test('persistent pause removes the job scheduler and start re-upserts its template', async () => {
+	test('persistent pause removes the job scheduler and resume re-upserts its template', async () => {
 		const bullmq = createFakeBullMQ();
 		const registry = createScheduler({
 			driver: persistent({ bullmq: bullmq.module }),
@@ -388,9 +427,10 @@ describe('scheduler', () => {
 
 		registry.cron('daily', '0 0 * * *', () => undefined);
 		await registry.setup({ initialized: true });
+		const resumed = waitForEvent(registry, 'resumed');
 
 		await registry.pause('daily');
-		await registry.start('daily');
+		await registry.resume('daily');
 
 		assert.deepEqual(bullmq.state.queues[0]!.removed, ['daily']);
 		assert.deepEqual(
@@ -398,6 +438,7 @@ describe('scheduler', () => {
 			['daily', 'daily'],
 		);
 		assert.equal(registry.get('daily')?.status, 'scheduled');
+		assert.equal((await resumed).task.id, 'daily');
 	});
 
 	test('persistent runImmediately enqueues one immediate job per setup version', async () => {

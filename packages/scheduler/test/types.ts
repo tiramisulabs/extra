@@ -18,6 +18,7 @@ expectType<SchedulerRegistry | undefined>(usingClient.scheduler);
 createScheduler({ driver: memory() });
 scheduler({ driver: memory() });
 expectType<SchedulerLike<ScheduledTask>>(createScheduler({ driver: memory() }));
+expectType<Promise<void>>(createScheduler({ driver: memory() }).resume('task'));
 
 // @ts-expect-error scheduler driver is required
 createScheduler({});

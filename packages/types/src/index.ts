@@ -85,6 +85,29 @@ export interface QueuesLike {
 
 export type SchedulerRunnerLike<TTask = unknown> = (task: TTask) => Awaitable<unknown>;
 
+export interface SchedulerEventMapLike<TTask = unknown> {
+	scheduled: { task: TTask };
+	started: { task: TTask };
+	completed: { task: TTask; result: unknown };
+	failed: { task: TTask; error: unknown };
+	paused: { task: TTask };
+	resumed: { task: TTask };
+	removed: { task: TTask };
+}
+
 export interface SchedulerLike<TTask = unknown> {
 	add(id: string, schedule: DurationInputLike, runner: SchedulerRunnerLike<TTask>, options?: DataLike): TTask;
+	interval(id: string, schedule: DurationInputLike, runner: SchedulerRunnerLike<TTask>, options?: DataLike): TTask;
+	cron(id: string, expression: string, runner: SchedulerRunnerLike<TTask>, options?: DataLike): TTask;
+	on<TEvent extends keyof SchedulerEventMapLike<TTask>>(
+		event: TEvent,
+		listener: (payload: SchedulerEventMapLike<TTask>[TEvent]) => Awaitable<void>,
+	): () => void;
+	once<TEvent extends keyof SchedulerEventMapLike<TTask>>(
+		event: TEvent,
+		listener: (payload: SchedulerEventMapLike<TTask>[TEvent]) => Awaitable<void>,
+	): () => void;
+	pause?(id: string): Awaitable<void>;
+	resume?(id: string): Awaitable<void>;
+	remove?(id: string): Awaitable<void>;
 }
