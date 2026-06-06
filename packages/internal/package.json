@@ -3,8 +3,11 @@
 	"version": "0.0.0",
 	"private": true,
 	"license": "MIT",
-	"main": "./src/index.ts",
-	"types": "./src/index.ts",
+	"files": [
+		"lib/**"
+	],
+	"main": "./lib/index.js",
+	"types": "./lib/index.d.ts",
 	"scripts": {
 		"build": "tsc",
 		"checkb": "biome check --write --no-errors-on-unmatched ./src ./test",

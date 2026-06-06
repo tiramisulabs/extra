@@ -1,15 +1,12 @@
 import { createRequire } from 'node:module';
+import type { DurationInput } from '@slipher/internal';
+import { isAmbiguousQueueAddArgs, parseDuration, queueAddAmbiguityMessage } from '@slipher/internal';
 import './seyfert';
 
-const AMBIGUOUS_QUEUE_ADD_MESSAGE = [
-	'Ambiguous queue.add() call: a string first argument plus an options-shaped second argument can be either data/options or name/data.',
-	'Use add(name, data, options) for named jobs, or pass non-string data to add(data, options).',
-].join(' ');
-const QUEUE_JOB_OPTION_KEYS = ['id', 'delay', 'attempts', 'priority', 'retryDelay'] as const;
-const QUEUE_JOB_OPTION_KEY_SET = new Set<string>(QUEUE_JOB_OPTION_KEYS);
+export type { DurationInput } from '@slipher/internal';
+export { InvalidDurationError } from '@slipher/internal';
 
 export type Awaitable<T> = T | Promise<T>;
-export type DurationInput = number | string;
 export type JobStatus = 'waiting' | 'delayed' | 'active' | 'completed' | 'failed';
 export type QueueEventName = keyof QueueEventMap<unknown, unknown>;
 export type WorkerEventName = keyof QueueWorkerEventMap<unknown, unknown>;
@@ -293,26 +290,6 @@ interface EventMetadata {
 const processorMetadata = new WeakMap<Function, ProcessorMetadata>();
 const processMetadata = new WeakMap<object, QueueMethod[]>();
 const eventMetadata = new WeakMap<object, EventMetadata[]>();
-const durationUnits = new Map<string, number>([
-	['ms', 1],
-	['millisecond', 1],
-	['milliseconds', 1],
-	['s', 1000],
-	['sec', 1000],
-	['second', 1000],
-	['seconds', 1000],
-	['m', 60_000],
-	['min', 60_000],
-	['minute', 60_000],
-	['minutes', 60_000],
-	['h', 3_600_000],
-	['hr', 3_600_000],
-	['hour', 3_600_000],
-	['hours', 3_600_000],
-	['d', 86_400_000],
-	['day', 86_400_000],
-	['days', 86_400_000],
-]);
 
 interface QueueWorkerEventSource<TData, TResult> {
 	onWorker<TEvent extends keyof QueueWorkerEventMap<TData, TResult>>(
@@ -1156,7 +1133,7 @@ export class QueuesRegistry {
 		maybeOptions?: JobOptions,
 	): Promise<QueueJob<any, any, string>> {
 		if (isAmbiguousQueueAddArgs(nameOrData, dataOrOptions, maybeOptions)) {
-			throw new TypeError(AMBIGUOUS_QUEUE_ADD_MESSAGE);
+			throw new TypeError(queueAddAmbiguityMessage);
 		}
 
 		if (typeof nameOrData === 'string' && dataOrOptions !== undefined) {
@@ -1357,7 +1334,7 @@ function parseQueueAddArgs<TData, TResult>(
 	maybeOptions?: JobOptions<TData, TResult>,
 ): { data: TData; name: string; options: JobOptions<TData, TResult> } {
 	if (isAmbiguousQueueAddArgs(nameOrData, dataOrOptions, maybeOptions)) {
-		throw new TypeError(AMBIGUOUS_QUEUE_ADD_MESSAGE);
+		throw new TypeError(queueAddAmbiguityMessage);
 	}
 
 	if (typeof nameOrData === 'string' && dataOrOptions !== undefined) {
@@ -1373,56 +1350,6 @@ function parseQueueAddArgs<TData, TResult>(
 		name: 'default',
 		options: (dataOrOptions ?? {}) as JobOptions<TData, TResult>,
 	};
-}
-
-function isAmbiguousQueueAddArgs(nameOrData: unknown, dataOrOptions: unknown, maybeOptions: unknown): boolean {
-	return (
-		typeof nameOrData === 'string' &&
-		dataOrOptions !== undefined &&
-		maybeOptions === undefined &&
-		isJobOptionsLike(dataOrOptions)
-	);
-}
-
-// isJobOptionsLike owns the overload-disambiguation whitelist. If job options
-// grow, update QUEUE_JOB_OPTION_KEYS here too.
-function isJobOptionsLike(value: unknown): value is JobOptions {
-	if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-	const keys = Object.keys(value);
-	if (!keys.length) return false;
-	return keys.every(key => QUEUE_JOB_OPTION_KEY_SET.has(key));
-}
-
-export class InvalidDurationError extends RangeError {
-	constructor(input: DurationInput) {
-		super(`Invalid duration: ${String(input)}`);
-		this.name = 'InvalidDurationError';
-	}
-}
-
-function parseDuration(input: DurationInput): number {
-	if (typeof input === 'number') {
-		if (Number.isFinite(input) && input >= 0) return input;
-		throw new InvalidDurationError(input);
-	}
-
-	const source = input.trim().toLowerCase();
-	if (!source) throw new InvalidDurationError(input);
-
-	const numeric = Number(source);
-	if (Number.isFinite(numeric) && numeric >= 0) return numeric;
-
-	let total = 0;
-	let consumed = 0;
-	const matcher = /\s*(\d+(?:\.\d+)?)\s*(milliseconds?|ms|seconds?|sec|s|minutes?|min|m|hours?|hr|h|days?|d)\s*/gy;
-
-	for (let match = matcher.exec(source); match; match = matcher.exec(source)) {
-		consumed += match[0].length;
-		total += Number(match[1]) * durationUnits.get(match[2]!)!;
-	}
-
-	if (consumed !== source.length || total < 0) throw new InvalidDurationError(input);
-	return total;
 }
 
 function resolveRetryDelayValue(

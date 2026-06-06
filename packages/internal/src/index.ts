@@ -1,5 +1,35 @@
 export type DurationInput = number | string;
 
+export const queueAddAmbiguityMessage = [
+	'Ambiguous queue.add() call: a string first argument plus an options-shaped second argument can be either data/options or name/data.',
+	'Use add(name, data, options) for named jobs, or pass non-string data to add(data, options).',
+].join(' ');
+
+export const queueJobOptionKeys = ['id', 'delay', 'attempts', 'priority', 'retryDelay'] as const;
+const queueJobOptionKeySet = new Set<string>(queueJobOptionKeys);
+
+export function isAmbiguousQueueAddArgs(
+	nameOrPayload: unknown,
+	payloadOrOptions: unknown,
+	maybeOptions: unknown,
+): boolean {
+	return (
+		typeof nameOrPayload === 'string' &&
+		payloadOrOptions !== undefined &&
+		maybeOptions === undefined &&
+		isJobOptionsLike(payloadOrOptions)
+	);
+}
+
+// isJobOptionsLike owns the queue.add overload-disambiguation whitelist. If job
+// options grow, update queueJobOptionKeys here too.
+export function isJobOptionsLike(value: unknown): value is Record<string, unknown> {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+	const keys = Object.keys(value);
+	if (!keys.length) return false;
+	return keys.every(key => queueJobOptionKeySet.has(key));
+}
+
 const durationUnits = new Map<string, number>([
 	['ms', 1],
 	['millisecond', 1],
