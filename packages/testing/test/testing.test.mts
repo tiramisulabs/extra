@@ -1,4 +1,4 @@
-import { assert, describe, test } from 'vitest';
+import { assert, describe, expect, test } from 'vitest';
 import {
 	mockChannel,
 	mockClient,
@@ -157,6 +157,17 @@ describe('standalone stubs', () => {
 		assert.equal(first, second);
 		assert.equal(second.jobs.length, 1);
 		assert.equal(second.jobs[0]?.name, 'send');
+	});
+
+	test('mockQueues rejects ambiguous string payload plus options-shaped data', async () => {
+		const queue = mockQueues().get('email');
+
+		await expect(queue.add('send', { delay: '5s' })).rejects.toThrow(/Ambiguous queue\.add\(\) call/);
+
+		const job = await queue.add('send', { delay: '5s' }, {});
+
+		assert.equal(job.name, 'send');
+		assert.deepEqual(job.payload, { delay: '5s' });
 	});
 
 	test('mockScheduler records dynamic tasks', () => {

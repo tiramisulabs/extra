@@ -15,11 +15,13 @@ import { mockCommandContext, mockUser } from '@slipher/testing';
 import { expect, test } from 'vitest';
 
 test('command replies', async () => {
-	const ctx = mockCommandContext({
+	const ctx = mockCommandContext<{ user: ReturnType<typeof mockUser> }>({
 		commandName: 'ban',
 		options: { user: mockUser({ id: '123' }) },
 	});
 
+	// MockCommandContext models the Seyfert fields most command tests touch, but
+	// it is intentionally not a full CommandContext implementation.
 	await command.run(ctx as never);
 
 	expect(ctx.responses.at(-1)).toMatchObject({ content: expect.stringContaining('Banned') });
@@ -58,11 +60,15 @@ ctx.logger.add({ command: 'welcome' });
 await ctx.queues.get('welcome').add('send', { userId: ctx.author.id });
 ctx.scheduler.add('reminder', '30m', () => undefined);
 
-expect(ctx.logger.entries).toHaveLength(2);
+expect(ctx.logger.entries).toHaveLength(3);
 expect(ctx.logger.currentContext.command).toBe('welcome');
 expect(ctx.queues.get('welcome').jobs).toHaveLength(1);
 expect(ctx.scheduler.tasks).toHaveLength(1);
 ```
+
+`logger.add()` mutates `currentContext` and records a synthetic `{ level: 'add' }` entry so tests can assert context changes in order with regular log calls.
+
+`queue.add(name, payload, options)` uses the third argument to disambiguate named jobs. A call like `queue.add('send', { delay: '5s' })` is ambiguous because it could mean a string payload plus job options or a named job whose payload happens to look like job options; the mock throws with a descriptive error instead of guessing.
 
 ## Behavior Recipes
 
@@ -102,6 +108,15 @@ const ctx = mockDeep<CommandContext>();
 
 - No assertions, fake timers, or spies are bundled. Use the test runner you already have.
 - Generated IDs can be overridden on every factory.
+- Call `resetMockIds()` in `beforeEach` when tests assert generated IDs:
+
+```ts
+import { beforeEach } from 'vitest';
+import { resetMockIds } from '@slipher/testing';
+
+beforeEach(() => resetMockIds());
+```
+
 - Mock queue and scheduler stubs record intent; they do not run background workers.
 
 ## Development

@@ -28,15 +28,15 @@ export interface QueueJobLike<TData = unknown, TResult = unknown, TName extends 
 }
 
 export interface QueueEventMapLike<TData, TResult, TJob extends QueueJobLike<TData, TResult>> {
-	added: [job: TJob];
-	active: [job: TJob];
-	completed: [job: TJob, result: TResult];
-	failed: [job: TJob, error: unknown];
-	retrying: [job: TJob, error: unknown, delay: number];
-	idle: [];
+	added: { job: TJob };
+	active: { job: TJob };
+	completed: { job: TJob; result: TResult };
+	failed: { job: TJob; error: unknown };
+	retrying: { job: TJob; error: unknown; delay: number };
+	idle: {};
 }
 
-export type QueueListenerLike<TArgs extends readonly unknown[]> = (...args: TArgs) => Awaitable<void>;
+export type QueueListenerLike<TPayload> = (payload: TPayload) => Awaitable<void>;
 
 export interface QueueLike<
 	TData = unknown,
@@ -51,6 +51,10 @@ export interface QueueLike<
 	): Awaitable<QueueJobLike<TJobData, TResult>>;
 	add(data: TData, options?: QueueJobOptionsLike): Awaitable<TJob>;
 	on<TEvent extends keyof QueueEventMapLike<TData, TResult, TJob>>(
+		event: TEvent,
+		listener: QueueListenerLike<QueueEventMapLike<TData, TResult, TJob>[TEvent]>,
+	): () => void;
+	once<TEvent extends keyof QueueEventMapLike<TData, TResult, TJob>>(
 		event: TEvent,
 		listener: QueueListenerLike<QueueEventMapLike<TData, TResult, TJob>[TEvent]>,
 	): () => void;
@@ -78,6 +82,29 @@ export interface QueuesLike {
 
 export type SchedulerRunnerLike<TTask = unknown> = (task: TTask) => Awaitable<unknown>;
 
+export interface SchedulerEventMapLike<TTask = unknown> {
+	scheduled: { task: TTask };
+	started: { task: TTask };
+	completed: { task: TTask; result: unknown };
+	failed: { task: TTask; error: unknown };
+	paused: { task: TTask };
+	resumed: { task: TTask };
+	removed: { task: TTask };
+}
+
 export interface SchedulerLike<TTask = unknown> {
 	add(id: string, schedule: DurationInputLike, runner: SchedulerRunnerLike<TTask>, options?: DataLike): TTask;
+	interval(id: string, schedule: DurationInputLike, runner: SchedulerRunnerLike<TTask>, options?: DataLike): TTask;
+	cron(id: string, expression: string, runner: SchedulerRunnerLike<TTask>, options?: DataLike): TTask;
+	on<TEvent extends keyof SchedulerEventMapLike<TTask>>(
+		event: TEvent,
+		listener: (payload: SchedulerEventMapLike<TTask>[TEvent]) => Awaitable<void>,
+	): () => void;
+	once<TEvent extends keyof SchedulerEventMapLike<TTask>>(
+		event: TEvent,
+		listener: (payload: SchedulerEventMapLike<TTask>[TEvent]) => Awaitable<void>,
+	): () => void;
+	pause?(id: string): Awaitable<void>;
+	resume?(id: string): Awaitable<void>;
+	remove?(id: string): Awaitable<void>;
 }

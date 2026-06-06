@@ -1,3 +1,14 @@
+import type {
+	LoggerLike,
+	QueueEventMapLike,
+	QueueJobLike,
+	QueueLike,
+	QueuesLike,
+	SchedulerEventMapLike,
+	SchedulerLike,
+} from '@slipher/types';
+import { mockId } from './id';
+
 export type MockLogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
 
 export interface MockLogEntry {
@@ -5,7 +16,7 @@ export interface MockLogEntry {
 	args: unknown[];
 }
 
-export interface MockLogger {
+export interface MockLogger extends LoggerLike {
 	readonly currentContext: Readonly<Record<string, unknown>>;
 	entries: MockLogEntry[];
 	add(data: Record<string, unknown>): void;
@@ -19,54 +30,77 @@ export interface MockLogger {
 	flush(): Promise<void>;
 }
 
-export interface MockQueueJob<TPayload = unknown> {
-	name: string;
+export interface MockQueueJob<TPayload = unknown, TResult = unknown, TName extends string = string>
+	extends QueueJobLike<TPayload, TResult, TName> {
+	id: string;
+	name: TName;
+	data: TPayload;
 	payload: TPayload;
 	options?: Record<string, unknown>;
 }
 
 export interface MockQueueEventMap<TPayload = unknown, TResult = unknown> {
-	added: [job: MockQueueJob<TPayload>];
-	active: [job: MockQueueJob<TPayload>];
-	completed: [job: MockQueueJob<TPayload>, result: TResult];
-	failed: [job: MockQueueJob<TPayload>, error: unknown];
-	retrying: [job: MockQueueJob<TPayload>, error: unknown, delay: number];
-	idle: [];
+	added: QueueEventMapLike<TPayload, TResult, MockQueueJob<TPayload, TResult>>['added'];
+	active: QueueEventMapLike<TPayload, TResult, MockQueueJob<TPayload, TResult>>['active'];
+	completed: QueueEventMapLike<TPayload, TResult, MockQueueJob<TPayload, TResult>>['completed'];
+	failed: QueueEventMapLike<TPayload, TResult, MockQueueJob<TPayload, TResult>>['failed'];
+	retrying: QueueEventMapLike<TPayload, TResult, MockQueueJob<TPayload, TResult>>['retrying'];
+	idle: QueueEventMapLike<TPayload, TResult, MockQueueJob<TPayload, TResult>>['idle'];
 }
 
-export interface MockQueue<TPayload = unknown, TResult = unknown> {
+export interface MockQueue<TPayload = unknown, TResult = unknown>
+	extends QueueLike<TPayload, TResult, MockQueueJob<TPayload, TResult>> {
 	name: string;
-	jobs: MockQueueJob<TPayload>[];
+	jobs: MockQueueJob<TPayload, TResult>[];
 	add<TJobPayload = unknown>(
 		name: string,
 		payload: TJobPayload,
 		options?: Record<string, unknown>,
-	): Promise<MockQueueJob<TJobPayload>>;
-	add(payload: TPayload, options?: Record<string, unknown>): Promise<MockQueueJob<TPayload>>;
+	): Promise<MockQueueJob<TJobPayload, TResult>>;
+	add(payload: TPayload, options?: Record<string, unknown>): Promise<MockQueueJob<TPayload, TResult>>;
 	on<TEvent extends keyof MockQueueEventMap<TPayload, TResult>>(
 		event: TEvent,
-		listener: (...args: MockQueueEventMap<TPayload, TResult>[TEvent]) => unknown,
+		listener: (payload: MockQueueEventMap<TPayload, TResult>[TEvent]) => unknown,
+	): () => void;
+	once<TEvent extends keyof MockQueueEventMap<TPayload, TResult>>(
+		event: TEvent,
+		listener: (payload: MockQueueEventMap<TPayload, TResult>[TEvent]) => unknown,
 	): () => void;
 	off<TEvent extends keyof MockQueueEventMap<TPayload, TResult>>(
 		event: TEvent,
-		listener: (...args: MockQueueEventMap<TPayload, TResult>[TEvent]) => unknown,
+		listener: (payload: MockQueueEventMap<TPayload, TResult>[TEvent]) => unknown,
 	): void;
 }
 
-export interface MockQueues {
+export interface MockQueues extends QueuesLike {
 	queues: Map<string, MockQueue>;
-	get<TPayload = unknown, TResult = unknown>(name: string): MockQueue<TPayload, TResult>;
+	get<TPayload = unknown, TResult = unknown>(name: string, options?: unknown): MockQueue<TPayload, TResult>;
 }
 
 export interface MockScheduledTask {
+	id: string;
 	name: string;
-	schedule: string;
+	schedule: number | string;
 	run: (task: MockScheduledTask) => unknown;
 }
 
-export interface MockScheduler {
+export interface MockScheduler extends SchedulerLike<MockScheduledTask> {
 	tasks: MockScheduledTask[];
-	add(name: string, schedule: string, run: (task: MockScheduledTask) => unknown): MockScheduledTask;
+	add(name: string, schedule: number | string, run: (task: MockScheduledTask) => unknown): MockScheduledTask;
+	interval(name: string, schedule: number | string, run: (task: MockScheduledTask) => unknown): MockScheduledTask;
+	cron(name: string, schedule: string, run: (task: MockScheduledTask) => unknown): MockScheduledTask;
+	on<TEvent extends keyof SchedulerEventMapLike<MockScheduledTask>>(
+		event: TEvent,
+		listener: (payload: SchedulerEventMapLike<MockScheduledTask>[TEvent]) => unknown,
+	): () => void;
+	once<TEvent extends keyof SchedulerEventMapLike<MockScheduledTask>>(
+		event: TEvent,
+		listener: (payload: SchedulerEventMapLike<MockScheduledTask>[TEvent]) => unknown,
+	): () => void;
+	off<TEvent extends keyof SchedulerEventMapLike<MockScheduledTask>>(
+		event: TEvent,
+		listener: (payload: SchedulerEventMapLike<MockScheduledTask>[TEvent]) => unknown,
+	): void;
 }
 
 export interface MockClientOptions {
@@ -133,27 +167,33 @@ export function mockQueues(): MockQueues {
 					name,
 					jobs: [],
 					/**
-					 * Runtime overload disambiguation for add checks isJobOptionsLike(payloadOrOptions).
-					 * When the 2-arg form sees job-options-like data, maybeOptions is undefined and
-					 * the second argument becomes options, so the job name falls back to "default".
-					 * For example, add('send', { delay: '5s' }) records name="default" and
-					 * payload="send". To force a named job, use the 3-arg form:
-					 * add('send', { payload: true }, { delay: '5s' }).
+					 * Runtime overload disambiguation for add uses maybeOptions plus
+					 * isJobOptionsLike. The two-argument form add('send', { delay: '5s' })
+					 * is ambiguous, so it throws instead of guessing. Use
+					 * add('send', { payload: true }, { delay: '5s' }) to force
+					 * name="send".
 					 */
 					async add(nameOrPayload: unknown, payloadOrOptions?: unknown, maybeOptions?: Record<string, unknown>) {
-						const hasJobName =
-							typeof nameOrPayload === 'string' &&
-							payloadOrOptions !== undefined &&
-							(maybeOptions !== undefined || !isJobOptionsLike(payloadOrOptions));
+						if (isAmbiguousQueueAddArgs(nameOrPayload, payloadOrOptions, maybeOptions)) {
+							throw new TypeError(createAmbiguousQueueAddMessage());
+						}
+
+						const hasJobName = typeof nameOrPayload === 'string' && payloadOrOptions !== undefined;
+						const payload = (hasJobName ? payloadOrOptions : nameOrPayload) as TPayload;
 						const job = {
+							id: mockId(),
+							data: payload,
 							name: hasJobName ? nameOrPayload : 'default',
 							options: (hasJobName ? maybeOptions : payloadOrOptions) as Record<string, unknown> | undefined,
-							payload: (hasJobName ? payloadOrOptions : nameOrPayload) as TPayload,
+							payload,
 						};
 						this.jobs.push(job);
 						return job;
 					},
 					on() {
+						return () => undefined;
+					},
+					once() {
 						return () => undefined;
 					},
 					off() {},
@@ -165,9 +205,24 @@ export function mockQueues(): MockQueues {
 	};
 }
 
-// isJobOptionsLike uses the ['id', 'delay', 'attempts', 'priority', 'retryDelay']
-// whitelist to disambiguate add overloads. Update these keys if queue job
-// options grow, for example backoff, timeout, or jobId.
+function isAmbiguousQueueAddArgs(nameOrPayload: unknown, payloadOrOptions: unknown, maybeOptions: unknown): boolean {
+	return (
+		typeof nameOrPayload === 'string' &&
+		payloadOrOptions !== undefined &&
+		maybeOptions === undefined &&
+		isJobOptionsLike(payloadOrOptions)
+	);
+}
+
+function createAmbiguousQueueAddMessage(): string {
+	return [
+		'Ambiguous queue.add() call: a string first argument plus an options-shaped second argument can be either data/options or name/data.',
+		'Use add(name, data, options) for named jobs, or pass non-string data to add(data, options).',
+	].join(' ');
+}
+
+// isJobOptionsLike owns the overload-disambiguation whitelist. If job options
+// grow, update ['id', 'delay', 'attempts', 'priority', 'retryDelay'] here too.
 function isJobOptionsLike(value: unknown): value is Record<string, unknown> {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
 	const keys = Object.keys(value);
@@ -177,14 +232,24 @@ function isJobOptionsLike(value: unknown): value is Record<string, unknown> {
 
 export function mockScheduler(): MockScheduler {
 	const tasks: MockScheduledTask[] = [];
+	const add = (name: string, schedule: number | string, run: (task: MockScheduledTask) => unknown) => {
+		const task = { id: mockId(), name, schedule, run };
+		tasks.push(task);
+		return task;
+	};
 
 	return {
 		tasks,
-		add(name, schedule, run) {
-			const task = { name, schedule, run };
-			tasks.push(task);
-			return task;
+		add,
+		interval: add,
+		cron: add,
+		on() {
+			return () => undefined;
 		},
+		once() {
+			return () => undefined;
+		},
+		off() {},
 	};
 }
 

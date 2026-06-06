@@ -1,5 +1,5 @@
 import type { LoggerLike, QueueLike, SchedulerLike } from '@slipher/types';
-import { mockLogger, mockQueues, mockScheduler } from '../src';
+import { mockCommandContext, mockLogger, mockQueues, mockScheduler } from '../src';
 
 declare function expectType<T>(value: T): void;
 
@@ -11,3 +11,9 @@ expectType<QueueLike>(queues.get('welcome'));
 
 const scheduler = mockScheduler();
 expectType<SchedulerLike>(scheduler);
+
+const typedContext = mockCommandContext<{ reason: string; count: number }>({
+	options: { reason: 'spam', count: 2 },
+});
+expectType<string>(typedContext.options.reason);
+expectType<number>(typedContext.options.count);

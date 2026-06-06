@@ -21,7 +21,7 @@ import {
 
 export type MockContextResponse = Record<string, unknown> | string;
 
-export interface MockCommandContextOptions {
+export interface MockCommandContextOptions<TOptions extends Record<string, unknown> = Record<string, unknown>> {
 	commandName?: string;
 	fullCommandName?: string;
 	userId?: string;
@@ -33,7 +33,7 @@ export interface MockCommandContextOptions {
 	guild?: MockGuild | null;
 	channel?: MockChannel;
 	member?: MockMember;
-	options?: Record<string, unknown>;
+	options?: TOptions;
 	metadata?: Record<string, unknown>;
 	logger?: MockLogger;
 	queues?: MockQueues;
@@ -43,7 +43,7 @@ export interface MockCommandContextOptions {
 	applicationId?: string;
 }
 
-export interface MockCommandContext {
+export interface MockCommandContext<TOptions extends Record<string, unknown> = Record<string, unknown>> {
 	command: { name: string };
 	fullCommandName: string;
 	client: MockClient;
@@ -57,7 +57,7 @@ export interface MockCommandContext {
 	channel(): Promise<MockChannel>;
 	me(): Promise<MockMember | null>;
 	member: MockMember | null;
-	options: Record<string, unknown>;
+	options: TOptions;
 	metadata: Record<string, unknown>;
 	logger: MockLogger;
 	queues: MockQueues;
@@ -71,7 +71,9 @@ export interface MockCommandContext {
 	lastResponse(): MockContextResponse | undefined;
 }
 
-export function mockCommandContext(options: MockCommandContextOptions = {}): MockCommandContext {
+export function mockCommandContext<TOptions extends Record<string, unknown> = Record<string, unknown>>(
+	options: MockCommandContextOptions<TOptions> = {},
+): MockCommandContext<TOptions> {
 	const author = options.author ?? mockUser({ id: options.userId });
 	const guild = options.guild === null ? null : (options.guild ?? mockGuild({ id: options.guildId }));
 	const guildId = guild?.id;
@@ -115,7 +117,7 @@ export function mockCommandContext(options: MockCommandContextOptions = {}): Moc
 			return member;
 		},
 		member,
-		options: options.options ?? {},
+		options: options.options ?? ({} as TOptions),
 		metadata: options.metadata ?? {},
 		logger,
 		queues,
