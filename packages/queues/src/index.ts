@@ -1,6 +1,13 @@
 import { createRequire } from 'node:module';
 import './seyfert';
 
+const AMBIGUOUS_QUEUE_ADD_MESSAGE = [
+	'Ambiguous queue.add() call: a string first argument plus an options-shaped second argument can be either data/options or name/data.',
+	'Use add(name, data, options) for named jobs, or pass non-string data to add(data, options).',
+].join(' ');
+const QUEUE_JOB_OPTION_KEYS = ['id', 'delay', 'attempts', 'priority', 'retryDelay'] as const;
+const QUEUE_JOB_OPTION_KEY_SET = new Set<string>(QUEUE_JOB_OPTION_KEYS);
+
 export type Awaitable<T> = T | Promise<T>;
 export type DurationInput = number | string;
 export type JobStatus = 'waiting' | 'delayed' | 'active' | 'completed' | 'failed';
@@ -1149,7 +1156,7 @@ export class QueuesRegistry {
 		maybeOptions?: JobOptions,
 	): Promise<QueueJob<any, any, string>> {
 		if (isAmbiguousQueueAddArgs(nameOrData, dataOrOptions, maybeOptions)) {
-			throw new TypeError(createAmbiguousQueueAddMessage());
+			throw new TypeError(AMBIGUOUS_QUEUE_ADD_MESSAGE);
 		}
 
 		if (typeof nameOrData === 'string' && dataOrOptions !== undefined) {
@@ -1350,7 +1357,7 @@ function parseQueueAddArgs<TData, TResult>(
 	maybeOptions?: JobOptions<TData, TResult>,
 ): { data: TData; name: string; options: JobOptions<TData, TResult> } {
 	if (isAmbiguousQueueAddArgs(nameOrData, dataOrOptions, maybeOptions)) {
-		throw new TypeError(createAmbiguousQueueAddMessage());
+		throw new TypeError(AMBIGUOUS_QUEUE_ADD_MESSAGE);
 	}
 
 	if (typeof nameOrData === 'string' && dataOrOptions !== undefined) {
@@ -1377,20 +1384,13 @@ function isAmbiguousQueueAddArgs(nameOrData: unknown, dataOrOptions: unknown, ma
 	);
 }
 
-function createAmbiguousQueueAddMessage(): string {
-	return [
-		'Ambiguous queue.add() call: a string first argument plus an options-shaped second argument can be either data/options or name/data.',
-		'Use add(name, data, options) for named jobs, or pass non-string data to add(data, options).',
-	].join(' ');
-}
-
 // isJobOptionsLike owns the overload-disambiguation whitelist. If job options
-// grow, update ['id', 'delay', 'attempts', 'priority', 'retryDelay'] here too.
+// grow, update QUEUE_JOB_OPTION_KEYS here too.
 function isJobOptionsLike(value: unknown): value is JobOptions {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
 	const keys = Object.keys(value);
 	if (!keys.length) return false;
-	return keys.every(key => ['id', 'delay', 'attempts', 'priority', 'retryDelay'].includes(key));
+	return keys.every(key => QUEUE_JOB_OPTION_KEY_SET.has(key));
 }
 
 export class InvalidDurationError extends RangeError {
