@@ -54,12 +54,12 @@ class AudioProcessor {
 	}
 
 	@OnWorkerEvent('active')
-	onActive(job: QueueJobOf<'audio'>) {
+	onActive({ job }: { job: QueueJobOf<'audio'> }) {
 		job.snapshot();
 	}
 
 	@OnQueueEvent('completed')
-	onCompleted(job: QueueJobOf<'audio'>, result: string) {
+	onCompleted({ job, result }: { job: QueueJobOf<'audio'>; result: string }) {
 		job.snapshot();
 		void result;
 	}
@@ -91,6 +91,13 @@ await ctx.queues.add('audio', 'transcode', {
 await ctx.queues.get('audio').add('concatenate', {
 	fileIds: ['a', 'b'],
 });
+
+await ctx.queues.add(
+	'audio',
+	'transcode',
+	{ fileId: 'file-2', format: 'ogg' },
+	{ attempts: 5, retryDelay: '10s' },
+);
 ```
 
 Simple queues do not declare a `job` discriminant and use `add(data, options)`:
@@ -104,6 +111,8 @@ declare module '@slipher/queues' {
 
 await ctx.queues.add('welcome', { userId: ctx.author.id });
 ```
+
+`queue.add(name, payload, options)` uses the third argument to disambiguate named jobs. A call like `queue.add('send', { delay: '5s' })` is ambiguous because it can mean a string payload plus job options or a named job whose payload happens to look like job options. Slipher throws a descriptive `TypeError` instead of guessing; use `queue.add('send', { delay: '5s' }, {})` to force `name = 'send'`, or pass non-string data to `add(data, options)`.
 
 Each `@Processor()` class has exactly one `@Process()` handler. Switch on `job.name` for named-job queues. There is no framework-level per-name dispatch, so typos are caught by the typed producer surface instead of becoming `"Queue process not found"` retries at runtime.
 
@@ -137,6 +146,8 @@ Avoid importing the exported `client` from processors or services that are loade
 `@OnWorkerEvent(event)` is local to the process that ran the job. Use it for local cache updates or process-local instrumentation.
 
 `@OnQueueEvent(event)` is the queue/global channel. With `memory()` both decorators observe the same single-process queue. With `persistent()`, queue-level events are prepared for BullMQ `QueueEvents` and use one extra Redis connection per queue per replica.
+
+All listeners receive one object payload, matching `@slipher/scheduler`: `{ job }`, `{ job, result }`, `{ job, error }`, `{ job, error, delay }`, or `{}` for `idle`. Direct queue instances support both `on()` and `once()`.
 
 Listener errors are isolated. Throwing inside an event handler is reported through `reportListenerError` and never changes job state, retry counts, or whether later listeners run.
 
@@ -187,6 +198,14 @@ export default queues({
 `queueOptions` goes to BullMQ's `new Queue(name, options)` layer. `defaultJobOptions` goes to BullMQ's per-job defaults and is also merged into explicit `add()` options.
 
 Static `retryDelay` values map to BullMQ `backoff: { type: 'fixed', delay }`. BullMQ backoff objects pass through. Function-form `retryDelay` is memory-only; the persistent driver rejects it during setup or at the `add()` call site because BullMQ owns retry timing.
+
+`retryDelay` only matters when `attempts > 1`. If a queue or job defines `retryDelay` while attempts resolves to `1`, Slipher emits a `SLIPHER_QUEUE_RETRY_DELAY_NO_RETRIES` warning because no retry will be scheduled. Per-job options are passed as the final `add()` argument:
+
+```ts
+await ctx.queues.add('audio', 'transcode', { fileId: 'file-1', format: 'mp3' }, { attempts: 3, retryDelay: '5s' });
+```
+
+Invalid duration strings throw `InvalidDurationError`, exported from `@slipher/queues` for `instanceof` checks.
 
 Persistent queues open BullMQ `Queue`, `Worker`, and `QueueEvents` during plugin `setup()`, not module load. `client.close()` runs `queuesPlugin.teardown()` and closes worker, queue-events, and queue resources. Outside Seyfert, call `registry.close()` directly. Wire process signals to close whichever lifecycle owner you use:
 

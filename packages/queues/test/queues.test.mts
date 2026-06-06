@@ -1,12 +1,15 @@
-import { assert, describe, test } from 'vitest';
+import { assert, describe, expect, test } from 'vitest';
 import {
 	createQueues,
+	InvalidDurationError,
 	memory,
 	OnQueueEvent,
 	OnWorkerEvent,
 	Process,
 	Processor,
 	persistent,
+	type Queue,
+	type QueueEventMap,
 	type QueueJob,
 	type QueueJobOf,
 	type QueueRegistration,
@@ -28,14 +31,14 @@ declare module '../src' {
 	}
 }
 
-function waitForEvent<TArgs extends readonly unknown[]>(
-	queue: { on(event: string, listener: (...args: TArgs) => void): () => void },
-	event: string,
-): Promise<TArgs> {
+function waitForEvent<TData, TResult, TEvent extends keyof QueueEventMap<TData, TResult>>(
+	queue: Pick<Queue<TData, TResult>, 'on'>,
+	event: TEvent,
+): Promise<QueueEventMap<TData, TResult>[TEvent]> {
 	return new Promise(resolve => {
-		const off = queue.on(event, (...args: TArgs) => {
+		const off = queue.on(event, payload => {
 			off();
-			resolve(args);
+			resolve(payload);
 		});
 	});
 }
@@ -74,14 +77,14 @@ describe('memory queues', () => {
 		assert.equal(job.status, 'delayed');
 		assert.equal(queue.counts().delayed, 1);
 
-		const [retryJob, retryError, retryDelay] = await retrying;
-		const [completedJob, result] = await completed;
+		const retry = await retrying;
+		const completedPayload = await completed;
 
-		assert.equal(retryJob, job);
-		assert.instanceOf(retryError, Error);
-		assert.equal(retryDelay, 0);
-		assert.equal(completedJob, job);
-		assert.equal(result, 'hello:user-1');
+		assert.equal(retry.job, job);
+		assert.instanceOf(retry.error, Error);
+		assert.equal(retry.delay, 0);
+		assert.equal(completedPayload.job, job);
+		assert.equal(completedPayload.result, 'hello:user-1');
 		assert.equal(job.name, 'default');
 		assert.equal(job.attemptsMade, 2);
 		assert.equal(job.status, 'completed');
@@ -99,11 +102,11 @@ describe('memory queues', () => {
 		const queue = registry.get('priority', { autostart: false });
 		const idle = waitForEvent(queue, 'idle');
 
-		await queue.add('low', { priority: 0 });
-		await queue.add('high', { priority: 10 });
+		await queue.add({ label: 'low' }, { priority: 0 });
+		await queue.add({ label: 'high' }, { priority: 10 });
 		queue.process(job => {
-			processed.push(job.data);
-			return job.data;
+			processed.push(job.data.label);
+			return job.data.label;
 		});
 
 		await idle;
@@ -140,6 +143,78 @@ describe('memory queues', () => {
 
 		await registry.close();
 	});
+
+	test('supports once listeners with object payloads', async () => {
+		const registry = createQueues({ driver: memory() });
+		const queue = registry.get('welcome');
+		const completed: string[] = [];
+		const idle = waitForEvent(queue, 'idle');
+
+		queue.process(job => `welcome:${job.data.userId}`);
+		queue.once('completed', payload => {
+			completed.push(payload.result);
+		});
+
+		await queue.add({ userId: 'user-1' });
+		await queue.add({ userId: 'user-2' });
+		await idle;
+
+		assert.deepEqual(completed, ['welcome:user-1']);
+
+		await registry.close();
+	});
+
+	test('warns when retryDelay cannot schedule retries', async () => {
+		const originalEmitWarning = process.emitWarning;
+		const warnings: { warning: string | Error; options?: ErrorOptions & { code?: string } }[] = [];
+		process.emitWarning = ((warning: string | Error, options?: ErrorOptions & { code?: string }) => {
+			warnings.push({ options, warning });
+			return true;
+		}) as typeof process.emitWarning;
+
+		try {
+			const registry = createQueues({ driver: memory() });
+			const queue = registry.get('welcome', { retryDelay: '5s' });
+			await queue.add({ userId: 'user-1' }, { retryDelay: '1s' });
+			await registry.close();
+		} finally {
+			process.emitWarning = originalEmitWarning;
+		}
+
+		assert.deepEqual(
+			warnings.map(entry => entry.options?.code),
+			['SLIPHER_QUEUE_RETRY_DELAY_NO_RETRIES', 'SLIPHER_QUEUE_RETRY_DELAY_NO_RETRIES'],
+		);
+	});
+
+	test('exports InvalidDurationError for consumer instanceof checks', () => {
+		let thrown: unknown;
+
+		try {
+			memory({ now: () => 0 })
+				.get('welcome')
+				.add({ userId: 'user-1' }, { delay: 'soon' });
+		} catch (error) {
+			thrown = error;
+		}
+
+		assert.instanceOf(thrown, InvalidDurationError);
+	});
+
+	test('rejects ambiguous string payload plus options-shaped data', async () => {
+		const registry = createQueues({ driver: memory() });
+		const queue = registry.get('outbox');
+
+		assert.throws(() => queue.add('send', { delay: '5s' }), /Ambiguous queue\.add\(\) call/);
+		await expect(registry.add('outbox', 'send', { delay: '5s' })).rejects.toThrow(/Ambiguous queue\.add\(\) call/);
+
+		const named = await queue.add('send', { delay: '5s' }, {});
+
+		assert.equal(named.name, 'send');
+		assert.deepEqual(named.data, { delay: '5s' });
+
+		await registry.close();
+	});
 });
 
 describe('decorated queues', () => {
@@ -159,12 +234,12 @@ describe('decorated queues', () => {
 				}
 			}
 
-			completed(_job: QueueJobOf<'mail'>, result: string) {
-				events.push(result);
+			completed(payload: { job: QueueJobOf<'mail'>; result: string }) {
+				events.push(payload.result);
 			}
 
-			active(job: QueueJobOf<'mail'>) {
-				workerEvents.push(job.name);
+			active(payload: { job: QueueJobOf<'mail'> }) {
+				workerEvents.push(payload.job.name);
 			}
 		}
 
@@ -178,10 +253,10 @@ describe('decorated queues', () => {
 		const completed = waitForEvent(registry.get('mail'), 'completed');
 
 		const job = await registry.add('mail', 'send', { email: 'hi@example.com' });
-		const [completedJob, result] = await completed;
+		const completedPayload = await completed;
 
-		assert.equal(completedJob, job);
-		assert.equal(result, 'sent:hi@example.com');
+		assert.equal(completedPayload.job, job);
+		assert.equal(completedPayload.result, 'sent:hi@example.com');
 		assert.deepEqual(processed, ['send:hi@example.com']);
 		assert.deepEqual(events, ['sent:hi@example.com']);
 		assert.deepEqual(workerEvents, ['send']);
@@ -341,12 +416,12 @@ describe('persistent queues', () => {
 				return `worker:${job.name}:${job.data.email}`;
 			}
 
-			queueCompleted(_job: QueueJobOf<'mail'>, result: string) {
-				queueEvents.push(result);
+			queueCompleted(payload: { job: QueueJobOf<'mail'>; result: string }) {
+				queueEvents.push(payload.result);
 			}
 
-			workerCompleted(_job: QueueJobOf<'mail'>, result: string) {
-				workerEvents.push(result);
+			workerCompleted(payload: { job: QueueJobOf<'mail'>; result: string }) {
+				workerEvents.push(payload.result);
 			}
 		}
 

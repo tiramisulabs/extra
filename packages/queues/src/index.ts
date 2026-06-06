@@ -6,7 +6,7 @@ export type DurationInput = number | string;
 export type JobStatus = 'waiting' | 'delayed' | 'active' | 'completed' | 'failed';
 export type QueueEventName = keyof QueueEventMap<unknown, unknown>;
 export type WorkerEventName = keyof QueueWorkerEventMap<unknown, unknown>;
-export type QueueListener<TArgs extends readonly unknown[]> = (...args: TArgs) => void;
+export type QueueListener<TPayload> = (payload: TPayload) => void;
 export type QueueProcessor<TData, TResult> = (job: QueueJob<TData, TResult, string>) => Awaitable<TResult>;
 export type QueueListenerErrorReporter = (event: string, error: unknown) => void;
 export interface BackoffOptions {
@@ -103,26 +103,26 @@ export interface QueueJobSnapshot<TData, TResult = unknown> {
 }
 
 export interface QueueEventMap<TData, TResult> {
-	added: [job: QueueJob<TData, TResult>];
-	active: [job: QueueJob<TData, TResult>];
-	completed: [job: QueueJob<TData, TResult>, result: TResult];
-	failed: [job: QueueJob<TData, TResult>, error: unknown];
-	retrying: [job: QueueJob<TData, TResult>, error: unknown, delay: number];
-	idle: [];
+	added: { job: QueueJob<TData, TResult> };
+	active: { job: QueueJob<TData, TResult> };
+	completed: { job: QueueJob<TData, TResult>; result: TResult };
+	failed: { job: QueueJob<TData, TResult>; error: unknown };
+	retrying: { job: QueueJob<TData, TResult>; error: unknown; delay: number };
+	idle: {};
 }
 
 export interface QueueWorkerEventMap<TData, TResult> {
-	active: [job: QueueJob<TData, TResult>];
-	completed: [job: QueueJob<TData, TResult>, result: TResult];
-	failed: [job: QueueJob<TData, TResult>, error: unknown];
-	retrying: [job: QueueJob<TData, TResult>, error: unknown, delay: number];
-	idle: [];
+	active: { job: QueueJob<TData, TResult> };
+	completed: { job: QueueJob<TData, TResult>; result: TResult };
+	failed: { job: QueueJob<TData, TResult>; error: unknown };
+	retrying: { job: QueueJob<TData, TResult>; error: unknown; delay: number };
+	idle: {};
 }
 
 export interface QueueGlobalEventMap<TData, TResult> {
-	added: [job: QueueJob<TData, TResult>];
-	completed: [job: QueueJob<TData, TResult>, result: TResult];
-	failed: [job: QueueJob<TData, TResult>, error: unknown];
+	added: { job: QueueJob<TData, TResult> };
+	completed: { job: QueueJob<TData, TResult>; result: TResult };
+	failed: { job: QueueJob<TData, TResult>; error: unknown };
 }
 
 export interface Queue<TData = unknown, TResult = unknown, TRegisteredData = TData> {
@@ -149,6 +149,10 @@ export interface Queue<TData = unknown, TResult = unknown, TRegisteredData = TDa
 	counts(): Awaitable<QueueCounts>;
 	getJob(id: string): Awaitable<QueueJob<TData, TResult> | undefined>;
 	on<TEvent extends keyof QueueEventMap<TData, TResult>>(
+		event: TEvent,
+		listener: QueueListener<QueueEventMap<TData, TResult>[TEvent]>,
+	): () => void;
+	once<TEvent extends keyof QueueEventMap<TData, TResult>>(
 		event: TEvent,
 		listener: QueueListener<QueueEventMap<TData, TResult>[TEvent]>,
 	): () => void;
@@ -308,6 +312,10 @@ interface QueueWorkerEventSource<TData, TResult> {
 		event: TEvent,
 		listener: QueueListener<QueueWorkerEventMap<TData, TResult>[TEvent]>,
 	): () => void;
+	onceWorker<TEvent extends keyof QueueWorkerEventMap<TData, TResult>>(
+		event: TEvent,
+		listener: QueueListener<QueueWorkerEventMap<TData, TResult>[TEvent]>,
+	): () => void;
 	offWorker<TEvent extends keyof QueueWorkerEventMap<TData, TResult>>(
 		event: TEvent,
 		listener: QueueListener<QueueWorkerEventMap<TData, TResult>[TEvent]>,
@@ -357,8 +365,8 @@ export class QueueJob<TData, TResult = unknown, TName extends string = string> {
 }
 
 export class QueueEmitter<TData, TResult> {
-	private readonly listeners = new Map<string, Set<QueueListener<readonly unknown[]>>>();
-	private readonly workerListeners = new Map<string, Set<QueueListener<readonly unknown[]>>>();
+	private readonly listeners = new Map<string, Set<QueueListener<unknown>>>();
+	private readonly workerListeners = new Map<string, Set<QueueListener<unknown>>>();
 
 	constructor(private readonly reportListenerError: QueueListenerErrorReporter = defaultReportListenerError) {}
 
@@ -366,50 +374,72 @@ export class QueueEmitter<TData, TResult> {
 		event: TEvent,
 		listener: QueueListener<QueueEventMap<TData, TResult>[TEvent]>,
 	): () => void {
-		const listeners = this.listeners.get(event) ?? new Set<QueueListener<readonly unknown[]>>();
-		listeners.add(listener as QueueListener<readonly unknown[]>);
+		const listeners = this.listeners.get(event) ?? new Set<QueueListener<unknown>>();
+		listeners.add(listener as QueueListener<unknown>);
 		this.listeners.set(event, listeners);
 
 		return () => this.off(event, listener);
+	}
+
+	once<TEvent extends keyof QueueEventMap<TData, TResult>>(
+		event: TEvent,
+		listener: QueueListener<QueueEventMap<TData, TResult>[TEvent]>,
+	): () => void {
+		const off = this.on(event, payload => {
+			off();
+			listener(payload);
+		});
+		return off;
 	}
 
 	onWorker<TEvent extends keyof QueueWorkerEventMap<TData, TResult>>(
 		event: TEvent,
 		listener: QueueListener<QueueWorkerEventMap<TData, TResult>[TEvent]>,
 	): () => void {
-		const listeners = this.workerListeners.get(event) ?? new Set<QueueListener<readonly unknown[]>>();
-		listeners.add(listener as QueueListener<readonly unknown[]>);
+		const listeners = this.workerListeners.get(event) ?? new Set<QueueListener<unknown>>();
+		listeners.add(listener as QueueListener<unknown>);
 		this.workerListeners.set(event, listeners);
 
 		return () => this.offWorker(event, listener);
+	}
+
+	onceWorker<TEvent extends keyof QueueWorkerEventMap<TData, TResult>>(
+		event: TEvent,
+		listener: QueueListener<QueueWorkerEventMap<TData, TResult>[TEvent]>,
+	): () => void {
+		const off = this.onWorker(event, payload => {
+			off();
+			listener(payload);
+		});
+		return off;
 	}
 
 	off<TEvent extends keyof QueueEventMap<TData, TResult>>(
 		event: TEvent,
 		listener: QueueListener<QueueEventMap<TData, TResult>[TEvent]>,
 	): void {
-		this.listeners.get(event)?.delete(listener as QueueListener<readonly unknown[]>);
+		this.listeners.get(event)?.delete(listener as QueueListener<unknown>);
 	}
 
 	offWorker<TEvent extends keyof QueueWorkerEventMap<TData, TResult>>(
 		event: TEvent,
 		listener: QueueListener<QueueWorkerEventMap<TData, TResult>[TEvent]>,
 	): void {
-		this.workerListeners.get(event)?.delete(listener as QueueListener<readonly unknown[]>);
+		this.workerListeners.get(event)?.delete(listener as QueueListener<unknown>);
 	}
 
 	emit<TEvent extends keyof QueueEventMap<TData, TResult>>(
 		event: TEvent,
-		...args: QueueEventMap<TData, TResult>[TEvent]
+		payload: QueueEventMap<TData, TResult>[TEvent],
 	): void {
-		this.emitTo(this.listeners, event, args);
+		this.emitTo(this.listeners, event, payload);
 	}
 
 	emitWorker<TEvent extends keyof QueueWorkerEventMap<TData, TResult>>(
 		event: TEvent,
-		...args: QueueWorkerEventMap<TData, TResult>[TEvent]
+		payload: QueueWorkerEventMap<TData, TResult>[TEvent],
 	): void {
-		this.emitTo(this.workerListeners, event, args);
+		this.emitTo(this.workerListeners, event, payload);
 	}
 
 	removeAllListeners(): void {
@@ -417,14 +447,10 @@ export class QueueEmitter<TData, TResult> {
 		this.workerListeners.clear();
 	}
 
-	private emitTo(
-		listenersByEvent: Map<string, Set<QueueListener<readonly unknown[]>>>,
-		event: string,
-		args: readonly unknown[],
-	): void {
+	private emitTo(listenersByEvent: Map<string, Set<QueueListener<unknown>>>, event: string, payload: unknown): void {
 		for (const listener of listenersByEvent.get(event) ?? []) {
 			try {
-				listener(...args);
+				listener(payload);
 			} catch (error) {
 				this.reportListenerError(String(event), error);
 			}
@@ -468,6 +494,7 @@ export class MemoryQueue<TData = unknown, TResult = unknown>
 		if (!Number.isInteger(this.defaultAttempts) || this.defaultAttempts <= 0) {
 			throw new RangeError('Queue attempts must be a positive integer.');
 		}
+		warnRetryDelayWithoutRetries(options.retryDelay, this.defaultAttempts, `queue "${this.name}"`);
 		this.running = options.autostart ?? true;
 	}
 
@@ -491,6 +518,7 @@ export class MemoryQueue<TData = unknown, TResult = unknown>
 		const delay = parseDuration(options.delay ?? 0);
 		const attempts = options.attempts ?? this.defaultAttempts;
 		if (!Number.isInteger(attempts) || attempts <= 0) throw new RangeError('Job attempts must be a positive integer.');
+		warnRetryDelayWithoutRetries(options.retryDelay, attempts, `job "${name}" on queue "${this.name}"`);
 		const jobId = options.id ?? this.generateJobId();
 		if (this.getJob(jobId)) throw new RangeError(`Job with id "${jobId}" already exists.`);
 
@@ -507,7 +535,7 @@ export class MemoryQueue<TData = unknown, TResult = unknown>
 
 		this.idle = false;
 		this.enqueue(job);
-		this.emit('added', job);
+		this.emit('added', { job });
 		this.schedule();
 		return job;
 	}
@@ -611,8 +639,8 @@ export class MemoryQueue<TData = unknown, TResult = unknown>
 		if (!next) {
 			if (this.activeJobs.size === 0 && !this.idle) {
 				this.idle = true;
-				this.emit('idle');
-				this.emitWorker('idle');
+				this.emit('idle', {});
+				this.emitWorker('idle', {});
 			}
 			return;
 		}
@@ -637,8 +665,8 @@ export class MemoryQueue<TData = unknown, TResult = unknown>
 		job.attemptsMade++;
 		job.updatedAt = new Date(this.now());
 		this.activeJobs.set(job.id, job);
-		this.emit('active', job);
-		this.emitWorker('active', job);
+		this.emit('active', { job });
+		this.emitWorker('active', { job });
 		let completedResult: TResult | undefined;
 		let completed = false;
 		let failedError: unknown;
@@ -671,8 +699,8 @@ export class MemoryQueue<TData = unknown, TResult = unknown>
 
 				job.runAt = new Date(this.now() + delay);
 				this.idle = false;
-				this.emit('retrying', job, error, delay);
-				this.emitWorker('retrying', job, error, delay);
+				this.emit('retrying', { delay, error, job });
+				this.emitWorker('retrying', { delay, error, job });
 				this.enqueue(job);
 			} else {
 				this.failJob(job, error);
@@ -681,11 +709,11 @@ export class MemoryQueue<TData = unknown, TResult = unknown>
 		} finally {
 			this.activeJobs.delete(job.id);
 			if (completed) {
-				this.emit('completed', job, completedResult as TResult);
-				this.emitWorker('completed', job, completedResult as TResult);
+				this.emit('completed', { job, result: completedResult as TResult });
+				this.emitWorker('completed', { job, result: completedResult as TResult });
 			} else if (failedError !== undefined) {
-				this.emit('failed', job, failedError);
-				this.emitWorker('failed', job, failedError);
+				this.emit('failed', { error: failedError, job });
+				this.emitWorker('failed', { error: failedError, job });
 			}
 			this.schedule();
 		}
@@ -766,6 +794,7 @@ export class PersistentQueue<TData = unknown, TResult = unknown>
 	setup(client?: QueuesClientLike): void {
 		if (this.state === 'ready') return;
 		this.rejectUnsupportedRetryDelay(this.options.retryDelay);
+		warnRetryDelayWithoutRetries(this.options.retryDelay, this.options.attempts ?? 1, `queue "${this.name}"`);
 		this.state = 'ready';
 		this.queue = new this.bullmq.Queue(this.name, this.baseQueueOptions());
 		if (this.bullmq.QueueEvents) {
@@ -797,10 +826,15 @@ export class PersistentQueue<TData = unknown, TResult = unknown>
 		const queue = this.requireQueue();
 		const { data, name, options } = parseQueueAddArgs<TData, TResult>(nameOrData, dataOrOptions, maybeOptions);
 		this.rejectUnsupportedRetryDelay(options.retryDelay);
+		warnRetryDelayWithoutRetries(
+			options.retryDelay ?? this.options.retryDelay,
+			options.attempts ?? this.options.attempts ?? 1,
+			`job "${name}" on queue "${this.name}"`,
+		);
 		const bullOptions = this.buildJobOptions(options);
 		const bullJob = await queue.add(name, data, bullOptions);
 		const job = this.fromBullJob(bullJob, data, name, options);
-		this.emit('added', job);
+		this.emit('added', { job });
 		return job;
 	}
 
@@ -863,8 +897,8 @@ export class PersistentQueue<TData = unknown, TResult = unknown>
 
 		const job = this.fromBullJob(bullJob);
 		job.status = 'active';
-		this.emit('active', job);
-		this.emitWorker('active', job);
+		this.emit('active', { job });
+		this.emitWorker('active', { job });
 		let completedResult: TResult | undefined;
 		let completed = false;
 		let failedError: unknown;
@@ -885,11 +919,11 @@ export class PersistentQueue<TData = unknown, TResult = unknown>
 			throw error;
 		} finally {
 			if (completed) {
-				this.emitWorker('completed', job, completedResult as TResult);
-				if (!this.queueEvents) this.emit('completed', job, completedResult as TResult);
+				this.emitWorker('completed', { job, result: completedResult as TResult });
+				if (!this.queueEvents) this.emit('completed', { job, result: completedResult as TResult });
 			} else if (failedError !== undefined) {
-				this.emitWorker('failed', job, failedError);
-				if (!this.queueEvents) this.emit('failed', job, failedError);
+				this.emitWorker('failed', { error: failedError, job });
+				if (!this.queueEvents) this.emit('failed', { error: failedError, job });
 			}
 		}
 	}
@@ -1003,7 +1037,7 @@ export class PersistentQueue<TData = unknown, TResult = unknown>
 			const record = eventRecord(event);
 			const job = await this.jobFromQueueEvent(record);
 			const result = (record.returnvalue ?? job.result) as TResult;
-			this.emit('completed', job, result);
+			this.emit('completed', { job, result });
 		} catch (error) {
 			defaultReportListenerError(`${this.name}:completed`, error);
 		}
@@ -1014,7 +1048,7 @@ export class PersistentQueue<TData = unknown, TResult = unknown>
 			const record = eventRecord(event);
 			const job = await this.jobFromQueueEvent(record);
 			const error = job.error ?? new Error(String(record.failedReason ?? 'Queue job failed.'));
-			this.emit('failed', job, error);
+			this.emit('failed', { error, job });
 		} catch (error) {
 			defaultReportListenerError(`${this.name}:failed`, error);
 		}
@@ -1114,13 +1148,14 @@ export class QueuesRegistry {
 		dataOrOptions?: unknown,
 		maybeOptions?: JobOptions,
 	): Promise<QueueJob<any, any, string>> {
-		if (
-			typeof nameOrData === 'string' &&
-			dataOrOptions !== undefined &&
-			(maybeOptions !== undefined || !isJobOptionsLike(dataOrOptions))
-		) {
+		if (isAmbiguousQueueAddArgs(nameOrData, dataOrOptions, maybeOptions)) {
+			throw new TypeError(createAmbiguousQueueAddMessage());
+		}
+
+		if (typeof nameOrData === 'string' && dataOrOptions !== undefined) {
 			return this.get(queueName).add(nameOrData, dataOrOptions, maybeOptions);
 		}
+
 		return this.get(queueName).add(nameOrData as never, dataOrOptions as JobOptions | undefined);
 	}
 
@@ -1151,8 +1186,8 @@ export class QueuesRegistry {
 
 		for (const event of eventMetadata.get(prototype) ?? []) {
 			const handler = this.getMethod(instance, event.method);
-			const listener = (...args: readonly unknown[]) => {
-				handler.apply(instance, [...args]);
+			const listener = (payload: unknown) => {
+				handler.call(instance, payload);
 			};
 
 			if (event.scope === 'worker') {
@@ -1314,12 +1349,11 @@ function parseQueueAddArgs<TData, TResult>(
 	dataOrOptions?: unknown,
 	maybeOptions?: JobOptions<TData, TResult>,
 ): { data: TData; name: string; options: JobOptions<TData, TResult> } {
-	const hasJobName =
-		typeof nameOrData === 'string' &&
-		dataOrOptions !== undefined &&
-		(maybeOptions !== undefined || !isJobOptionsLike(dataOrOptions));
+	if (isAmbiguousQueueAddArgs(nameOrData, dataOrOptions, maybeOptions)) {
+		throw new TypeError(createAmbiguousQueueAddMessage());
+	}
 
-	if (hasJobName) {
+	if (typeof nameOrData === 'string' && dataOrOptions !== undefined) {
 		return {
 			data: dataOrOptions as TData,
 			name: nameOrData,
@@ -1334,6 +1368,24 @@ function parseQueueAddArgs<TData, TResult>(
 	};
 }
 
+function isAmbiguousQueueAddArgs(nameOrData: unknown, dataOrOptions: unknown, maybeOptions: unknown): boolean {
+	return (
+		typeof nameOrData === 'string' &&
+		dataOrOptions !== undefined &&
+		maybeOptions === undefined &&
+		isJobOptionsLike(dataOrOptions)
+	);
+}
+
+function createAmbiguousQueueAddMessage(): string {
+	return [
+		'Ambiguous queue.add() call: a string first argument plus an options-shaped second argument can be either data/options or name/data.',
+		'Use add(name, data, options) for named jobs, or pass non-string data to add(data, options).',
+	].join(' ');
+}
+
+// isJobOptionsLike owns the overload-disambiguation whitelist. If job options
+// grow, update ['id', 'delay', 'attempts', 'priority', 'retryDelay'] here too.
 function isJobOptionsLike(value: unknown): value is JobOptions {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
 	const keys = Object.keys(value);
@@ -1341,7 +1393,7 @@ function isJobOptionsLike(value: unknown): value is JobOptions {
 	return keys.every(key => ['id', 'delay', 'attempts', 'priority', 'retryDelay'].includes(key));
 }
 
-class InvalidDurationError extends RangeError {
+export class InvalidDurationError extends RangeError {
 	constructor(input: DurationInput) {
 		super(`Invalid duration: ${String(input)}`);
 		this.name = 'InvalidDurationError';
@@ -1389,6 +1441,17 @@ function normalizeBackoffOptions(value: BackoffOptions): BackoffOptions {
 		...value,
 		delay: value.delay === undefined ? undefined : parseDuration(value.delay),
 	};
+}
+
+function warnRetryDelayWithoutRetries<TData, TResult>(
+	retryDelay: RetryDelayResolver<TData, TResult> | undefined,
+	attempts: number,
+	scope: string,
+): void {
+	if (retryDelay === undefined || attempts > 1) return;
+	process.emitWarning?.(`${scope} defines retryDelay but attempts is ${attempts}; no retries will be scheduled.`, {
+		code: 'SLIPHER_QUEUE_RETRY_DELAY_NO_RETRIES',
+	});
 }
 
 function defaultReportListenerError(event: string, error: unknown): void {
