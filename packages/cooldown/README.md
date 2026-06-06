@@ -190,6 +190,8 @@ For `type: 'guild'`, DMs fall back to `author.id` because there is no `guildId`.
 | `@slipher/redis-adapter` | Yes, Lua script through `eval` |
 | Worker / third-party adapters without `eval` | Best effort |
 
+Only `consume` uses the Redis Lua path. `check`, `remaining`, and `reset` are regular cache reads/writes, so under Redis they can observe state that changes between calls when other workers are consuming the same bucket. Use `consume` as the authority for admission decisions; treat `check` and `remaining` as display/preview helpers.
+
 ## Shared Buckets (`group`)
 
 Commands that share a `group` share the same cache key. The key is built as `${group ?? resolvedCommandName}:${typeLabel}:${target}`, so different commands in the same group hit one bucket per target.
@@ -203,6 +205,16 @@ class KickCommand extends Command { /* ... */ }
 ```
 
 A user that runs `/ban` cannot immediately run `/kick`; both are gated by the same `moderation:user:<userId>` bucket.
+
+`group` is only the cache namespace after a cooldown has been resolved; it does not make subcommands inherit cooldowns. For a command with subcommands, the manager resolves cooldown data as `subcommand.cooldown ?? parent.cooldown`. Put the decorator on the parent when every subcommand should be gated, or put it on individual subcommands when only some should be gated:
+
+```ts
+@Declare({ name: 'daily', description: 'Daily rewards' })
+@Cooldown.user(86_400_000, { default: 1 })
+class DailyCommand extends Command { /* claim/status subcommands */ }
+```
+
+In that shape, `/daily claim` and `/daily status` both inherit the parent cooldown. If only `claim` should be limited, assign `cooldown` to that subcommand instead of the parent.
 
 ## Custom Target Resolvers
 
