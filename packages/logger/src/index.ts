@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { createRequire } from 'node:module';
 import { Logger as SeyfertLogger } from 'seyfert';
 import { LogLevels as SeyfertLogLevels } from 'seyfert/lib/common';
 
@@ -34,7 +35,6 @@ export interface LoggerOptions {
 }
 
 export interface LoggerPluginOptions extends LoggerOptions {
-	pluginName?: string;
 	context?: AutoContextConfig;
 	interceptInternal?: boolean;
 }
@@ -43,6 +43,7 @@ export interface LoggerPlugin {
 	name: string;
 	options?(current: Readonly<Record<string, unknown>>): LoggerPluginOptionsFragment;
 	setup?(client: SeyfertClientLike): Awaitable<void>;
+	teardown?(client: SeyfertClientLike): Awaitable<void>;
 }
 
 export interface LoggerPluginOptionsFragment {
@@ -130,104 +131,24 @@ export type PinoLogMethod = (payload: Record<string, unknown>, message?: string)
 
 export type EvlogLevel = 'debug' | 'info' | 'warn' | 'error';
 
-export interface EvlogRedactConfig {
-	paths?: string[];
-	patterns?: RegExp[];
-	builtins?: false | Array<'creditCard' | 'email' | 'ipv4' | 'phone' | 'jwt' | 'bearer' | 'iban'>;
-	replacement?: string;
-}
-
-export interface EvlogPipelineContext {
-	event: Record<string, unknown>;
-	request?: {
-		method?: string;
-		path?: string;
-		requestId?: string;
-	};
-	headers?: Record<string, string>;
-}
-
-export interface EvlogTailSamplingContext extends EvlogPipelineContext {
-	shouldKeep: boolean;
-}
-
-export interface EvlogAdapterOptions {
-	include?: string[];
-	exclude?: string[];
-	routes?: Record<string, unknown>;
-	drain?: (context: EvlogPipelineContext) => Awaitable<void>;
-	enrich?: (context: EvlogPipelineContext) => Awaitable<void>;
-	keep?: (context: EvlogTailSamplingContext) => Awaitable<void>;
-	redact?: boolean | EvlogRedactConfig;
-	plugins?: unknown[];
-}
-
-interface EvlogAdapterContext {
-	entry: LogEntry;
-	logger?: EvlogRequestLogger;
-}
+type EvlogLogMethod = {
+	(tag: string, message: string): void;
+	(event: Record<string, unknown>): void;
+};
 
 interface EvlogRequestLogger {
 	set(context: Record<string, unknown>): void;
 	setLevel(level: EvlogLevel): void;
-	emit?(overrides?: Record<string, unknown>): Record<string, unknown> | null;
-	error(error: Error | string, context?: Record<string, unknown>): void;
-	info(message: string, context?: Record<string, unknown>): void;
-	warn(message: string, context?: Record<string, unknown>): void;
+	emit(overrides?: Record<string, unknown>): Record<string, unknown> | null;
 }
-
-interface EvlogRequestHandle {
-	logger?: EvlogRequestLogger;
-	skipped: boolean;
-	finish(options?: { status?: number; error?: Error }): Promise<unknown>;
-	runWith<T>(run: () => T | Promise<T>): Promise<T>;
-}
-
-interface EvlogFrameworkIntegration {
-	start(context: EvlogAdapterContext, options?: EvlogToolkitOptions): EvlogRequestHandle;
-}
-
-interface EvlogToolkitModule {
-	defineFrameworkIntegration<TContext>(spec: {
-		name: string;
-		extractRequest(context: TContext): {
-			method: string;
-			path: string;
-			headers?: Headers | Record<string, string | string[] | undefined>;
-			requestId?: string;
-		};
-		attachLogger(context: TContext, logger: EvlogRequestLogger): void;
-	}): EvlogFrameworkIntegration;
-	runEnrichAndDrain(
-		event: Record<string, unknown>,
-		options: EvlogMiddlewareOptions,
-		requestInfo: { method: string; path: string; requestId?: string },
-		responseStatus?: number,
-	): Promise<void>;
-	shouldLog?(path: string, include?: string[], exclude?: string[]): boolean;
-}
-
-type EvlogToolkitOptions = Omit<EvlogAdapterOptions, 'drain' | 'enrich' | 'keep' | 'plugins'> & {
-	drain?: (context: EvlogPipelineContext) => Awaitable<void>;
-	enrich?: (context: EvlogPipelineContext) => Awaitable<void>;
-	keep?: (context: EvlogTailSamplingContext) => Awaitable<void>;
-	plugins?: unknown[];
-};
-type EvlogMiddlewareOptions = EvlogToolkitOptions & {
-	method: string;
-	path: string;
-	requestId?: string;
-	headers?: Record<string, string>;
-};
 
 interface EvlogCoreModule {
-	createLogger(
-		initialContext?: Record<string, unknown>,
-		internalOptions?: { _deferDrain?: boolean },
-	): EvlogRequestLogger;
+	log: Record<EvlogLevel, EvlogLogMethod>;
+	createLogger(initialContext?: Record<string, unknown>): EvlogRequestLogger;
 }
 
 const loggerScope = new AsyncLocalStorage<WideEventLogger>();
+const requireFromHere = createRequire(__filename);
 
 const levelValues: Record<LogLevel, number> = {
 	trace: 10,
@@ -447,7 +368,12 @@ export class ConsoleLoggerAdapter implements LoggerAdapter {
 		});
 		const writer = getConsoleWriter(entry.level);
 
-		writer(payload);
+		if (process.env.NODE_ENV === 'production') {
+			writer(JSON.stringify(payload));
+			return;
+		}
+
+		writer(formatConsolePayload(payload));
 	}
 }
 
@@ -468,7 +394,7 @@ export function logger(options: LoggerPluginOptions = {}): LoggerPlugin {
 	const contextConfig = resolveContextConfig(options.context);
 
 	return {
-		name: options.pluginName ?? '@slipher/logger',
+		name: '@slipher/logger',
 		options: () => ({
 			context: source => ({ logger: root.event(buildSeyfertEventContext(source, 'command', contextConfig)) }),
 			contextScopes: [
@@ -482,6 +408,7 @@ export function logger(options: LoggerPluginOptions = {}): LoggerPlugin {
 			installSeyfertLogger(client, root);
 			if (options.interceptInternal ?? true) installSeyfertInternalLogger(root);
 		},
+		teardown: () => root.flush(),
 	};
 }
 
@@ -512,36 +439,18 @@ export function createPinoLoggerAdapter(target: PinoLoggerLike): LoggerAdapter {
 	};
 }
 
-export function createEvlogAdapter(options: EvlogAdapterOptions = {}): LoggerAdapter {
-	const integration = createEvlogIntegration();
-	const toolkit = importEvlogToolkit();
+export function createEvlogAdapter(): LoggerAdapter {
+	assertEvlogInstalled();
 	const core = importEvlogCore();
 
 	return {
 		async write(entry) {
 			if (!isEvlogLifecycleEntry(entry)) {
-				await writeEvlogImmediateEntry(entry, options, await toolkit, await core);
+				writeEvlogImmediateEntry(entry, await core);
 				return;
 			}
 
-			const context: EvlogAdapterContext = { entry };
-			const handle = (await integration).start(context, options as EvlogToolkitOptions);
-			if (handle.skipped) return;
-
-			const logger = context.logger ?? handle.logger;
-			if (!logger) return;
-
-			const message = entry.message ?? defaultWideEventMessage(getString(entry.data.kind) ?? 'event', 'success');
-			logger.set(
-				stripUndefined({
-					...entry.bindings,
-					...entry.data,
-					message,
-				}),
-			);
-			logger.setLevel(toEvlogLevel(entry.level));
-
-			await handle.finish(createEvlogFinishOptions(entry));
+			writeEvlogWideEvent(entry, await core);
 		},
 	};
 }
@@ -677,16 +586,20 @@ function getContextLogger(
 	kind: 'command' | 'component' | 'modal',
 	contextConfig: Record<AutoContextField, boolean>,
 ): WideEventLogger {
-	const source = asRecord(context) as { logger?: unknown };
 	const data = buildSeyfertEventContext(context, kind, contextConfig);
+	const scopedLogger = loggerScope.getStore();
+	if (scopedLogger) {
+		scopedLogger.add(data);
+		return scopedLogger;
+	}
+
+	const source = asRecord(context) as { logger?: unknown };
 	if (source.logger instanceof WideEventLogger) {
 		source.logger.add(data);
 		return source.logger;
 	}
 
-	const contextLogger = root.event(data);
-	if (context && typeof context === 'object') source.logger = contextLogger;
-	return contextLogger;
+	return root.event(data);
 }
 
 function buildSeyfertEventContext(
@@ -774,88 +687,51 @@ function entryToAdapterPayload(entry: LogEntry): Record<string, unknown> {
 	return stripUndefined({ ...entry.data });
 }
 
-async function writeEvlogImmediateEntry(
-	entry: LogEntry,
-	options: EvlogAdapterOptions,
-	toolkit: EvlogToolkitModule,
-	core: EvlogCoreModule,
-): Promise<void> {
-	const requestInfo = createEvlogImmediateRequestInfo(entry);
-	if (toolkit.shouldLog && !toolkit.shouldLog(requestInfo.path, options.include, options.exclude)) return;
-
-	const logger = core.createLogger(entryToEvlogStandalonePayload(entry), { _deferDrain: true });
-	logger.setLevel(toEvlogLevel(entry.level));
-	writeEvlogImmediateMessage(logger, entry);
-
-	const event = logger.emit?.();
-	if (!event) return;
-
-	await toolkit.runEnrichAndDrain(event, createEvlogMiddlewareOptions(options, requestInfo), requestInfo);
-}
-
 function isEvlogLifecycleEntry(entry: LogEntry): boolean {
 	return typeof entry.data.durationMs === 'number' && typeof entry.data.outcome === 'string';
 }
 
-function entryToEvlogStandalonePayload(entry: LogEntry): Record<string, unknown> {
-	return stripUndefined({
-		...entry.bindings,
-		...entry.data,
-		message: entry.message,
-	});
-}
+function writeEvlogImmediateEntry(entry: LogEntry, core: EvlogCoreModule): void {
+	const level = toEvlogLevel(entry.level);
+	const tag = getEvlogTag(entry);
+	const message = entry.message ?? defaultWideEventMessage(tag, 'success');
+	const data = entryToEvlogPayload(entry, { message, tag });
 
-function writeEvlogImmediateMessage(logger: EvlogRequestLogger, entry: LogEntry): void {
-	if (entry.level === 'error' || entry.level === 'fatal') {
-		logger.error(toError(entry.data.error ?? entry.message ?? 'Log entry failed'));
+	if (Object.keys(data).length > 2 || entry.level !== level) {
+		if (entry.level !== level) data.level = entry.level;
+		core.log[level](data);
 		return;
 	}
 
-	if (!entry.message) return;
-	if (entry.level === 'warn') logger.warn(entry.message);
-	else logger.info(entry.message);
+	core.log[level](tag, message);
 }
 
-function createEvlogImmediateRequestInfo(entry: LogEntry): { method: string; path: string; requestId?: string } {
+function writeEvlogWideEvent(entry: LogEntry, core: EvlogCoreModule): void {
+	const message = entry.message ?? defaultWideEventMessage(getString(entry.data.kind) ?? 'event', 'success');
+	const logger = core.createLogger(stripUndefined({ ...entry.bindings, tag: getEvlogTag(entry) }));
+	logger.set(stripUndefined({ ...entry.data, message }));
+	logger.setLevel(toEvlogLevel(entry.level));
+	if (entry.level === 'trace' || entry.level === 'fatal') logger.set({ level: entry.level });
+	logger.emit();
+}
+
+function entryToEvlogPayload(entry: LogEntry, base: { message: string; tag: string }): Record<string, unknown> {
 	return stripUndefined({
-		method: 'LOG',
-		path: getEvlogPath(entry),
-		requestId: getString(entry.data.requestId) ?? getString(entry.data.interactionId),
+		...entry.bindings,
+		...entry.data,
+		...base,
 	});
 }
 
-function createEvlogMiddlewareOptions(
-	options: EvlogAdapterOptions,
-	requestInfo: { method: string; path: string; requestId?: string },
-): EvlogMiddlewareOptions {
-	return {
-		...(options as EvlogToolkitOptions),
-		...requestInfo,
-	};
+function getEvlogTag(entry: LogEntry): string {
+	return getString(entry.data.source) ?? getString(entry.bindings.name) ?? 'app';
 }
 
-async function createEvlogIntegration(): Promise<EvlogFrameworkIntegration> {
-	const toolkit = await importEvlogToolkit();
-
-	return toolkit.defineFrameworkIntegration<EvlogAdapterContext>({
-		name: '@slipher/logger',
-		extractRequest: context => ({
-			method: getString(context.entry.data.kind)?.toUpperCase() ?? 'LOG',
-			path: getEvlogPath(context.entry),
-			requestId: getString(context.entry.data.requestId) ?? getString(context.entry.data.interactionId),
-		}),
-		attachLogger(context, logger) {
-			context.logger = logger;
-		},
-	});
-}
-
-async function importEvlogToolkit(): Promise<EvlogToolkitModule> {
+function assertEvlogInstalled(): void {
 	try {
-		return await importEsmModule<EvlogToolkitModule>('evlog/toolkit');
+		requireFromHere.resolve('evlog');
 	} catch (error) {
-		const missing = error instanceof Error && 'code' in error && error.code === 'MODULE_NOT_FOUND';
-		if (missing) {
+		if (isMissingModuleError(error)) {
 			throw new Error('@slipher/logger createEvlogAdapter() requires "evlog"; install it in your application.');
 		}
 		throw error;
@@ -866,12 +742,16 @@ async function importEvlogCore(): Promise<EvlogCoreModule> {
 	try {
 		return await importEsmModule<EvlogCoreModule>('evlog');
 	} catch (error) {
-		const missing = error instanceof Error && 'code' in error && error.code === 'MODULE_NOT_FOUND';
-		if (missing) {
+		if (isMissingModuleError(error)) {
 			throw new Error('@slipher/logger createEvlogAdapter() requires "evlog"; install it in your application.');
 		}
 		throw error;
 	}
+}
+
+function isMissingModuleError(error: unknown): boolean {
+	if (!(error instanceof Error) || !('code' in error)) return false;
+	return error.code === 'MODULE_NOT_FOUND' || error.code === 'ERR_MODULE_NOT_FOUND';
 }
 
 function importEsmModule<TModule>(specifier: string): Promise<TModule> {
@@ -883,37 +763,6 @@ function importEsmModule<TModule>(specifier: string): Promise<TModule> {
 
 		throw error;
 	});
-}
-
-function getEvlogPath(entry: LogEntry): string {
-	const kind = getString(entry.data.kind) ?? 'log';
-	const name = getString(entry.data.command) ?? getString(entry.data.customId) ?? getString(entry.message);
-	const segments = [kind, name].filter((segment): segment is string => Boolean(segment));
-	return `/${segments.map(slugPathSegment).join('/')}`;
-}
-
-function slugPathSegment(value: string): string {
-	return value
-		.trim()
-		.toLowerCase()
-		.replace(/[^a-z0-9._-]+/g, '-')
-		.replace(/^-+|-+$/g, '');
-}
-
-function createEvlogFinishOptions(entry: LogEntry): { status?: number; error?: Error } {
-	if (entry.level !== 'error' && entry.level !== 'fatal') {
-		return { status: 200 };
-	}
-
-	return {
-		error: toError(entry.data.error ?? entry.message ?? 'Log entry failed'),
-		status: 500,
-	};
-}
-
-function toError(value: unknown): Error {
-	if (value instanceof Error) return value;
-	return new Error(String(value));
 }
 
 function toEvlogLevel(level: WritableLogLevel): EvlogLevel {
@@ -947,17 +796,26 @@ function installSeyfertInternalLogger(root: RootLogger): void {
 			level: mappedLevel,
 			time: root.timestamp(),
 			bindings: {},
-			data: {
-				source: 'seyfert',
-				logger: self.name,
-				args,
-			},
+			data: buildSeyfertInternalLogData(self, args),
 			message: formatSeyfertLogMessage(args),
 		});
 
 		previous?.(self, level, args);
 		return undefined;
 	});
+}
+
+function buildSeyfertInternalLogData(self: SeyfertLogger, args: readonly unknown[]): LogData {
+	const data: LogData = {
+		source: `seyfert:${normalizeSeyfertLoggerName(self.name)}`,
+	};
+	const error = args.find((value): value is Error => value instanceof Error);
+	if (error) data.err = error;
+	return data;
+}
+
+function normalizeSeyfertLoggerName(name: string): string {
+	return name.replace(/^\[|\]$/g, '') || 'internal';
 }
 
 function mapSeyfertLogLevel(level: SeyfertLogLevels): WritableLogLevel {
@@ -978,7 +836,6 @@ function mapSeyfertLogLevel(level: SeyfertLogLevels): WritableLogLevel {
 function formatSeyfertLogMessage(args: readonly unknown[]): string | undefined {
 	const parts = args.flatMap(value => {
 		if (typeof value === 'string') return [value];
-		if (value instanceof Error) return [value.message];
 		return [];
 	});
 	return parts.length ? parts.join(' ') : undefined;
@@ -1015,6 +872,14 @@ function stripUndefined<T extends Record<string, unknown>>(value: T): T {
 		if (value[key] === undefined) delete value[key];
 	}
 	return value;
+}
+
+function formatConsolePayload(payload: Record<string, unknown>): string {
+	const { level, message, name, source, time, ...rest } = payload;
+	const tag = getString(source) ?? getString(name);
+	const prefix = [time, level, tag ? `[${tag}]` : undefined].filter(Boolean).join(' ');
+	const suffix = Object.keys(rest).length ? ` ${JSON.stringify(rest)}` : '';
+	return `${prefix}${message ? ` ${message}` : ''}${suffix}`;
 }
 
 function getConsoleWriter(level: WritableLogLevel): (...args: unknown[]) => void {

@@ -3,15 +3,15 @@ import type { RootLogger, WideEventLogger } from './index';
 
 declare module 'seyfert' {
 	interface Client<Ready extends boolean = boolean> {
-		slipherLogger: RootLogger;
+		slipherLogger?: RootLogger;
 	}
 
 	interface HttpClient {
-		slipherLogger: RootLogger;
+		slipherLogger?: RootLogger;
 	}
 
 	interface WorkerClient<Ready extends boolean = boolean> {
-		slipherLogger: RootLogger;
+		slipherLogger?: RootLogger;
 	}
 
 	interface ExtendContext {
@@ -19,6 +19,6 @@ declare module 'seyfert' {
 	}
 
 	interface UsingClient {
-		slipherLogger: RootLogger;
+		slipherLogger?: RootLogger;
 	}
 }

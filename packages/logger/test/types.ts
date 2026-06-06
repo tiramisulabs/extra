@@ -19,13 +19,15 @@ declare const workerClient: WorkerClient;
 declare const usingClient: UsingClient;
 
 expectType<WideEventLogger>(context.logger);
-expectType<RootLogger>(client.slipherLogger);
-expectType<RootLogger>(httpClient.slipherLogger);
-expectType<RootLogger>(workerClient.slipherLogger);
-expectType<RootLogger>(usingClient.slipherLogger);
+expectType<RootLogger | undefined>(client.slipherLogger);
+expectType<RootLogger | undefined>(httpClient.slipherLogger);
+expectType<RootLogger | undefined>(workerClient.slipherLogger);
+expectType<RootLogger | undefined>(usingClient.slipherLogger);
 expectType<LoggerLike>({} as WideEventLogger);
 
-expectType<LoggerAdapter>(createEvlogAdapter({ drain() {} }));
+expectType<LoggerAdapter>(createEvlogAdapter());
+// @ts-expect-error evlog drain/redact/enrich configuration belongs in initLogger()
+createEvlogAdapter({ drain() {} });
 expectType<WideEventLogger>(useLogger());
 
 const auditMiddleware = createMiddleware<{ requestId: string }, CommandContext>(async ({ context, next }) => {

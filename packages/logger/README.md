@@ -36,9 +36,11 @@ The plugin adds a wide event logger to every command, component, and modal conte
 
 Use `client.slipherLogger` when you want the root logger with a Slipher-specific type.
 
-Seyfert internal logs are intercepted by default and routed through the configured adapter with `source: 'seyfert'`. Set `interceptInternal: false` only if you intentionally want Seyfert's pretty console output; doing so means internal gateway/API lines bypass your adapter redaction policy.
+Seyfert internal logs are intercepted by default and routed through the configured adapter with `source: 'seyfert:<Subsystem>'`. The internal bridge does not copy raw argument arrays into `args`; if Seyfert passes an `Error`, it is exposed as `err`. Set `interceptInternal: false` only if you intentionally want Seyfert's pretty console output; doing so means internal gateway/API lines bypass your adapter redaction policy.
 
 Until the upstream Seyfert hook-composition fix lands, some Seyfert default error hooks may still duplicate logs outside this package.
+
+The plugin name registered with Seyfert is always `@slipher/logger`. The `name` option is a logger binding, so it appears in emitted records but does not rename the plugin. When Seyfert stops the client with `client.close()`, the plugin teardown flushes the configured adapter if it exposes `flush()`.
 
 ## Carry Context Through Middlewares
 
@@ -153,13 +155,17 @@ export async function findPlan(userId: string) {
 
 ## Adapters
 
-The default adapter writes one flat object to `console`. Use an adapter when you want entries in another logger or event stream. On field collisions, user data from `add()` or level-method data wins over envelope and binding fields.
+The default adapter writes pretty console text in development and JSON strings in production. Use an adapter when you want entries in another logger or event stream. On field collisions, user data from `add()` or level-method data wins over envelope and binding fields.
+
+Redaction belongs to the sink you choose. The console adapter does not redact by itself; configure redaction in your collector/runtime, use Pino redaction on the Pino instance, or use evlog redaction in `initLogger()`.
 
 ```ts
 import { createPinoLoggerAdapter, logger } from '@slipher/logger';
 import pino from 'pino';
 
-const root = pino();
+const root = pino({
+	redact: ['token', 'headers.authorization'],
+});
 
 export default logger({
 	name: 'slipher-bot',
@@ -167,7 +173,7 @@ export default logger({
 });
 ```
 
-For evlog, initialize evlog with the service envelope and pass evlog middleware options to `createEvlogAdapter()`:
+For evlog, initialize evlog with the service envelope, redaction, sampling/keep rules, and drains. Then pass `createEvlogAdapter()` to the Slipher logger:
 
 ```sh
 pnpm add evlog
@@ -179,29 +185,33 @@ import { createFsDrain } from 'evlog/fs';
 import { createDrainPipeline } from 'evlog/pipeline';
 import { createEvlogAdapter, logger } from '@slipher/logger';
 
+const drain = createDrainPipeline({
+	batch: { size: 50, intervalMs: 5_000 },
+})(createFsDrain());
+
 initLogger({
 	env: {
 		service: 'slipher-bot',
 		environment: process.env.NODE_ENV ?? 'development',
 		version: process.env.npm_package_version,
 	},
+	redact: {
+		paths: ['token', 'headers.authorization'],
+		patterns: [/Bot\s+[A-Za-z0-9._-]+/g],
+	},
+	drain,
 	silent: true,
 });
 
-const drain = createDrainPipeline({
-	batch: { size: 50, intervalMs: 5_000 },
-})(createFsDrain());
-
 export default logger({
 	name: 'slipher-bot',
-	adapter: createEvlogAdapter({
-		drain,
-		redact: true,
-	}),
+	adapter: createEvlogAdapter(),
 });
 ```
 
-Any evlog drain works here, including Axiom, OTLP, Sentry, fs, memory, or your own pipeline. `createEvlogAdapter()` loads `evlog/toolkit` lazily, so `evlog` is only required when this adapter is used. Set `silent: true` in `initLogger()` when drains own the output channel.
+Any evlog drain works here, including Axiom, OTLP, Sentry, fs, memory, or your own pipeline. `createEvlogAdapter()` loads `evlog` lazily and fails at adapter creation if it is not installed. Set `silent: true` in `initLogger()` when drains own the output channel.
+
+Immediate level entries call evlog's tagged log API (`log.info(tag, message)`, `log.warn(...)`, and so on) unless extra structured data is present. Wide events use `createLogger(context).set(data).emit()` and do not create fake HTTP request fields.
 
 ## Outside Seyfert
 

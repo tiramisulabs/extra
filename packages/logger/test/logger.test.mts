@@ -224,6 +224,9 @@ describe('logger plugin', () => {
 		assert.equal(adapter.entries.length, 1);
 		assert.equal(adapter.entries[0].message, 'member joined');
 		assert.deepEqual(adapter.entries[0].data, { memberId: 'user-1' });
+
+		await plugin.teardown?.(client);
+		assert.equal(adapter.flushes, 1);
 	});
 
 	test('setup routes Seyfert internal logs through the adapter and preserves existing customizers', async () => {
@@ -241,20 +244,26 @@ describe('logger plugin', () => {
 			await plugin.setup?.({ commands: {}, components: {}, events: {}, langs: {}, cache: {} });
 
 			new SeyfertLogger({ name: '[API]', active: true }).info('identify', { token: 'secret' });
+			new SeyfertLogger({ name: '[Gateway]', active: true }).error('lost shard', new Error('socket closed'));
 		} finally {
 			SeyfertLogger.customize((_self, _level, args) => args);
 			console.log = originalLog;
 		}
 
-		assert.equal(adapter.entries.length, 1);
+		assert.equal(adapter.entries.length, 2);
 		assert.equal(adapter.entries[0].level, 'info');
 		assert.equal(adapter.entries[0].message, 'identify');
-		assert.deepEqual(adapter.entries[0].data, {
-			source: 'seyfert',
-			logger: '[API]',
-			args: ['identify', { token: 'secret' }],
-		});
-		assert.deepEqual(chained, [['[API]', LogLevels.Info, ['identify', { token: 'secret' }]]]);
+		assert.deepEqual(adapter.entries[0].data, { source: 'seyfert:API' });
+		assert.equal(adapter.entries[1].level, 'error');
+		assert.equal(adapter.entries[1].message, 'lost shard');
+		assert.equal(adapter.entries[1].data.source, 'seyfert:Gateway');
+		assert.instanceOf(adapter.entries[1].data.err, Error);
+		assert.equal(chained.length, 2);
+		assert.deepEqual(chained[0], ['[API]', LogLevels.Info, ['identify', { token: 'secret' }]]);
+		assert.equal(chained[1]?.[0], '[Gateway]');
+		assert.equal(chained[1]?.[1], LogLevels.Error);
+		assert.equal((chained[1]?.[2] as unknown[])?.[0], 'lost shard');
+		assert.instanceOf((chained[1]?.[2] as unknown[])?.[1], Error);
 	});
 
 	test('useLogger exposes the current command logger without passing context', async () => {
@@ -286,10 +295,26 @@ describe('logger plugin', () => {
 		assert.equal(adapter.entries[2].data.serviceUser, 'user-1');
 		assert.throws(() => useLogger(), /outside of a Seyfert logger scope/);
 	});
+
+	test('context scopes do not mutate Seyfert contexts with logger fields', async () => {
+		const adapter = new RecordingAdapter();
+		const plugin = logger({ adapter });
+		const options = plugin.options?.({});
+		const context = { fullCommandName: 'ping' };
+
+		await options?.contextScopes?.[0]?.(context, async () => {
+			useLogger().add({ requestId: 'request-1' });
+			await options?.commands?.defaults?.onAfterRun?.(context, undefined);
+		});
+
+		assert.equal('logger' in context, false);
+		assert.equal(adapter.entries[0].data.command, 'ping');
+		assert.equal(adapter.entries[0].data.requestId, 'request-1');
+	});
 });
 
 describe('logger adapters', () => {
-	test('ConsoleLoggerAdapter writes one flat object with user data winning collisions', () => {
+	test('ConsoleLoggerAdapter writes pretty text by default with user data winning collisions', () => {
 		const calls: unknown[][] = [];
 		const originalInfo = console.info;
 		console.info = (...args: unknown[]) => {
@@ -310,14 +335,43 @@ describe('logger adapters', () => {
 
 		assert.equal(calls.length, 1);
 		assert.equal(calls[0].length, 1);
-		assert.deepEqual(calls[0][0], {
-			time: '2026-05-29T10:00:00.000Z',
-			level: 'critical',
-			message: 'override',
-			name: 'bot',
-			shardId: 1,
-			guildId: 'guild-1',
-		});
+		assert.equal(calls[0][0], '2026-05-29T10:00:00.000Z critical [bot] override {"shardId":1,"guildId":"guild-1"}');
+	});
+
+	test('ConsoleLoggerAdapter writes JSON in production', () => {
+		const calls: unknown[][] = [];
+		const originalEnv = process.env.NODE_ENV;
+		const originalInfo = console.info;
+		process.env.NODE_ENV = 'production';
+		console.info = (...args: unknown[]) => {
+			calls.push(args);
+		};
+
+		try {
+			new ConsoleLoggerAdapter().write({
+				bindings: { name: 'bot' },
+				data: { guildId: 'guild-1' },
+				level: 'info',
+				message: 'ready',
+				time: new Date('2026-05-29T10:00:00.000Z'),
+			});
+		} finally {
+			if (originalEnv === undefined) delete process.env.NODE_ENV;
+			else process.env.NODE_ENV = originalEnv;
+			console.info = originalInfo;
+		}
+
+		assert.equal(calls.length, 1);
+		assert.equal(
+			calls[0][0],
+			JSON.stringify({
+				time: '2026-05-29T10:00:00.000Z',
+				level: 'info',
+				message: 'ready',
+				name: 'bot',
+				guildId: 'guild-1',
+			}),
+		);
 	});
 
 	test('createPinoLoggerAdapter sends only event data and uses child bindings', async () => {
@@ -345,18 +399,17 @@ describe('logger adapters', () => {
 		assert.deepEqual(calls, [[{ guildId: 'guild-1' }, 'ready']]);
 	});
 
-	test('createEvlogAdapter routes entries through evlog redact enrich and drain pipeline', async () => {
+	test('createEvlogAdapter routes entries through the evlog global pipeline', async () => {
 		const events: Array<Record<string, unknown>> = [];
-		initLogger({ _suppressDrainWarning: true, silent: true } as never);
-		const adapter = createEvlogAdapter({
+		initLogger({
+			_suppressDrainWarning: true,
+			silent: true,
 			redact: { paths: ['secret'], builtins: false },
-			enrich(context) {
-				context.event.enriched = true;
-			},
 			drain(context) {
 				events.push(context.event as Record<string, unknown>);
 			},
 		});
+		const adapter = createEvlogAdapter();
 
 		await adapter.write({
 			bindings: { service: 'bot' },
@@ -370,10 +423,10 @@ describe('logger adapters', () => {
 			message: 'command completed',
 			time: new Date('2026-05-29T10:00:00.000Z'),
 		});
+		await flushEvlogDrain();
 
 		assert.equal(events.length, 1);
 		assert.equal(events[0]!.command, 'deploy');
-		assert.equal(events[0]!.enriched, true);
 		assert.equal(events[0]!.message, 'command completed');
 		assert.equal('method' in events[0]!, false);
 		assert.equal(events[0]!.secret, '[REDACTED]');
@@ -382,12 +435,14 @@ describe('logger adapters', () => {
 
 	test('createEvlogAdapter keeps warn lifecycle entries out of HTTP error status', async () => {
 		const events: Array<Record<string, unknown>> = [];
-		initLogger({ _suppressDrainWarning: true, silent: true } as never);
-		const adapter = createEvlogAdapter({
+		initLogger({
+			_suppressDrainWarning: true,
+			silent: true,
 			drain(context) {
 				events.push(context.event as Record<string, unknown>);
 			},
 		});
+		const adapter = createEvlogAdapter();
 
 		await adapter.write({
 			bindings: {},
@@ -400,9 +455,11 @@ describe('logger adapters', () => {
 			message: 'command permission denied',
 			time: new Date('2026-05-29T10:00:00.000Z'),
 		});
+		await flushEvlogDrain();
 
 		assert.equal(events.length, 1);
-		assert.equal(events[0]!.status, 200);
+		assert.equal('status' in events[0]!, false);
+		assert.equal('method' in events[0]!, false);
 	});
 });
 
@@ -481,4 +538,8 @@ describe('createLogger', () => {
 function clock(values: Date[]): () => Date {
 	let index = 0;
 	return () => values[Math.min(index++, values.length - 1)];
+}
+
+async function flushEvlogDrain(): Promise<void> {
+	await new Promise(resolve => setTimeout(resolve, 0));
 }
