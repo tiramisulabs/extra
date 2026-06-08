@@ -332,6 +332,24 @@ describe('logger plugin', () => {
 		assert.equal(adapter.entries[0].data.command, 'ping');
 		assert.equal(adapter.entries[0].data.requestId, 'request-1');
 	});
+
+	test('generic context extension does not hard-code command kind for components', async () => {
+		const adapter = new RecordingAdapter();
+		const plugin = logger({ adapter });
+		const options = plugin.options?.({});
+		const extension = options?.context?.({ customId: 'button:confirm' }) as { logger: WideEventLogger };
+
+		assert.equal(extension.logger.currentContext.kind, undefined);
+
+		await options?.components?.defaults?.onAfterRun?.(
+			{ logger: extension.logger, customId: 'button:confirm' },
+			undefined,
+		);
+
+		assert.equal(adapter.entries.length, 1);
+		assert.equal(adapter.entries[0].data.kind, 'component');
+		assert.equal(adapter.entries[0].data.customId, 'button:confirm');
+	});
 });
 
 describe('logger adapters', () => {

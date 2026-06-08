@@ -123,10 +123,8 @@ export function logger(options: LoggerPluginOptions = {}): LoggerPlugin {
 	return {
 		name: '@slipher/logger',
 		options: () => ({
-			context: source => ({ logger: root.event(buildSeyfertEventContext(source, 'command', contextConfig)) }),
-			contextScopes: [
-				(context, run) => loggerScope.run(getContextLogger(root, context, 'command', contextConfig), run),
-			],
+			context: source => ({ logger: root.event(extractSeyfertLogContext(source, contextConfig)) }),
+			contextScopes: [(context, run) => loggerScope.run(getScopedLogger(root, context, contextConfig), run)],
 			commands: { defaults: createCommandDefaults(root, contextConfig) },
 			components: { defaults: createComponentDefaults(root, 'component', contextConfig) },
 			modals: { defaults: createComponentDefaults(root, 'modal', contextConfig) },
@@ -288,6 +286,18 @@ function getContextLogger(
 	contextConfig: Record<AutoContextField, boolean>,
 ): WideEventLogger {
 	const data = buildSeyfertEventContext(context, kind, contextConfig);
+	return getLoggerWithData(root, context, data);
+}
+
+function getScopedLogger(
+	root: RootLogger,
+	context: unknown,
+	contextConfig: Record<AutoContextField, boolean>,
+): WideEventLogger {
+	return getLoggerWithData(root, context, extractSeyfertLogContext(context, contextConfig));
+}
+
+function getLoggerWithData(root: RootLogger, context: unknown, data: LogData): WideEventLogger {
 	const scopedLogger = loggerScope.getStore();
 	if (scopedLogger) {
 		scopedLogger.add(data);
