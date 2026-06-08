@@ -4,7 +4,7 @@ import { CacheFrom, type ReturnCache } from 'seyfert/lib/cache';
 import type { BaseClient } from 'seyfert/lib/client/base';
 import type { UsingClient } from 'seyfert/lib/commands';
 import type { CommandFromContent } from 'seyfert/lib/commands/handle';
-import { type Awaitable, Formatter, fakePromise, type PickPartial, TimestampStyle } from 'seyfert/lib/common';
+import { type Awaitable, fakePromise, type PickPartial } from 'seyfert/lib/common';
 import { type CooldownData, CooldownResource, type CooldownType } from './resource';
 
 export type CooldownTargetType = `${CooldownType}` | 'global';
@@ -498,12 +498,7 @@ export class CooldownManager {
 	 * Resolve target from the current interaction context and consume a token.
 	 * Returns `undefined` when the command resolves to no cooldown or when a custom resolver yields no target.
 	 */
-	context(context: AnyContext, use?: keyof UsesProps, guildId?: string): ReturnCache<CooldownResult | undefined>;
-	context(options?: CooldownContextOptions): ReturnCache<CooldownResult | undefined>;
-	context(contextOrOptions?: AnyContext | CooldownContextOptions, use?: keyof UsesProps, guildId?: string) {
-		if (isCooldownContext(contextOrOptions)) return this.contextFrom(contextOrOptions, use, guildId);
-
-		const options = contextOrOptions ?? {};
+	context(options: CooldownContextOptions = {}): ReturnCache<CooldownResult | undefined> {
 		return this.contextFrom(useCooldownContext(), options.use, options.guildId);
 	}
 
@@ -536,53 +531,6 @@ export class CooldownManager {
 				return context.author.id;
 		}
 	}
-}
-
-function isCooldownContext(context: unknown): context is AnyContext {
-	return (
-		typeof context === 'object' &&
-		context !== null &&
-		('author' in context || 'command' in context || 'fullCommandName' in context)
-	);
-}
-
-export interface FormatRemainingOptions {
-	/** Output format. Defaults to `'text'`. */
-	style?: 'text' | 'discord';
-	/** Discord timestamp style. Only used when `style === 'discord'`. Defaults to `TimestampStyle.RelativeTime`. */
-	discordStyle?: TimestampStyle;
-	/** Override the reference "now" timestamp. Useful for tests. */
-	now?: () => number;
-}
-
-/**
- * Format a cooldown duration as either a short human string or a Discord timestamp tag built with Seyfert's `Formatter`.
- *
- * Accepts either a millisecond duration (`number`) or an absolute target timestamp (`Date`).
- *
- * Text examples: `500 → "1s"`, `5000 → "5s"`, `90000 → "1m 30s"`, `3_600_000 → "1h"`.
- * Discord examples: `5000 → "<t:1717372805:R>"`, `result.retryAfter → "<t:1717372805:R>"`.
- */
-export function formatRemaining(input: number | Date, options: FormatRemainingOptions = {}): string {
-	const now = options.now?.() ?? Date.now();
-	const targetMs = input instanceof Date ? input.getTime() : now + (Number.isFinite(input) ? Math.max(input, 0) : 0);
-
-	if (options.style === 'discord') {
-		return Formatter.timestamp(new Date(Math.max(0, targetMs)), options.discordStyle ?? TimestampStyle.RelativeTime);
-	}
-
-	const diffMs = Math.max(targetMs - now, 0);
-	if (diffMs <= 0) return '0s';
-	const totalSeconds = Math.ceil(diffMs / 1000);
-	if (totalSeconds < 60) return `${totalSeconds}s`;
-	const totalMinutes = Math.floor(totalSeconds / 60);
-	const remSeconds = totalSeconds % 60;
-	if (totalMinutes < 60) {
-		return remSeconds ? `${totalMinutes}m ${remSeconds}s` : `${totalMinutes}m`;
-	}
-	const hours = Math.floor(totalMinutes / 60);
-	const remMinutes = totalMinutes % 60;
-	return remMinutes ? `${hours}h ${remMinutes}m` : `${hours}h`;
 }
 
 export interface CooldownPluginOptions {

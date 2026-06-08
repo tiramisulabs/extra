@@ -1,7 +1,6 @@
 import { type AnyContext, Cache, Client, Command, Logger, MemoryAdapter, SubCommand } from 'seyfert';
 import { HandleCommand } from 'seyfert/lib/commands/handle';
 import { CommandHandler } from 'seyfert/lib/commands/handler.js';
-import { TimestampStyle } from 'seyfert/lib/common';
 import { afterEach, assert, beforeEach, describe, test, vi } from 'vitest';
 import {
 	Cooldown,
@@ -9,7 +8,6 @@ import {
 	type CooldownProps,
 	CooldownType,
 	cooldown as cooldownPlugin,
-	formatRemaining,
 	runWithCooldownContext,
 	useCooldownContext,
 } from '../src';
@@ -571,15 +569,6 @@ describe('CooldownManager — context scope', () => {
 		vi.useRealTimers();
 	});
 
-	test('context still accepts an explicit command context', async () => {
-		const result = await manager.context(commandContext());
-
-		assert.ok(result);
-		assert.equal(result.allowed, true);
-		assert.equal(result.key, 'testCommand:user:user1');
-		assert.equal(manager.resource.get('testCommand:user:user1')?.remaining, 2);
-	});
-
 	test('context throws a clear error when called without an active cooldown scope', () => {
 		assert.throws(() => manager.context(), /outside of a Seyfert cooldown scope/);
 	});
@@ -647,50 +636,6 @@ describe('Cooldown decorator shortcuts', () => {
 		@Cooldown.custom(resolver, 1_000, undefined, { group: 'mod' })
 		class Cmd {}
 		assert.equal((new Cmd() as Cmd & { cooldown: CooldownProps }).cooldown.group, 'mod');
-	});
-});
-
-describe('formatRemaining', () => {
-	test('returns "0s" for non-positive values', () => {
-		assert.equal(formatRemaining(0), '0s');
-		assert.equal(formatRemaining(-100), '0s');
-		assert.equal(formatRemaining(Number.NaN), '0s');
-	});
-
-	test('returns seconds-only strings under one minute', () => {
-		assert.equal(formatRemaining(500), '1s');
-		assert.equal(formatRemaining(5_000), '5s');
-		assert.equal(formatRemaining(59_000), '59s');
-	});
-
-	test('returns minute/second strings under one hour', () => {
-		assert.equal(formatRemaining(60_000), '1m');
-		assert.equal(formatRemaining(90_000), '1m 30s');
-	});
-
-	test('returns hour/minute strings beyond one hour', () => {
-		assert.equal(formatRemaining(3_600_000), '1h');
-		assert.equal(formatRemaining(3_660_000), '1h 1m');
-	});
-
-	test('accepts an absolute Date input', () => {
-		const target = new Date(Date.now() + 5_000);
-		assert.equal(formatRemaining(target), '5s');
-	});
-
-	test('discord mode emits a Formatter.timestamp tag using TimestampStyle.RelativeTime by default', () => {
-		assert.equal(formatRemaining(5_000, { style: 'discord', now: () => 0 }), '<t:5:R>');
-	});
-
-	test('discord mode honors a custom TimestampStyle', () => {
-		assert.equal(
-			formatRemaining(5_000, { style: 'discord', discordStyle: TimestampStyle.ShortTime, now: () => 0 }),
-			'<t:5:t>',
-		);
-	});
-
-	test('discord mode accepts a Date input', () => {
-		assert.equal(formatRemaining(new Date(0), { style: 'discord' }), '<t:0:R>');
 	});
 });
 

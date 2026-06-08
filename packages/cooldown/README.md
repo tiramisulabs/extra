@@ -4,7 +4,7 @@ Per-command cooldowns for Seyfert bots — declare them with decorators, get a r
 
 ## How it works
 
-Declare a cooldown on a command (`@Cooldown.user(5_000)`, …). Before the command runs you check and consume it, getting a `CooldownResult` — allowed or not, how long is left, and why it was blocked — which you turn into a reply (often with `formatRemaining`).
+Declare a cooldown on a command (`@Cooldown.user(5_000)`, …). Before the command runs you check and consume it, getting a `CooldownResult` — allowed or not, how long is left, and why it was blocked — which you turn into a reply.
 
 Each cooldown is keyed by a **scope** (`user` / `guild` / `channel` / `global`, or a custom resolver) and stored in `client.cache`, so the backend is whatever cache adapter your bot already uses (in-memory, Redis, …). Commands that share a `group` share one bucket.
 
@@ -35,7 +35,7 @@ The simplest way is the `@Cooldown` class decorator, with typed shortcuts per sc
 
 ```ts
 import { Command, CommandContext, Declare } from 'seyfert';
-import { Cooldown, formatRemaining } from '@slipher/cooldown';
+import { Cooldown } from '@slipher/cooldown';
 
 @Declare({ name: 'ping', description: 'Ping' })
 @Cooldown.user(5_000) // 5s per user, 1 use
@@ -49,7 +49,7 @@ export default class PingCommand extends Command {
 			}
 
 			return ctx.write({
-				content: `Try again ${formatRemaining(result.retryAfter, { style: 'discord' })}.`,
+				content: `Try again in ${Math.ceil(result.remainingMs / 1000)}s.`,
 			});
 		}
 
@@ -156,15 +156,9 @@ For `type: 'guild'`, DMs fall back to `author.id` because there is no `guildId`.
 
 ### Storage atomicity
 
-`consume` is atomic when the cache adapter supports the Slipher Redis `eval` escape hatch. The default in-memory adapter is also safe for normal single-process usage because operations run synchronously on one event loop. Other adapters use the best-effort read-decide-write path.
+`consume` is atomic when the cache adapter supports the Slipher Redis `eval` escape hatch (e.g. `@slipher/redis-adapter`); the default in-memory adapter is also safe for single-process usage. Other adapters fall back to a best-effort read-decide-write path.
 
-| Adapter | Consume atomicity |
-| --- | --- |
-| Default memory adapter | Yes, single-process event-loop semantics |
-| `@slipher/redis-adapter` | Yes, Lua script through `eval` |
-| Worker / third-party adapters without `eval` | Best effort |
-
-Only `consume` uses the Redis Lua path. `check`, `remaining`, and `reset` are regular cache reads/writes, so under Redis they can observe state that changes between calls when other workers are consuming the same bucket. Use `consume` as the authority for admission decisions; treat `check` and `remaining` as display/preview helpers.
+Only `consume` uses that atomic path. `check`, `remaining`, and `reset` are regular cache reads/writes, so under Redis they can observe state that changes between calls when other workers are consuming the same bucket. Use `consume` as the authority for admission decisions; treat `check` and `remaining` as display/preview helpers.
 
 ## Shared Buckets (`group`)
 
@@ -216,46 +210,4 @@ To share a custom resolver bucket with other commands, pass `group` through the 
 class HeavyCommand extends Command { /* ... */ }
 ```
 
-## `formatRemaining` Helper
-
-```ts
-import { formatRemaining } from '@slipher/cooldown';
-import { TimestampStyle } from 'seyfert';
-```
-
-### Text mode (default)
-
-```ts
-formatRemaining(5_000)                // "5s"
-formatRemaining(90_000)               // "1m 30s"
-formatRemaining(3_660_000)            // "1h 1m"
-formatRemaining(result.remainingMs)   // relative to now()
-formatRemaining(result.retryAfter)    // accepts Date
-```
-
-### Discord mode
-
-Discord mode uses Seyfert's `Formatter.timestamp` under the hood and accepts the `TimestampStyle` enum. Default style is `TimestampStyle.RelativeTime` (`R`), the natural choice for cooldown messages.
-
-```ts
-formatRemaining(result.retryAfter, { style: 'discord' });
-// "<t:1717372805:R>"
-
-formatRemaining(result.retryAfter, {
-	style: 'discord',
-	discordStyle: TimestampStyle.ShortTime,
-});
-// "<t:1717372805:t>"
-```
-
-### Idiomatic command reply
-
-```ts
-const result = await ctx.cooldown.context();
-if (result && !result.allowed) {
-	return ctx.write({
-		content: `Wait ${formatRemaining(result.retryAfter, { style: 'discord' })} before reusing this command.`,
-	});
-}
-```
 
