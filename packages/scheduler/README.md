@@ -1,6 +1,14 @@
 # @slipher/scheduler
 
-Task scheduling helpers for Seyfert projects.
+Cron and interval task scheduling for Seyfert bots — in the current process, or on BullMQ/Redis for cluster-wide schedules.
+
+## How it works
+
+You define tasks two ways — `@Cron`/`@Interval` decorated classes, or `registry.cron(...)` / `registry.interval(...)` calls. Each task has a stable `id`, runs on its schedule, and emits lifecycle events (`scheduled`, `started`, `completed`, `failed`, `paused`, `resumed`, `removed`).
+
+A **driver** decides where schedules live: `memory()` runs them in the current process; `persistent()` runs them on BullMQ/Redis so they survive restarts and coordinate across replicas — same task code either way.
+
+Everything flows through one **registry**, exposed as `ctx.scheduler`, `client.scheduler`, and the plugin's `registry` (the same object).
 
 ## Install
 
@@ -161,7 +169,7 @@ const client = new Client({
 await client.start();
 ```
 
-Persistent schedules open BullMQ `Queue`, `Worker`, and `QueueEvents` during plugin `setup()`, not module load. `client.close()` runs `schedulerPlugin.teardown()` and closes worker, queue-events, and queue resources. Outside Seyfert, call `registry.close()` directly. A closed persistent driver cannot be started again; create a new scheduler plugin or registry for a new process lifecycle. Wire process signals to close whichever lifecycle owner you use:
+`client.close()` tears the schedules down and releases the Redis/BullMQ resources; wire it to your process signals:
 
 ```ts
 process.on('SIGTERM', () => {
@@ -181,7 +189,7 @@ On startup, the persistent driver compares Redis job schedulers against register
 
 `pause(id)` removes the BullMQ job scheduler. `resume(id)` re-creates it with the captured template and emits `resumed`. `start(id)` remains as a compatibility alias for `resume(id)`.
 
-`runImmediately: true` enqueues one immediate job during setup with a deterministic job id: `${taskId}:immediate:${schedulerVersion}`. That deduplicates the immediate run across replicas in the same process-start wave and runs again on the next start, matching memory-driver behavior.
+`runImmediately: true` runs the task once at setup (deduplicated across replicas in the same start wave), then on its normal schedule.
 
 ## Events
 
@@ -197,18 +205,3 @@ Supported events: `scheduled`, `started`, `completed`, `failed`, `paused`, `resu
 With `memory()`, events are in-process. With `persistent()`, `started`, `completed`, and `failed` come from BullMQ `QueueEvents`, so every replica listening on the registry sees the cluster-level task outcome. `QueueEvents` uses one extra Redis connection per scheduler queue per replica.
 
 Listener errors are isolated and reported through the configured logger.
-
-## Implementation Notes
-
-- `add()` treats duration strings as intervals and cron strings as cron expressions.
-- If a string is neither a valid duration nor accepted by the cron driver, `add()` throws an error that includes the original input and says it is not a valid duration or cron expression.
-- `ScheduledTask.snapshot()` returns state for health checks or dashboards.
-- The memory driver stores Croner jobs in-process.
-- The persistent driver maps tasks into BullMQ job schedulers and stores `taskId` in every BullMQ job payload. QueueEvents resolve task identity from `job.data.taskId` or BullMQ's `repeatJobKey` via `Job.fromId(queue, jobId)`, not by parsing BullMQ's internal jobId string format.
-
-## Development
-
-```sh
-pnpm --filter @slipher/scheduler test
-pnpm --filter @slipher/scheduler build
-```
