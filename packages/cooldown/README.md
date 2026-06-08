@@ -16,6 +16,8 @@ The manager is a single object, reachable as `ctx.cooldown` or `client.cooldown`
 pnpm add @slipher/cooldown
 ```
 
+Requires Seyfert v5.
+
 ## Plugin Setup
 
 ```ts
