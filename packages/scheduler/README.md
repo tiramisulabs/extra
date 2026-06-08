@@ -16,7 +16,7 @@ Everything flows through one **registry**, exposed as `ctx.scheduler`, `client.s
 pnpm add @slipher/scheduler
 ```
 
-Install BullMQ only when you need persistent, cluster-aware schedules. The persistent driver uses BullMQ job schedulers, so it requires BullMQ `^5.23.0` or newer:
+Requires Seyfert v5. Install BullMQ only when you need persistent, cluster-aware schedules. The persistent driver uses BullMQ job schedulers, so it requires BullMQ `^5.23.0` or newer:
 
 ```sh
 pnpm add bullmq@^5.23.0
