@@ -9,7 +9,14 @@ import {
 	type UsingClient,
 	type WorkerClient,
 } from 'seyfert';
-import { createEvlogAdapter, type LoggerAdapter, type RootLogger, useLogger, type WideEventLogger } from '../src';
+import {
+	createEvlogAdapter,
+	type LoggerAdapter,
+	type RootLogger,
+	useLogger,
+	useRootLogger,
+	type WideEventLogger,
+} from '../src';
 
 declare function expectType<T>(value: T): void;
 declare const context: CommandContext;
@@ -19,6 +26,7 @@ declare const workerClient: WorkerClient;
 declare const usingClient: UsingClient;
 
 expectType<WideEventLogger>(context.logger);
+expectType<RootLogger>(useRootLogger());
 expectType<RootLogger | undefined>(client.slipherLogger);
 expectType<RootLogger | undefined>(httpClient.slipherLogger);
 expectType<RootLogger | undefined>(workerClient.slipherLogger);

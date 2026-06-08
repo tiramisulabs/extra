@@ -6,7 +6,7 @@ import {
 	ConsoleLoggerAdapter,
 	createEvlogAdapter,
 	createLogger,
-	createPinoLoggerAdapter,
+	createPinoAdapter,
 	extractSeyfertLogContext,
 	type LogEntry,
 	type LoggerAdapter,
@@ -14,6 +14,7 @@ import {
 	logger,
 	type RootLogger,
 	useLogger,
+	useRootLogger,
 	type WideEventLogger,
 } from '../src';
 
@@ -196,6 +197,25 @@ describe('logger plugin', () => {
 		assert.equal(adapter.entries.length, 1);
 	});
 
+	test('command run errors emit a single wide event with context, not a duplicate immediate log', async () => {
+		const adapter = new RecordingAdapter();
+		const plugin = logger({ adapter });
+		const options = plugin.options?.({});
+		const extension = options?.context?.({ id: 'interaction-1', guildId: 'guild-1' }) as { logger: WideEventLogger };
+		const context = commandContext(extension.logger);
+		const error = new Error('boom');
+
+		await options?.commands?.defaults?.onRunError?.(context, error);
+		await options?.commands?.defaults?.onAfterRun?.(context, error);
+
+		assert.equal(adapter.entries.length, 1);
+		assert.equal(adapter.entries[0].level, 'error');
+		assert.equal(adapter.entries[0].message, 'command failed');
+		assert.equal(adapter.entries[0].data.outcome, 'error');
+		assert.equal(adapter.entries[0].data.error, error);
+		assert.equal(adapter.entries[0].data.command, 'admin ban');
+	});
+
 	test('setup installs the root logger on the client and Seyfert handlers', async () => {
 		const adapter = new RecordingAdapter();
 		const plugin = logger({ adapter });
@@ -212,6 +232,7 @@ describe('logger plugin', () => {
 		const rootLogger = client.logger as RootLogger;
 
 		assert.equal(client.slipherLogger, rootLogger);
+		assert.equal(useRootLogger(), rootLogger);
 		assert.equal(client.commands.logger, rootLogger);
 		assert.equal(client.components.logger, rootLogger);
 		assert.equal(client.events.logger, rootLogger);
@@ -243,7 +264,7 @@ describe('logger plugin', () => {
 			const plugin = logger({ adapter, now: () => new Date('2026-05-29T10:00:00.000Z') });
 			await plugin.setup?.({ commands: {}, components: {}, events: {}, langs: {}, cache: {} });
 
-			new SeyfertLogger({ name: '[API]', active: true }).info('identify', { token: 'secret' });
+			new SeyfertLogger({ name: '[API]', active: true }).info('identify', { requestId: 'req-1' });
 			new SeyfertLogger({ name: '[Gateway]', active: true }).error('lost shard', new Error('socket closed'));
 		} finally {
 			SeyfertLogger.customize((_self, _level, args) => args);
@@ -253,13 +274,13 @@ describe('logger plugin', () => {
 		assert.equal(adapter.entries.length, 2);
 		assert.equal(adapter.entries[0].level, 'info');
 		assert.equal(adapter.entries[0].message, 'identify');
-		assert.deepEqual(adapter.entries[0].data, { source: 'seyfert:API' });
+		assert.deepEqual(adapter.entries[0].data, { source: 'seyfert:API', details: { requestId: 'req-1' } });
 		assert.equal(adapter.entries[1].level, 'error');
 		assert.equal(adapter.entries[1].message, 'lost shard');
 		assert.equal(adapter.entries[1].data.source, 'seyfert:Gateway');
 		assert.instanceOf(adapter.entries[1].data.err, Error);
 		assert.equal(chained.length, 2);
-		assert.deepEqual(chained[0], ['[API]', LogLevels.Info, ['identify', { token: 'secret' }]]);
+		assert.deepEqual(chained[0], ['[API]', LogLevels.Info, ['identify', { requestId: 'req-1' }]]);
 		assert.equal(chained[1]?.[0], '[Gateway]');
 		assert.equal(chained[1]?.[1], LogLevels.Error);
 		assert.equal((chained[1]?.[2] as unknown[])?.[0], 'lost shard');
@@ -316,7 +337,9 @@ describe('logger plugin', () => {
 describe('logger adapters', () => {
 	test('ConsoleLoggerAdapter writes pretty text by default with user data winning collisions', () => {
 		const calls: unknown[][] = [];
+		const originalNoColor = process.env.NO_COLOR;
 		const originalInfo = console.info;
+		process.env.NO_COLOR = '1';
 		console.info = (...args: unknown[]) => {
 			calls.push(args);
 		};
@@ -330,12 +353,51 @@ describe('logger adapters', () => {
 				time: new Date('2026-05-29T10:00:00.000Z'),
 			});
 		} finally {
+			if (originalNoColor === undefined) delete process.env.NO_COLOR;
+			else process.env.NO_COLOR = originalNoColor;
 			console.info = originalInfo;
 		}
 
 		assert.equal(calls.length, 1);
 		assert.equal(calls[0].length, 1);
-		assert.equal(calls[0][0], '2026-05-29T10:00:00.000Z critical [bot] override {"shardId":1,"guildId":"guild-1"}');
+		assert.equal(calls[0][0], '10:00:00.000 CRITICAL [bot] override\n    shardId   1\n    guildId   guild-1');
+	});
+
+	test('ConsoleLoggerAdapter colorizes by level and appends error stacks when color is enabled', () => {
+		const calls: unknown[][] = [];
+		const originalNoColor = process.env.NO_COLOR;
+		const originalForceColor = process.env.FORCE_COLOR;
+		const originalError = console.error;
+		delete process.env.NO_COLOR;
+		process.env.FORCE_COLOR = '1';
+		console.error = (...args: unknown[]) => {
+			calls.push(args);
+		};
+		const error = new Error('socket closed');
+
+		try {
+			new ConsoleLoggerAdapter().write({
+				bindings: {},
+				data: { command: 'ban', err: error },
+				level: 'error',
+				message: 'command failed',
+				time: new Date('2026-05-29T10:00:00.000Z'),
+			});
+		} finally {
+			if (originalNoColor === undefined) delete process.env.NO_COLOR;
+			else process.env.NO_COLOR = originalNoColor;
+			if (originalForceColor === undefined) delete process.env.FORCE_COLOR;
+			else process.env.FORCE_COLOR = originalForceColor;
+			console.error = originalError;
+		}
+
+		const output = calls[0][0] as string;
+		assert.equal(calls.length, 1);
+		assert.ok(output.includes('ERROR\x1b[0m'), 'level label is colorized');
+		assert.ok(output.includes('command failed'), 'message rendered');
+		assert.ok(output.includes('command\x1b[0m'), 'field key colorized in its own column');
+		assert.ok(output.includes('    Error: socket closed'), 'error stack indented on following lines');
+		assert.equal(output.includes('err\x1b[0m'), false, 'error not rendered as a field');
 	});
 
 	test('ConsoleLoggerAdapter writes JSON in production', () => {
@@ -374,7 +436,36 @@ describe('logger adapters', () => {
 		);
 	});
 
-	test('createPinoLoggerAdapter sends only event data and uses child bindings', async () => {
+	test('ConsoleLoggerAdapter serializes Error fields in production JSON', () => {
+		const calls: unknown[][] = [];
+		const originalEnv = process.env.NODE_ENV;
+		const originalError = console.error;
+		process.env.NODE_ENV = 'production';
+		console.error = (...args: unknown[]) => {
+			calls.push(args);
+		};
+
+		try {
+			new ConsoleLoggerAdapter().write({
+				bindings: {},
+				data: { error: new Error('Missing Permissions') },
+				level: 'error',
+				message: 'command failed',
+				time: new Date('2026-05-29T10:00:00.000Z'),
+			});
+		} finally {
+			if (originalEnv === undefined) delete process.env.NODE_ENV;
+			else process.env.NODE_ENV = originalEnv;
+			console.error = originalError;
+		}
+
+		const parsed = JSON.parse(calls[0][0] as string);
+		assert.equal(parsed.error.name, 'Error');
+		assert.equal(parsed.error.message, 'Missing Permissions');
+		assert.equal(typeof parsed.error.stack, 'string');
+	});
+
+	test('createPinoAdapter sends only event data and uses child bindings', async () => {
 		const childCalls: unknown[] = [];
 		const calls: unknown[][] = [];
 		const target = {
@@ -384,8 +475,7 @@ describe('logger adapters', () => {
 			},
 			info: (...args: unknown[]) => calls.push(args),
 		};
-		const adapter =
-			createPinoLoggerAdapter(target).child?.({ name: 'bot', shardId: 1 }) ?? createPinoLoggerAdapter(target);
+		const adapter = createPinoAdapter(target).child?.({ name: 'bot', shardId: 1 }) ?? createPinoAdapter(target);
 
 		await adapter.write({
 			bindings: { name: 'bot', shardId: 1 },
@@ -433,7 +523,7 @@ describe('logger adapters', () => {
 		assert.equal('status' in events[0]!, false);
 	});
 
-	test('createEvlogAdapter keeps warn lifecycle entries out of HTTP error status', async () => {
+	test('createEvlogAdapter emits warn lifecycle entries as wide events without fake HTTP fields', async () => {
 		const events: Array<Record<string, unknown>> = [];
 		initLogger({
 			_suppressDrainWarning: true,
@@ -460,6 +550,32 @@ describe('logger adapters', () => {
 		assert.equal(events.length, 1);
 		assert.equal('status' in events[0]!, false);
 		assert.equal('method' in events[0]!, false);
+	});
+
+	test('createEvlogAdapter uses the tagged form for simple entries, folding name into the tag', async () => {
+		const events: Array<Record<string, unknown>> = [];
+		initLogger({
+			_suppressDrainWarning: true,
+			silent: true,
+			drain(context) {
+				events.push(context.event as Record<string, unknown>);
+			},
+		} as never);
+		const adapter = createEvlogAdapter();
+
+		await adapter.write({
+			bindings: { name: 'tohka-bot' },
+			data: {},
+			level: 'info',
+			message: 'Tohka is ready',
+			time: new Date('2026-05-29T10:00:00.000Z'),
+		});
+		await flushEvlogDrain();
+
+		assert.equal(events.length, 1);
+		assert.equal(events[0]!.tag, 'tohka-bot');
+		assert.equal(events[0]!.message, 'Tohka is ready');
+		assert.equal('name' in events[0]!, false);
 	});
 });
 

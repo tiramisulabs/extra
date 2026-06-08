@@ -1,5 +1,5 @@
 import type {} from 'seyfert';
-import type { RootLogger, WideEventLogger } from './index';
+import type { RootLogger, WideEventLogger } from './core';
 
 declare module 'seyfert' {
 	interface Client<Ready extends boolean = boolean> {
