@@ -171,6 +171,24 @@ export default class ProfileCommand extends Command {
 
 No `emit()` is called anywhere — when `run()` returns, the plugin emits one wide event that already carries the `plan` and `cached` fields added inside `loadProfile()`.
 
+### Scope your own unit of work
+
+Seyfert only opens a scope for commands, components, and modals. For anything else — a queue job, a cron task, an event handler, a script — wrap it in `withLoggerScope(data, fn)` to get the same one-wide-event-per-unit behavior: it opens a scope, runs your work, and emits a single event (with `outcome` and `durationMs`) when it finishes.
+
+```ts
+import { withLoggerScope, useLogger } from '@slipher/logger';
+
+// e.g. a queue job processor
+async function handle(job: Job) {
+	return withLoggerScope({ kind: 'job', queue: 'audio', jobId: job.id }, async () => {
+		useLogger().add({ fileId: job.data.fileId }); // works in deep helpers too
+		await transcode(job.data);
+	});
+}
+```
+
+`useLogger()` inside the callback (and its deep helpers) resolves to that job's event; it emits once when `withLoggerScope` returns, or with `outcome: 'error'` if it throws. For finer control, `runInLoggerScope(event, fn)` binds an event you already hold (and does not emit) — handy in tests to assert on a specific event.
+
 ## Adapters
 
 An adapter decides where records go. The default is the console adapter; swap it for Pino or evlog to feed an existing pipeline. Those two are optional peer dependencies — install the one you use (`pnpm add pino` or `pnpm add evlog`). On field collisions, data from `add()` and level methods wins over bindings.

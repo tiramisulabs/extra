@@ -111,6 +111,28 @@ export function useLogger(): WideEventLogger {
 	return installedRootLogger.event();
 }
 
+export function runInLoggerScope<T>(event: WideEventLogger, run: () => T): T {
+	return loggerScope.run(event, run);
+}
+
+export async function withLoggerScope<T>(data: LogData, run: () => Awaitable<T>): Promise<T> {
+	if (!installedRootLogger) {
+		throw new Error('Cannot open a logger scope before the @slipher/logger plugin is set up.');
+	}
+
+	const event = installedRootLogger.event(data);
+	return loggerScope.run(event, async () => {
+		try {
+			const result = await run();
+			await event.emit({ outcome: 'success' });
+			return result;
+		} catch (error) {
+			await event.emit({ outcome: 'error', error });
+			throw error;
+		}
+	});
+}
+
 export function logger(options: LoggerPluginOptions = {}): LoggerPlugin {
 	const root = createLogger(options);
 	const contextConfig = resolveContextConfig(options.context);

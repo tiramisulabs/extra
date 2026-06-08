@@ -13,8 +13,10 @@ import {
 	type LoggerPlugin,
 	logger,
 	type RootLogger,
+	runInLoggerScope,
 	useLogger,
 	type WideEventLogger,
+	withLoggerScope,
 } from '../src';
 
 class RecordingAdapter implements LoggerAdapter {
@@ -285,6 +287,58 @@ describe('logger plugin', () => {
 		assert.equal(adapter.entries[1].data.source, 'event');
 		assert.equal(adapter.entries[1].data.interactionId, 'interaction-1');
 		assert.equal(adapter.entries[1].data.outcome, 'success');
+	});
+
+	test('runInLoggerScope binds an event so useLogger() resolves to it', () => {
+		const adapter = new RecordingAdapter();
+		const root = createLogger({ adapter });
+		const event = root.event({ kind: 'job' });
+
+		runInLoggerScope(event, () => {
+			assert.equal(useLogger(), event);
+			useLogger().add({ jobId: 'job-1' });
+		});
+
+		assert.equal(event.currentContext.jobId, 'job-1');
+	});
+
+	test('withLoggerScope scopes a unit of work and emits one wide event on success', async () => {
+		const adapter = new RecordingAdapter();
+		const plugin = logger({ adapter });
+		await plugin.setup?.({ commands: {}, components: {}, events: {}, langs: {}, cache: {} });
+
+		const result = await withLoggerScope({ kind: 'job', jobId: 'job-1' }, () => {
+			useLogger().add({ processed: 2 });
+			return 'done';
+		});
+
+		assert.equal(result, 'done');
+		assert.equal(adapter.entries.length, 1);
+		assert.equal(adapter.entries[0].data.kind, 'job');
+		assert.equal(adapter.entries[0].data.jobId, 'job-1');
+		assert.equal(adapter.entries[0].data.processed, 2);
+		assert.equal(adapter.entries[0].data.outcome, 'success');
+	});
+
+	test('withLoggerScope emits an error wide event and rethrows on failure', async () => {
+		const adapter = new RecordingAdapter();
+		const plugin = logger({ adapter });
+		await plugin.setup?.({ commands: {}, components: {}, events: {}, langs: {}, cache: {} });
+		const boom = new Error('boom');
+
+		let thrown: unknown;
+		try {
+			await withLoggerScope({ kind: 'job' }, () => {
+				throw boom;
+			});
+		} catch (error) {
+			thrown = error;
+		}
+
+		assert.equal(thrown, boom);
+		assert.equal(adapter.entries.length, 1);
+		assert.equal(adapter.entries[0].data.outcome, 'error');
+		assert.equal(adapter.entries[0].data.error, boom);
 	});
 
 	test('setup routes Seyfert internal logs through the adapter and preserves existing customizers', async () => {
