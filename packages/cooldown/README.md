@@ -41,7 +41,7 @@ import { Cooldown, formatRemaining } from '@slipher/cooldown';
 @Cooldown.user(5_000) // 5s per user, 1 use
 export default class PingCommand extends Command {
 	async run(ctx: CommandContext) {
-		const result = await ctx.cooldown.context(ctx);
+		const result = await ctx.cooldown.context();
 
 		if (result && !result.allowed) {
 			if (result.reason === 'over_capacity') {
@@ -135,7 +135,7 @@ interface CooldownResult {
 ## Manager API
 
 ```ts
-ctx.cooldown.context(ctx);                              // resolve target, consume, return result
+ctx.cooldown.context();                              // resolve target, consume, return result
 ctx.cooldown.check({ name: 'ping', target: ctx.author.id });
 ctx.cooldown.consume({ name: 'ping', target: ctx.author.id });
 ctx.cooldown.remaining({ name: 'ping', target: ctx.author.id });
@@ -251,7 +251,7 @@ formatRemaining(result.retryAfter, {
 ### Idiomatic command reply
 
 ```ts
-const result = await ctx.cooldown.context(ctx);
+const result = await ctx.cooldown.context();
 if (result && !result.allowed) {
 	return ctx.write({
 		content: `Wait ${formatRemaining(result.retryAfter, { style: 'discord' })} before reusing this command.`,
