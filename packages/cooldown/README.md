@@ -1,6 +1,14 @@
 # @slipher/cooldown
 
-Per-command cooldowns for Seyfert bots. Ships a Seyfert plugin, a `CooldownManager` on `ctx.cooldown` and `client.cooldown`, rich `CooldownResult` values, decorator shortcuts, custom target resolvers, shared buckets across commands, and a `formatRemaining` helper with text and Discord timestamp output.
+Per-command cooldowns for Seyfert bots — declare them with decorators, get a rich result you can turn into a friendly retry message, and share buckets across commands.
+
+## How it works
+
+Declare a cooldown on a command (`@Cooldown.user(5_000)`, …). Before the command runs you check and consume it, getting a `CooldownResult` — allowed or not, how long is left, and why it was blocked — which you turn into a reply (often with `formatRemaining`).
+
+Each cooldown is keyed by a **scope** (`user` / `guild` / `channel` / `global`, or a custom resolver) and stored in `client.cache`, so the backend is whatever cache adapter your bot already uses (in-memory, Redis, …). Commands that share a `group` share one bucket.
+
+The manager is a single object — reach it as `ctx.cooldown`, `client.cooldown`, or what you build with `createCooldown()`.
 
 ## Install
 
@@ -21,39 +29,9 @@ const client = new Client({
 
 The plugin attaches a `CooldownManager` to the client (`client.cooldown`) and exposes it on every interaction context (`ctx.cooldown`). Storage is backed by `client.cache`.
 
-## TypeScript Setup
+## TypeScript setup
 
-The package augments Seyfert's types via `declare module 'seyfert'` in `src/seyfert.ts` (loaded as a side-effect import by `src/index.ts`). For TypeScript to pick up `client.cooldown` / `ctx.cooldown` and the `cooldown?: CooldownProps` field on commands, the augmentation file must be in the compilation graph.
-
-In practice this means **at least one file in your project must import from `@slipher/cooldown`** — for example the file where you register the plugin:
-
-```ts
-import { Client } from 'seyfert';
-import { cooldown } from '@slipher/cooldown'; // <- side-effect loads the augmentations
-
-const client = new Client({
-  plugins: [cooldown()],
-});
-```
-
-If you only register the plugin via configuration and never import the package in any TypeScript file (rare, but possible with split bot/loader setups), add a one-line side-effect import anywhere in your sources:
-
-```ts
-// src/types/slipher.d.ts (or any .ts/.d.ts file in your build)
-import '@slipher/cooldown';
-```
-
-Alternatively, list the package in your `tsconfig.json` so it is always included:
-
-```json
-{
-  "compilerOptions": {
-    "types": ["@slipher/cooldown"]
-  }
-}
-```
-
-Once the augmentation is loaded, `client.cooldown`, `ctx.cooldown`, and `cooldown?: CooldownProps` on every command class are typed automatically across `Client`, `HttpClient`, `WorkerClient`, `UsingClient` and `ExtendContext`.
+The package augments Seyfert's types (`client.cooldown`, `ctx.cooldown`, and `cooldown?` on commands). Importing `@slipher/cooldown` anywhere in your project — which you already do to register the plugin — loads it. If a split bot/loader setup never imports the package, add a side-effect import (`import '@slipher/cooldown'`) or list it in your `tsconfig` `types`.
 
 ## Declaring a Cooldown
 
@@ -302,11 +280,4 @@ import { createCooldown, installCooldown } from '@slipher/cooldown';
 
 const manager = createCooldown();
 installCooldown(client, manager);
-```
-
-## Development
-
-```sh
-pnpm --filter @slipher/cooldown test
-pnpm --filter @slipher/cooldown build
 ```
