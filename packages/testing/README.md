@@ -2,11 +2,17 @@
 
 Runner-agnostic fixtures for testing Seyfert bots and Slipher plugins.
 
+## How it works
+
+The package is plain mock objects — no assertions, spies, or fake timers bundled — so they work with any test runner. The core is `mockCommandContext()`: a stand-in for a Seyfert command context with the fields most commands touch, plus working Slipher stubs (`logger`, `queues`, `scheduler`) that **record what your command does** so you can assert on it afterward. Factories (`mockUser`, `mockGuild`, …) build the entities, with deterministic ids you can override.
+
 ## Install
 
 ```sh
 pnpm add -D @slipher/testing
 ```
+
+Requires Seyfert v5.
 
 ## Mock Command Contexts
 
@@ -104,24 +110,13 @@ import type { CommandContext } from 'seyfert';
 const ctx = mockDeep<CommandContext>();
 ```
 
-## Implementation Notes
+## Deterministic ids
 
-- No assertions, fake timers, or spies are bundled. Use the test runner you already have.
-- Generated IDs can be overridden on every factory.
-- Call `resetMockIds()` in `beforeEach` when tests assert generated IDs:
+Generated ids are overridable on every factory. When a test asserts on a generated id, reset the counter first:
 
 ```ts
 import { beforeEach } from 'vitest';
 import { resetMockIds } from '@slipher/testing';
 
 beforeEach(() => resetMockIds());
-```
-
-- Mock queue and scheduler stubs record intent; they do not run background workers.
-
-## Development
-
-```sh
-pnpm --filter @slipher/testing test
-pnpm --filter @slipher/testing build
 ```
