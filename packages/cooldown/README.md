@@ -8,7 +8,7 @@ Declare a cooldown on a command (`@Cooldown.user(5_000)`, …). Before the comma
 
 Each cooldown is keyed by a **scope** (`user` / `guild` / `channel` / `global`, or a custom resolver) and stored in `client.cache`, so the backend is whatever cache adapter your bot already uses (in-memory, Redis, …). Commands that share a `group` share one bucket.
 
-The manager is a single object — reach it as `ctx.cooldown`, `client.cooldown`, or what you build with `createCooldown()`.
+The manager is a single object, reachable as `ctx.cooldown` or `client.cooldown`.
 
 ## Install
 
@@ -259,21 +259,3 @@ if (result && !result.allowed) {
 }
 ```
 
-## Programmatic Usage
-
-If you do not want the plugin, build the manager yourself:
-
-```ts
-import { CooldownManager } from '@slipher/cooldown';
-
-const manager = new CooldownManager(client);
-```
-
-Or detach plugin construction from attach time:
-
-```ts
-import { createCooldown, installCooldown } from '@slipher/cooldown';
-
-const manager = createCooldown();
-installCooldown(client, manager);
-```

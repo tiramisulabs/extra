@@ -599,12 +599,8 @@ export interface CooldownPlugin {
 	setup(client: BaseClient): void;
 }
 
-export function createCooldown(options: CooldownPluginOptions = {}): CooldownManager {
-	return options.manager ?? new CooldownManager();
-}
-
 export function cooldown(options: CooldownPluginOptions = {}): CooldownPlugin {
-	const manager = createCooldown(options);
+	const manager = options.manager ?? new CooldownManager();
 	const contextScope: CooldownContextScope = (context, run) => runWithCooldownContext(context as AnyContext, run);
 
 	return {
@@ -619,15 +615,7 @@ export function cooldown(options: CooldownPluginOptions = {}): CooldownPlugin {
 			};
 		},
 		setup(client) {
-			installCooldown(client, manager);
+			manager.attach(client);
 		},
 	};
-}
-
-export function installCooldown<TClient extends BaseClient>(
-	client: TClient,
-	manager: CooldownManager,
-): CooldownManager {
-	manager.attach(client);
-	return manager;
 }
