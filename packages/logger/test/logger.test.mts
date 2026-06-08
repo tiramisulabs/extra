@@ -274,10 +274,10 @@ describe('logger plugin', () => {
 		assert.equal(adapter.entries.length, 2);
 		assert.equal(adapter.entries[0].level, 'info');
 		assert.equal(adapter.entries[0].message, 'identify');
-		assert.deepEqual(adapter.entries[0].data, { source: 'seyfert:API', details: { requestId: 'req-1' } });
+		assert.deepEqual(adapter.entries[0].data, { _source: 'seyfert:API', details: { requestId: 'req-1' } });
 		assert.equal(adapter.entries[1].level, 'error');
 		assert.equal(adapter.entries[1].message, 'lost shard');
-		assert.equal(adapter.entries[1].data.source, 'seyfert:Gateway');
+		assert.equal(adapter.entries[1].data._source, 'seyfert:Gateway');
 		assert.instanceOf(adapter.entries[1].data.err, Error);
 		assert.equal(chained.length, 2);
 		assert.deepEqual(chained[0], ['[API]', LogLevels.Info, ['identify', { requestId: 'req-1' }]]);

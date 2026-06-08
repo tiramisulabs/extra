@@ -69,8 +69,8 @@ function formatConsolePayload(entry: LogEntry): string {
 	const fields = stripUndefined({ ...entry.bindings, ...entry.data });
 	const levelText = getString(fields.level) ?? entry.level;
 	const messageText = getString(fields.message) ?? entry.message;
-	const tag = getString(fields.source) ?? getString(fields.name);
-	for (const key of ['level', 'message', 'time', 'source', 'name']) delete fields[key];
+	const tag = getString(fields._source) ?? getString(fields.name);
+	for (const key of ['level', 'message', 'time', '_source', 'name']) delete fields[key];
 
 	const errors: Error[] = [];
 	for (const key of Object.keys(fields)) {

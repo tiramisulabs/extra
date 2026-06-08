@@ -369,7 +369,7 @@ function installSeyfertInternalLogger(root: RootLogger): void {
 
 function buildSeyfertInternalLogData(self: SeyfertLogger, args: readonly unknown[]): LogData {
 	const data: LogData = {
-		source: `seyfert:${normalizeSeyfertLoggerName(self.name)}`,
+		_source: `seyfert:${normalizeSeyfertLoggerName(self.name)}`,
 	};
 
 	// Strings build the message; the first Error becomes `err`; any other args

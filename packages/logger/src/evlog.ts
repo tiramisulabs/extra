@@ -45,7 +45,7 @@ function writeEvlogImmediateEntry(entry: LogEntry, core: EvlogCoreModule): void 
 	// remaining fields decide between evlog's clean tagged form and its object form.
 	const extra = stripUndefined({ ...entry.bindings, ...entry.data });
 	delete extra.name;
-	delete extra.source;
+	delete extra._source;
 	if (entry.level !== level) extra.level = entry.level;
 
 	if (Object.keys(extra).length === 0) {
@@ -64,14 +64,15 @@ function writeEvlogWideEvent(entry: LogEntry, core: EvlogCoreModule): void {
 
 	// Emit via the object form (not createLogger) so evlog does not stamp its own
 	// createLogger -> emit stopwatch as `duration` ("in 0ms"); our real elapsed time is
-	// already in the `durationMs` field. The `[bracket]` is the bot identity (name);
-	// `source`/`kind` stay as fields, so `name` is dropped to avoid a redundant field.
-	const bindings = stripUndefined({ ...entry.bindings });
-	delete bindings.name;
+	// already in the `durationMs` field. The `[bracket]` comes from `service`, set to the
+	// derived tag (source ?? name ?? 'app') — same ordering as the console adapter and the
+	// immediate path — and consumed here so it is not also a plain field.
+	const fields = stripUndefined({ ...entry.bindings, ...entry.data });
+	delete fields.name;
+	delete fields._source;
 	const payload: LogData = stripUndefined({
-		service: getString(entry.bindings.name) ?? 'app',
-		...bindings,
-		...entry.data,
+		service: getEvlogTag(entry),
+		...fields,
 		message,
 		level: entry.level === level ? undefined : entry.level,
 	});
@@ -79,7 +80,7 @@ function writeEvlogWideEvent(entry: LogEntry, core: EvlogCoreModule): void {
 }
 
 function getEvlogTag(entry: LogEntry): string {
-	return getString(entry.data.source) ?? getString(entry.bindings.name) ?? 'app';
+	return getString(entry.data._source) ?? getString(entry.bindings.name) ?? 'app';
 }
 
 function completedMessage(kind: string): string {
