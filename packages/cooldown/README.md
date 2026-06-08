@@ -29,10 +29,6 @@ const client = new Client({
 
 The plugin attaches a `CooldownManager` to the client (`client.cooldown`) and exposes it on every interaction context (`ctx.cooldown`). Storage is backed by `client.cache`.
 
-## TypeScript setup
-
-The package augments Seyfert's types (`client.cooldown`, `ctx.cooldown`, and `cooldown?` on commands). Importing `@slipher/cooldown` anywhere in your project — which you already do to register the plugin — loads it. If a split bot/loader setup never imports the package, add a side-effect import (`import '@slipher/cooldown'`) or list it in your `tsconfig` `types`.
-
 ## Declaring a Cooldown
 
 The simplest way is the `@Cooldown` class decorator, with typed shortcuts per scope.
