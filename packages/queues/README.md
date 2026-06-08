@@ -19,7 +19,7 @@ Everything flows through one **registry**, exposed as `ctx.queues`, `client.queu
 pnpm add @slipher/queues
 ```
 
-Install BullMQ only when you want Redis-backed persistent queues:
+Requires Seyfert v5. Install BullMQ only when you want Redis-backed persistent queues:
 
 ```sh
 pnpm add bullmq
