@@ -1,36 +1,11 @@
 import type { LoggerLike } from '@slipher/types';
-import {
-	type Client,
-	Command,
-	type CommandContext,
-	createMiddleware,
-	Declare,
-	type HttpClient,
-	type UsingClient,
-	type WorkerClient,
-} from 'seyfert';
-import {
-	createEvlogAdapter,
-	type LoggerAdapter,
-	type RootLogger,
-	useLogger,
-	useRootLogger,
-	type WideEventLogger,
-} from '../src';
+import { Command, type CommandContext, createMiddleware, Declare } from 'seyfert';
+import { createEvlogAdapter, type LoggerAdapter, useLogger, type WideEventLogger } from '../src';
 
 declare function expectType<T>(value: T): void;
 declare const context: CommandContext;
-declare const client: Client;
-declare const httpClient: HttpClient;
-declare const workerClient: WorkerClient;
-declare const usingClient: UsingClient;
 
 expectType<WideEventLogger>(context.logger);
-expectType<RootLogger>(useRootLogger());
-expectType<RootLogger | undefined>(client.slipherLogger);
-expectType<RootLogger | undefined>(httpClient.slipherLogger);
-expectType<RootLogger | undefined>(workerClient.slipherLogger);
-expectType<RootLogger | undefined>(usingClient.slipherLogger);
 expectType<LoggerLike>({} as WideEventLogger);
 
 expectType<LoggerAdapter>(createEvlogAdapter());

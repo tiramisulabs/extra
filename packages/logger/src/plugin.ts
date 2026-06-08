@@ -56,7 +56,6 @@ export interface ComponentLoggerDefaults {
 
 export interface SeyfertClientLike {
 	logger?: unknown;
-	slipherLogger?: unknown;
 	commands?: unknown;
 	components?: unknown;
 	events?: unknown;
@@ -103,17 +102,13 @@ const defaultContextConfig: Record<AutoContextField, boolean> = {
 
 export function useLogger(): WideEventLogger {
 	const current = loggerScope.getStore();
-	if (!current) {
-		throw new Error('Cannot access logger outside of a Seyfert logger scope.');
-	}
-	return current;
-}
-
-export function useRootLogger(): RootLogger {
+	if (current) return current;
 	if (!installedRootLogger) {
-		throw new Error('Cannot access the root logger before the @slipher/logger plugin is set up.');
+		throw new Error('Cannot access the logger before the @slipher/logger plugin is set up.');
 	}
-	return installedRootLogger;
+	// Outside an interaction scope, hand back a fresh root-backed wide event: level
+	// methods emit immediately, and add()/emit() let you build a one-off wide event.
+	return installedRootLogger.event();
 }
 
 export function logger(options: LoggerPluginOptions = {}): LoggerPlugin {
@@ -142,8 +137,6 @@ export function installSeyfertLogger<TClient extends SeyfertClientLike>(
 	rootLogger: RootLogger,
 ): RootLogger {
 	installedRootLogger = rootLogger;
-	client.slipherLogger = rootLogger;
-	client.logger = rootLogger;
 	setLoggerOn(client.commands, rootLogger);
 	setLoggerOn(client.components, rootLogger);
 	setLoggerOn(client.events, rootLogger);

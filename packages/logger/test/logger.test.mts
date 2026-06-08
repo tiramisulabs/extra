@@ -14,7 +14,6 @@ import {
 	logger,
 	type RootLogger,
 	useLogger,
-	useRootLogger,
 	type WideEventLogger,
 } from '../src';
 
@@ -216,11 +215,10 @@ describe('logger plugin', () => {
 		assert.equal(adapter.entries[0].data.command, 'admin ban');
 	});
 
-	test('setup installs the root logger on the client and Seyfert handlers', async () => {
+	test('setup installs the logger on Seyfert subsystems and flushes on teardown', async () => {
 		const adapter = new RecordingAdapter();
 		const plugin = logger({ adapter });
 		const client = {
-			logger: undefined,
 			commands: {},
 			components: {},
 			events: {},
@@ -229,18 +227,15 @@ describe('logger plugin', () => {
 		};
 
 		await plugin.setup?.(client);
-		const rootLogger = client.logger as RootLogger;
+		const rootLogger = client.commands.logger as RootLogger;
 
-		assert.equal(client.slipherLogger, rootLogger);
-		assert.equal(useRootLogger(), rootLogger);
-		assert.equal(client.commands.logger, rootLogger);
 		assert.equal(client.components.logger, rootLogger);
 		assert.equal(client.events.logger, rootLogger);
 		assert.equal(client.langs.logger, rootLogger);
 		assert.equal(client.cache.logger, rootLogger);
 		assert.equal(client.cache.__logger__, rootLogger);
 
-		await rootLogger.info('member joined', { memberId: 'user-1' });
+		await useLogger().info('member joined', { memberId: 'user-1' });
 
 		assert.equal(adapter.entries.length, 1);
 		assert.equal(adapter.entries[0].message, 'member joined');
@@ -248,6 +243,25 @@ describe('logger plugin', () => {
 
 		await plugin.teardown?.(client);
 		assert.equal(adapter.flushes, 1);
+	});
+
+	test('useLogger works outside an interaction scope, immediate and as a one-off wide event', async () => {
+		const adapter = new RecordingAdapter();
+		const plugin = logger({ adapter });
+		await plugin.setup?.({ commands: {}, components: {}, events: {}, langs: {}, cache: {} });
+
+		await useLogger().info('ready');
+		assert.equal(adapter.entries[0].message, 'ready');
+
+		const event = useLogger();
+		event.add({ source: 'event', interactionId: 'interaction-1' });
+		await event.emit({ message: 'interactionCreate received' });
+
+		assert.equal(adapter.entries.length, 2);
+		assert.equal(adapter.entries[1].message, 'interactionCreate received');
+		assert.equal(adapter.entries[1].data.source, 'event');
+		assert.equal(adapter.entries[1].data.interactionId, 'interaction-1');
+		assert.equal(adapter.entries[1].data.outcome, 'success');
 	});
 
 	test('setup routes Seyfert internal logs through the adapter and preserves existing customizers', async () => {
@@ -294,8 +308,6 @@ describe('logger plugin', () => {
 		const extension = options?.context?.({ id: 'interaction-1' }) as { logger: WideEventLogger };
 		const context = commandContext(extension.logger);
 
-		assert.throws(() => useLogger(), /outside of a Seyfert logger scope/);
-
 		await options?.contextScopes?.[0]?.(context, async () => {
 			await options?.commands?.defaults?.onBeforeMiddlewares?.(context);
 			const scopedLogger = useLogger();
@@ -314,7 +326,6 @@ describe('logger plugin', () => {
 			['command received', 'loaded user service', 'command completed'],
 		);
 		assert.equal(adapter.entries[2].data.serviceUser, 'user-1');
-		assert.throws(() => useLogger(), /outside of a Seyfert logger scope/);
 	});
 
 	test('context scopes do not mutate Seyfert contexts with logger fields', async () => {

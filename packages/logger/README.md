@@ -129,26 +129,24 @@ logger({ context: { shardId: true, channelId: false } });
 
 ## Accessing the logger
 
-Three ways, depending on what you have in scope:
+In a command/component/modal handler you already have `ctx.logger`. Everywhere else — helpers, services, event handlers, startup — use **`useLogger()`**. It always returns a usable logger; what it does depends on where you call it:
+
+- **Inside an interaction scope** it returns that interaction's wide event — `add()` enriches the same final event as `ctx.logger`, and level methods (`info`/`warn`/…) emit immediately.
+- **Outside any scope** it returns a fresh root-backed logger — level methods log immediately wherever you are, and you can build a one-off wide event by starting it, `add()`-ing context, then `emit()`-ing.
 
 ```ts
-import { useLogger, useRootLogger } from '@slipher/logger';
+import { useLogger } from '@slipher/logger';
 
-// 1. Inside a command/component/modal scope — the current interaction's wide event.
-useLogger().add({ plan });
+// immediate log, anywhere
+useLogger().info('ready');
 
-// 2. Anywhere (events, startup, helpers) — the installed root logger. No client, no `?.`.
-useRootLogger()
-	.event({ source: 'event', interactionId: interaction.id })
-	.emit({ message: 'interactionCreate received' });
-
-// 3. From the client itself (optional — only present after setup).
-client.slipherLogger?.info('ready');
+// a one-off wide event from, say, an interactionCreate handler
+const event = useLogger();
+event.add({ source: 'event', interactionId: interaction.id });
+await event.emit({ message: 'interactionCreate received' });
 ```
 
-- `useLogger()` returns the `WideEventLogger` of the active Seyfert scope. `add()` feeds the same final event as `ctx.logger`; level methods emit immediately.
-- `useRootLogger()` returns the root logger captured at setup. Use it where there is no interaction scope (event handlers, startup, helpers) — prefer it over threading `client` around just to log, with no optional `?.`. It throws if called before the plugin is set up.
-- `client.slipherLogger` is the same root logger as a typed property on the client, for when you already have the client in hand. It is optional because it only exists after `setup()`.
+(`useLogger()` throws only if the plugin hasn't been set up yet. Outside a scope each call returns a *fresh* event, so capture it in a variable — as above — when you intend to `add()` then `emit()`.)
 
 Because `useLogger()` reads the active scope instead of taking a parameter, a helper deep in the call stack can enrich the interaction's wide event without being handed the context:
 
