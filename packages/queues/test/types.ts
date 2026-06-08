@@ -9,7 +9,6 @@ import {
 	type Queue,
 	type QueueData,
 	type QueueJob,
-	type QueueJobOf,
 	type QueueOf,
 	type QueueRegistration,
 	type QueueResult,
@@ -73,29 +72,6 @@ expectType<ClassDecorator>(
 
 expectType<MethodDecorator>(OnQueueEvent('completed'));
 expectType<MethodDecorator>(OnWorkerEvent('active'));
-
-const welcomeJob = registry.add('welcome', 'send', { source: 'slash-command', userId: 'user-1' });
-expectType<Promise<QueueJobOf<'welcome'>>>(welcomeJob);
-expectType<
-	Promise<
-		| QueueJob<{ source: 'slash-command' | 'scheduler'; userId: string }, string, 'send'>
-		| QueueJob<{ action: string }, string, 'audit'>
-	>
->(welcomeJob);
-
-registry.add('audit', { action: 'deploy' });
-
-// @ts-expect-error registered queues require their declared payload shape
-registry.add('welcome', 'send', { source: 'slash-command' });
-
-// @ts-expect-error registered queue names cannot fall through to the dynamic overload
-registry.add('welcome', 'send', { source: 'text-command', userId: 'user-1' });
-
-// @ts-expect-error job-space queues require a known job name
-registry.add('welcome', 'unknown', { userId: 'user-1' });
-
-const dynamicJob = registry.add('dynamic', { ok: true });
-expectType<Promise<QueueJob<{ ok: boolean }, unknown>>>(dynamicJob);
 
 const dynamicQueue = registry.get<{ value: number }, boolean>('dynamic');
 expectType<Queue<{ value: number }, boolean>>(dynamicQueue);

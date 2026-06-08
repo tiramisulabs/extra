@@ -1,6 +1,17 @@
 # @slipher/queues
 
-Typed job queues for Seyfert bots. The package gives you a Seyfert plugin, a registry on `ctx.queues` and `client.queues`, in-memory and BullMQ-backed drivers, processors, worker/queue events, retries, delays, priorities, and concurrency controls.
+Typed job queues for Seyfert bots — produce jobs from anywhere, process them with decorated classes, on an in-memory driver or a BullMQ/Redis one.
+
+## How it works
+
+You declare each queue's shape in `RegisteredQueues`, then work with it from two sides:
+
+- **Producers** enqueue jobs with `ctx.queues.get(name).add(...)`, fully typed against the queue's payload.
+- **Processors** are `@Processor()` classes with a single `@Process()` handler that runs each job, plus optional `@OnQueueEvent` / `@OnWorkerEvent` listeners.
+
+A **driver** decides where jobs live: `memory()` runs them in the current process; `persistent()` runs them on BullMQ/Redis so they survive restarts and spread across workers — same API either way.
+
+Everything flows through one **registry**, exposed as `ctx.queues`, `client.queues`, and the plugin's `registry` (the same object), so you can produce jobs from a command, an event, or a plain service.
 
 ## Install
 
@@ -31,6 +42,8 @@ import {
 	queues,
 } from '@slipher/queues';
 
+// Discriminated union: the `audio` processor handles several named jobs,
+// each with its own payload, switched on the `job` field.
 type AudioJob =
 	| { job: 'transcode'; fileId: string; format: 'mp3' | 'ogg' }
 	| { job: 'concatenate'; fileIds: string[] };
@@ -83,17 +96,11 @@ export const client = new Client({
 Produce jobs with the queue name, job name, and payload:
 
 ```ts
-await ctx.queues.add('audio', 'transcode', {
-	fileId: 'file-1',
-	format: 'mp3',
-});
-
 await ctx.queues.get('audio').add('concatenate', {
 	fileIds: ['a', 'b'],
 });
 
-await ctx.queues.add(
-	'audio',
+await ctx.queues.get('audio').add(
 	'transcode',
 	{ fileId: 'file-2', format: 'ogg' },
 	{ attempts: 5, retryDelay: '10s' },
@@ -109,7 +116,7 @@ declare module '@slipher/queues' {
 	}
 }
 
-await ctx.queues.add('welcome', { userId: ctx.author.id });
+await ctx.queues.get('welcome').add({ userId: ctx.author.id });
 ```
 
 `queue.add(name, payload, options)` uses the third argument to disambiguate named jobs. A call like `queue.add('send', { delay: '5s' })` is ambiguous because it can mean a string payload plus job options or a named job whose payload happens to look like job options. Slipher throws a descriptive `TypeError` instead of guessing; use `queue.add('send', { delay: '5s' }, {})` to force `name = 'send'`, or pass non-string data to `add(data, options)`.
@@ -163,77 +170,38 @@ queues({
 
 ## Drivers
 
-`memory()` runs jobs in the current process and supports:
+The driver decides where jobs live — your queue and processor code stays the same, so you can swap drivers without touching anything else.
 
-- `delay`
-- `attempts`
-- `retryDelay`
-- `priority`
-- `concurrency`
-- lifecycle events: `added`, `active`, `completed`, `failed`, `retrying`, and `idle`
+`memory()` runs jobs in the current process and supports `delay`, `attempts`, `retryDelay`, `priority`, `concurrency`, and the lifecycle events `added`, `active`, `completed`, `failed`, `retrying`, and `idle`.
 
-Use `persistent()` when jobs need to survive restarts or be shared across workers:
+`persistent()` runs them on BullMQ/Redis so they survive restarts and spread across workers:
 
 ```ts
 import { persistent, queues } from '@slipher/queues';
 
-export default queues({
+const queuesPlugin = queues({
 	driver: persistent({
 		connection: { host: '127.0.0.1', port: 6379 },
 		prefix: 'slipher',
-		queueOptions: {
-			settings: {
-				stalledInterval: 30_000,
-			},
-		},
-		defaultJobOptions: {
-			removeOnComplete: true,
-			attempts: 3,
-		},
+		defaultJobOptions: { removeOnComplete: true, attempts: 3 },
 	}),
 	processors: [AudioProcessor],
 });
+// add queuesPlugin to the client's `plugins: []`
 ```
 
-`queueOptions` goes to BullMQ's `new Queue(name, options)` layer. `defaultJobOptions` goes to BullMQ's per-job defaults and is also merged into explicit `add()` options.
-
-Static `retryDelay` values map to BullMQ `backoff: { type: 'fixed', delay }`. BullMQ backoff objects pass through. Function-form `retryDelay` is memory-only; the persistent driver rejects it during setup or at the `add()` call site because BullMQ owns retry timing.
-
-`retryDelay` only matters when `attempts > 1`. If a queue or job defines `retryDelay` while attempts resolves to `1`, Slipher emits a `SLIPHER_QUEUE_RETRY_DELAY_NO_RETRIES` warning because no retry will be scheduled. Per-job options are passed as the final `add()` argument:
+`retryDelay` only matters when `attempts > 1` — if a queue or job sets `retryDelay` while attempts resolves to `1`, Slipher emits a `SLIPHER_QUEUE_RETRY_DELAY_NO_RETRIES` warning because no retry will be scheduled. Per-job options are the final `add()` argument:
 
 ```ts
-await ctx.queues.add('audio', 'transcode', { fileId: 'file-1', format: 'mp3' }, { attempts: 3, retryDelay: '5s' });
+await ctx.queues.get('audio').add('transcode', { fileId: 'file-1', format: 'mp3' }, { attempts: 3, retryDelay: '5s' });
 ```
 
 Invalid duration strings throw `InvalidDurationError`, exported from `@slipher/queues` for `instanceof` checks.
 
-Persistent queues open BullMQ `Queue`, `Worker`, and `QueueEvents` during plugin `setup()`, not module load. `client.close()` runs `queuesPlugin.teardown()` and closes worker, queue-events, and queue resources. Outside Seyfert, call `registry.close()` directly. Wire process signals to close whichever lifecycle owner you use:
+`client.close()` tears the queues down; wire it to your process signals:
 
 ```ts
 process.on('SIGTERM', () => {
 	void client.close().then(() => process.exit(0));
 });
-```
-
-## Outside Seyfert
-
-The registry also works without a Seyfert client for scripts, tests, and workers:
-
-```ts
-import { createQueues, memory } from '@slipher/queues';
-
-const registry = createQueues({ driver: memory() });
-const audio = registry.get('audio');
-
-audio.process(job => `processed:${job.name}`);
-
-await audio.add('transcode', { fileId: 'file-1', format: 'mp3' });
-await registry.close();
-```
-
-## Development
-
-```sh
-pnpm --filter @slipher/queues test
-pnpm --filter @slipher/queues build
 ```

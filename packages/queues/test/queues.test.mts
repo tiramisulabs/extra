@@ -206,7 +206,6 @@ describe('memory queues', () => {
 		const queue = registry.get('outbox');
 
 		assert.throws(() => queue.add('send', { delay: '5s' }), /Ambiguous queue\.add\(\) call/);
-		await expect(registry.add('outbox', 'send', { delay: '5s' })).rejects.toThrow(/Ambiguous queue\.add\(\) call/);
 
 		const named = await queue.add('send', { delay: '5s' }, {});
 
@@ -252,7 +251,7 @@ describe('decorated queues', () => {
 		registry.register({ processors: [MailProcessor] });
 		const completed = waitForEvent(registry.get('mail'), 'completed');
 
-		const job = await registry.add('mail', 'send', { email: 'hi@example.com' });
+		const job = await registry.get('mail').add('send', { email: 'hi@example.com' });
 		const completedPayload = await completed;
 
 		assert.equal(completedPayload.job, job);

@@ -265,11 +265,6 @@ export interface BullJobLike {
 
 export type QueueConstructor<T = object> = new (...args: unknown[]) => T;
 type QueueMethod = string | symbol;
-type DynamicQueueName<TName extends string> = string extends TName
-	? TName
-	: TName extends RegisteredQueueName
-		? never
-		: TName;
 
 interface QueueEntry<TData, TResult> {
 	job: QueueJob<TData, TResult, string>;
@@ -1108,39 +1103,6 @@ export class QueuesRegistry {
 	get<TData = unknown, TResult = unknown>(name: string, options?: QueueOptions<TData, TResult>): Queue<TData, TResult>;
 	get<TData = unknown, TResult = unknown>(name: string, options?: QueueOptions<TData, TResult>): Queue<TData, TResult> {
 		return this.getOrCreateQueue(name, options);
-	}
-
-	async add<TName extends RegisteredQueueName, TJobName extends JobNameOf<TName>>(
-		queueName: TName,
-		name: TJobName,
-		data: QueuePayloadFor<QueueRegisteredData<TName>, TJobName>,
-		options?: JobOptions,
-	): Promise<QueueJobOf<TName>>;
-	async add<TName extends RegisteredQueueName>(
-		queueName: TName,
-		data: QueueData<TName>,
-		options?: JobOptions,
-	): Promise<QueueJobOf<TName>>;
-	async add<const TName extends string, TData = unknown, TResult = unknown>(
-		queueName: DynamicQueueName<TName>,
-		data: TData,
-		options?: JobOptions,
-	): Promise<QueueJob<TData, TResult>>;
-	async add(
-		queueName: string,
-		nameOrData: unknown,
-		dataOrOptions?: unknown,
-		maybeOptions?: JobOptions,
-	): Promise<QueueJob<any, any, string>> {
-		if (isAmbiguousQueueAddArgs(nameOrData, dataOrOptions, maybeOptions)) {
-			throw new TypeError(queueAddAmbiguityMessage);
-		}
-
-		if (typeof nameOrData === 'string' && dataOrOptions !== undefined) {
-			return this.get(queueName).add(nameOrData, dataOrOptions, maybeOptions);
-		}
-
-		return this.get(queueName).add(nameOrData as never, dataOrOptions as JobOptions | undefined);
 	}
 
 	async close(): Promise<void> {
