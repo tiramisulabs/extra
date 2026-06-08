@@ -163,15 +163,9 @@ export function extractSeyfertLogContext(context: unknown, config: AutoContextCo
 						getStringField(source.command, 'name'),
 				)
 			: undefined,
-		customId: resolvedConfig.customId
-			? getString(source.customId ?? source.custom_id ?? interaction.customId ?? interaction.custom_id)
-			: undefined,
-		guildId: resolvedConfig.guildId
-			? getString(source.guildId ?? source.guild_id ?? interaction.guildId ?? interaction.guild_id)
-			: undefined,
-		channelId: resolvedConfig.channelId
-			? getString(source.channelId ?? source.channel_id ?? interaction.channelId ?? interaction.channel_id)
-			: undefined,
+		customId: resolvedConfig.customId ? getString(source.customId ?? interaction.customId) : undefined,
+		guildId: resolvedConfig.guildId ? getString(source.guildId ?? interaction.guildId) : undefined,
+		channelId: resolvedConfig.channelId ? getString(source.channelId ?? interaction.channelId) : undefined,
 		shardId: resolvedConfig.shardId ? getNumber(source.shardId ?? interaction.shardId) : undefined,
 		userId: resolvedConfig.userId ? getString(author.id) : undefined,
 		interactionId: resolvedConfig.interactionId

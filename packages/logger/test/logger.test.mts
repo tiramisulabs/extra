@@ -161,6 +161,29 @@ describe('logger plugin', () => {
 		});
 	});
 
+	test('extracts a camelCase Seyfert context and ignores raw snake_case payloads', () => {
+		// Mirrors Seyfert's component/modal context: camelCase getters, customId off the interaction.
+		// A lock against Seyfert renames — if a field name changes, this fails instead of degrading silently.
+		const componentContext = {
+			customId: 'confirm:1',
+			guildId: 'guild-1',
+			channelId: 'channel-1',
+			author: { id: 'user-1' },
+			interaction: { id: 'interaction-1' },
+		};
+
+		assert.deepEqual(extractSeyfertLogContext(componentContext), {
+			channelId: 'channel-1',
+			customId: 'confirm:1',
+			guildId: 'guild-1',
+			interactionId: 'interaction-1',
+			userId: 'user-1',
+		});
+
+		// Seyfert hands camelCase contexts; raw Discord snake_case is intentionally not read.
+		assert.deepEqual(extractSeyfertLogContext({ guild_id: 'g', channel_id: 'c', custom_id: 'x' }), {});
+	});
+
 	test('explicit add fields can include username even though auto extraction does not', async () => {
 		const adapter = new RecordingAdapter();
 		const plugin = logger({ adapter });
