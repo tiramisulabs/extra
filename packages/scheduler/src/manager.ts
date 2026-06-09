@@ -1,3 +1,4 @@
+import { createPlugin } from 'seyfert';
 import { type DurationInput, InvalidDurationError, parseDuration } from './duration';
 import { SchedulerEmitter } from './events';
 import { getTaskMetadata, instantiateTaskSource } from './metadata';
@@ -208,18 +209,17 @@ export function createScheduler(options: CreateSchedulerOptions) {
 export function scheduler(options: CreateSchedulerOptions): SchedulerPlugin {
 	const registry = createScheduler(options);
 
-	return {
+	return createPlugin({
 		name: '@slipher/scheduler',
 		registry,
-		options() {
-			return {
-				context() {
-					return { scheduler: registry };
-				},
-			};
+		client: {
+			scheduler: () => registry,
+		},
+		ctx: {
+			scheduler: () => registry,
 		},
 		async setup(client) {
-			client.scheduler = registry;
+			if (client.scheduler !== registry) client.scheduler = registry;
 
 			if (client.logger) {
 				registry.setLogger(client.logger);
@@ -230,5 +230,5 @@ export function scheduler(options: CreateSchedulerOptions): SchedulerPlugin {
 		async teardown() {
 			await registry.close();
 		},
-	};
+	});
 }

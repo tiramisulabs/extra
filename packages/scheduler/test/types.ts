@@ -1,5 +1,5 @@
 import type { SchedulerLike } from '@slipher/types';
-import type { Client, CommandContext, HttpClient, UsingClient, WorkerClient } from 'seyfert';
+import type { Client, CommandContext, HttpClient, Register, UsingClient, WorkerClient } from 'seyfert';
 import { createScheduler, memory, persistent, type ScheduledTask, type SchedulerRegistry, scheduler } from '../src';
 
 declare function expectType<T>(value: T): void;
@@ -8,7 +8,15 @@ declare const client: Client;
 declare const httpClient: HttpClient;
 declare const workerClient: WorkerClient;
 declare const usingClient: UsingClient;
+const schedulerPlugin = scheduler({ driver: memory() });
 
+declare module 'seyfert' {
+	interface Register {
+		plugins: [typeof schedulerPlugin];
+	}
+}
+
+expectType<Register>({ plugins: [schedulerPlugin] });
 expectType<SchedulerRegistry>(context.scheduler);
 expectType<SchedulerRegistry | undefined>(client.scheduler);
 expectType<SchedulerRegistry | undefined>(httpClient.scheduler);

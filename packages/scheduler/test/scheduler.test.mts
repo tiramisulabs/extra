@@ -250,11 +250,12 @@ describe('scheduler', () => {
 
 		await plugin.setup?.(client);
 
-		const extension = plugin.options?.({})?.context?.({});
+		const extension = { scheduler: plugin.ctx?.scheduler({} as never, client as never) };
 
 		assert.equal(plugin.name, '@slipher/scheduler');
+		assert.equal(typeof plugin.client?.scheduler, 'function');
 		assert.equal(client.scheduler, plugin.registry);
-		assert.equal(extension?.scheduler, plugin.registry);
+		assert.equal(extension.scheduler, plugin.registry);
 		assert.deepEqual(
 			plugin.registry.list().map(task => task.id),
 			['heartbeat', 'daily'],

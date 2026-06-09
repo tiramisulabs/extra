@@ -1,9 +1,10 @@
+import type { SeyfertPlugin } from 'seyfert';
 import type { SchedulerRegistry } from './manager';
 import type { ScheduledTask } from './task';
 
 export type { DurationInput } from './duration';
 
-export type Awaitable<T> = T | PromiseLike<T>;
+export type Awaitable<T> = T | Promise<T>;
 
 export type ScheduleKind = 'cron' | 'interval';
 
@@ -94,19 +95,15 @@ export interface SchedulerDecoratorOptions extends ScheduledTaskOptions {
 	id?: string;
 }
 
-export interface SchedulerPlugin {
+export interface SchedulerPlugin
+	extends SeyfertPlugin<{ scheduler: SchedulerRegistry }, { scheduler: SchedulerRegistry }> {
 	name: '@slipher/scheduler';
 	registry: SchedulerRegistry;
-	options(client?: unknown): {
-		context(client?: unknown): {
-			scheduler: SchedulerRegistry;
-		};
-	};
 	setup(client: SchedulerClientLike): Awaitable<void>;
 	teardown(client: SchedulerClientLike): Awaitable<void>;
 }
 
-export interface SchedulerClientLike extends Record<string, unknown> {
+export interface SchedulerClientLike {
 	initialized?: boolean;
 	logger?: SchedulerLogger;
 	scheduler?: SchedulerRegistry;

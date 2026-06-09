@@ -1,5 +1,3 @@
-import './seyfert';
-
 export { Cron, Interval } from './decorators';
 export { memory } from './drivers/memory';
 export { persistent } from './drivers/persistent';
