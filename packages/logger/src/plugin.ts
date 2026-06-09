@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { Logger as SeyfertLogger } from 'seyfert';
+import { createPlugin, Logger as SeyfertLogger, type SeyfertPlugin } from 'seyfert';
 import { LogLevels as SeyfertLogLevels } from 'seyfert/lib/common';
 
 import {
@@ -17,9 +17,8 @@ export interface LoggerPluginOptions extends LoggerOptions {
 	context?: AutoContextConfig;
 }
 
-export interface LoggerPlugin {
-	name: string;
-	options?(current: Readonly<Record<string, unknown>>): LoggerPluginOptionsFragment;
+export interface LoggerPlugin extends SeyfertPlugin<{}, { logger: WideEventLogger }> {
+	name: '@slipher/logger';
 	setup?(client: SeyfertClientLike): Awaitable<void>;
 	teardown?(client: SeyfertClientLike): Awaitable<void>;
 }
@@ -137,20 +136,31 @@ export function logger(options: LoggerPluginOptions = {}): LoggerPlugin {
 	const root = createLogger(options);
 	const contextConfig = resolveContextConfig(options.context);
 
-	return {
+	return createPlugin({
 		name: '@slipher/logger',
-		options: () => ({
-			context: source => ({ logger: root.event(extractSeyfertLogContext(source, contextConfig)) }),
-			contextScopes: [(context, run) => loggerScope.run(getScopedLogger(root, context, contextConfig), run)],
-			commands: { defaults: createCommandDefaults(root, contextConfig) },
-			components: { defaults: createComponentDefaults(root, 'component', contextConfig) },
-			modals: { defaults: createComponentDefaults(root, 'modal', contextConfig) },
-		}),
+		ctx: {
+			logger: source => root.event(extractSeyfertLogContext(source, contextConfig)),
+		},
+		register(api) {
+			api.options.set(createLoggerPluginOptions(root, contextConfig));
+		},
 		setup: client => {
 			installSeyfertLogger(client, root);
 			installSeyfertInternalLogger(root);
 		},
 		teardown: () => root.flush(),
+	});
+}
+
+function createLoggerPluginOptions(
+	root: RootLogger,
+	contextConfig: Record<AutoContextField, boolean>,
+): LoggerPluginOptionsFragment {
+	return {
+		contextScopes: [(context, run) => loggerScope.run(getScopedLogger(root, context, contextConfig), run)],
+		commands: { defaults: createCommandDefaults(root, contextConfig) },
+		components: { defaults: createComponentDefaults(root, 'component', contextConfig) },
+		modals: { defaults: createComponentDefaults(root, 'modal', contextConfig) },
 	};
 }
 

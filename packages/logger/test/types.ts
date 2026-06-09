@@ -1,10 +1,18 @@
 import type { LoggerLike } from '@slipher/types';
-import { Command, type CommandContext, createMiddleware, Declare } from 'seyfert';
-import { createEvlogAdapter, type LoggerAdapter, useLogger, type WideEventLogger } from '../src';
+import { Command, type CommandContext, createMiddleware, Declare, type Register } from 'seyfert';
+import { createEvlogAdapter, type LoggerAdapter, logger, useLogger, type WideEventLogger } from '../src';
 
 declare function expectType<T>(value: T): void;
 declare const context: CommandContext;
+const loggerPlugin = logger();
 
+declare module 'seyfert' {
+	interface Register {
+		plugins: [typeof loggerPlugin];
+	}
+}
+
+expectType<Register>({ plugins: [loggerPlugin] });
 expectType<WideEventLogger>(context.logger);
 expectType<LoggerLike>({} as WideEventLogger);
 

@@ -24,14 +24,20 @@ Install the plugin once on the client:
 import { Client } from 'seyfert';
 import { logger } from '@slipher/logger';
 
-const client = new Client({
-	plugins: [
-		logger({
-			name: 'slipher-bot',
-			level: 'debug',
-		}),
-	],
+const loggerPlugin = logger({
+	name: 'slipher-bot',
+	level: 'debug',
 });
+
+const client = new Client({
+	plugins: [loggerPlugin],
+});
+
+declare module 'seyfert' {
+	interface Register {
+		plugins: [typeof loggerPlugin];
+	}
+}
 ```
 
 ### Options

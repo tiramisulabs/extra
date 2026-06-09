@@ -1,5 +1,5 @@
 import { initLogger } from 'evlog';
-import { Logger as SeyfertLogger } from 'seyfert';
+import { Logger as SeyfertLogger, type SeyfertPluginApi } from 'seyfert';
 import { LogLevels } from 'seyfert/lib/common';
 import { assert, describe, test } from 'vitest';
 import {
@@ -11,6 +11,7 @@ import {
 	type LogEntry,
 	type LoggerAdapter,
 	type LoggerPlugin,
+	type LoggerPluginOptionsFragment,
 	logger,
 	type RootLogger,
 	runInLoggerScope,
@@ -60,17 +61,39 @@ function commandContext(loggerInstance: WideEventLogger) {
 	};
 }
 
+function getLoggerPluginOptions(plugin: LoggerPlugin): LoggerPluginOptionsFragment {
+	const fragments: LoggerPluginOptionsFragment[] = [];
+	plugin.register?.({
+		options: {
+			set(fragment) {
+				fragments.push(fragment as LoggerPluginOptionsFragment);
+			},
+		},
+	} as SeyfertPluginApi);
+
+	const fragment = fragments[0];
+	if (!fragment) throw new Error('Logger plugin did not register options.');
+	return fragment;
+}
+
+function getLoggerContext(plugin: LoggerPlugin, source: unknown): { logger: WideEventLogger } {
+	const loggerInstance = plugin.ctx?.logger(source, {} as never);
+	if (!loggerInstance) throw new Error('Logger plugin did not expose ctx.logger.');
+	return { logger: loggerInstance };
+}
+
 describe('logger plugin', () => {
-	test('returns a structural Seyfert plugin with context and lifecycle defaults', () => {
+	test('returns a Seyfert Plugin API v3 plugin with context and lifecycle defaults', () => {
 		const plugin: LoggerPlugin = logger({ adapter: new RecordingAdapter() });
-		const options = plugin.options?.({});
+		const options = getLoggerPluginOptions(plugin);
 
 		assert.equal(plugin.name, '@slipher/logger');
 		assert.equal(typeof plugin.setup, 'function');
-		assert.equal(typeof options?.context, 'function');
-		assert.equal(typeof options?.commands?.defaults?.onAfterRun, 'function');
-		assert.equal(typeof options?.components?.defaults?.onAfterRun, 'function');
-		assert.equal(typeof options?.modals?.defaults?.onAfterRun, 'function');
+		assert.equal(typeof plugin.ctx?.logger, 'function');
+		assert.equal(typeof plugin.register, 'function');
+		assert.equal(typeof options.commands?.defaults?.onAfterRun, 'function');
+		assert.equal(typeof options.components?.defaults?.onAfterRun, 'function');
+		assert.equal(typeof options.modals?.defaults?.onAfterRun, 'function');
 	});
 
 	test('level methods emit immediately and wide events contain no logs array', async () => {
@@ -83,14 +106,14 @@ describe('logger plugin', () => {
 				new Date('2026-05-29T10:00:00.100Z'),
 			]),
 		});
-		const options = plugin.options?.({});
-		const extension = options?.context?.({
+		const options = getLoggerPluginOptions(plugin);
+		const extension = getLoggerContext(plugin, {
 			id: 'interaction-1',
 			guildId: 'guild-1',
 			channelId: 'channel-1',
 			shardId: 2,
 			user: { id: 'user-1', username: 'Socram' },
-		}) as { logger: WideEventLogger };
+		});
 
 		extension.logger.add({ actorRole: 'admin' });
 		extension.logger.warn('target not in guild', { targetUser: 'user-2' });
@@ -101,7 +124,7 @@ describe('logger plugin', () => {
 		assert.deepEqual(adapter.entries[0].data, { targetUser: 'user-2' });
 		assert.equal('command' in adapter.entries[0].data, false);
 
-		await options?.commands?.defaults?.onAfterRun?.(commandContext(extension.logger), undefined);
+		await options.commands?.defaults?.onAfterRun?.(commandContext(extension.logger), undefined);
 
 		assert.equal(adapter.entries.length, 2);
 		assert.equal(adapter.entries[1].level, 'info');
@@ -189,14 +212,14 @@ describe('logger plugin', () => {
 	test('explicit add fields can include username even though auto extraction does not', async () => {
 		const adapter = new RecordingAdapter();
 		const plugin = logger({ adapter });
-		const options = plugin.options?.({});
-		const extension = options?.context?.({
+		const options = getLoggerPluginOptions(plugin);
+		const extension = getLoggerContext(plugin, {
 			id: 'interaction-1',
 			user: { id: 'user-1', username: 'auto-noise' },
-		}) as { logger: WideEventLogger };
+		});
 
 		extension.logger.add({ username: 'manual' });
-		await options?.commands?.defaults?.onAfterRun?.(commandContext(extension.logger), undefined);
+		await options.commands?.defaults?.onAfterRun?.(commandContext(extension.logger), undefined);
 
 		assert.equal(adapter.entries[0].data.username, 'manual');
 	});
@@ -204,11 +227,11 @@ describe('logger plugin', () => {
 	test('guards concurrent command emits while the adapter write is pending', async () => {
 		const adapter = new BlockingAdapter();
 		const plugin = logger({ adapter });
-		const options = plugin.options?.({});
-		const extension = options?.context?.({ id: 'interaction-1' }) as { logger: WideEventLogger };
+		const options = getLoggerPluginOptions(plugin);
+		const extension = getLoggerContext(plugin, { id: 'interaction-1' });
 
-		const first = options?.commands?.defaults?.onAfterRun?.(commandContext(extension.logger), undefined);
-		const second = options?.commands?.defaults?.onAfterRun?.(commandContext(extension.logger), undefined);
+		const first = options.commands?.defaults?.onAfterRun?.(commandContext(extension.logger), undefined);
+		const second = options.commands?.defaults?.onAfterRun?.(commandContext(extension.logger), undefined);
 
 		await Promise.resolve();
 
@@ -224,13 +247,13 @@ describe('logger plugin', () => {
 	test('command run errors emit a single wide event with context, not a duplicate immediate log', async () => {
 		const adapter = new RecordingAdapter();
 		const plugin = logger({ adapter });
-		const options = plugin.options?.({});
-		const extension = options?.context?.({ id: 'interaction-1', guildId: 'guild-1' }) as { logger: WideEventLogger };
+		const options = getLoggerPluginOptions(plugin);
+		const extension = getLoggerContext(plugin, { id: 'interaction-1', guildId: 'guild-1' });
 		const context = commandContext(extension.logger);
 		const error = new Error('boom');
 
-		await options?.commands?.defaults?.onRunError?.(context, error);
-		await options?.commands?.defaults?.onAfterRun?.(context, error);
+		await options.commands?.defaults?.onRunError?.(context, error);
+		await options.commands?.defaults?.onAfterRun?.(context, error);
 
 		assert.equal(adapter.entries.length, 1);
 		assert.equal(adapter.entries[0].level, 'error');
@@ -381,12 +404,12 @@ describe('logger plugin', () => {
 	test('useLogger exposes the current command logger without passing context', async () => {
 		const adapter = new RecordingAdapter();
 		const plugin = logger({ adapter, level: 'debug' });
-		const options = plugin.options?.({});
-		const extension = options?.context?.({ id: 'interaction-1' }) as { logger: WideEventLogger };
+		const options = getLoggerPluginOptions(plugin);
+		const extension = getLoggerContext(plugin, { id: 'interaction-1' });
 		const context = commandContext(extension.logger);
 
-		await options?.contextScopes?.[0]?.(context, async () => {
-			await options?.commands?.defaults?.onBeforeMiddlewares?.(context);
+		await options.contextScopes?.[0]?.(context, async () => {
+			await options.commands?.defaults?.onBeforeMiddlewares?.(context);
 			const scopedLogger = useLogger();
 
 			assert.equal(scopedLogger, extension.logger);
@@ -394,7 +417,7 @@ describe('logger plugin', () => {
 			scopedLogger.add({ serviceUser: 'user-1' });
 			scopedLogger.info('loaded user service');
 
-			await options?.commands?.defaults?.onAfterRun?.(context, undefined);
+			await options.commands?.defaults?.onAfterRun?.(context, undefined);
 		});
 
 		assert.equal(adapter.entries.length, 3);
@@ -408,12 +431,12 @@ describe('logger plugin', () => {
 	test('context scopes do not mutate Seyfert contexts with logger fields', async () => {
 		const adapter = new RecordingAdapter();
 		const plugin = logger({ adapter });
-		const options = plugin.options?.({});
+		const options = getLoggerPluginOptions(plugin);
 		const context = { fullCommandName: 'ping' };
 
-		await options?.contextScopes?.[0]?.(context, async () => {
+		await options.contextScopes?.[0]?.(context, async () => {
 			useLogger().add({ requestId: 'request-1' });
-			await options?.commands?.defaults?.onAfterRun?.(context, undefined);
+			await options.commands?.defaults?.onAfterRun?.(context, undefined);
 		});
 
 		assert.equal('logger' in context, false);
@@ -424,12 +447,12 @@ describe('logger plugin', () => {
 	test('generic context extension does not hard-code command kind for components', async () => {
 		const adapter = new RecordingAdapter();
 		const plugin = logger({ adapter });
-		const options = plugin.options?.({});
-		const extension = options?.context?.({ customId: 'button:confirm' }) as { logger: WideEventLogger };
+		const options = getLoggerPluginOptions(plugin);
+		const extension = getLoggerContext(plugin, { customId: 'button:confirm' });
 
 		assert.equal(extension.logger.currentContext.kind, undefined);
 
-		await options?.components?.defaults?.onAfterRun?.(
+		await options.components?.defaults?.onAfterRun?.(
 			{ logger: extension.logger, customId: 'button:confirm' },
 			undefined,
 		);

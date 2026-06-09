@@ -1,5 +1,3 @@
-import './seyfert';
-
 export { ConsoleLoggerAdapter } from './console';
 export * from './core';
 export { createEvlogAdapter, type EvlogLevel } from './evlog';
