@@ -296,13 +296,13 @@ describe('decorated queues', () => {
 describe('queues plugin', () => {
 	test('exposes the registry on Seyfert context and installs it on the client during setup', async () => {
 		const plugin = queues({ driver: memory() });
-		const options = plugin.options?.({});
-		const extension = options?.context?.({}) as { queues: QueuesRegistry };
 		const client = {};
+		const extension = { queues: plugin.ctx?.queues({}, client as never) };
 
 		await plugin.setup?.(client);
 
 		assert.equal(plugin.name, '@slipher/queues');
+		assert.equal(typeof plugin.client?.queues, 'function');
 		assert.equal(extension.queues, plugin.registry);
 		assert.equal((client as { queues?: QueuesRegistry }).queues, plugin.registry);
 		await plugin.teardown?.(client);

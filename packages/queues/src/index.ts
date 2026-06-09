@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 import type { DurationInput } from '@slipher/internal';
 import { isAmbiguousQueueAddArgs, parseDuration, queueAddAmbiguityMessage } from '@slipher/internal';
-import './seyfert';
+import { createPlugin, type SeyfertPlugin } from 'seyfert';
 
 export type { DurationInput } from '@slipher/internal';
 export { InvalidDurationError } from '@slipher/internal';
@@ -187,21 +187,16 @@ export interface QueuesRegisterOptions {
 
 export interface QueuesPluginOptions extends CreateQueuesOptions {}
 
-export interface QueuesPlugin {
-	name: string;
+export interface QueuesPlugin extends SeyfertPlugin<{ queues: QueuesRegistry }, { queues: QueuesRegistry }> {
+	name: '@slipher/queues';
 	registry: QueuesRegistry;
-	options?(current: Readonly<Record<string, unknown>>): QueuesPluginOptionsFragment;
 	setup?(client: QueuesClientLike): Awaitable<void>;
 	teardown?(client: QueuesClientLike): Awaitable<void>;
 }
 
-export interface QueuesPluginOptionsFragment {
-	context?(source: unknown): Record<string, unknown>;
-}
-
 export interface QueuesClientLike {
 	initialized?: boolean;
-	queues?: unknown;
+	queues?: QueuesRegistry;
 }
 
 export interface PersistentQueueOptions {
@@ -1192,12 +1187,15 @@ export function createQueues(options: CreateQueuesOptions): QueuesRegistry {
 export function queues(options: QueuesPluginOptions): QueuesPlugin {
 	const registry = createQueues(options);
 
-	return {
+	return createPlugin({
 		name: '@slipher/queues',
 		registry,
-		options: () => ({
-			context: () => ({ queues: registry }),
-		}),
+		client: {
+			queues: () => registry,
+		},
+		ctx: {
+			queues: () => registry,
+		},
 		setup: async client => {
 			installQueues(client, registry);
 			await registry.setup(client);
@@ -1205,14 +1203,14 @@ export function queues(options: QueuesPluginOptions): QueuesPlugin {
 		teardown: async () => {
 			await registry.close();
 		},
-	};
+	});
 }
 
 export function installQueues<TClient extends QueuesClientLike>(
 	client: TClient,
 	registry: QueuesRegistry,
 ): QueuesRegistry {
-	client.queues = registry;
+	if (client.queues !== registry) client.queues = registry;
 	return registry;
 }
 
