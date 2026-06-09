@@ -27,7 +27,7 @@ pnpm add bullmq@^5.23.0
 Pick the driver explicitly:
 
 ```ts
-import { Client } from 'seyfert';
+import { Client, definePlugins } from 'seyfert';
 import { Interval, memory, scheduler } from '@slipher/scheduler';
 
 class MaintenanceTasks {
@@ -41,16 +41,17 @@ const schedulerPlugin = scheduler({
 	driver: memory(),
 	tasks: [MaintenanceTasks],
 });
+const plugins = definePlugins(schedulerPlugin);
 
 declare module 'seyfert' {
 	interface Register {
-		plugins: [typeof schedulerPlugin];
+		plugins: typeof plugins;
 	}
 }
 
 export const registry = schedulerPlugin.registry;
 export const client = new Client({
-	plugins: [schedulerPlugin],
+	plugins,
 });
 ```
 
@@ -86,8 +87,9 @@ export default class RefreshCacheCommand extends Command {
 ```ts
 // index.ts
 const schedulerPlugin = scheduler({ driver: memory(), tasks: [MaintenanceTasks] });
+const plugins = definePlugins(schedulerPlugin);
 export const registry = schedulerPlugin.registry;
-export const client = new Client({ plugins: [schedulerPlugin] });
+export const client = new Client({ plugins });
 
 // services/reports.ts
 import { registry } from '../index';
@@ -158,7 +160,7 @@ const registry = createScheduler({
 For a Seyfert bot, create the plugin, register it on the client, and start the client so plugin setup opens Redis/BullMQ resources:
 
 ```ts
-import { Client } from 'seyfert';
+import { Client, definePlugins } from 'seyfert';
 import { persistent, scheduler } from '@slipher/scheduler';
 
 const schedulerPlugin = scheduler({
@@ -167,15 +169,16 @@ const schedulerPlugin = scheduler({
 	}),
 	tasks: [MaintenanceTasks],
 });
+const plugins = definePlugins(schedulerPlugin);
 
 declare module 'seyfert' {
 	interface Register {
-		plugins: [typeof schedulerPlugin];
+		plugins: typeof plugins;
 	}
 }
 
 const client = new Client({
-	plugins: [schedulerPlugin],
+	plugins,
 });
 
 await client.start();
