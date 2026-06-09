@@ -21,21 +21,22 @@ Requires Seyfert v5.
 Install the plugin once on the client:
 
 ```ts
-import { Client } from 'seyfert';
+import { Client, definePlugins } from 'seyfert';
 import { logger } from '@slipher/logger';
 
 const loggerPlugin = logger({
 	name: 'slipher-bot',
 	level: 'debug',
 });
+const plugins = definePlugins(loggerPlugin);
 
 const client = new Client({
-	plugins: [loggerPlugin],
+	plugins,
 });
 
 declare module 'seyfert' {
 	interface Register {
-		plugins: [typeof loggerPlugin];
+		plugins: typeof plugins;
 	}
 }
 ```
