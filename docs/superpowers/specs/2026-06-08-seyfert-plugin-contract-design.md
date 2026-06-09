@@ -1,420 +1,419 @@
-# Seyfert Plugin Contract Design
+# Seyfert Plugin Contract - Implementation Snapshot
 
-Date: 2026-06-08
+Date: 2026-06-09
+
+## Status
+
+This document now describes the plugin API implemented for the Seyfert v5 core
+work. It intentionally supersedes the broader proposal notes that included
+`dependsOn`, `PluginEnforce`, `client.services`, `api.client.decorate`,
+interaction interceptors, text parser hooks, gateway intents, service slots, and
+unsafe patches.
+
+Those ideas can still be revisited later, but they are not part of the current
+contract and should not be documented as shipped.
 
 ## Goal
 
-Define the next Seyfert plugin contract before implementing core changes in the Seyfert core repository.
+Give third-party package authors a stable, root-importable contract for building
+Seyfert plugins without importing from `seyfert/lib/...` or replacing internal
+handlers such as `HandleCommand`.
 
-This design supersedes the narrower guide-first contract assumptions in `2026-06-08-seyfert-plugin-guide-design.md`. The guide remains useful for documentation work, but the core contract now needs to support a real third-party ecosystem: plugins should be installable integration units that declare capabilities through public extension points, without forcing authors to replace Seyfert internals such as `HandleCommand`.
+A plugin should be able to answer:
 
-## Inputs
-
-- Existing Seyfert core spike for root-importable plugin authoring types and helpers.
-- Plugin system review document provided during the design session.
-- External pattern review: Nest modules/lifecycle, Fastify plugins, Hapi plugins, Vite/Astro integrations, and webpack hooks.
-- Real ecosystem pressure from packages such as `yunaforseyfert`, which currently extends `HandleCommand` and imports from `seyfert/lib/...` to customize text command parsing and resolution.
+1. What does my package add to Seyfert?
+2. How does the user install it on `new Client({ plugins })`?
+3. What gets exposed on `client.*` or `ctx.*`?
+4. What work belongs in `register`, `setup`, and `teardown`?
+5. How are errors and conflicts attributed?
 
 ## Definition
 
-A Seyfert plugin is an installable integration object that contributes behavior, configuration, resources, or framework extensions to a Seyfert client through Seyfert's public plugin contract.
+A Seyfert plugin is an installable integration object that contributes behavior,
+configuration, resources, or framework extensions to a Seyfert client through
+Seyfert's public plugin contract.
 
 Practical taxonomy:
 
-- Plugin: installed in `new Client({ plugins: [...] })` and composed/controlled by Seyfert.
-- Adapter: replaces a lower-level infrastructure interface such as cache, HTTP, REST, or gateway behavior. It can be packaged by a plugin, but the adapter itself is not the main plugin contract.
-- Utility: exported functions/classes the user imports and calls manually. It can support a plugin, but it is not a plugin by itself.
+- Plugin: installed in `new Client({ plugins: [...] })` and composed by Seyfert.
+- Adapter: replaces a lower-level infrastructure interface such as cache, HTTP,
+  REST, or gateway behavior. An adapter can be used by a plugin, but the adapter
+  itself is not the plugin contract.
+- Utility: exported functions/classes the user imports and calls manually. It can
+  support a plugin, but it is not a plugin by itself.
 
-## Public Contract
+## Implemented Public Contract
+
+The public authoring helper is `createPlugin(...)`. It is an identity helper that
+preserves inference and should be used in documentation examples.
 
 ```ts
-export enum PluginEnforce {
-	Pre = 'pre',
-	Post = 'post',
-}
+import { createPlugin } from 'seyfert';
 
+export const examplePlugin = createPlugin({
+	name: 'example',
+	client: {
+		example: client => new ExampleService(client),
+	},
+	ctx: {
+		example: (interaction, client) => new ExampleContextHelper(interaction, client),
+	},
+	register(api) {
+		api.commands.add(ExampleCommand);
+		api.components.add(ExampleButton);
+		api.modals.add(ExampleModal);
+		api.events.on('botReady', client => {
+			client.logger.info('example plugin ready');
+		});
+		api.middlewares.add('example-audit', exampleMiddleware, { global: true });
+		api.options.set({ allowedMentions: { parse: [] } });
+	},
+	async setup(client) {
+		await client.example.start();
+	},
+	async teardown(client) {
+		await client.example.stop();
+	},
+});
+```
+
+The implemented shape is:
+
+```ts
 export interface SeyfertPlugin<
-	TOptions extends BaseClientOptions = BaseClientOptions,
-	TClient extends UsingClient = UsingClient,
+	E extends object = {},
+	C extends object = {},
+	I extends readonly AnySeyfertPlugin[] = readonly [],
 > {
 	name: string;
-	imports?: readonly SeyfertPlugin[];
-	dependsOn?: readonly string[];
-	enforce?: PluginEnforce;
-
-	options?(): SeyfertPluginOptions<TOptions>;
+	imports?: I;
+	client?: PluginClientMap<E>;
+	ctx?: PluginContextMap<C>;
 	register?(api: SeyfertPluginApi): void;
-	validate?(options: Readonly<BaseClientOptions>, api: SeyfertPluginValidationApi): void;
-
-	setup?(client: SeyfertPluginClient<TClient>): Awaitable<void>;
-	commandsLoaded?(client: SeyfertPluginClient<TClient>): Awaitable<void>;
-	componentsLoaded?(client: SeyfertPluginClient<TClient>): Awaitable<void>;
-	ready?(client: SeyfertPluginClient<TClient>): Awaitable<void>;
-	teardown?(client: SeyfertPluginClient<TClient>): Awaitable<void>;
+	setup?(client: SeyfertPluginClient & ExtendOf<I> & E): Awaitable<void>;
+	teardown?(client: SeyfertPluginClient & ExtendOf<I> & E): Awaitable<void>;
 }
 ```
 
-`createPlugin(...)` remains the public helper. Do not introduce `definePlugin` in this design. `setup` and `teardown` remain the lifecycle names; do not rename them to `onStart` or `onStop`.
+`client` and `ctx` are static key maps. This is intentional: Seyfert can inspect
+the keys before runtime, detect collisions, and provide stable type inference.
 
-`options()` has no arguments. The previous `current` snapshot is removed because it was a raw merge snapshot, not the final composed options. Plugins that need to inspect final state use `validate(...)`; plugins that need to register capabilities use `register(api)`.
+Factories receive `BaseClient`, not the fully augmented `UsingClient`, to avoid a
+type cycle. A plugin's own `setup` receives its own client extension and the
+extensions from its `imports`.
 
-## Plugin API
+## Implemented Plugin API
 
-`register(api)` is a synchronous construction phase. It declares capabilities into an internal registry; it must not mutate handlers directly and must not depend on live runtime state.
-
-Initial `SeyfertPluginApi`:
+`register(api)` is synchronous. It declares behavior into an internal registry.
+It must not await runtime work and must not directly mutate handlers.
 
 ```ts
 interface SeyfertPluginApi {
-	commands: {
-		add(...commands: SeteableCommand[]): void;
-		text: {
-			setArgsParser(parser: TextCommandArgsParser): void;
-			setResolver(resolver: TextCommandResolver): void;
-		};
-	};
-
-	components: {
-		add(...components: SeteableComponent[]): void;
-	};
-
 	events: {
-		add(...events: ClientEvent[]): void;
+		on<E extends ClientNameEvents | CustomEventsKeys | GatewayEvents>(
+			name: E,
+			handler: (...args: ResolveEventParams<E>) => unknown,
+			opts?: { once?: boolean },
+		): void;
+		onAny(handler: (name: string, ...args: unknown[]) => unknown): void;
+		emit<E extends CustomEventsKeys>(name: E, ...payload: ResolveEventRunParams<E>): void;
 	};
-
-	gateway: {
-		addIntents(...intents: PluginIntentResolvable[]): void;
+	commands: {
+		add(...commands: HandleableCommand[]): void;
 	};
-
+	components: {
+		add(...components: HandleableComponent[]): void;
+	};
+	modals: {
+		add(...modals: HandleableModal[]): void;
+	};
 	middlewares: {
-		add(name: string, middleware: MiddlewareContext): void;
-		useGlobal(name: string): void;
+		add(name: string, middleware: MiddlewareContext, opts?: { global?: boolean }): void;
 	};
-
-	client: {
-		decorate<K extends string>(key: K, factory: PluginServiceFactory): void;
-	};
-
-	services: {
-		expose<K extends string>(key: K, factory: PluginServiceFactory): void;
+	options: {
+		set(fragment: SeyfertPluginOptions): void;
 	};
 }
 ```
 
-The exact type aliases can use Seyfert's existing internal names where available, but all public authoring types must be root-importable from `seyfert`. Do not require `seyfert/lib/...` imports for plugin authors.
+Current extension strategies:
 
-## Registry Semantics
+| API | Strategy | Conflict behavior |
+| --- | --- | --- |
+| `commands.add` | Additive | Duplicate command names fail |
+| `components.add` | Additive | Duplicate static `customId` values fail |
+| `modals.add` | Additive | Duplicate static `customId` values fail |
+| `events.on` | Additive | Multiple listeners are allowed |
+| `events.onAny` | Additive | Multiple listeners are allowed |
+| `events.emit` | Notification | Gateway event names cannot be emitted |
+| `middlewares.add` | Additive by name | Duplicate name policy follows middleware registration |
+| `options.set` | Composed fragment | Merged before user options |
 
-`register(api)` accumulates contributions in a registry. Seyfert applies those contributions at the correct runtime phase.
+## Resolution Rules
 
-Additive extension points:
-
-- `commands.add`
-- `components.add`
-- `events.add`
-- `gateway.addIntents`
-- `middlewares.add`
-- `middlewares.useGlobal`
-
-Singleton extension points:
-
-- `commands.text.setArgsParser`
-- `commands.text.setResolver`
-- `client.decorate(key)`
-- `services.expose(key)`
-
-Singleton conflicts are errors by default. Do not add `override` in the first implementation unless a concrete plugin needs it.
-
-## Plugin Resolution
-
-Resolution rules:
+Implemented resolution:
 
 1. Start from the user's `plugins` array.
 2. Recursively expand each plugin's `imports` before the importing plugin.
 3. Dedupe the same plugin object/instance.
 4. Error if two different plugin instances share the same `name`.
-5. Build hard order edges from `imports` and `dependsOn`.
-6. Sort by hard dependencies.
-7. Use `PluginEnforce.Pre` and `PluginEnforce.Post` as soft ordering preferences.
-8. Preserve user array order as the tie-breaker.
+5. Preserve resolved order from imports plus user array order.
 
-`imports` and `dependsOn` are hard dependencies and win over `enforce`. `enforce` is a phase preference, not a dependency.
+Not implemented yet:
 
-`imports` means "this plugin brings another plugin with it." `dependsOn` means "this plugin requires another plugin to exist, but it does not instantiate it."
+- `dependsOn`
+- `PluginEnforce`
+- numeric priority
+- plugin semver negotiation
+- `conflictsWith`
 
-Examples:
+If multiple plugins need the same imported plugin, the user or parent plugin
+should share that plugin instance. Different instances with the same `name` are
+a conflict, not an implicit merge.
 
-```ts
-export function economyPlugin(options: { storage?: SeyfertPlugin } = {}) {
-	return createPlugin({
-		name: 'economy',
-		imports: [options.storage ?? sqliteStoragePlugin()],
-		register(api) {
-			api.client.decorate('economy', client => new EconomyApi(client));
-		},
-	});
-}
-```
+## Client And Context Extension
+
+`client` adds app-wide client properties:
 
 ```ts
-createPlugin({
-	name: 'audit',
-	dependsOn: ['database'],
+const queuesPlugin = createPlugin({
+	name: '@slipher/queues',
+	client: {
+		queues: () => registry,
+	},
 });
 ```
 
-If multiple plugins need the same imported plugin instance, the user or parent plugin should share that instance. Different instances with the same `name` are a conflict, not an implicit merge.
-
-## Services And Decoration
-
-Seyfert should expose a core runtime service registry:
+`ctx` adds per-interaction context properties:
 
 ```ts
-ctx.client.services.get('economy');
-ctx.client.services.getOptional('economy');
-ctx.client.services.has('economy');
+const loggerPlugin = createPlugin({
+	name: '@slipher/logger',
+	ctx: {
+		logger: () => createWideEventLogger(),
+	},
+});
 ```
 
-Typing uses module augmentation:
+Rules:
+
+- Static `client` and `ctx` keys are collected during construction.
+- Duplicate plugin `client` keys fail.
+- Duplicate plugin `ctx` keys fail.
+- `client` keys cannot overwrite existing client properties.
+- `client` factories are synchronous and run before `setup`.
+- `ctx` factories run when Seyfert builds an interaction context.
+
+For cross-file types, applications use `Register`:
 
 ```ts
+const loggerPlugin = logger();
+const cooldownPlugin = cooldown();
+
 declare module 'seyfert' {
-	interface RegisteredPluginServices {
-		economy: EconomyApi;
+	interface Register {
+		plugins: [typeof loggerPlugin, typeof cooldownPlugin];
 	}
 }
 ```
 
-`services.get('economy')` returns `EconomyApi` without requiring a generic. Generic overloads can remain as escape hatches for dynamic keys.
-
-`api.client.decorate('economy', factory)` does two things:
-
-1. Adds `client.economy`.
-2. Exposes the same value as `client.services.get('economy')`.
-
-`api.services.expose('internal:scheduler', factory)` exposes a service without decorating the client.
-
-Factories are registered during `register(api)` but instantiated before `setup()`, when a real client exists. Factories are synchronous. If a service needs async connection work, expose an object synchronously and connect it during `setup()`.
-
-## Commands And Components
-
-`api.commands.add(...)` and `api.components.add(...)` are declarative. They do not call `client.commands.set(...)` or `client.components.set(...)` during `register`.
-
-Runtime application:
-
-- Load disk commands first.
-- Apply plugin commands after disk commands.
-- Run `commandsLoaded`.
-- Load disk components first.
-- Apply plugin components after disk components.
-- Run `componentsLoaded`.
-
-Plugin commands/components must work even when there is no commands/components directory configured.
-
-Any collision between plugin contributions or between plugin and disk contributions is an error in v1. Do not allow silent last-wins behavior.
-
-This directly fixes the command-wipe failure mode where registering commands in `setup()` is erased by `CommandHandler.load()`.
-
-## Text Command Pipeline
-
-Plugins can customize text command parsing/resolution without extending `HandleCommand`.
-
-```ts
-register(api) {
-	api.commands.text.setArgsParser(yunaArgsParser);
-	api.commands.text.setResolver(yunaResolver);
-}
-```
-
-Use context-object signatures:
-
-```ts
-export type TextCommandArgsParser = (context: TextCommandArgsParserContext) => Record<string, string>;
-
-export interface TextCommandArgsParserContext {
-	client: UsingClient;
-	content: string;
-	command: Command | SubCommand;
-	message: MessageStructure;
-}
-
-export type TextCommandResolver = (
-	context: TextCommandResolverContext,
-) => CommandFromContent & { argsContent?: string };
-
-export interface TextCommandResolverContext {
-	client: UsingClient;
-	content: string;
-	prefix: string;
-	rawMessage: GatewayMessageCreateDispatchData;
-}
-```
-
-Yuna can adapt its current `this: HandleCommand` functions with a small wrapper. The public Seyfert contract should not expose or require subclassing `HandleCommand`.
-
-Public root exports needed:
-
-- `TextCommandArgsParser`
-- `TextCommandArgsParserContext`
-- `TextCommandResolver`
-- `TextCommandResolverContext`
-- `CommandFromContent`
-- `CommandOptionWithType`
-
-## Events
-
-`api.events.add(...)` registers multi-listener events.
-
-Events are notifications, not a pipeline. All listeners for a given event should be isolated and can run via `Promise.allSettled`. A failure in one plugin's listener must not prevent the user event or another plugin event from running.
-
-Errors are reported with plugin/event attribution. Event listener failures do not throw to the gateway caller.
-
-## Intents
-
-`api.gateway.addIntents(...)` contributes gateway intents. Accept the same ergonomic input forms already supported by runtime config where practical: intent strings, numbers, and arrays.
-
-Plugin intents are always OR-merged with user/config intents. A plugin intent is a minimum requirement for that plugin to function. If a user does not want that intent, they should not install the plugin or should disable that plugin feature through plugin-specific options.
-
-For `WorkerClient`, plugin intents must be included before creating workers, not inside a worker after the manager already chose intents.
-
-`HttpClient` can accept plugin intents as no-op contributions.
-
-## Middlewares
-
-`api.middlewares.add(name, middleware)` registers a middleware implementation.
-
-`api.middlewares.useGlobal(name)` contributes that middleware name to `globalMiddlewares` with the same plugin-first/user-last composition as existing options.
-
-Typing still uses `RegisteredMiddlewares` module augmentation:
-
-```ts
-declare module 'seyfert' {
-	interface RegisteredMiddlewares {
-		cooldown: typeof cooldownMiddleware;
-	}
-}
-```
-
-Name collisions are errors.
+`Register` is the source of global app typing. `imports` helps the importing
+plugin internally, but imported plugin types do not become global app types
+unless they are included in `Register`.
 
 ## Lifecycle Timing
 
 Construction:
 
-1. Resolve plugins, imports, names, dependencies, and order.
-2. Run `options()` for each plugin.
-3. Run `register(api)` for each plugin.
-4. Merge and compose final client options.
-5. Validate registry conflicts.
-6. Run `validate(finalOptions, validationApi)`.
+1. Resolve plugin order and imports.
+2. Collect static `client` and `ctx` keys.
+3. Create context fragments from `ctx`.
+4. Run legacy `options(current)` if present for compatibility.
+5. Run `register(api)`.
+6. Merge plugin option fragments before user options.
+7. Compose contexts, context scopes, global middlewares, and default hooks.
 
 Start:
 
-1. Set token and REST debug flags.
-2. Instantiate services and decorations.
-3. Run `setup`.
+1. Resolve token and REST debug flags.
+2. Ensure `handleCommand` exists.
+3. Install and run plugin setup.
 4. Start cache adapter.
 5. Load languages.
 6. Load disk commands.
 7. Apply plugin commands.
-8. Run `commandsLoaded`.
+8. Emit `commandsLoaded`.
 9. Load disk components.
-10. Apply plugin components.
-11. Run `componentsLoaded`.
-12. Start gateway or HTTP runtime.
-13. Run `ready`.
+10. Apply plugin components and modals.
+11. Emit `componentsLoaded`.
 
 Close:
 
-1. Run `teardown` in reverse plugin order.
-2. Keep `close()` idempotent.
+1. `client.close()` waits for in-flight plugin setup.
+2. Runs `teardown` in reverse plugin order.
+3. Clears setup/close promises after completion.
 
-Idempotency:
+`setup` should start resources. `teardown` should flush, close, or restore them.
+Do not create new typed client keys in `setup`; declare them in `client`.
 
-- `setup`, `commandsLoaded`, `componentsLoaded`, and `ready` run once per start cycle.
-- Calling `start()` twice without `close()` must not duplicate these hooks.
-- After `close()`, a later `start()` may run them again.
+## Commands, Components, And Modals
 
-Client variants:
-
-- `Client`: `ready` runs when the client is actually ready and `client.me`/`applicationId` exist.
-- `WorkerClient`: `ready` runs once per worker client instance. Avoid double-running on both `WORKER_READY` and manager-level `BOT_READY`.
-- `HttpClient`: `ready` runs at the end of `start()` because there is no gateway ready event.
-
-## Validation
-
-`validate(finalOptions, api)` is synchronous and runs after `register` and conflict validation. It can inspect final options and registry state but cannot mutate them.
-
-Validation API:
+Plugin command/component/modal registration is declarative:
 
 ```ts
-interface SeyfertPluginValidationApi {
-	plugin: SeyfertPlugin;
-	plugins: {
-		has(name: string): boolean;
-		names(): readonly string[];
-	};
-	services: {
-		has<K extends keyof RegisteredPluginServices>(key: K): boolean;
-		has(key: string): boolean;
-	};
-	fail(message: string): never;
-	warn(message: string): void;
+register(api) {
+	api.commands.add(PingCommand);
+	api.components.add(RefreshButton);
+	api.modals.add(ProfileModal);
 }
 ```
 
-`fail` throws an attributed plugin error during client construction.
+Runtime application:
 
-## Error Policy
+- Disk commands load first.
+- Plugin commands are applied after disk commands.
+- `commandsLoaded` is emitted after plugin commands are applied.
+- Disk components load first.
+- Plugin components and modals are applied after disk components.
+- `componentsLoaded` is emitted after plugin components and modals are applied.
 
-All plugin failures should be attributed by plugin name, phase, and index/order where possible.
+Conflicts are errors. Seyfert does not allow silent last-wins behavior here.
+Subcommands cannot be registered as top-level plugin commands.
 
-Phases:
+This fixes the old failure mode where registering commands in `setup()` could be
+erased by later command loading.
 
-- `options`
-- `register`
-- `validate`
-- service/decorate factory
-- `setup`
+## Events
+
+Plugins can listen to gateway, client, and custom events:
+
+```ts
+register(api) {
+	api.events.on('botReady', client => {
+		client.logger.info('ready');
+	});
+
+	api.events.on('commandsLoaded', (commands, client) => {
+		client.logger.info({ count: commands.length }, 'commands loaded');
+	});
+}
+```
+
+Events are notifications, not a pipeline. Multiple plugin listeners can observe
+the same event. Listener tasks are isolated and settled together, so one plugin
+failure is attributed without skipping the remaining listeners.
+
+Plugins can emit custom events with `api.events.emit(...)`. Emitting gateway event
+names is rejected.
+
+Implemented custom lifecycle events:
+
 - `commandsLoaded`
 - `componentsLoaded`
-- `ready`
-- `teardown`
-- event listener
 
-Errors should preserve the original error in `cause`.
+## Diagnostics And Errors
 
-Constructor-phase errors fail `new Client()`. Start-phase errors fail `start()` and should clean up completed setup work. Teardown errors are collected and surfaced as an `AggregateError`. Event errors are reported individually and do not stop other listeners.
+`client.plugins` is the resolved plugin list. It also exposes:
 
-## Out Of Scope
+- `client.plugins.resolved`
+- `client.plugins.diagnostics`
 
-- Full plugin version negotiation.
-- Semver constraints.
-- `conflictsWith`.
-- Fastify/Nest-style encapsulation scopes.
-- Numeric plugin priority.
-- Silent override/last-wins behavior.
-- Requiring authors to subclass `HandleCommand`.
-- Requiring plugin authors to import from `seyfert/lib/...`.
-- Renaming `setup`/`teardown`.
+Diagnostics include plugin name, order index, imports, client keys, context keys,
+command/component/modal contribution counts, events, and middlewares.
 
-## Implementation Slices
+Plugin errors should preserve the original error in `cause` and identify:
 
-Recommended order for later implementation in the Seyfert core repository:
+- plugin name
+- phase
+- resolved index
 
-1. Plugin resolution: `imports`, unique names, `dependsOn`, `PluginEnforce`, deterministic order.
-2. `register(api)` and internal registry with conflict detection.
-3. Service registry and `client.services`; `client.decorate` applying before `setup`.
-4. Declarative commands/components and loaded lifecycle hooks.
-5. Text command parser/resolver registry and public root types.
-6. Event multi-listeners with isolation.
-7. Gateway intents OR-merge, including worker manager path.
-8. Middleware registration.
-9. `ready` lifecycle across `Client`, `WorkerClient`, and `HttpClient`.
-10. Uniform attributed plugin errors and validation API.
+Current attributed phases include `register`, `options`, `client.<key>`,
+`ctx.<key>`, `commands.add`, `components.add`, `setup`, `teardown`, and event
+listener failures.
 
-Each slice should get consumer-facing type tests and focused runtime tests before implementation.
+## Package Authoring Defaults
 
-## Open Follow-Up
+Third-party plugin packages should:
 
-Decide whether a plugin preset should be allowed to hide imported plugin names from `client.plugins`, or whether `client.plugins` should always expose the fully expanded resolved list. Recommendation for implementation: expose the resolved list for debuggability.
+- Export the public plugin factory from the package root.
+- Use `createPlugin(...)` in the implementation.
+- Put `seyfert` in `peerDependencies` with a v5-compatible range.
+- Put `seyfert` in `devDependencies` for local tests and type checks.
+- Publish only supported entry points through `exports`.
+- Avoid `seyfert/lib/...` imports in public examples.
+- Keep adapters as adapters unless they also expose a Seyfert plugin.
+
+Minimal metadata:
+
+```json
+{
+	"name": "seyfert-plugin-example",
+	"type": "module",
+	"exports": {
+		".": {
+			"types": "./lib/index.d.ts",
+			"import": "./lib/index.js",
+			"require": "./lib/index.js",
+			"default": "./lib/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"peerDependencies": {
+		"seyfert": ">=5.0.0-0"
+	},
+	"devDependencies": {
+		"seyfert": ">=5.0.0-0"
+	}
+}
+```
+
+## Extra Package Migration Notes
+
+The current `extra` plugin migrations should be used as practical examples:
+
+- `@slipher/logger`: exposes request logging through `ctx.logger`; keeps
+  `client.logger` as Seyfert's native logger; teardown restores installed hooks.
+- `@slipher/queues`: exposes one registry through `client.queues`, `ctx.queues`,
+  and the plugin factory return value; teardown closes registry access.
+- `@slipher/scheduler`: exposes one registry through `client.scheduler`,
+  `ctx.scheduler`, and the plugin factory return value; immediate memory tasks
+  are deferred until plugin setup.
+- `@slipher/cooldown`: exposes `client.cooldown` and `ctx.cooldown`; cache miss
+  normalization belongs in Seyfert `BaseResource`, not in the cooldown package.
+
+## Do Not Document As Shipped Yet
+
+These belong to future design work unless a later PR implements them:
+
+- `dependsOn`
+- `PluginEnforce`
+- `validate`
+- `client.services`
+- `api.client.decorate`
+- `api.services.expose`, `claim`, or `wrap`
+- `api.interaction.around`, `onRun`, `onAfterRun`, `onError`, `onDeny`
+- text command parser/resolver registration
+- command/component/modal factories or `onLoad`
+- gateway intent contributions
+- REST interceptors
+- cache resource registration
+- language registration
+- transformers
+- `ready` plugin lifecycle
+- `unsafe.patch`
+
+## Documentation Handoff
+
+The first public guide should focus on the implemented v5 MVP:
+
+1. Define plugin vs adapter vs utility.
+2. Create a minimal plugin with `createPlugin`.
+3. Add `client.*` and `ctx.*` using static maps.
+4. Register commands, components, modals, middlewares, and events.
+5. Explain `setup`, `teardown`, and `client.close()`.
+6. Show `Register` augmentation for cross-file types.
+7. Explain `imports` ordering.
+8. Show package `peerDependencies` and `exports`.
+9. Mention diagnostics and attributed errors.
+
+Avoid documenting proposal-only APIs until they are implemented.

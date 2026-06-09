@@ -1,201 +1,339 @@
-# Seyfert Plugin Guide Design
+# Seyfert Plugin Guide Handoff
 
-Date: 2026-06-08
+Date: 2026-06-09
 
 ## Goal
 
-Create a documentation guide that answers the question: "How do I make a Seyfert plugin?"
+Create a public documentation guide that answers:
 
-The guide itself will live in `/Users/socram/dev/seyfert-web`, but this design stays in the `extra` workspace so the ecosystem context remains next to the Slipher package work.
+> How do I make a Seyfert plugin?
 
-The guide should make `SeyfertPlugin` the primary mental model for third-party authors. Adapters and utilities should be documented as related ecosystem categories, not as the main plugin contract.
+The final user-facing guide belongs in the Seyfert website docs. This handoff
+stays in `extra` because the practical examples come from the Slipher package
+migrations.
 
-## Approved Approach
+Use `SeyfertPlugin` and `createPlugin` as the main mental model. Adapters and
+utilities should be documented as related ecosystem categories, not as the main
+answer.
 
-Use approach A: guide first, with a small contract-polish watchlist.
+## Current Contract To Document
 
-Do not build a starter template yet. Do not start by changing Seyfert core. If the guide exposes awkward public types or forces deep imports, capture that as follow-up work for a possible approach C in `seyfert`.
+Document only the implemented v5 plugin MVP:
 
-## Target Files
+- `createPlugin(...)`
+- `name`
+- `imports`
+- `client`
+- `ctx`
+- `register(api)`
+- `setup(client)`
+- `teardown(client)`
+- `api.commands.add`
+- `api.components.add`
+- `api.modals.add`
+- `api.events.on`
+- `api.events.onAny`
+- `api.events.emit`
+- `api.middlewares.add`
+- `api.options.set`
+- `Register` augmentation
+- `client.plugins.resolved`
+- `client.plugins.diagnostics`
+- `commandsLoaded`
+- `componentsLoaded`
 
-In `seyfert-web`:
+Do not document proposal-only APIs as shipped. In particular, do not include
+`dependsOn`, `PluginEnforce`, `client.services`, `api.client.decorate`,
+`interaction.around`, text command parser hooks, gateway intents, REST
+interceptors, service slots, command factories, `onLoad`, `ready`, or
+`unsafe.patch`.
 
-- Add `content/guide/recipes/plugins.mdx`
-- Update `content/guide/recipes/meta.json` to include `plugins`
-- Update `content/guide/tips/ecosystem.mdx` to link to the guide and clarify package categories
+## Target Navigation
 
-Do not put the final user-facing guide in `extra`.
+Recommended website shape:
 
-## Navigation Design
+- Add a recipe page titled `Creating Plugins`.
+- Keep the ecosystem/tips page as the package catalog and taxonomy page.
+- Link from the ecosystem page to the plugin authoring recipe.
 
-Add one recipe page:
-
-- Path: `/guide/recipes/plugins`
-- Title: `Creating Plugins`
-
-Keep `content/guide/tips/ecosystem.mdx` as the package catalog and taxonomy page. It should link to the recipe for people who want to author a plugin.
+The guide should be practical. It should not read like an API reference dump.
 
 ## Guide Outline
 
 ### 1. What a Seyfert plugin is
 
-Define a plugin as a `SeyfertPlugin` object passed to:
+Define a plugin as an object passed to:
 
 ```ts
 new Client({
-  plugins: [loggerPlugin()],
+	plugins: [loggerPlugin],
 });
 ```
 
 Explain that a plugin can contribute:
 
-- client option fragments through `options()`
-- context fields through `options.context`
-- scoped execution through `contextScopes`
-- defaults/hooks for commands, components, and modals
-- setup and teardown lifecycle
+- app-wide services through `client`
+- interaction helpers through `ctx`
+- commands, components, modals, events, middlewares, and option fragments through
+  `register(api)`
+- startup work through `setup`
+- cleanup work through `teardown`
 
-### 2. Minimal logger plugin
+### 2. Minimal plugin
 
-Use a simplified logger based on `tiramisulabs/extra#18`, not the full `@slipher/logger` package.
+Use a tiny plugin first:
 
-The example should teach Seyfert integration, not production-grade logging. It should show:
+```ts
+import { createPlugin } from 'seyfert';
 
-- a `loggerPlugin(options)` factory
-- `satisfies SeyfertPlugin` or a return type of `SeyfertPlugin`
-- `options.context` adding `ctx.logger`
-- `declare module "seyfert"` extending `ExtendContext`
+export const pingPlugin = createPlugin({
+	name: 'ping-plugin',
+	register(api) {
+		api.commands.add(PingCommand);
+	},
+});
+```
 
-### 3. Scope with `contextScopes`
+Show installation:
 
-Explain the difference between `context` and `contextScopes`:
+```ts
+import { Client } from 'seyfert';
+import { pingPlugin } from './ping-plugin';
 
-- `context` answers "how does `ctx.logger` appear?"
-- `contextScopes` answers "how can deep helpers use the current logger without receiving `ctx`?"
+const client = new Client({
+	plugins: [pingPlugin],
+});
+```
 
-Show a minimal `AsyncLocalStorage` based `useLogger()` example. Keep it small and focused on the contract.
+### 3. Client and context helpers
 
-### 4. Lifecycle
+Use a simplified logger as the main teaching example. It should teach Seyfert
+integration, not production-grade logging.
+
+```ts
+import { createPlugin } from 'seyfert';
+
+export function loggerPlugin() {
+	const root = new SimpleLogger();
+
+	return createPlugin({
+		name: 'example-logger',
+		client: {
+			exampleLogger: () => root,
+		},
+		ctx: {
+			logger: interaction => root.child({
+				interactionId: interaction.id,
+			}),
+		},
+		setup(client) {
+			client.exampleLogger.info('logger plugin ready');
+		},
+		teardown(client) {
+			return client.exampleLogger.flush();
+		},
+	});
+}
+```
+
+Explain the distinction:
+
+- `client` is for app-wide, stable resources.
+- `ctx` is for per-interaction helpers.
+- Factories are synchronous.
+- Async connection or cleanup belongs in `setup` and `teardown`.
+
+### 4. Register augmentation
+
+Show the app-level typing pattern:
+
+```ts
+const logger = loggerPlugin();
+
+declare module 'seyfert' {
+	interface Register {
+		plugins: [typeof logger];
+	}
+}
+
+const client = new Client({
+	plugins: [logger],
+});
+```
+
+Then show usage from a command:
+
+```ts
+export default class ProfileCommand extends Command {
+	async run(ctx: CommandContext) {
+		ctx.logger.info('profile opened');
+		ctx.client.exampleLogger.info('root logger is available');
+	}
+}
+```
+
+Use `Register`, not `ExtendContext`, as the main plugin typing story.
+
+### 5. Lifecycle
 
 Explain:
 
-- `setup(client)` initializes plugin resources during `client.start()`
-- `teardown(client)` flushes or closes resources through `client.close()`
-- setup is for runtime wiring, not type augmentation
+- `register(api)` is synchronous and declarative.
+- `setup(client)` runs during `client.start()` after plugin client properties
+  exist and before command/component loading completes.
+- `teardown(client)` runs through `client.close()` in reverse plugin order.
+- `setup` starts resources; `teardown` flushes, closes, or restores them.
 
-Show setup/teardown on the simplified logger:
+Mention that plugin commands and components are applied after disk-loaded ones,
+then `commandsLoaded` and `componentsLoaded` are emitted.
+
+### 6. Registering behavior
+
+Show one compact example with multiple contribution types:
 
 ```ts
-setup(client) {
-  root.info("logger plugin ready");
-}
+register(api) {
+	api.commands.add(HealthCommand);
+	api.components.add(RefreshButton);
+	api.modals.add(ProfileModal);
+	api.middlewares.add('audit', auditMiddleware, { global: true });
 
-teardown() {
-  return root.flush();
+	api.events.on('commandsLoaded', (commands, client) => {
+		client.logger.info({ count: commands.length }, 'commands loaded');
+	});
 }
 ```
 
-### 5. Packaging minimum
+Explain conflicts:
 
-Include only the package metadata needed for correct third-party ergonomics:
+- duplicate command names fail
+- duplicate static component/modal custom IDs fail
+- duplicate `client` or `ctx` keys fail
+- multiple event listeners are allowed
 
-- `seyfert` should be a peer dependency to avoid duplicate installs and broken module augmentation
-- `seyfert` can also be a dev dependency for local tests/builds
-- define an `exports` map for the root package entry
+### 7. Imports and ordering
 
-Example:
+Explain `imports` as "this plugin brings another plugin with it":
+
+```ts
+const storage = storagePlugin();
+
+export const economy = createPlugin({
+	name: 'economy',
+	imports: [storage],
+	client: {
+		economy: client => new EconomyService(client),
+	},
+});
+```
+
+Clarify:
+
+- imported plugins resolve before the importing plugin
+- the same plugin instance is deduped
+- different instances with the same name are conflicts
+- there is no shipped `dependsOn` or priority API yet
+
+### 8. Package metadata
+
+Include the minimum metadata needed for third-party ergonomics:
 
 ```json
 {
-  "name": "seyfert-plugin-example",
-  "type": "module",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    }
-  },
-  "peerDependencies": {
-    "seyfert": ">=4.3.0-0"
-  },
-  "devDependencies": {
-    "seyfert": ">=4.3.0-0",
-    "typescript": "^5.9.3"
-  }
+	"name": "seyfert-plugin-example",
+	"type": "module",
+	"exports": {
+		".": {
+			"types": "./lib/index.d.ts",
+			"import": "./lib/index.js",
+			"require": "./lib/index.js",
+			"default": "./lib/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"peerDependencies": {
+		"seyfert": ">=5.0.0-0"
+	},
+	"devDependencies": {
+		"seyfert": ">=5.0.0-0",
+		"typescript": "^5.9.3"
+	}
 }
 ```
 
-This is not a publishing guide. Avoid npm release flow, versioning strategy, CI, badges, or package-template details.
+This is not a publishing guide. Avoid npm release flow, versioning strategy, CI,
+badges, and package-template details.
 
-### 6. What is not a plugin
+### 9. What is not a plugin
 
 Add a short taxonomy:
 
-- `SeyfertPlugin`: adds behavior to the client, context, defaults, or lifecycle
-- Adapter: replaces infrastructure like cache, HTTP, REST, or gateway behavior
-- Utility: exports functions/classes consumed manually
+- `SeyfertPlugin`: adds behavior to the client, context, lifecycle, or runtime
+  registry.
+- Adapter: swaps infrastructure such as cache, HTTP, REST, gateway, or storage.
+- Utility: exports functions/classes consumed manually.
 
-Adapters can appear at the end as related extension points, but they should not be the main answer to "how do I make a plugin?"
+Adapters can appear at the end as related extension points, but they should not
+be the main answer to "how do I make a plugin?"
 
 ## Example Boundaries
 
 Include:
 
+- `createPlugin`
 - `LoggerPluginOptions`
 - minimal `SimpleLogger`
 - `loggerPlugin()`
+- `client.exampleLogger`
 - `ctx.logger`
-- `useLogger()`
-- `contextScopes`
-- `onAfterRun`
-- `onRunError`
+- `Register`
+- `commandsLoaded`
 - `setup`
 - `teardown`
-- `declare module "seyfert"` for `ExtendContext`
+- package `peerDependencies`
+- package `exports`
 
 Exclude:
 
 - Pino adapter
 - evlog adapter
 - wide-event theory
-- intercepting Seyfert internals
 - console formatting
 - full tests
 - npm publishing flow
 - cache resources
 - decorators
-- middleware examples
+- `contextScopes` as the main plugin path
+- `ExtendContext` as the main plugin typing path
+- internal `seyfert/lib/...` imports
 
-Mention that the real `@slipher/logger` can be more complete, but the guide intentionally stays smaller.
-
-## Contract Polish Watchlist
-
-While writing the guide, verify whether plugin authors can use only root `seyfert` imports.
-
-Known current state from local inspection:
-
-- `SeyfertPlugin` is exported through `seyfert`
-- `SeyfertPluginClient` is exported through `seyfert`
-- `ContextScope` appears available through client exports, but verify from consumer snippets
-- `SeyfertPlugin.options()` currently returns an internal fragment type, so helper authors may need to repeat the shape unless Seyfert exports a public fragment type
-
-Potential follow-up in `seyfert`:
-
-- export a public `SeyfertPluginOptionsFragment` or equivalent name
-- make `ContextScope` clearly root-importable in docs
-- avoid recommending `seyfert/lib/...` imports for plugin authoring
-
-Do not change runtime behavior unless writing the guide reveals a real limitation.
+Mention that real packages such as `@slipher/logger`, `@slipher/queues`,
+`@slipher/scheduler`, and `@slipher/cooldown` are more complete than the guide
+example.
 
 ## Source Evidence
 
-Local repo inspection found:
+The current implementation provides:
 
-- `seyfert` core already has `SeyfertPlugin` with `options`, `setup`, and `teardown`
-- plugin setup runs during `client.start()`
-- plugin teardown runs through `client.close()`
-- `context`, `contextScopes`, `globalMiddlewares`, and command/component/modal defaults compose in plugin order before user hooks
-- `extra#18` provides the real logger plugin reference, but the docs example should be smaller
+- root `createPlugin`
+- root `SeyfertPlugin`
+- root `SeyfertPluginApi`
+- root `SeyfertPluginClient`
+- root `Register`
+- static `client` and `ctx` maps
+- `imports` resolution
+- plugin diagnostics on `client.plugins`
+- `register(api)` contributions for commands, components, modals, events,
+  middlewares, and options
+- `setup` and `teardown`
+- `commandsLoaded` and `componentsLoaded`
+
+The migrated `extra` packages provide practical examples:
+
+- `@slipher/logger`: context logger lifecycle
+- `@slipher/queues`: shared registry exposed on client and context
+- `@slipher/scheduler`: setup-driven scheduler startup
+- `@slipher/cooldown`: cache-backed manager exposed on client and context
 
 ## Success Criteria
 
@@ -203,17 +341,17 @@ The final guide should let a third-party author answer:
 
 1. What object do I export?
 2. How does the user install it on `new Client({ plugins })`?
-3. How do I add `ctx.something`?
-4. How do I keep request-scoped state across helper calls?
+3. How do I add `client.something`?
+4. How do I add `ctx.something`?
 5. Where do setup and cleanup belong?
-6. What package metadata prevents duplicate Seyfert installs?
-7. When am I building an adapter or utility instead of a plugin?
+6. How do I register commands, components, modals, events, or middlewares?
+7. What package metadata prevents duplicate Seyfert installs?
+8. When am I building an adapter or utility instead of a plugin?
 
-## Out of Scope
+## Out Of Scope
 
-- Implementing the final guide in this design step
+- Implementing the final website guide in this design step
 - Creating a starter package
-- Updating `extra` package READMEs
 - Publishing anything
-- Changing `@slipher/logger`
-- Changing `seyfert` core before the guide identifies a concrete contract gap
+- Updating every `extra` package README
+- Documenting proposal-only APIs as shipped
