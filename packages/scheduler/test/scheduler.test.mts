@@ -302,7 +302,7 @@ describe('scheduler', () => {
 		);
 	});
 
-	test('emits scheduled before running an immediate memory task', async () => {
+	test('defers an immediate memory task until setup after emitting scheduled', async () => {
 		const croner = createFakeCroner();
 		const registry = createScheduler({
 			driver: memory({ croner: croner.factory }),
@@ -325,6 +325,11 @@ describe('scheduler', () => {
 			},
 			{ runImmediately: true },
 		);
+
+		await Promise.resolve();
+		assert.deepEqual(events, ['scheduled']);
+
+		await registry.setup({ initialized: true });
 		await completed;
 
 		assert.deepEqual(events, ['scheduled', 'started', 'runner']);

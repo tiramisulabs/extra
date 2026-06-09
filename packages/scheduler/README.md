@@ -42,6 +42,12 @@ const schedulerPlugin = scheduler({
 	tasks: [MaintenanceTasks],
 });
 
+declare module 'seyfert' {
+	interface Register {
+		plugins: [typeof schedulerPlugin];
+	}
+}
+
 export const registry = schedulerPlugin.registry;
 export const client = new Client({
 	plugins: [schedulerPlugin],
@@ -161,6 +167,12 @@ const schedulerPlugin = scheduler({
 	}),
 	tasks: [MaintenanceTasks],
 });
+
+declare module 'seyfert' {
+	interface Register {
+		plugins: [typeof schedulerPlugin];
+	}
+}
 
 const client = new Client({
 	plugins: [schedulerPlugin],
