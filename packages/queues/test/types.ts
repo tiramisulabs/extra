@@ -1,5 +1,13 @@
 import type { QueueLike } from '@slipher/types';
-import type { Client, CommandContext, HttpClient, Register, UsingClient, WorkerClient } from 'seyfert';
+import {
+	type Client,
+	type CommandContext,
+	definePlugins,
+	type HttpClient,
+	type Register,
+	type UsingClient,
+	type WorkerClient,
+} from 'seyfert';
 import {
 	type Awaitable,
 	type JobNameOf,
@@ -39,14 +47,15 @@ declare const httpClient: HttpClient;
 declare const workerClient: WorkerClient;
 declare const client: UsingClient;
 const queuesPlugin = queues({ driver: memory() });
+const plugins = definePlugins(queuesPlugin);
 
 declare module 'seyfert' {
 	interface Register {
-		plugins: [typeof queuesPlugin];
+		plugins: typeof plugins;
 	}
 }
 
-expectType<Register>({ plugins: [queuesPlugin] });
+expectType<Register>({ plugins });
 expectType<QueuesRegistry>(commandContext.queues);
 expectType<QueuesRegistry | undefined>(concreteClient.queues);
 expectType<QueuesRegistry | undefined>(httpClient.queues);

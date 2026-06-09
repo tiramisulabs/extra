@@ -30,7 +30,7 @@ pnpm add bullmq
 Declare queues with `RegisteredQueues`. Named jobs use a `job` discriminant; that field is type-only and becomes BullMQ's native job name.
 
 ```ts
-import { Client } from 'seyfert';
+import { Client, definePlugins } from 'seyfert';
 import {
 	OnQueueEvent,
 	OnWorkerEvent,
@@ -86,16 +86,17 @@ const queuesPlugin = queues({
 	}),
 	processors: [AudioProcessor],
 });
+const plugins = definePlugins(queuesPlugin);
 
 declare module 'seyfert' {
 	interface Register {
-		plugins: [typeof queuesPlugin];
+		plugins: typeof plugins;
 	}
 }
 
 export const registry = queuesPlugin.registry;
 export const client = new Client({
-	plugins: [queuesPlugin],
+	plugins,
 });
 ```
 
@@ -141,8 +142,9 @@ Each `@Processor()` class has exactly one `@Process()` handler. Switch on `job.n
 ```ts
 // index.ts
 const queuesPlugin = queues({ driver: memory(), processors: [AudioProcessor] });
+const plugins = definePlugins(queuesPlugin);
 export const registry = queuesPlugin.registry;
-export const client = new Client({ plugins: [queuesPlugin] });
+export const client = new Client({ plugins });
 
 // services/media.ts
 import { registry } from '../index';
