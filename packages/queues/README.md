@@ -87,6 +87,12 @@ const queuesPlugin = queues({
 	processors: [AudioProcessor],
 });
 
+declare module 'seyfert' {
+	interface Register {
+		plugins: [typeof queuesPlugin];
+	}
+}
+
 export const registry = queuesPlugin.registry;
 export const client = new Client({
 	plugins: [queuesPlugin],

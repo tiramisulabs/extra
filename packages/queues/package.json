@@ -11,6 +11,15 @@
 	],
 	"main": "./lib/index.js",
 	"types": "./lib/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./lib/index.d.ts",
+			"import": "./lib/index.js",
+			"require": "./lib/index.js",
+			"default": "./lib/index.js"
+		},
+		"./package.json": "./package.json"
+	},
 	"scripts": {
 		"dev": "tsc --watch",
 		"build": "pnpm --filter @slipher/internal build && tsc && node ../../scripts/vendor-internal.mjs queues",
@@ -23,7 +32,7 @@
 	},
 	"peerDependencies": {
 		"bullmq": "^5.0.0",
-		"seyfert": ">=4.3.0-0"
+		"seyfert": ">=5.0.0-0"
 	},
 	"peerDependenciesMeta": {
 		"bullmq": {

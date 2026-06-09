@@ -1084,6 +1084,7 @@ export class PersistentQueueDriver implements QueueDriver {
 export class QueuesRegistry {
 	private readonly queues = new Map<string, Queue<unknown, unknown>>();
 	private readonly queueOptionFingerprints = new Map<string, string | undefined>();
+	private closed = false;
 
 	constructor(private readonly options: CreateQueuesOptions) {
 		if (options.processors?.length) this.register({ processors: options.processors });
@@ -1105,9 +1106,11 @@ export class QueuesRegistry {
 		else await Promise.all([...this.queues.values()].map(queue => queue.close()));
 		this.queues.clear();
 		this.queueOptionFingerprints.clear();
+		this.closed = true;
 	}
 
 	async setup(client?: QueuesClientLike): Promise<void> {
+		if (this.closed) throw new Error('@slipher/queues registry is closed.');
 		await this.options.driver.setup?.(client);
 	}
 
@@ -1150,6 +1153,7 @@ export class QueuesRegistry {
 		name: string,
 		options?: QueueOptions<TData, TResult>,
 	): Queue<TData, TResult> {
+		if (this.closed) throw new Error('@slipher/queues registry is closed.');
 		const mergedOptions = { ...this.options.queueDefaults, ...(options ?? {}) };
 		const fingerprint = fingerprintQueueOptions(mergedOptions);
 		const existing = this.queues.get(name);
@@ -1186,6 +1190,9 @@ export function createQueues(options: CreateQueuesOptions): QueuesRegistry {
 
 export function queues(options: QueuesPluginOptions): QueuesPlugin {
 	const registry = createQueues(options);
+	let installedClient: QueuesClientLike | undefined;
+	let hadPreviousQueues = false;
+	let previousQueues: QueuesRegistry | undefined;
 
 	return createPlugin({
 		name: '@slipher/queues',
@@ -1197,11 +1204,21 @@ export function queues(options: QueuesPluginOptions): QueuesPlugin {
 			queues: () => registry,
 		},
 		setup: async client => {
+			installedClient = client;
+			hadPreviousQueues = Object.prototype.hasOwnProperty.call(client, 'queues');
+			previousQueues = client.queues;
 			installQueues(client, registry);
 			await registry.setup(client);
 		},
-		teardown: async () => {
-			await registry.close();
+		teardown: async client => {
+			try {
+				await registry.close();
+			} finally {
+				restoreQueues(client ?? installedClient, registry, hadPreviousQueues, previousQueues);
+				installedClient = undefined;
+				hadPreviousQueues = false;
+				previousQueues = undefined;
+			}
 		},
 	});
 }
@@ -1212,6 +1229,20 @@ export function installQueues<TClient extends QueuesClientLike>(
 ): QueuesRegistry {
 	if (client.queues !== registry) client.queues = registry;
 	return registry;
+}
+
+function restoreQueues(
+	client: QueuesClientLike | undefined,
+	registry: QueuesRegistry,
+	hadPreviousQueues: boolean,
+	previousQueues: QueuesRegistry | undefined,
+): void {
+	if (!client || client.queues !== registry) return;
+	if (hadPreviousQueues) {
+		client.queues = previousQueues;
+	} else {
+		delete client.queues;
+	}
 }
 
 export function memory(options: QueueOptions = {}): QueueDriver {

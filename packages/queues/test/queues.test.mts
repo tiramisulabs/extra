@@ -307,6 +307,17 @@ describe('queues plugin', () => {
 		assert.equal((client as { queues?: QueuesRegistry }).queues, plugin.registry);
 		await plugin.teardown?.(client);
 	});
+
+	test('teardown uninstalls the registry from the client and closes captured registry access', async () => {
+		const plugin = queues({ driver: memory() });
+		const client = {};
+
+		await plugin.setup?.(client);
+		await plugin.teardown?.(client);
+
+		assert.equal((client as { queues?: QueuesRegistry }).queues, undefined);
+		assert.throws(() => plugin.registry.get('welcome'), /closed/);
+	});
 });
 
 describe('persistent queues', () => {
