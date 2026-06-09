@@ -21,18 +21,19 @@ Requires Seyfert v5.
 ## Plugin Setup
 
 ```ts
-import { Client } from 'seyfert';
+import { Client, definePlugins } from 'seyfert';
 import { cooldown } from '@slipher/cooldown';
 
 const cooldownPlugin = cooldown();
+const plugins = definePlugins(cooldownPlugin);
 
 const client = new Client({
-	plugins: [cooldownPlugin],
+	plugins,
 });
 
 declare module 'seyfert' {
 	interface Register {
-		plugins: [typeof cooldownPlugin];
+		plugins: typeof plugins;
 	}
 }
 ```

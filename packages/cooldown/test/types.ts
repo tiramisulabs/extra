@@ -10,6 +10,7 @@ import type {
 	UsingClient,
 	WorkerClient,
 } from 'seyfert';
+import { definePlugins } from 'seyfert';
 import { type CooldownManager, type CooldownProps, cooldown } from '../src';
 
 declare function expectType<T>(value: T): void;
@@ -23,14 +24,15 @@ declare const subCommand: SubCommand;
 declare const contextMenuCommand: ContextMenuCommand;
 declare const entryPointCommand: EntryPointCommand;
 const cooldownPlugin = cooldown();
+const plugins = definePlugins(cooldownPlugin);
 
 declare module 'seyfert' {
 	interface Register {
-		plugins: [typeof cooldownPlugin];
+		plugins: typeof plugins;
 	}
 }
 
-expectType<Register>({ plugins: [cooldownPlugin] });
+expectType<Register>({ plugins });
 expectType<CooldownManager>(context.cooldown);
 expectType<CooldownManager | undefined>(client.cooldown);
 expectType<CooldownManager | undefined>(httpClient.cooldown);
