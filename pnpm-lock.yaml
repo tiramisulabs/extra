@@ -40,8 +40,8 @@ importers:
         specifier: ^25.0.10
         version: 25.0.10
       seyfert:
-        specifier: 4.3.1-dev-27001512861.0
-        version: 4.3.1-dev-27001512861.0
+        specifier: github:tiramisulabs/seyfert#socram/plugin-contract-polish-spike
+        version: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/79efe05a376acdc28bf3488e36cff4f536211ce6
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -691,8 +691,9 @@ packages:
   seyfert@4.1.0:
     resolution: {integrity: sha512-SIv40+9oOT8gNXIbtaQhxZWN/PuVP1vF2yU+ZM2XkmRwirqmonATHlNF2o/pCGsX9hudNuD59HJfHEixOmESlw==}
 
-  seyfert@4.3.1-dev-27001512861.0:
-    resolution: {integrity: sha512-lbbyC7DSVSIIq8nU/Wcb4m0kokpodXzqkt13WWefjK2zPMoH5S2y5bRLOnyYuodNW5zbO25KGqvvlPWPoz+zQw==}
+  seyfert@https://codeload.github.com/tiramisulabs/seyfert/tar.gz/79efe05a376acdc28bf3488e36cff4f536211ce6:
+    resolution: {tarball: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/79efe05a376acdc28bf3488e36cff4f536211ce6}
+    version: 4.3.0
 
   siginfo@2.0.0:
     resolution: {integrity: sha512-ybx0WO1/8bSBLEWXZvEd7gMW3Sn3JFlW3TvX1nREbDLRNQNaeNN8WK0meBwPdAaOI7TtRRRJn/Es1zhrrCHu7g==}
@@ -1266,7 +1267,7 @@ snapshots:
 
   seyfert@4.1.0: {}
 
-  seyfert@4.3.1-dev-27001512861.0: {}
+  seyfert@https://codeload.github.com/tiramisulabs/seyfert/tar.gz/79efe05a376acdc28bf3488e36cff4f536211ce6: {}
 
   siginfo@2.0.0: {}
 

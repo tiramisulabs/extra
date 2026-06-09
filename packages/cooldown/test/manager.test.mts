@@ -645,15 +645,18 @@ describe('cooldown() plugin', () => {
 		assert.equal(plugin.name, '@slipher/cooldown');
 		assert.ok(plugin.manager instanceof CooldownManager);
 		assert.equal(typeof plugin.setup, 'function');
-		assert.equal(typeof plugin.options, 'function');
+		assert.equal(typeof plugin.client?.cooldown, 'function');
+		assert.equal(typeof plugin.ctx?.cooldown, 'function');
+		assert.equal(typeof plugin.register, 'function');
 
-		const options = plugin.options();
-		const ctx = options.context();
-		assert.equal(ctx.cooldown, plugin.manager);
+		assert.equal(plugin.client?.cooldown({} as never), plugin.manager);
+		assert.equal(plugin.ctx?.cooldown({} as never, {} as never), plugin.manager);
 
-		const scope = options.contextScopes[0];
+		const optionFragments: { contextScopes?: readonly unknown[] }[] = [];
+		plugin.register?.({ options: { set: fragment => optionFragments.push(fragment) } } as never);
+		const scope = optionFragments[0]?.contextScopes?.[0];
 		assert.equal(typeof scope, 'function');
-		await scope(commandContext(), async () => {
+		await (scope as (context: AnyContext, run: () => unknown) => unknown)(commandContext(), async () => {
 			assert.equal(useCooldownContext().fullCommandName, 'testCommand');
 		});
 	});

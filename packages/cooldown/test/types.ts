@@ -1,5 +1,16 @@
-import type { Client, CommandContext, HttpClient, UsingClient, WorkerClient } from 'seyfert';
-import type { CooldownManager } from '../src';
+import type {
+	Client,
+	Command,
+	CommandContext,
+	ContextMenuCommand,
+	EntryPointCommand,
+	HttpClient,
+	Register,
+	SubCommand,
+	UsingClient,
+	WorkerClient,
+} from 'seyfert';
+import { type CooldownManager, type CooldownProps, cooldown } from '../src';
 
 declare function expectType<T>(value: T): void;
 declare const context: CommandContext;
@@ -7,9 +18,25 @@ declare const client: Client;
 declare const httpClient: HttpClient;
 declare const workerClient: WorkerClient;
 declare const usingClient: UsingClient;
+declare const command: Command;
+declare const subCommand: SubCommand;
+declare const contextMenuCommand: ContextMenuCommand;
+declare const entryPointCommand: EntryPointCommand;
+const cooldownPlugin = cooldown();
 
-expectType<CooldownManager | undefined>(context.cooldown);
+declare module 'seyfert' {
+	interface Register {
+		plugins: [typeof cooldownPlugin];
+	}
+}
+
+expectType<Register>({ plugins: [cooldownPlugin] });
+expectType<CooldownManager>(context.cooldown);
 expectType<CooldownManager | undefined>(client.cooldown);
 expectType<CooldownManager | undefined>(httpClient.cooldown);
 expectType<CooldownManager | undefined>(workerClient.cooldown);
 expectType<CooldownManager | undefined>(usingClient.cooldown);
+expectType<CooldownProps | undefined>(command.cooldown);
+expectType<CooldownProps | undefined>(subCommand.cooldown);
+expectType<CooldownProps | undefined>(contextMenuCommand.cooldown);
+expectType<CooldownProps | undefined>(entryPointCommand.cooldown);

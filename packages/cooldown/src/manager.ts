@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { AnyContext } from 'seyfert';
+import { type AnyContext, type ContextScope, createPlugin, type SeyfertPlugin } from 'seyfert';
 import { CacheFrom, type ReturnCache } from 'seyfert/lib/cache';
 import type { BaseClient } from 'seyfert/lib/client/base';
 import type { UsingClient } from 'seyfert/lib/commands';
@@ -12,7 +12,7 @@ export type CooldownTargetResolver = (context: AnyContext) => string | undefined
 
 const cooldownContexts = new AsyncLocalStorage<AnyContext>();
 
-export type CooldownContextScope = <T>(context: unknown, run: () => Awaitable<T>) => Awaitable<T>;
+export type CooldownContextScope = ContextScope;
 
 export interface CooldownContextOptions {
 	use?: keyof UsesProps;
@@ -156,7 +156,8 @@ export class CooldownManager {
 
 	attach(client: BaseClient): this {
 		this._client = client;
-		(client as BaseClient & { cooldown: CooldownManager }).cooldown = this;
+		const target = client as BaseClient & { cooldown?: CooldownManager };
+		if (target.cooldown !== this) target.cooldown = this;
 		this._resource = new CooldownResource(client.cache, client as unknown as UsingClient);
 		return this;
 	}
@@ -537,13 +538,9 @@ export interface CooldownPluginOptions {
 	manager?: CooldownManager;
 }
 
-export interface CooldownPlugin {
+export interface CooldownPlugin extends SeyfertPlugin<{ cooldown: CooldownManager }, { cooldown: CooldownManager }> {
 	name: '@slipher/cooldown';
 	manager: CooldownManager;
-	options(): {
-		context(): { cooldown: CooldownManager };
-		contextScopes: readonly CooldownContextScope[];
-	};
 	setup(client: BaseClient): void;
 }
 
@@ -551,19 +548,20 @@ export function cooldown(options: CooldownPluginOptions = {}): CooldownPlugin {
 	const manager = options.manager ?? new CooldownManager();
 	const contextScope: CooldownContextScope = (context, run) => runWithCooldownContext(context as AnyContext, run);
 
-	return {
+	return createPlugin({
 		name: '@slipher/cooldown',
 		manager,
-		options() {
-			return {
-				context() {
-					return { cooldown: manager };
-				},
-				contextScopes: [contextScope],
-			};
+		client: {
+			cooldown: () => manager,
+		},
+		ctx: {
+			cooldown: () => manager,
+		},
+		register(api) {
+			api.options.set({ contextScopes: [contextScope] });
 		},
 		setup(client) {
 			manager.attach(client);
 		},
-	};
+	});
 }

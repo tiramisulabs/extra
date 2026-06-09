@@ -1,27 +1,7 @@
 import type {} from 'seyfert';
-import type { CooldownManager, CooldownProps } from './manager';
+import type { CooldownProps } from './manager';
 
 declare module 'seyfert' {
-	interface Client<Ready extends boolean = boolean> {
-		cooldown?: CooldownManager;
-	}
-
-	interface HttpClient {
-		cooldown?: CooldownManager;
-	}
-
-	interface WorkerClient<Ready extends boolean = boolean> {
-		cooldown?: CooldownManager;
-	}
-
-	interface ExtendContext {
-		cooldown?: CooldownManager;
-	}
-
-	interface UsingClient {
-		cooldown?: CooldownManager;
-	}
-
 	interface Command {
 		cooldown?: CooldownProps;
 	}

@@ -24,9 +24,17 @@ Requires Seyfert v5.
 import { Client } from 'seyfert';
 import { cooldown } from '@slipher/cooldown';
 
+const cooldownPlugin = cooldown();
+
 const client = new Client({
-	plugins: [cooldown()],
+	plugins: [cooldownPlugin],
 });
+
+declare module 'seyfert' {
+	interface Register {
+		plugins: [typeof cooldownPlugin];
+	}
+}
 ```
 
 The plugin attaches a `CooldownManager` to the client (`client.cooldown`) and exposes it on every interaction context (`ctx.cooldown`). Storage is backed by `client.cache`.
@@ -211,5 +219,3 @@ To share a custom resolver bucket with other commands, pass `group` through the 
 )
 class HeavyCommand extends Command { /* ... */ }
 ```
-
-
