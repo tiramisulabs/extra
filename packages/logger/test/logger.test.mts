@@ -263,15 +263,18 @@ describe('logger plugin', () => {
 		assert.equal(adapter.entries[0].data.command, 'admin ban');
 	});
 
-	test('setup installs the logger on Seyfert subsystems and flushes on teardown', async () => {
+	test('setup installs the logger on Seyfert subsystems and cleans up on teardown', async () => {
 		const adapter = new RecordingAdapter();
 		const plugin = logger({ adapter });
+		const previousCommandsLogger = { previous: 'commands' };
+		const previousCacheInternalLogger = { previous: 'cache-internal' };
+		const previousCustomizer = (SeyfertLogger as unknown as { __callback?: unknown }).__callback;
 		const client = {
-			commands: {},
+			commands: { logger: previousCommandsLogger },
 			components: {},
 			events: {},
 			langs: {},
-			cache: {},
+			cache: { __logger__: previousCacheInternalLogger },
 		};
 
 		await plugin.setup?.(client);
@@ -291,6 +294,14 @@ describe('logger plugin', () => {
 
 		await plugin.teardown?.(client);
 		assert.equal(adapter.flushes, 1);
+		assert.equal(client.commands.logger, previousCommandsLogger);
+		assert.equal('logger' in client.components, false);
+		assert.equal('logger' in client.events, false);
+		assert.equal('logger' in client.langs, false);
+		assert.equal('logger' in client.cache, false);
+		assert.equal(client.cache.__logger__, previousCacheInternalLogger);
+		assert.equal((SeyfertLogger as unknown as { __callback?: unknown }).__callback, previousCustomizer);
+		assert.throws(() => useLogger(), /before the @slipher\/logger plugin is set up/);
 	});
 
 	test('useLogger works outside an interaction scope, immediate and as a one-off wide event', async () => {

@@ -88,6 +88,23 @@ const loggerScope = new AsyncLocalStorage<WideEventLogger>();
 
 let installedRootLogger: RootLogger | undefined;
 
+interface InstalledLoggerProperty {
+	target: Record<string, unknown>;
+	key: 'logger' | '__logger__';
+	hadOwnValue: boolean;
+	previousValue: unknown;
+}
+
+interface LoggerInstallation {
+	previousRootLogger: RootLogger | undefined;
+	properties: InstalledLoggerProperty[];
+	restoreInternalLogger: () => void;
+}
+
+interface SeyfertLoggerInstallOptions {
+	installInternalLogger?: boolean;
+}
+
 const defaultContextConfig: Record<AutoContextField, boolean> = {
 	kind: true,
 	command: true,
@@ -135,6 +152,7 @@ export async function withLoggerScope<T>(data: LogData, run: () => Awaitable<T>)
 export function logger(options: LoggerPluginOptions = {}): LoggerPlugin {
 	const root = createLogger(options);
 	const contextConfig = resolveContextConfig(options.context);
+	let installation: LoggerInstallation | undefined;
 
 	return createPlugin({
 		name: '@slipher/logger',
@@ -145,10 +163,16 @@ export function logger(options: LoggerPluginOptions = {}): LoggerPlugin {
 			api.options.set(createLoggerPluginOptions(root, contextConfig));
 		},
 		setup: client => {
-			installSeyfertLogger(client, root);
-			installSeyfertInternalLogger(root);
+			installation?.restoreInternalLogger();
+			restoreSeyfertLogger(root, installation);
+			installation = installSeyfertLoggerForPlugin(client, root);
 		},
-		teardown: () => root.flush(),
+		teardown: async () => {
+			await root.flush();
+			installation?.restoreInternalLogger();
+			restoreSeyfertLogger(root, installation);
+			installation = undefined;
+		},
 	});
 }
 
@@ -168,14 +192,42 @@ export function installSeyfertLogger<TClient extends SeyfertClientLike>(
 	client: TClient,
 	rootLogger: RootLogger,
 ): RootLogger {
-	installedRootLogger = rootLogger;
-	setLoggerOn(client.commands, rootLogger);
-	setLoggerOn(client.components, rootLogger);
-	setLoggerOn(client.events, rootLogger);
-	setLoggerOn(client.langs, rootLogger);
-	setLoggerOn(client.cache, rootLogger);
-	setInternalLoggerOn(client.cache, rootLogger);
+	installSeyfertLoggerForPlugin(client, rootLogger, { installInternalLogger: false });
 	return rootLogger;
+}
+
+function installSeyfertLoggerForPlugin<TClient extends SeyfertClientLike>(
+	client: TClient,
+	rootLogger: RootLogger,
+	options: SeyfertLoggerInstallOptions = {},
+): LoggerInstallation {
+	const properties: InstalledLoggerProperty[] = [];
+	const previousRootLogger = installedRootLogger;
+	installedRootLogger = rootLogger;
+	setLoggerOn(client.commands, rootLogger, properties);
+	setLoggerOn(client.components, rootLogger, properties);
+	setLoggerOn(client.events, rootLogger, properties);
+	setLoggerOn(client.langs, rootLogger, properties);
+	setLoggerOn(client.cache, rootLogger, properties);
+	setInternalLoggerOn(client.cache, rootLogger, properties);
+	return {
+		previousRootLogger,
+		properties,
+		restoreInternalLogger: options.installInternalLogger === false ? noop : installSeyfertInternalLogger(rootLogger),
+	};
+}
+
+function restoreSeyfertLogger(rootLogger: RootLogger, installation: LoggerInstallation | undefined): void {
+	if (installedRootLogger === rootLogger) installedRootLogger = installation?.previousRootLogger;
+
+	for (const property of installation?.properties ?? []) {
+		if (property.target[property.key] !== rootLogger) continue;
+		if (property.hadOwnValue) {
+			property.target[property.key] = property.previousValue;
+		} else {
+			delete property.target[property.key];
+		}
+	}
 }
 
 export function extractSeyfertLogContext(context: unknown, config: AutoContextConfig = {}): SeyfertLogContext {
@@ -352,15 +404,37 @@ function withError(data: LogData, error: unknown): LogData {
 	return { ...data, error };
 }
 
-function setLoggerOn(target: unknown, rootLogger: RootLogger): void {
+function setLoggerOn(target: unknown, rootLogger: RootLogger, properties: InstalledLoggerProperty[] = []): void {
 	if (!target || typeof target !== 'object') return;
-	(target as { logger?: RootLogger }).logger = rootLogger;
+	setLoggerProperty(target, 'logger', rootLogger, properties);
 }
 
-function setInternalLoggerOn(target: unknown, rootLogger: RootLogger): void {
+function setInternalLoggerOn(
+	target: unknown,
+	rootLogger: RootLogger,
+	properties: InstalledLoggerProperty[] = [],
+): void {
 	if (!target || typeof target !== 'object') return;
-	(target as { __logger__?: RootLogger }).__logger__ = rootLogger;
+	setLoggerProperty(target, '__logger__', rootLogger, properties);
 }
+
+function setLoggerProperty(
+	target: object,
+	key: 'logger' | '__logger__',
+	rootLogger: RootLogger,
+	properties: InstalledLoggerProperty[],
+): void {
+	const record = target as Record<string, unknown>;
+	properties.push({
+		target: record,
+		key,
+		hadOwnValue: Object.prototype.hasOwnProperty.call(record, key),
+		previousValue: record[key],
+	});
+	record[key] = rootLogger;
+}
+
+function noop(): void {}
 
 type SeyfertCustomizeLoggerCallback = (
 	self: SeyfertLogger,
@@ -368,10 +442,10 @@ type SeyfertCustomizeLoggerCallback = (
 	args: unknown[],
 ) => unknown[] | undefined;
 
-function installSeyfertInternalLogger(root: RootLogger): void {
+function installSeyfertInternalLogger(root: RootLogger): () => void {
 	const previous = (SeyfertLogger as unknown as { __callback?: SeyfertCustomizeLoggerCallback }).__callback;
 
-	SeyfertLogger.customize((self, level, args) => {
+	const callback: SeyfertCustomizeLoggerCallback = (self, level, args) => {
 		const mappedLevel = mapSeyfertLogLevel(level);
 		void root.writeEntry({
 			level: mappedLevel,
@@ -383,7 +457,14 @@ function installSeyfertInternalLogger(root: RootLogger): void {
 
 		previous?.(self, level, args);
 		return undefined;
-	});
+	};
+
+	SeyfertLogger.customize(callback);
+
+	return () => {
+		const loggerConstructor = SeyfertLogger as unknown as { __callback?: SeyfertCustomizeLoggerCallback };
+		if (loggerConstructor.__callback === callback) loggerConstructor.__callback = previous;
+	};
 }
 
 function buildSeyfertInternalLogData(self: SeyfertLogger, args: readonly unknown[]): LogData {

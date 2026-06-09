@@ -137,6 +137,7 @@ logger({ context: { shardId: true, channelId: false } });
 
 In a command/component/modal handler you already have `ctx.logger`. Everywhere else — helpers, services, event handlers, startup — use **`useLogger()`**. It always returns a usable logger; what it does depends on where you call it:
 
+- `client.logger` remains Seyfert's own logger. This plugin does not replace it with a wide-event logger.
 - **Inside an interaction scope** it returns that interaction's wide event — `add()` enriches the same final event as `ctx.logger`, and level methods (`info`/`warn`/…) emit immediately.
 - **Outside any scope** it returns a fresh root-backed logger — level methods log immediately wherever you are, and you can build a one-off wide event by starting it, `add()`-ing context, then `emit()`-ing.
 
@@ -179,7 +180,7 @@ No `emit()` is called anywhere — when `run()` returns, the plugin emits one wi
 
 ## Adapters
 
-An adapter decides where records go. The default is the console adapter; swap it for Pino or evlog to feed an existing pipeline. Those two are optional peer dependencies — install the one you use (`pnpm add pino` or `pnpm add evlog`). On field collisions, data from `add()` and level methods wins over bindings.
+An adapter decides where records go. The default is the console adapter; swap it for Pino or evlog to feed an existing pipeline. Pino support wraps the instance you provide; evlog is an optional peer dependency because the adapter imports it. Install the one you use (`pnpm add pino` or `pnpm add evlog`). On field collisions, data from `add()` and level methods wins over bindings.
 
 > **Redaction belongs to the sink.** The console adapter does **not** redact. Configure redaction in your runtime/collector, in your Pino instance, or in evlog's `initLogger()`. evlog's built-in patterns (`creditCard`, `email`, `jwt`, …) do **not** cover Discord bot tokens — add a pattern for those.
 
