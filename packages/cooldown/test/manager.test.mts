@@ -33,6 +33,7 @@ function commandContext(overrides: Record<string, unknown> = {}) {
 }
 
 class AtomicMemoryAdapter extends MemoryAdapter {
+	readonly supportsAtomicCooldowns = true;
 	evalCalls = 0;
 
 	async eval(_script: string, keys: string[], args: string[]) {
@@ -65,6 +66,15 @@ class AtomicMemoryAdapter extends MemoryAdapter {
 		this.addToRelationship(namespace, memberKey);
 		this.patch(hashKey, { interval, remaining });
 		return [1, 0, now, limit, remaining, 0];
+	}
+}
+
+class EvalOnlyMemoryAdapter extends MemoryAdapter {
+	evalCalls = 0;
+
+	async eval() {
+		this.evalCalls++;
+		throw new Error('eval should not be used without an explicit cooldown atomic opt-in');
 	}
 }
 
@@ -392,7 +402,7 @@ describe('CooldownManager — check / consume / remaining / reset', () => {
 		assert.equal(manager.resource.get('ping:user:u1'), undefined);
 	});
 
-	test('consume uses an atomic adapter path when eval is available', async () => {
+	test('consume uses an atomic adapter path when the adapter opts in', async () => {
 		const adapter = new AtomicMemoryAdapter();
 		client.cache = new Cache(0, adapter, {}, client);
 		manager = new CooldownManager(client);
@@ -408,6 +418,21 @@ describe('CooldownManager — check / consume / remaining / reset', () => {
 		assert.equal(third.allowed, false);
 		assert.equal(third.reason, 'rate_limited');
 		assert.equal((adapter.get('cooldowns.ping:user:u1') as CooldownData | null)?.remaining, 0);
+	});
+
+	test('consume does not use eval without an explicit atomic opt-in', async () => {
+		const adapter = new EvalOnlyMemoryAdapter();
+		client.cache = new Cache(0, adapter, {}, client);
+		manager = new CooldownManager(client);
+
+		const result = await manager.consume({ name: 'ping', target: 'u1' });
+
+		assert.ok(result);
+		assert.equal(result.allowed, true);
+		assert.equal(result.remainingUses, 1);
+		assert.equal(adapter.evalCalls, 0);
+		assert.equal((adapter.get('cooldowns.ping:user:u1') as CooldownData | null)?.remaining, 1);
+		assert.equal(adapter.contains('cooldowns', 'ping:user:u1'), true);
 	});
 
 	test('atomic adapter path does not overspend under concurrent consumes', async () => {

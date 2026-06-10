@@ -124,7 +124,8 @@ type AtomicCooldownResult = [
 	reasonCode: number,
 ];
 
-interface AtomicCooldownAdapter {
+export interface AtomicCooldownAdapter {
+	supportsAtomicCooldowns: true;
 	eval<T = unknown>(script: string, keys: string[], args: string[]): Awaitable<T>;
 }
 
@@ -347,7 +348,9 @@ export class CooldownManager {
 
 	private getAtomicAdapter(): AtomicCooldownAdapter | undefined {
 		const adapter = this.resource.adapter as Partial<AtomicCooldownAdapter>;
-		return typeof adapter.eval === 'function' ? (adapter as AtomicCooldownAdapter) : undefined;
+		return adapter.supportsAtomicCooldowns === true && typeof adapter.eval === 'function'
+			? (adapter as AtomicCooldownAdapter)
+			: undefined;
 	}
 
 	private consumeAtomic(
