@@ -95,6 +95,36 @@ describe('memory queues', () => {
 		await registry.close();
 	});
 
+	test('close stops pending memory jobs from processing after active work settles', async () => {
+		let releaseFirst!: () => void;
+		const firstBlocked = new Promise<void>(resolve => {
+			releaseFirst = resolve;
+		});
+		const processed: string[] = [];
+		const registry = createQueues({ driver: memory() });
+		const queue = registry.get('welcome', { concurrency: 1 });
+
+		queue.process(async job => {
+			processed.push(job.data.userId);
+			if (processed.length === 1) await firstBlocked;
+			return `done:${job.data.userId}`;
+		});
+
+		await queue.add({ userId: 'first' });
+		await queue.add({ userId: 'second' });
+		await flushQueueEvents();
+
+		queue.close();
+		releaseFirst();
+		await flushQueueEvents();
+
+		assert.deepEqual(processed, ['first']);
+		assert.equal(queue.counts().completed, 1);
+		assert.equal(queue.counts().waiting, 1);
+
+		await registry.close();
+	});
+
 	test('runs higher priority ready jobs before lower priority jobs', async () => {
 		const processed: string[] = [];
 		let now = 1_000;
@@ -259,6 +289,34 @@ describe('decorated queues', () => {
 		assert.deepEqual(processed, ['send:hi@example.com']);
 		assert.deepEqual(events, ['sent:hi@example.com']);
 		assert.deepEqual(workerEvents, ['send']);
+
+		await registry.close();
+	});
+
+	test('@Process handlers run with the processor instance as this', async () => {
+		class MailProcessor {
+			prefix = 'sent';
+
+			handle(job: QueueJobOf<'mail'>) {
+				return `${this.prefix}:${job.data.email}`;
+			}
+		}
+
+		Processor('mail')(MailProcessor);
+		Process()(MailProcessor.prototype, 'handle');
+
+		const registry = createQueues({ driver: memory(), processors: [MailProcessor] });
+		const queue = registry.get('mail');
+		const outcome = Promise.race([
+			waitForEvent(queue, 'completed').then(payload => ({ result: payload.result, type: 'completed' as const })),
+			waitForEvent(queue, 'failed').then(payload => ({ error: payload.error, type: 'failed' as const })),
+		]);
+
+		await queue.add('send', { email: 'hi@example.com' });
+		const result = await outcome;
+
+		if (result.type === 'failed') assert.fail(`Expected completed job, got failed: ${String(result.error)}`);
+		assert.equal(result.result, 'sent:hi@example.com');
 
 		await registry.close();
 	});

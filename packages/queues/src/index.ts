@@ -543,6 +543,8 @@ export class MemoryQueue<TData = unknown, TResult = unknown>
 	}
 
 	close(): void {
+		this.running = false;
+		this.processor = undefined;
 		this.clearTimer();
 		this.removeAllListeners();
 	}
@@ -1052,6 +1054,8 @@ export class PersistentQueue<TData = unknown, TResult = unknown>
 export class PersistentQueueDriver implements QueueDriver {
 	private readonly bullmq: BullMQModuleLike;
 	private readonly queues = new Map<string, PersistentQueue<unknown, unknown>>();
+	private setupClient?: QueuesClientLike;
+	private setupComplete = false;
 
 	constructor(private readonly options: PersistentQueueOptions = {}) {
 		this.bullmq = options.bullmq ?? loadBullMQ();
@@ -1068,16 +1072,21 @@ export class PersistentQueueDriver implements QueueDriver {
 
 		const queue = new PersistentQueue<TData, TResult>(name, this.bullmq, this.options, options);
 		this.queues.set(name, queue as PersistentQueue<unknown, unknown>);
+		if (this.setupComplete) queue.setup(this.setupClient);
 		return queue;
 	}
 
 	setup(client?: QueuesClientLike): void {
 		for (const queue of this.queues.values()) queue.setup(client);
+		this.setupClient = client;
+		this.setupComplete = true;
 	}
 
 	async close(): Promise<void> {
 		await Promise.all([...this.queues.values()].map(queue => queue.close()));
 		this.queues.clear();
+		this.setupClient = undefined;
+		this.setupComplete = false;
 	}
 }
 
@@ -1145,7 +1154,7 @@ export class QueuesRegistry {
 		}
 
 		queue.process(job => {
-			return handler(job as QueueJob<unknown, unknown>);
+			return handler.call(instance, job as QueueJob<unknown, unknown>);
 		});
 	}
 
