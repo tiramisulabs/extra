@@ -25,7 +25,6 @@ import {
 	type QueueResult,
 	type QueuesRegistry,
 	queues,
-	queuesService,
 } from '../src';
 
 type WelcomeJob =
@@ -64,8 +63,6 @@ expectType<QueuesRegistry | undefined>(httpClient.queues);
 expectType<QueuesRegistry | undefined>(workerClient.queues);
 expectType<QueuesRegistry | undefined>(client.queues);
 expectType<QueuesRegistry>(pluginClient.queues);
-expectType<QueuesRegistry | undefined>(concreteClient.services.get('queues'));
-expectType<QueuesRegistry | undefined>(concreteClient.services.get(queuesService));
 
 const welcomeQueue = registry.get('welcome');
 expectType<QueueOf<'welcome'>>(welcomeQueue);

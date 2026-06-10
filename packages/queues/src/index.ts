@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 import type { DurationInput } from '@slipher/internal';
 import { isAmbiguousQueueAddArgs, parseDuration, queueAddAmbiguityMessage } from '@slipher/internal';
-import { createPlugin, createServiceKey, type SeyfertPlugin } from 'seyfert';
+import { createPlugin, type SeyfertPlugin } from 'seyfert';
 
 export type { DurationInput } from '@slipher/internal';
 export { InvalidDurationError } from '@slipher/internal';
@@ -192,14 +192,6 @@ export interface QueuesPlugin extends SeyfertPlugin<{ queues: QueuesRegistry }, 
 	registry: QueuesRegistry;
 	setup?(client: QueuesClientLike): Awaitable<void>;
 	teardown?(client: QueuesClientLike): Awaitable<void>;
-}
-
-export const queuesService = createServiceKey<QueuesRegistry>('queues');
-
-declare module 'seyfert' {
-	interface RegisteredPluginServices {
-		queues: QueuesRegistry;
-	}
 }
 
 export interface QueuesClientLike {
@@ -1210,9 +1202,6 @@ export function queues(options: QueuesPluginOptions): QueuesPlugin {
 		},
 		ctx: {
 			queues: () => registry,
-		},
-		register(api) {
-			api.services.set(queuesService, registry);
 		},
 		setup: async client => {
 			installedClient = client;
