@@ -13,7 +13,6 @@ import {
 	type LoggerPlugin,
 	type LoggerPluginOptionsFragment,
 	logger,
-	loggerService,
 	type RootLogger,
 	runInLoggerScope,
 	useLogger,
@@ -64,21 +63,14 @@ function commandContext(loggerInstance: WideEventLogger) {
 
 function getLoggerPluginOptions(plugin: LoggerPlugin): LoggerPluginOptionsFragment {
 	const fragments: LoggerPluginOptionsFragment[] = [];
-	const services = new Map<unknown, unknown>();
 	plugin.register?.({
 		options: {
 			set(fragment) {
 				fragments.push(fragment as LoggerPluginOptionsFragment);
 			},
 		},
-		services: {
-			set(key, value) {
-				services.set(key, value);
-			},
-		},
 	} as SeyfertPluginApi);
 
-	if (!services.has(loggerService)) throw new Error('Logger plugin did not register a service.');
 	const fragment = fragments[0];
 	if (!fragment) throw new Error('Logger plugin did not register options.');
 	return fragment;
