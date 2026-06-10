@@ -8,7 +8,6 @@ import {
 	type CooldownProps,
 	CooldownType,
 	cooldown as cooldownPlugin,
-	cooldownService,
 	runWithCooldownContext,
 	useCooldownContext,
 } from '../src';
@@ -654,12 +653,7 @@ describe('cooldown() plugin', () => {
 		assert.equal(plugin.ctx?.cooldown({} as never, {} as never), plugin.manager);
 
 		const optionFragments: { contextScopes?: readonly unknown[] }[] = [];
-		const services = new Map<unknown, unknown>();
-		plugin.register?.({
-			options: { set: fragment => optionFragments.push(fragment) },
-			services: { set: (key, value) => services.set(key, value) },
-		} as never);
-		assert.equal(services.get(cooldownService), plugin.manager);
+		plugin.register?.({ options: { set: fragment => optionFragments.push(fragment) } } as never);
 		const scope = optionFragments[0]?.contextScopes?.[0];
 		assert.equal(typeof scope, 'function');
 		await (scope as (context: AnyContext, run: () => unknown) => unknown)(commandContext(), async () => {

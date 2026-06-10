@@ -13,7 +13,7 @@ import type {
 	WorkerClient,
 } from 'seyfert';
 import { definePlugins } from 'seyfert';
-import { type CooldownManager, type CooldownProps, cooldown, cooldownService } from '../src';
+import { type CooldownManager, type CooldownProps, cooldown } from '../src';
 
 declare function expectType<T>(value: T): void;
 declare const context: CommandContext;
@@ -40,8 +40,6 @@ expectType<CooldownManager | undefined>(httpClient.cooldown);
 expectType<CooldownManager | undefined>(workerClient.cooldown);
 expectType<CooldownManager | undefined>(usingClient.cooldown);
 expectType<CooldownManager>(pluginClient.cooldown);
-expectType<CooldownManager | undefined>(client.services.get('cooldown'));
-expectType<CooldownManager | undefined>(client.services.get(cooldownService));
 expectType<CooldownProps | undefined>(command.cooldown);
 expectType<CooldownProps | undefined>(subCommand.cooldown);
 expectType<CooldownProps | undefined>(contextMenuCommand.cooldown);
