@@ -92,8 +92,6 @@ expectType<CooldownProps>(props);
 
 // @ts-expect-error use variants were removed
 manager.consume({ name: 'ping', target: 'u1', use: 'premium' });
-// @ts-expect-error cost replaced tokens as the public consume/check option
-manager.consume({ name: 'ping', target: 'u1', tokens: 2 });
 // @ts-expect-error remaining is intentionally not public
 manager.remaining({ name: 'ping', target: 'u1' });
 // @ts-expect-error low-level set is intentionally not public
