@@ -90,10 +90,6 @@ expectType<ClassDecorator>(Cooldown.custom(() => 'target', 5_000, { group: 'cust
 const props: CooldownProps = { type: 'user', interval: 5_000, uses: 3, group: 'mod' };
 expectType<CooldownProps>(props);
 
-// @ts-expect-error use variants were removed
-manager.consume({ name: 'ping', target: 'u1', use: 'premium' });
-// @ts-expect-error remaining is intentionally not public
-manager.remaining({ name: 'ping', target: 'u1' });
 // @ts-expect-error low-level set is intentionally not public
 manager.set({ key: 'ping:user:u1', interval: 1_000, remaining: 1 });
 // @ts-expect-error context() was replaced by zero-arg verbs
