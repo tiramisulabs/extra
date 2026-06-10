@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { type AnyContext, type ContextScope, createPlugin, type SeyfertPlugin } from 'seyfert';
+import { type AnyContext, type ContextScope, createPlugin, createServiceKey, type SeyfertPlugin } from 'seyfert';
 import { CacheFrom, type ReturnCache } from 'seyfert/lib/cache';
 import type { BaseClient } from 'seyfert/lib/client/base';
 import type { UsingClient } from 'seyfert/lib/commands';
@@ -13,6 +13,7 @@ export type CooldownTargetResolver = (context: AnyContext) => string | undefined
 const cooldownContexts = new AsyncLocalStorage<AnyContext>();
 
 export type CooldownContextScope = ContextScope;
+export const cooldownService = createServiceKey<CooldownManager>('cooldown');
 
 export interface CooldownContextOptions {
 	use?: keyof UsesProps;
@@ -558,6 +559,7 @@ export function cooldown(options: CooldownPluginOptions = {}): CooldownPlugin {
 			cooldown: () => manager,
 		},
 		register(api) {
+			api.services.set(cooldownService, manager);
 			api.options.set({ contextScopes: [contextScope] });
 		},
 		setup(client) {

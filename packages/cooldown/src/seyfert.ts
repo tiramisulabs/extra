@@ -1,7 +1,11 @@
 import type {} from 'seyfert';
-import type { CooldownProps } from './manager';
+import type { CooldownManager, CooldownProps } from './manager';
 
 declare module 'seyfert' {
+	interface RegisteredPluginServices {
+		cooldown: CooldownManager;
+	}
+
 	interface Command {
 		cooldown?: CooldownProps;
 	}
