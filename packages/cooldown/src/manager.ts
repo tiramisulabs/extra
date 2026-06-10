@@ -92,6 +92,9 @@ export type CooldownResult =
 			retryAfter: null;
 	  });
 
+export type CooldownMiddleware = MiddlewareContext<CooldownResult | undefined, AnyContext>;
+export type CooldownMiddlewares<Name extends string = 'cooldown'> = Record<Name, CooldownMiddleware>;
+
 export interface CooldownCheckOptions {
 	name: string;
 	target: string;
@@ -600,10 +603,7 @@ function resolveCooldownMiddleware(input: CooldownPluginOptions['middleware'], m
 	};
 }
 
-function createCooldownMiddleware(
-	manager: CooldownManager,
-	options: CooldownMiddlewareOptions,
-): MiddlewareContext<CooldownResult | undefined, AnyContext> {
+function createCooldownMiddleware(manager: CooldownManager, options: CooldownMiddlewareOptions): CooldownMiddleware {
 	return async ({ next, stop }) => {
 		const result = await manager.context();
 		if (!result || result.allowed) return next(result);

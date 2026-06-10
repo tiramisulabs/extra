@@ -1,12 +1,10 @@
 import type {
-	AnyContext,
 	Client,
 	Command,
 	CommandContext,
 	ContextMenuCommand,
 	EntryPointCommand,
 	HttpClient,
-	MiddlewareContext,
 	PluginUsingClient,
 	Register,
 	RegisteredMiddlewares,
@@ -16,7 +14,13 @@ import type {
 	WorkerClient,
 } from 'seyfert';
 import { definePlugins, Middlewares } from 'seyfert';
-import { type CooldownManager, type CooldownProps, type CooldownResult, cooldown } from '../src';
+import {
+	type CooldownManager,
+	type CooldownMiddleware,
+	type CooldownMiddlewares,
+	type CooldownProps,
+	cooldown,
+} from '../src';
 
 declare function expectType<T>(value: T): void;
 declare const context: CommandContext;
@@ -34,6 +38,7 @@ const plugins = definePlugins(cooldownPlugin);
 
 declare module 'seyfert' {
 	interface Register extends RegisterPlugins<typeof plugins> {}
+	interface RegisteredMiddlewares extends CooldownMiddlewares<'commandCooldown'> {}
 }
 
 expectType<Register>({ plugins });
@@ -47,5 +52,7 @@ expectType<CooldownProps | undefined>(command.cooldown);
 expectType<CooldownProps | undefined>(subCommand.cooldown);
 expectType<CooldownProps | undefined>(contextMenuCommand.cooldown);
 expectType<CooldownProps | undefined>(entryPointCommand.cooldown);
-expectType<MiddlewareContext<CooldownResult | undefined, AnyContext>>({} as RegisteredMiddlewares['cooldown']);
+expectType<CooldownMiddleware>({} as RegisteredMiddlewares['cooldown']);
+expectType<CooldownMiddleware>({} as RegisteredMiddlewares['commandCooldown']);
 expectType<ReturnType<typeof Middlewares>>(Middlewares(['cooldown']));
+expectType<ReturnType<typeof Middlewares>>(Middlewares(['commandCooldown']));

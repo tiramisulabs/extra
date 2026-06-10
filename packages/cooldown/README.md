@@ -70,7 +70,15 @@ You can also register it globally:
 const cooldownPlugin = cooldown({ middleware: { global: true } });
 ```
 
-Pass `middleware.message` to customize the stop message. If you pass a custom `middleware.name`, that runtime name is not inferred automatically by TypeScript; augment `RegisteredMiddlewares` in your app if you want the custom name to be typed.
+Pass `middleware.message` to customize the stop message. If you pass a custom `middleware.name`, that runtime name is not inferred automatically by TypeScript; use `CooldownMiddlewares` to augment `RegisteredMiddlewares` in your app:
+
+```ts
+import type { CooldownMiddlewares } from '@slipher/cooldown';
+
+declare module 'seyfert' {
+	interface RegisteredMiddlewares extends CooldownMiddlewares<'commandCooldown'> {}
+}
+```
 
 ## Declaring a Cooldown
 

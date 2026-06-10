@@ -1,9 +1,8 @@
-import type { AnyContext, MiddlewareContext } from 'seyfert';
-import type { CooldownProps, CooldownResult } from './manager';
+import type { CooldownMiddleware, CooldownProps } from './manager';
 
 declare module 'seyfert' {
 	interface RegisteredMiddlewares {
-		cooldown: MiddlewareContext<CooldownResult | undefined, AnyContext>;
+		cooldown: CooldownMiddleware;
 	}
 
 	interface Command {
