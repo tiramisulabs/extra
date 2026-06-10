@@ -4,11 +4,21 @@ import {
 	type CommandContext,
 	definePlugins,
 	type HttpClient,
+	type PluginUsingClient,
 	type Register,
+	type RegisterPlugins,
 	type UsingClient,
 	type WorkerClient,
 } from 'seyfert';
-import { createScheduler, memory, persistent, type ScheduledTask, type SchedulerRegistry, scheduler } from '../src';
+import {
+	createScheduler,
+	memory,
+	persistent,
+	type ScheduledTask,
+	type SchedulerRegistry,
+	scheduler,
+	schedulerService,
+} from '../src';
 
 declare function expectType<T>(value: T): void;
 declare const context: CommandContext;
@@ -16,13 +26,12 @@ declare const client: Client;
 declare const httpClient: HttpClient;
 declare const workerClient: WorkerClient;
 declare const usingClient: UsingClient;
+declare const pluginClient: PluginUsingClient<typeof plugins>;
 const schedulerPlugin = scheduler({ driver: memory() });
 const plugins = definePlugins(schedulerPlugin);
 
 declare module 'seyfert' {
-	interface Register {
-		plugins: typeof plugins;
-	}
+	interface Register extends RegisterPlugins<typeof plugins> {}
 }
 
 expectType<Register>({ plugins });
@@ -31,6 +40,9 @@ expectType<SchedulerRegistry | undefined>(client.scheduler);
 expectType<SchedulerRegistry | undefined>(httpClient.scheduler);
 expectType<SchedulerRegistry | undefined>(workerClient.scheduler);
 expectType<SchedulerRegistry | undefined>(usingClient.scheduler);
+expectType<SchedulerRegistry>(pluginClient.scheduler);
+expectType<SchedulerRegistry | undefined>(client.services.get('scheduler'));
+expectType<SchedulerRegistry | undefined>(client.services.get(schedulerService));
 
 createScheduler({ driver: memory() });
 scheduler({ driver: memory() });
