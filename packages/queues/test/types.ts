@@ -4,7 +4,9 @@ import {
 	type CommandContext,
 	definePlugins,
 	type HttpClient,
+	type PluginUsingClient,
 	type Register,
+	type RegisterPlugins,
 	type UsingClient,
 	type WorkerClient,
 } from 'seyfert';
@@ -23,6 +25,7 @@ import {
 	type QueueResult,
 	type QueuesRegistry,
 	queues,
+	queuesService,
 } from '../src';
 
 type WelcomeJob =
@@ -46,13 +49,12 @@ declare const concreteClient: Client;
 declare const httpClient: HttpClient;
 declare const workerClient: WorkerClient;
 declare const client: UsingClient;
+declare const pluginClient: PluginUsingClient<typeof plugins>;
 const queuesPlugin = queues({ driver: memory() });
 const plugins = definePlugins(queuesPlugin);
 
 declare module 'seyfert' {
-	interface Register {
-		plugins: typeof plugins;
-	}
+	interface Register extends RegisterPlugins<typeof plugins> {}
 }
 
 expectType<Register>({ plugins });
@@ -61,6 +63,9 @@ expectType<QueuesRegistry | undefined>(concreteClient.queues);
 expectType<QueuesRegistry | undefined>(httpClient.queues);
 expectType<QueuesRegistry | undefined>(workerClient.queues);
 expectType<QueuesRegistry | undefined>(client.queues);
+expectType<QueuesRegistry>(pluginClient.queues);
+expectType<QueuesRegistry | undefined>(concreteClient.services.get('queues'));
+expectType<QueuesRegistry | undefined>(concreteClient.services.get(queuesService));
 
 const welcomeQueue = registry.get('welcome');
 expectType<QueueOf<'welcome'>>(welcomeQueue);

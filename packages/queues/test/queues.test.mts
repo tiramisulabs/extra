@@ -15,6 +15,7 @@ import {
 	type QueueRegistration,
 	type QueuesRegistry,
 	queues,
+	queuesService,
 } from '../src';
 
 type MailJob = { job: 'send'; email: string } | { job: 'digest'; email: string; window: 'daily' | 'weekly' };
@@ -298,12 +299,16 @@ describe('queues plugin', () => {
 		const plugin = queues({ driver: memory() });
 		const client = {};
 		const extension = { queues: plugin.ctx?.queues({}, client as never) };
+		const services = new Map<unknown, unknown>();
+
+		plugin.register?.({ services: { set: (key, value) => services.set(key, value) } } as never);
 
 		await plugin.setup?.(client);
 
 		assert.equal(plugin.name, '@slipher/queues');
 		assert.equal(typeof plugin.client?.queues, 'function');
 		assert.equal(extension.queues, plugin.registry);
+		assert.equal(services.get(queuesService), plugin.registry);
 		assert.equal((client as { queues?: QueuesRegistry }).queues, plugin.registry);
 		await plugin.teardown?.(client);
 	});
