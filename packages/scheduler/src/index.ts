@@ -1,7 +1,7 @@
 export { Cron, Interval } from './decorators';
 export { memory } from './drivers/memory';
 export { persistent } from './drivers/persistent';
-export { createScheduler, SchedulerRegistry, scheduler, schedulerService } from './manager';
+export { createScheduler, SchedulerRegistry, scheduler } from './manager';
 export { ScheduledTask } from './task';
 export type {
 	Awaitable,

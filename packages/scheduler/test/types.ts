@@ -10,15 +10,7 @@ import {
 	type UsingClient,
 	type WorkerClient,
 } from 'seyfert';
-import {
-	createScheduler,
-	memory,
-	persistent,
-	type ScheduledTask,
-	type SchedulerRegistry,
-	scheduler,
-	schedulerService,
-} from '../src';
+import { createScheduler, memory, persistent, type ScheduledTask, type SchedulerRegistry, scheduler } from '../src';
 
 declare function expectType<T>(value: T): void;
 declare const context: CommandContext;
@@ -41,8 +33,6 @@ expectType<SchedulerRegistry | undefined>(httpClient.scheduler);
 expectType<SchedulerRegistry | undefined>(workerClient.scheduler);
 expectType<SchedulerRegistry | undefined>(usingClient.scheduler);
 expectType<SchedulerRegistry>(pluginClient.scheduler);
-expectType<SchedulerRegistry | undefined>(client.services.get('scheduler'));
-expectType<SchedulerRegistry | undefined>(client.services.get(schedulerService));
 
 createScheduler({ driver: memory() });
 scheduler({ driver: memory() });

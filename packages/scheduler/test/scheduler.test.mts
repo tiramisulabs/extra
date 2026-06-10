@@ -10,7 +10,6 @@ import {
 	type SchedulerEventPayloads,
 	type SchedulerRegistry,
 	scheduler,
-	schedulerService,
 } from '../src';
 import { parseDuration } from '../src/duration';
 
@@ -248,9 +247,7 @@ describe('scheduler', () => {
 			tasks: [MaintenanceTasks],
 		});
 		const client: Record<string, unknown> = {};
-		const services = new Map<unknown, unknown>();
 
-		plugin.register?.({ services: { set: (key: unknown, value: unknown) => services.set(key, value) } } as never);
 		await plugin.setup?.(client);
 
 		const extension = { scheduler: plugin.ctx?.scheduler({} as never, client as never) };
@@ -259,7 +256,6 @@ describe('scheduler', () => {
 		assert.equal(typeof plugin.client?.scheduler, 'function');
 		assert.equal(client.scheduler, plugin.registry);
 		assert.equal(extension.scheduler, plugin.registry);
-		assert.equal(services.get(schedulerService), plugin.registry);
 		assert.deepEqual(
 			plugin.registry.list().map(task => task.id),
 			['heartbeat', 'daily'],

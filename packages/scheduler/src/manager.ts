@@ -1,4 +1,4 @@
-import { createPlugin, createServiceKey } from 'seyfert';
+import { createPlugin } from 'seyfert';
 import { type DurationInput, InvalidDurationError, parseDuration } from './duration';
 import { SchedulerEmitter } from './events';
 import { getTaskMetadata, instantiateTaskSource } from './metadata';
@@ -206,14 +206,6 @@ export function createScheduler(options: CreateSchedulerOptions) {
 	return new SchedulerRegistry(options);
 }
 
-export const schedulerService = createServiceKey<SchedulerRegistry>('scheduler');
-
-declare module 'seyfert' {
-	interface RegisteredPluginServices {
-		scheduler: SchedulerRegistry;
-	}
-}
-
 export function scheduler(options: CreateSchedulerOptions): SchedulerPlugin {
 	const registry = createScheduler(options);
 
@@ -225,9 +217,6 @@ export function scheduler(options: CreateSchedulerOptions): SchedulerPlugin {
 		},
 		ctx: {
 			scheduler: () => registry,
-		},
-		register(api) {
-			api.services.set(schedulerService, registry);
 		},
 		async setup(client) {
 			if (client.scheduler !== registry) client.scheduler = registry;
