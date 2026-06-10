@@ -1,0 +1,215 @@
+# @slipher/queues
+
+Typed job queues for Seyfert bots — produce jobs from anywhere, process them with decorated classes, on an in-memory driver or a BullMQ/Redis one.
+
+## How it works
+
+You declare each queue's shape in `RegisteredQueues`, then work with it from two sides:
+
+- **Producers** enqueue jobs with `ctx.queues.get(name).add(...)`, fully typed against the queue's payload.
+- **Processors** are `@Processor()` classes with a single `@Process()` handler that runs each job, plus optional `@OnQueueEvent` / `@OnWorkerEvent` listeners.
+
+A **driver** decides where jobs live: `memory()` runs them in the current process; `persistent()` runs them on BullMQ/Redis so they survive restarts and spread across workers — same API either way.
+
+Everything flows through one **registry**, exposed as `ctx.queues`, `client.queues`, and the plugin's `registry` (the same object), so you can produce jobs from a command, an event, or a plain service.
+
+## Install
+
+```sh
+pnpm add @slipher/queues
+```
+
+Requires Seyfert v5. Install BullMQ only when you want Redis-backed persistent queues:
+
+```sh
+pnpm add bullmq
+```
+
+## Use With Seyfert
+
+Declare queues with `RegisteredQueues`. Named jobs use a `job` discriminant; that field is type-only and becomes BullMQ's native job name.
+
+```ts
+import { Client, definePlugins } from 'seyfert';
+import {
+	OnQueueEvent,
+	OnWorkerEvent,
+	Process,
+	Processor,
+	type QueueJobOf,
+	type QueueRegistration,
+	memory,
+	queues,
+} from '@slipher/queues';
+
+// Discriminated union: the `audio` processor handles several named jobs,
+// each with its own payload, switched on the `job` field.
+type AudioJob =
+	| { job: 'transcode'; fileId: string; format: 'mp3' | 'ogg' }
+	| { job: 'concatenate'; fileIds: string[] };
+
+declare module '@slipher/queues' {
+	interface RegisteredQueues {
+		audio: QueueRegistration<AudioJob, string>;
+	}
+}
+
+@Processor('audio')
+class AudioProcessor {
+	@Process()
+	async handle(job: QueueJobOf<'audio'>) {
+		switch (job.name) {
+			case 'transcode':
+				return transcode(job.data.fileId, job.data.format);
+			case 'concatenate':
+				return concatenate(job.data.fileIds);
+		}
+	}
+
+	@OnWorkerEvent('active')
+	onActive({ job }: { job: QueueJobOf<'audio'> }) {
+		job.snapshot();
+	}
+
+	@OnQueueEvent('completed')
+	onCompleted({ job, result }: { job: QueueJobOf<'audio'>; result: string }) {
+		job.snapshot();
+		void result;
+	}
+}
+
+const queuesPlugin = queues({
+	driver: memory({
+		attempts: 3,
+		retryDelay: '5s',
+		concurrency: 4,
+	}),
+	processors: [AudioProcessor],
+});
+const plugins = definePlugins(queuesPlugin);
+
+declare module 'seyfert' {
+	interface Register {
+		plugins: typeof plugins;
+	}
+}
+
+export const registry = queuesPlugin.registry;
+export const client = new Client({
+	plugins,
+});
+```
+
+Produce jobs with the queue name, job name, and payload:
+
+```ts
+await ctx.queues.get('audio').add('concatenate', {
+	fileIds: ['a', 'b'],
+});
+
+await ctx.queues.get('audio').add(
+	'transcode',
+	{ fileId: 'file-2', format: 'ogg' },
+	{ attempts: 5, retryDelay: '10s' },
+);
+```
+
+Simple queues do not declare a `job` discriminant and use `add(data, options)`:
+
+```ts
+declare module '@slipher/queues' {
+	interface RegisteredQueues {
+		welcome: QueueRegistration<{ userId: string }>;
+	}
+}
+
+await ctx.queues.get('welcome').add({ userId: ctx.author.id });
+```
+
+`queue.add(name, payload, options)` uses the third argument to disambiguate named jobs. A call like `queue.add('send', { delay: '5s' })` is ambiguous because it can mean a string payload plus job options or a named job whose payload happens to look like job options. Slipher throws a descriptive `TypeError` instead of guessing; use `queue.add('send', { delay: '5s' }, {})` to force `name = 'send'`, or pass non-string data to `add(data, options)`.
+
+Each `@Processor()` class has exactly one `@Process()` handler. Switch on `job.name` for named-job queues. There is no framework-level per-name dispatch, so typos are caught by the typed producer surface instead of becoming `"Queue process not found"` retries at runtime.
+
+## Accessing The Plugin Without `ctx`
+
+| Where | How |
+| --- | --- |
+| Command, component, modal | `ctx.queues` |
+| Event | `entity.client.queues` |
+| Anywhere with the client at hand | `client.queues` |
+| Code with no client | capture the plugin `registry` |
+
+```ts
+// index.ts
+const queuesPlugin = queues({ driver: memory(), processors: [AudioProcessor] });
+const plugins = definePlugins(queuesPlugin);
+export const registry = queuesPlugin.registry;
+export const client = new Client({ plugins });
+
+// services/media.ts
+import { registry } from '../index';
+
+export function scheduleTranscode(fileId: string) {
+	return registry.get('audio').add('transcode', { fileId, format: 'mp3' });
+}
+```
+
+Avoid importing the exported `client` from processors or services that are loaded by `index.ts`; that creates a circular import. Capturing the registry at composition time keeps the service independent. The invariant is `ctx.queues === client.queues === queuesPlugin.registry`.
+
+## Events
+
+`@OnWorkerEvent(event)` is local to the process that ran the job. Use it for local cache updates or process-local instrumentation.
+
+`@OnQueueEvent(event)` is the queue/global channel. With `memory()` both decorators observe the same single-process queue. With `persistent()`, queue-level events are prepared for BullMQ `QueueEvents` and use one extra Redis connection per queue per replica.
+
+All listeners receive one object payload, matching `@slipher/scheduler`: `{ job }`, `{ job, result }`, `{ job, error }`, `{ job, error, delay }`, or `{}` for `idle`. Direct queue instances support both `on()` and `once()`.
+
+Listener errors are isolated. Throwing inside an event handler is reported through `reportListenerError` and never changes job state, retry counts, or whether later listeners run.
+
+```ts
+queues({
+	driver: memory({
+		reportListenerError(event, error) {
+			logger.error('queue listener failed', { event, error });
+		},
+	}),
+});
+```
+
+## Drivers
+
+The driver decides where jobs live — your queue and processor code stays the same, so you can swap drivers without touching anything else.
+
+`memory()` runs jobs in the current process and supports `delay`, `attempts`, `retryDelay`, `priority`, `concurrency`, and the lifecycle events `added`, `active`, `completed`, `failed`, `retrying`, and `idle`.
+
+`persistent()` runs them on BullMQ/Redis so they survive restarts and spread across workers:
+
+```ts
+import { persistent, queues } from '@slipher/queues';
+
+const queuesPlugin = queues({
+	driver: persistent({
+		connection: { host: '127.0.0.1', port: 6379 },
+		prefix: 'slipher',
+		defaultJobOptions: { removeOnComplete: true, attempts: 3 },
+	}),
+	processors: [AudioProcessor],
+});
+// add queuesPlugin to the client's `plugins: []`
+```
+
+`retryDelay` only matters when `attempts > 1` — if a queue or job sets `retryDelay` while attempts resolves to `1`, Slipher emits a `SLIPHER_QUEUE_RETRY_DELAY_NO_RETRIES` warning because no retry will be scheduled. Per-job options are the final `add()` argument:
+
+```ts
+await ctx.queues.get('audio').add('transcode', { fileId: 'file-1', format: 'mp3' }, { attempts: 3, retryDelay: '5s' });
+```
+
+Invalid duration strings throw `InvalidDurationError`, exported from `@slipher/queues` for `instanceof` checks.
+
+`client.close()` tears the queues down; wire it to your process signals:
+
+```ts
+process.on('SIGTERM', () => {
+	void client.close().then(() => process.exit(0));
+});
+```

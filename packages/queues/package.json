@@ -1,0 +1,49 @@
+{
+	"name": "@slipher/queues",
+	"version": "0.1.0",
+	"private": false,
+	"license": "MIT",
+	"publishConfig": {
+		"access": "public"
+	},
+	"files": [
+		"lib/**"
+	],
+	"main": "./lib/index.js",
+	"types": "./lib/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./lib/index.d.ts",
+			"import": "./lib/index.js",
+			"require": "./lib/index.js",
+			"default": "./lib/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"scripts": {
+		"dev": "tsc --watch",
+		"build": "pnpm --filter @slipher/internal build && tsc && node ../../scripts/vendor-internal.mjs queues",
+		"lint": "biome lint --write ./src ./test",
+		"format": "biome format --write ./src ./test",
+		"checkb": "biome check --write --no-errors-on-unmatched ./src ./test",
+		"typecheck": "pnpm --filter @slipher/internal build && tsc --noEmit --project ./test/tsconfig.json",
+		"test": "pnpm typecheck && vitest run --config ./test/vitest.config.mts ./test/",
+		"prepublishOnly": "pnpm build"
+	},
+	"peerDependencies": {
+		"bullmq": "^5.0.0",
+		"seyfert": ">=5.0.0-0"
+	},
+	"peerDependenciesMeta": {
+		"bullmq": {
+			"optional": true
+		}
+	},
+	"devDependencies": {
+		"@slipher/internal": "workspace:*",
+		"@slipher/types": "workspace:*",
+		"@types/node": "^25.0.10",
+		"seyfert": "github:tiramisulabs/seyfert#socram/plugin-contract-polish-spike",
+		"typescript": "^5.9.3"
+	}
+}

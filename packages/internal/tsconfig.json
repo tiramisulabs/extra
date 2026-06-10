@@ -1,0 +1,27 @@
+{
+	"compilerOptions": {
+		"module": "CommonJS",
+		"target": "ESNext",
+		"lib": ["ESNext"],
+		"moduleResolution": "node",
+		"types": ["node"],
+		"declaration": true,
+		"sourceMap": false,
+		"strict": true,
+		"esModuleInterop": true,
+		"noImplicitAny": true,
+		"strictNullChecks": true,
+		"strictFunctionTypes": true,
+		"noImplicitThis": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
+		"noImplicitReturns": true,
+		"noFallthroughCasesInSwitch": true,
+		"skipLibCheck": true,
+		"noErrorTruncation": true,
+		"rootDir": "./src",
+		"outDir": "./lib",
+		"stripInternal": true
+	},
+	"exclude": ["**/lib", "**/test"]
+}
