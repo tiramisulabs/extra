@@ -1,0 +1,63 @@
+{
+	"name": "@slipher/scheduler",
+	"version": "0.1.0",
+	"private": false,
+	"license": "MIT",
+	"publishConfig": {
+		"access": "public"
+	},
+	"files": [
+		"lib/**"
+	],
+	"main": "./lib/index.js",
+	"types": "./lib/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./lib/index.d.ts",
+			"import": "./lib/index.js",
+			"require": "./lib/index.js",
+			"default": "./lib/index.js"
+		},
+		"./drivers/memory": {
+			"types": "./lib/drivers/memory.d.ts",
+			"import": "./lib/drivers/memory.js",
+			"require": "./lib/drivers/memory.js",
+			"default": "./lib/drivers/memory.js"
+		},
+		"./drivers/persistent": {
+			"types": "./lib/drivers/persistent.d.ts",
+			"import": "./lib/drivers/persistent.js",
+			"require": "./lib/drivers/persistent.js",
+			"default": "./lib/drivers/persistent.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"scripts": {
+		"dev": "tsc --watch",
+		"build": "tsc",
+		"lint": "biome lint --write ./src ./test",
+		"format": "biome format --write ./src ./test",
+		"checkb": "biome check --write --no-errors-on-unmatched ./src ./test",
+		"typecheck": "tsc --noEmit --project ./test/tsconfig.json",
+		"test": "pnpm typecheck && vitest run --config ./test/vitest.config.mts ./test/",
+		"prepublish": "pnpm build"
+	},
+	"dependencies": {
+		"croner": "^9.1.0"
+	},
+	"peerDependencies": {
+		"bullmq": "^5.23.0",
+		"seyfert": ">=5.0.0-0"
+	},
+	"peerDependenciesMeta": {
+		"bullmq": {
+			"optional": true
+		}
+	},
+	"devDependencies": {
+		"@slipher/types": "workspace:*",
+		"@types/node": "^25.0.10",
+		"seyfert": "github:tiramisulabs/seyfert#socram/plugin-contract-polish-spike",
+		"typescript": "^5.9.3"
+	}
+}

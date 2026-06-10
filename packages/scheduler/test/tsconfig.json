@@ -1,0 +1,12 @@
+{
+	"extends": "../tsconfig.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"rootDir": ".."
+	},
+	"include": [
+		"./types.ts",
+		"./scheduler.test.mts"
+	],
+	"exclude": []
+}
