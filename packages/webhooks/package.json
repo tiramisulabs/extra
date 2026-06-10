@@ -18,6 +18,7 @@
 		"lint": "biome lint --write ./src",
 		"format": "biome format --write ./src",
 		"checkb": "biome check --write --no-errors-on-unmatched ./src",
+		"test": "vitest run ./test/",
 		"prepublish": "pnpm build"
 	},
 	"devDependencies": {
