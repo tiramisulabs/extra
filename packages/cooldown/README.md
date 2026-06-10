@@ -40,6 +40,38 @@ declare module 'seyfert' {
 
 The plugin attaches a `CooldownManager` to the client (`client.cooldown`) and exposes it on every interaction context (`ctx.cooldown`). Storage is backed by `client.cache`.
 
+### Optional middleware
+
+If you prefer Seyfert middlewares over a manual `ctx.cooldown.context()` call in each command, enable the middleware:
+
+```ts
+const cooldownPlugin = cooldown({ middleware: true });
+```
+
+The default middleware name is `cooldown`, and the package registers it in Seyfert's `RegisteredMiddlewares`, so this is typed:
+
+```ts
+import { Command, type CommandContext, Declare, Middlewares } from 'seyfert';
+import { Cooldown } from '@slipher/cooldown';
+
+@Declare({ name: 'ping', description: 'Ping' })
+@Cooldown.user(5_000)
+@Middlewares(['cooldown'])
+export default class PingCommand extends Command {
+	async run(ctx: CommandContext) {
+		await ctx.write({ content: 'Pong!' });
+	}
+}
+```
+
+You can also register it globally:
+
+```ts
+const cooldownPlugin = cooldown({ middleware: { global: true } });
+```
+
+Pass `middleware.message` to customize the stop message. If you pass a custom `middleware.name`, that runtime name is not inferred automatically by TypeScript; augment `RegisteredMiddlewares` in your app if you want the custom name to be typed.
+
 ## Declaring a Cooldown
 
 The simplest way is the `@Cooldown` class decorator, with typed shortcuts per scope.

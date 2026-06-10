@@ -1,5 +1,12 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { type AnyContext, type ContextScope, createPlugin, type SeyfertPlugin } from 'seyfert';
+import {
+	type AnyContext,
+	type ContextScope,
+	createPlugin,
+	Formatter,
+	type MiddlewareContext,
+	type SeyfertPlugin,
+} from 'seyfert';
 import { CacheFrom, type ReturnCache } from 'seyfert/lib/cache';
 import type { BaseClient } from 'seyfert/lib/client/base';
 import type { UsingClient } from 'seyfert/lib/commands';
@@ -17,6 +24,14 @@ export type CooldownContextScope = ContextScope;
 export interface CooldownContextOptions {
 	use?: keyof UsesProps;
 	guildId?: string;
+}
+
+export type CooldownMiddlewareMessage = string | ((result: CooldownResult) => string);
+
+export interface CooldownMiddlewareOptions {
+	global?: boolean;
+	message?: CooldownMiddlewareMessage;
+	name?: string;
 }
 
 export function runWithCooldownContext<T>(context: AnyContext, run: () => Awaitable<T>) {
@@ -536,6 +551,7 @@ export class CooldownManager {
 
 export interface CooldownPluginOptions {
 	manager?: CooldownManager;
+	middleware?: boolean | CooldownMiddlewareOptions;
 }
 
 export interface CooldownPlugin extends SeyfertPlugin<{ cooldown: CooldownManager }, { cooldown: CooldownManager }> {
@@ -547,6 +563,7 @@ export interface CooldownPlugin extends SeyfertPlugin<{ cooldown: CooldownManage
 export function cooldown(options: CooldownPluginOptions = {}): CooldownPlugin {
 	const manager = options.manager ?? new CooldownManager();
 	const contextScope: CooldownContextScope = (context, run) => runWithCooldownContext(context as AnyContext, run);
+	const middleware = resolveCooldownMiddleware(options.middleware, manager);
 
 	return createPlugin({
 		name: '@slipher/cooldown',
@@ -558,10 +575,48 @@ export function cooldown(options: CooldownPluginOptions = {}): CooldownPlugin {
 			cooldown: () => manager,
 		},
 		register(api) {
+			if (middleware) {
+				api.middlewares.add(
+					middleware.name,
+					middleware.run,
+					middleware.global === undefined ? undefined : { global: middleware.global },
+				);
+			}
 			api.options.set({ contextScopes: [contextScope] });
 		},
 		setup(client) {
 			manager.attach(client);
 		},
 	});
+}
+
+function resolveCooldownMiddleware(input: CooldownPluginOptions['middleware'], manager: CooldownManager) {
+	if (!input) return undefined;
+	const options = input === true ? {} : input;
+	return {
+		global: options.global,
+		name: options.name ?? 'cooldown',
+		run: createCooldownMiddleware(manager, options),
+	};
+}
+
+function createCooldownMiddleware(
+	manager: CooldownManager,
+	options: CooldownMiddlewareOptions,
+): MiddlewareContext<CooldownResult | undefined, AnyContext> {
+	return async ({ next, stop }) => {
+		const result = await manager.context();
+		if (!result || result.allowed) return next(result);
+		return stop(resolveCooldownMiddlewareMessage(result, options.message));
+	};
+}
+
+function resolveCooldownMiddlewareMessage(
+	result: CooldownResult & { allowed: false },
+	message?: CooldownMiddlewareMessage,
+) {
+	if (typeof message === 'function') return message(result);
+	if (message) return message;
+	if (result.reason === 'over_capacity') return 'This command cannot run with its current cooldown settings.';
+	return `This command is cooling down. Try again ${Formatter.timestamp(result.retryAfter)}.`;
 }

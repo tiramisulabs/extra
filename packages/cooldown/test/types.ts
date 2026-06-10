@@ -1,19 +1,22 @@
 import type {
+	AnyContext,
 	Client,
 	Command,
 	CommandContext,
 	ContextMenuCommand,
 	EntryPointCommand,
 	HttpClient,
+	MiddlewareContext,
 	PluginUsingClient,
 	Register,
+	RegisteredMiddlewares,
 	RegisterPlugins,
 	SubCommand,
 	UsingClient,
 	WorkerClient,
 } from 'seyfert';
-import { definePlugins } from 'seyfert';
-import { type CooldownManager, type CooldownProps, cooldown } from '../src';
+import { definePlugins, Middlewares } from 'seyfert';
+import { type CooldownManager, type CooldownProps, type CooldownResult, cooldown } from '../src';
 
 declare function expectType<T>(value: T): void;
 declare const context: CommandContext;
@@ -44,3 +47,5 @@ expectType<CooldownProps | undefined>(command.cooldown);
 expectType<CooldownProps | undefined>(subCommand.cooldown);
 expectType<CooldownProps | undefined>(contextMenuCommand.cooldown);
 expectType<CooldownProps | undefined>(entryPointCommand.cooldown);
+expectType<MiddlewareContext<CooldownResult | undefined, AnyContext>>({} as RegisteredMiddlewares['cooldown']);
+expectType<ReturnType<typeof Middlewares>>(Middlewares(['cooldown']));
