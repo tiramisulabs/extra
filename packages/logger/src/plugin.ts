@@ -168,10 +168,13 @@ export function logger(options: LoggerPluginOptions = {}): LoggerPlugin {
 			installation = installSeyfertLoggerForPlugin(client, root);
 		},
 		teardown: async () => {
-			await root.flush();
-			installation?.restoreInternalLogger();
-			restoreSeyfertLogger(root, installation);
-			installation = undefined;
+			try {
+				await root.flush();
+			} finally {
+				installation?.restoreInternalLogger();
+				restoreSeyfertLogger(root, installation);
+				installation = undefined;
+			}
 		},
 	});
 }

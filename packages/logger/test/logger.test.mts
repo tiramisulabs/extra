@@ -33,6 +33,15 @@ class RecordingAdapter implements LoggerAdapter {
 	}
 }
 
+class RejectingFlushAdapter extends RecordingAdapter {
+	readonly flushError = new Error('flush failed');
+
+	override flush(): Promise<void> {
+		this.flushes++;
+		return Promise.reject(this.flushError);
+	}
+}
+
 class BlockingAdapter extends RecordingAdapter {
 	private releaseWrite?: () => void;
 	private readonly pendingWrite = new Promise<void>(resolve => {
@@ -293,6 +302,41 @@ describe('logger plugin', () => {
 		assert.deepEqual(adapter.entries[0].data, { memberId: 'user-1' });
 
 		await plugin.teardown?.(client);
+		assert.equal(adapter.flushes, 1);
+		assert.equal(client.commands.logger, previousCommandsLogger);
+		assert.equal('logger' in client.components, false);
+		assert.equal('logger' in client.events, false);
+		assert.equal('logger' in client.langs, false);
+		assert.equal('logger' in client.cache, false);
+		assert.equal(client.cache.__logger__, previousCacheInternalLogger);
+		assert.equal((SeyfertLogger as unknown as { __callback?: unknown }).__callback, previousCustomizer);
+		assert.throws(() => useLogger(), /before the @slipher\/logger plugin is set up/);
+	});
+
+	test('teardown cleans up Seyfert logger state even when flush rejects', async () => {
+		const adapter = new RejectingFlushAdapter();
+		const plugin = logger({ adapter });
+		const previousCommandsLogger = { previous: 'commands' };
+		const previousCacheInternalLogger = { previous: 'cache-internal' };
+		const previousCustomizer = (SeyfertLogger as unknown as { __callback?: unknown }).__callback;
+		const client = {
+			commands: { logger: previousCommandsLogger },
+			components: {},
+			events: {},
+			langs: {},
+			cache: { __logger__: previousCacheInternalLogger },
+		};
+
+		await plugin.setup?.(client);
+
+		let thrown: unknown;
+		try {
+			await plugin.teardown?.(client);
+		} catch (error) {
+			thrown = error;
+		}
+
+		assert.equal(thrown, adapter.flushError);
 		assert.equal(adapter.flushes, 1);
 		assert.equal(client.commands.logger, previousCommandsLogger);
 		assert.equal('logger' in client.components, false);
@@ -605,7 +649,7 @@ describe('logger adapters', () => {
 		assert.equal(typeof parsed.error.stack, 'string');
 	});
 
-	test('createPinoAdapter sends only event data and uses child bindings', async () => {
+	test('createPinoAdapter forwards unapplied bindings and uses child bindings', async () => {
 		const childCalls: unknown[] = [];
 		const calls: unknown[][] = [];
 		const target = {
@@ -618,15 +662,15 @@ describe('logger adapters', () => {
 		const adapter = createPinoAdapter(target).child?.({ name: 'bot', shardId: 1 }) ?? createPinoAdapter(target);
 
 		await adapter.write({
-			bindings: { name: 'bot', shardId: 1 },
-			data: { guildId: 'guild-1' },
+			bindings: { cluster: 'use1', name: 'bot', region: 'us-east', shardId: 1 },
+			data: { guildId: 'guild-1', region: 'runtime' },
 			level: 'info',
 			message: 'ready',
 			time: new Date('2026-05-29T10:00:00.000Z'),
 		});
 
 		assert.deepEqual(childCalls, [{ name: 'bot', shardId: 1 }]);
-		assert.deepEqual(calls, [[{ guildId: 'guild-1' }, 'ready']]);
+		assert.deepEqual(calls, [[{ cluster: 'use1', region: 'runtime', guildId: 'guild-1' }, 'ready']]);
 	});
 
 	test('createEvlogAdapter routes entries through the evlog global pipeline', async () => {
