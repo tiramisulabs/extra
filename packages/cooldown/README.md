@@ -164,7 +164,7 @@ Use explicit options outside a command, in admin commands, or in tests:
 
 ```ts
 await client.cooldown?.check({ name: 'ping', target: userId, guildId });
-await client.cooldown?.consume({ name: 'ping', target: userId, guildId, tokens: 2 });
+await client.cooldown?.consume({ name: 'ping', target: userId, guildId, cost: 2 });
 await client.cooldown?.reset({ name: 'ping', target: userId, guildId });
 ```
 
@@ -196,7 +196,7 @@ type CooldownResult =
 	  };
 ```
 
-Asking for more `tokens` than the bucket limit is a programmer error and throws `RangeError`.
+Asking for a `cost` higher than the bucket limit is a programmer error and throws `RangeError`.
 
 ## Shared Buckets
 

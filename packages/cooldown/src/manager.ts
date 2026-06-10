@@ -34,18 +34,18 @@ export interface CooldownProps {
 	 * because Discord does not provide `guildId`/`channelId` for every context.
 	 */
 	type?: CooldownTargetType | CooldownTargetResolver;
-	/** Interval in ms before a token refills. */
+	/** Interval in ms before the bucket refills. */
 	interval: number;
-	/** Available tokens in the bucket. Defaults to 1. */
+	/** Available uses in the bucket. Defaults to 1. */
 	uses?: number;
 	/** Shared bucket name. When set, the cache key uses this name instead of the resolved command. */
 	group?: string;
 }
 
 interface CooldownResultBase {
-	/** Maximum tokens for the bucket. */
+	/** Maximum uses for the bucket. */
 	limit: number;
-	/** Tokens still available after the operation. */
+	/** Uses still available after the operation. */
 	remainingUses: number;
 	/** Cache key used by this operation, useful for logging and metrics. */
 	key: string;
@@ -67,7 +67,7 @@ export type CooldownMiddleware = MiddlewareContext<CooldownResult | undefined, A
 export type CooldownMiddlewares<Name extends string = 'cooldown'> = Record<Name, CooldownMiddleware>;
 
 export interface CooldownImplicitOptions {
-	tokens?: number;
+	cost?: number;
 }
 
 export interface CooldownCheckOptions extends CooldownImplicitOptions {
@@ -122,7 +122,7 @@ local hashKey = KEYS[1]
 local namespaceKey = KEYS[2]
 local interval = tonumber(ARGV[1])
 local limit = tonumber(ARGV[2])
-local tokens = tonumber(ARGV[3])
+local cost = tonumber(ARGV[3])
 local memberKey = ARGV[4]
 
 local time = redis.call('TIME')
@@ -132,14 +132,14 @@ local remaining = tonumber(redis.call('HGET', hashKey, '${COOLDOWN_RESOURCE_FIEL
 local lastDrip = tonumber(redis.call('HGET', hashKey, '${COOLDOWN_RESOURCE_FIELD_PREFIX}lastDrip'))
 
 if remaining == nil or lastDrip == nil or now - lastDrip >= interval then
-	local newRemaining = limit - tokens
+	local newRemaining = limit - cost
 	redis.call('SADD', namespaceKey .. '${COOLDOWN_RESOURCE_RELATIONSHIP_SUFFIX}', memberKey)
 	redis.call('HSET', hashKey, '${COOLDOWN_RESOURCE_FIELD_PREFIX}interval', tostring(interval), '${COOLDOWN_RESOURCE_FIELD_PREFIX}remaining', tostring(newRemaining), '${COOLDOWN_RESOURCE_FIELD_PREFIX}lastDrip', tostring(now))
 	return {1, 0, now, limit, newRemaining}
 end
 
 local elapsed = now - lastDrip
-local newRemaining = remaining - tokens
+local newRemaining = remaining - cost
 if newRemaining < 0 then
 	local remainingMs = interval - elapsed
 	return {0, remainingMs, now + remainingMs, limit, remaining}
@@ -317,9 +317,9 @@ export class CooldownManager {
 		return limit;
 	}
 
-	private assertTokensWithinLimit(tokens: number, limit: number) {
-		if (!(Number.isFinite(tokens) && tokens > 0)) throw new RangeError('Cooldown tokens must be a positive number.');
-		if (tokens > limit) throw new RangeError(`Cooldown tokens (${tokens}) cannot exceed the bucket limit (${limit}).`);
+	private assertCostWithinLimit(cost: number, limit: number) {
+		if (!(Number.isFinite(cost) && cost > 0)) throw new RangeError('Cooldown cost must be a positive number.');
+		if (cost > limit) throw new RangeError(`Cooldown cost (${cost}) cannot exceed the bucket limit (${limit}).`);
 	}
 
 	private rateLimitedResult(
@@ -362,13 +362,13 @@ export class CooldownManager {
 		key: string,
 		props: CooldownProps,
 		limit: number,
-		tokens: number,
+		cost: number,
 	): ReturnCache<CooldownResult> {
 		return fakePromise(
 			adapter.eval<AtomicCooldownResult>(
 				ATOMIC_CONSUME_SCRIPT,
 				[this.resource.hashId(key), this.resource.namespace],
-				[String(props.interval), String(limit), String(tokens), key],
+				[String(props.interval), String(limit), String(cost), key],
 			),
 		).then(result => this.fromAtomicResult(key, result));
 	}
@@ -402,7 +402,7 @@ export class CooldownManager {
 	}
 
 	/**
-	 * Inspect the bucket without consuming a token.
+	 * Inspect the bucket without consuming uses.
 	 * Returns `undefined` when the command resolves to no cooldown.
 	 */
 	check(): ReturnCache<CooldownResult | undefined>;
@@ -413,31 +413,31 @@ export class CooldownManager {
 		if (!resolved) return undefined;
 
 		const { props, key } = resolved;
-		const tokens = options?.tokens ?? 1;
+		const cost = options?.cost ?? 1;
 		const limit = this.resolveLimit(props);
-		this.assertTokensWithinLimit(tokens, limit);
+		this.assertCostWithinLimit(cost, limit);
 
 		return fakePromise(this.resource.get(key)).then(data => {
 			const now = Date.now();
 
 			if (!data) {
-				return this.allowedResult(key, limit, limit - tokens, now);
+				return this.allowedResult(key, limit, limit - cost, now);
 			}
 
 			const elapsed = now - data.lastDrip;
 			if (elapsed >= props.interval) {
-				return this.allowedResult(key, limit, limit - tokens, now);
+				return this.allowedResult(key, limit, limit - cost, now);
 			}
 
-			const allowed = data.remaining - tokens >= 0;
+			const allowed = data.remaining - cost >= 0;
 			const remainingMs = Math.max(props.interval - elapsed, 0);
 			if (!allowed) return this.rateLimitedResult(key, limit, data.remaining, now, remainingMs);
-			return this.allowedResult(key, limit, data.remaining - tokens, now);
+			return this.allowedResult(key, limit, data.remaining - cost, now);
 		});
 	}
 
 	/**
-	 * Consume a token from the bucket.
+	 * Consume uses from the bucket.
 	 * Returns `undefined` when the command resolves to no cooldown.
 	 */
 	consume(): ReturnCache<CooldownResult | undefined>;
@@ -448,20 +448,20 @@ export class CooldownManager {
 		if (!resolved) return undefined;
 
 		const { props, key } = resolved;
-		const tokens = options?.tokens ?? 1;
+		const cost = options?.cost ?? 1;
 		const limit = this.resolveLimit(props);
-		this.assertTokensWithinLimit(tokens, limit);
+		this.assertCostWithinLimit(cost, limit);
 
-		this.debugger?.info(`Consuming cooldown ${key} (tokens=${tokens})`);
+		this.debugger?.info(`Consuming cooldown ${key} (cost=${cost})`);
 
 		const atomicAdapter = this.getAtomicAdapter();
-		if (atomicAdapter) return this.consumeAtomic(atomicAdapter, key, props, limit, tokens);
+		if (atomicAdapter) return this.consumeAtomic(atomicAdapter, key, props, limit, cost);
 
 		return fakePromise(this.resource.get(key)).then(data => {
 			const now = Date.now();
 
 			if (!data) {
-				const remaining = limit - tokens;
+				const remaining = limit - cost;
 				return fakePromise(
 					this.resource.set(CacheFrom.Gateway, key, {
 						interval: props.interval,
@@ -472,7 +472,7 @@ export class CooldownManager {
 
 			const elapsed = now - data.lastDrip;
 			if (elapsed >= props.interval) {
-				const remaining = limit - tokens;
+				const remaining = limit - cost;
 				return fakePromise(
 					this.resource.patch(CacheFrom.Gateway, key, {
 						lastDrip: now,
@@ -481,12 +481,12 @@ export class CooldownManager {
 				).then(() => this.allowedResult(key, limit, remaining, now));
 			}
 
-			if (data.remaining - tokens < 0) {
+			if (data.remaining - cost < 0) {
 				const remainingMs = props.interval - elapsed;
 				return this.rateLimitedResult(key, limit, data.remaining, now, remainingMs);
 			}
 
-			const remaining = data.remaining - tokens;
+			const remaining = data.remaining - cost;
 			return fakePromise(this.resource.patch(CacheFrom.Gateway, key, { remaining })).then(() =>
 				this.allowedResult(key, limit, remaining, now),
 			);

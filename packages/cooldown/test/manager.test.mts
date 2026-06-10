@@ -59,26 +59,26 @@ class AtomicMemoryAdapter extends MemoryAdapter {
 	async eval(_script: string, keys: string[], args: string[]) {
 		this.evalCalls++;
 		const [hashKey, namespace] = keys;
-		const [intervalArg, limitArg, tokensArg, memberKey] = args;
+		const [intervalArg, limitArg, costArg, memberKey] = args;
 		const now = Date.now();
 		const interval = Number(intervalArg);
 		const limit = Number(limitArg);
-		const tokens = Number(tokensArg);
+		const cost = Number(costArg);
 		const data = this.get(hashKey) as CooldownData | null;
 
 		if (!data || now - data.lastDrip >= interval) {
-			const remaining = limit - tokens;
+			const remaining = limit - cost;
 			this.addToRelationship(namespace, memberKey);
 			this.set(hashKey, { interval, remaining, lastDrip: now });
 			return [1, 0, now, limit, remaining];
 		}
 
 		const remainingMs = interval - (now - data.lastDrip);
-		if (data.remaining - tokens < 0) {
+		if (data.remaining - cost < 0) {
 			return [0, remainingMs, now + remainingMs, limit, data.remaining];
 		}
 
-		const remaining = data.remaining - tokens;
+		const remaining = data.remaining - cost;
 		this.addToRelationship(namespace, memberKey);
 		this.patch(hashKey, { interval, remaining });
 		return [1, 0, now, limit, remaining];
@@ -163,10 +163,23 @@ describe('CooldownManager — explicit check / consume / reset', () => {
 		assert.equal(manager.resource.get('ping:user:u1'), undefined);
 	});
 
-	test('throws RangeError when tokens exceed the limit without mutating', () => {
-		assert.throws(() => manager.consume({ name: 'ping', target: 'u1', tokens: 5 }), RangeError);
-		assert.throws(() => manager.check({ name: 'ping', target: 'u1', tokens: 5 }), RangeError);
+	test('throws RangeError when cost exceeds the limit without mutating', () => {
+		assert.throws(() => manager.consume({ name: 'ping', target: 'u1', cost: 5 }), RangeError);
+		assert.throws(() => manager.check({ name: 'ping', target: 'u1', cost: 5 }), RangeError);
 		assert.equal(manager.resource.get('ping:user:u1'), undefined);
+	});
+
+	test('consume and check accept a multi-use cost', async () => {
+		const preview = await manager.check({ name: 'ping', target: 'u1', cost: 2 });
+		const consumed = await manager.consume({ name: 'ping', target: 'u1', cost: 2 });
+		const blocked = await manager.consume({ name: 'ping', target: 'u1' });
+
+		assert.ok(preview && consumed && blocked);
+		assert.equal(preview.allowed, true);
+		assert.equal(preview.remainingUses, 0);
+		assert.equal(consumed.allowed, true);
+		assert.equal(consumed.remainingUses, 0);
+		assert.equal(blocked.allowed, false);
 	});
 
 	test('reset deletes the bucket and accepts guildId in the explicit form', async () => {
