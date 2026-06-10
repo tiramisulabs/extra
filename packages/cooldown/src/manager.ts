@@ -5,6 +5,7 @@ import {
 	createPlugin,
 	Formatter,
 	type MiddlewareContext,
+	type PluginMiddlewareMap,
 	type SeyfertPlugin,
 } from 'seyfert';
 import { CacheFrom, type ReturnCache } from 'seyfert/lib/cache';
@@ -523,13 +524,18 @@ export interface CooldownPluginOptions {
 	middleware?: boolean | CooldownMiddlewareOptions;
 }
 
-export interface CooldownPlugin extends SeyfertPlugin<{ cooldown: CooldownManager }, { cooldown: CooldownManager }> {
+export type CooldownPluginMiddlewares<TOptions> = TOptions extends { middleware: true } ? CooldownMiddlewares : {};
+
+export interface CooldownPlugin<TMiddlewares extends PluginMiddlewareMap = {}>
+	extends SeyfertPlugin<{ cooldown: CooldownManager }, { cooldown: CooldownManager }, readonly [], TMiddlewares> {
 	name: '@slipher/cooldown';
 	manager: CooldownManager;
 	setup(client: BaseClient): void;
 }
 
-export function cooldown(options: CooldownPluginOptions = {}): CooldownPlugin {
+export function cooldown<const TOptions extends CooldownPluginOptions = {}>(
+	options: TOptions = {} as TOptions,
+): CooldownPlugin<CooldownPluginMiddlewares<TOptions>> {
 	const manager = new CooldownManager();
 	const contextScope: ContextScope = (context, run) => cooldownContexts.run(context as AnyContext, run);
 	const middleware = resolveCooldownMiddleware(options.middleware, manager);
@@ -556,7 +562,7 @@ export function cooldown(options: CooldownPluginOptions = {}): CooldownPlugin {
 		setup(client) {
 			manager.attach(client);
 		},
-	});
+	}) as CooldownPlugin<CooldownPluginMiddlewares<TOptions>>;
 }
 
 function isExplicitOptions(

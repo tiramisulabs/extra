@@ -5,10 +5,12 @@ import type {
 	ContextMenuCommand,
 	EntryPointCommand,
 	HttpClient,
+	PluginMiddlewaresMapOf,
 	PluginUsingClient,
 	Register,
 	RegisteredMiddlewares,
 	RegisterPlugins,
+	ResolvedRegisteredMiddlewares,
 	SubCommand,
 	UsingClient,
 	WorkerClient,
@@ -36,8 +38,14 @@ declare const subCommand: SubCommand;
 declare const contextMenuCommand: ContextMenuCommand;
 declare const entryPointCommand: EntryPointCommand;
 declare const manager: CooldownManager;
-const cooldownPlugin = cooldown();
+const pluginWithoutMiddleware = cooldown();
+const pluginWithDisabledMiddleware = cooldown({ middleware: false });
+const pluginWithConfiguredMiddleware = cooldown({ middleware: { global: true } });
+const cooldownPlugin = cooldown({ middleware: true });
 const plugins = definePlugins(cooldownPlugin);
+const pluginsWithoutMiddleware = definePlugins(pluginWithoutMiddleware);
+const pluginsWithDisabledMiddleware = definePlugins(pluginWithDisabledMiddleware);
+const pluginsWithConfiguredMiddleware = definePlugins(pluginWithConfiguredMiddleware);
 
 declare module 'seyfert' {
 	interface Register extends RegisterPlugins<typeof plugins> {}
@@ -55,10 +63,16 @@ expectType<CooldownProps | undefined>(command.cooldown);
 expectType<CooldownProps | undefined>(subCommand.cooldown);
 expectType<CooldownProps | undefined>(contextMenuCommand.cooldown);
 expectType<CooldownProps | undefined>(entryPointCommand.cooldown);
-expectType<CooldownMiddleware>({} as RegisteredMiddlewares['cooldown']);
+expectType<CooldownMiddlewares>({} as PluginMiddlewaresMapOf<typeof plugins>);
+expectType<never>({} as keyof PluginMiddlewaresMapOf<typeof pluginsWithoutMiddleware>);
+expectType<never>({} as keyof PluginMiddlewaresMapOf<typeof pluginsWithDisabledMiddleware>);
+expectType<never>({} as keyof PluginMiddlewaresMapOf<typeof pluginsWithConfiguredMiddleware>);
+expectType<CooldownMiddleware>({} as ResolvedRegisteredMiddlewares['cooldown']);
 expectType<CooldownMiddleware>({} as RegisteredMiddlewares['commandCooldown']);
 expectType<ReturnType<typeof Middlewares>>(Middlewares(['cooldown']));
 expectType<ReturnType<typeof Middlewares>>(Middlewares(['commandCooldown']));
+// @ts-expect-error the default middleware is provided by the registered plugin, not a global augmentation
+expectType<CooldownMiddleware>({} as RegisteredMiddlewares['cooldown']);
 
 manager.consume();
 manager.consume({ tokens: 2 });

@@ -18,7 +18,7 @@ import { cooldown } from '@slipher/cooldown';
 
 const plugins = definePlugins(
 	cooldown({
-		middleware: { global: true },
+		middleware: true,
 	}),
 );
 
@@ -50,7 +50,7 @@ export default class PingCommand extends Command {
 }
 ```
 
-With `cooldown({ middleware: { global: true } })`, every command with `cooldown` props is consumed before `run`. If you prefer explicit middleware assignment, use the default `cooldown` name:
+With `cooldown({ middleware: true })`, the plugin registers the default `cooldown` middleware at runtime and contributes its type through Seyfert's plugin registry. Use the default name when assigning it explicitly:
 
 ```ts
 import { Middlewares } from 'seyfert';
@@ -75,17 +75,31 @@ const plugins = definePlugins(
 );
 ```
 
-The default middleware name is registered in Seyfert's `RegisteredMiddlewares`. If you use a custom name, add that name to your app types:
+If you configure the middleware with an options object, the runtime middleware is still registered, but the plugin does not infer the middleware type automatically. Add the name to your app types:
 
 ```ts
 import type { CooldownMiddlewares } from '@slipher/cooldown';
 
 declare module 'seyfert' {
-	interface RegisteredMiddlewares extends CooldownMiddlewares<'commandCooldown'> {}
+	interface RegisteredMiddlewares extends CooldownMiddlewares<'cooldown'> {}
 }
 ```
 
 ```ts
+const plugins = definePlugins(
+	cooldown({
+		middleware: { global: true },
+	}),
+);
+```
+
+Use the same helper for custom names:
+
+```ts
+declare module 'seyfert' {
+	interface RegisteredMiddlewares extends CooldownMiddlewares<'commandCooldown'> {}
+}
+
 const plugins = definePlugins(
 	cooldown({
 		middleware: { name: 'commandCooldown' },

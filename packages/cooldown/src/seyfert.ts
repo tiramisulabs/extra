@@ -1,10 +1,6 @@
-import type { CooldownMiddleware, CooldownProps } from './manager';
+import type { CooldownProps } from './manager';
 
 declare module 'seyfert' {
-	interface RegisteredMiddlewares {
-		cooldown: CooldownMiddleware;
-	}
-
 	interface Command {
 		cooldown?: CooldownProps;
 	}
