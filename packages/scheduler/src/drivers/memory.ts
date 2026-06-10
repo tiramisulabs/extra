@@ -33,6 +33,7 @@ class MemorySchedulerDriver implements SchedulerDriver {
 
 	setup() {
 		this.ready = true;
+		for (const job of this.jobs.values()) job.resume?.();
 		for (const id of [...this.immediateTaskIds]) {
 			const task = this.tasks.get(id);
 			const job = this.jobs.get(id);
@@ -46,6 +47,7 @@ class MemorySchedulerDriver implements SchedulerDriver {
 		const expression = definition.kind === 'interval' ? '* * * * * *' : definition.expression!;
 		const options: Record<string, unknown> = {
 			name: definition.id,
+			paused: true,
 		};
 
 		if (definition.kind === 'interval') {

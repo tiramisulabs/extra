@@ -14,16 +14,19 @@ import {
 import { parseDuration } from '../src/duration';
 
 class FakeCronerJob {
-	paused = false;
+	paused: boolean;
 	stopped = false;
 
 	constructor(
 		readonly expression: string,
 		readonly options: Record<string, unknown>,
 		private readonly runner: () => unknown,
-	) {}
+	) {
+		this.paused = options.paused === true;
+	}
 
 	trigger() {
+		if (this.paused) return undefined;
 		return this.runner();
 	}
 
@@ -204,6 +207,10 @@ describe('scheduler', () => {
 		assert.equal(croner.jobs[0]!.options.interval, 300);
 		assert.equal(croner.jobs[0]!.options.name, 'heartbeat');
 		assert.equal(task.status, 'scheduled');
+		assert.equal(croner.jobs[0]!.paused, true);
+
+		await registry.setup({ initialized: true });
+		assert.equal(croner.jobs[0]!.paused, false);
 
 		await croner.jobs[0]!.trigger();
 
@@ -223,6 +230,40 @@ describe('scheduler', () => {
 		await registry.close();
 
 		assert.equal(croner.jobs[0]!.stopped, true);
+	});
+
+	test('keeps memory Croner jobs paused until setup completes', async () => {
+		const events: string[] = [];
+		const registry = createScheduler({
+			driver: memory({
+				croner(_expression, options, runner) {
+					events.push('croner-created');
+					const job = new FakeCronerJob(_expression, options, runner);
+					void Promise.resolve().then(() => {
+						events.push('croner-trigger');
+						return job.trigger();
+					});
+					return job;
+				},
+			}),
+		});
+		registry.on('started', () => {
+			events.push('started');
+		});
+
+		registry.interval('heartbeat', '1s', () => {
+			events.push('runner');
+		});
+
+		await Promise.resolve();
+		await Promise.resolve();
+
+		assert.deepEqual(events, ['croner-created', 'croner-trigger']);
+
+		await registry.setup({ initialized: true });
+
+		assert.deepEqual(events, ['croner-created', 'croner-trigger']);
+		await registry.close();
 	});
 
 	test('registers decorated class methods and exposes the registry through the seyfert plugin context', async () => {
@@ -407,6 +448,103 @@ describe('scheduler', () => {
 		assert.equal(bullmq.state.queues[0]!.closed, true);
 		assert.equal(bullmq.state.queueEvents[0]!.closed, true);
 		assert.equal(bullmq.state.workers[0]!.closed, true);
+	});
+
+	test('updates persistent task snapshots before emitting queue lifecycle events', async () => {
+		const bullmq = createFakeBullMQ();
+		const registry = createScheduler({
+			driver: persistent({ bullmq: bullmq.module }),
+		});
+		const events: Array<{
+			event: string;
+			status: string;
+			runCount: number;
+			lastRunAt: boolean;
+			lastError: unknown;
+			result?: unknown;
+			error?: string;
+		}> = [];
+
+		registry.interval('heartbeat', '30s', () => 'ok');
+		registry.interval('cleanup', '30s', () => 'ok');
+		registry.on('started', ({ task }) => {
+			events.push({
+				event: 'started',
+				status: task.status,
+				runCount: task.runCount,
+				lastRunAt: task.lastRunAt instanceof Date,
+				lastError: task.lastError,
+			});
+		});
+		registry.on('completed', ({ task, result }) => {
+			events.push({
+				event: 'completed',
+				status: task.status,
+				runCount: task.runCount,
+				lastRunAt: task.lastRunAt instanceof Date,
+				lastError: task.lastError,
+				result,
+			});
+		});
+		registry.on('failed', ({ task, error }) => {
+			events.push({
+				event: 'failed',
+				status: task.status,
+				runCount: task.runCount,
+				lastRunAt: task.lastRunAt instanceof Date,
+				lastError: task.lastError instanceof Error ? task.lastError.message : task.lastError,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		});
+
+		await registry.setup({ initialized: true });
+		bullmq.state.jobs.set('heartbeat-job', {
+			data: { taskId: 'heartbeat' },
+			id: 'heartbeat-job',
+			name: 'opaque',
+		});
+		bullmq.state.jobs.set('cleanup-job', {
+			data: { taskId: 'cleanup' },
+			id: 'cleanup-job',
+			name: 'opaque',
+		});
+
+		bullmq.state.queueEvents[0]!.emit('active', { jobId: 'heartbeat-job' });
+		bullmq.state.queueEvents[0]!.emit('completed', {
+			jobId: 'heartbeat-job',
+			returnvalue: 'queue-event-result',
+		});
+		bullmq.state.queueEvents[0]!.emit('failed', {
+			jobId: 'cleanup-job',
+			failedReason: 'boom',
+		});
+		await flushMicrotasks();
+
+		assert.deepEqual(events, [
+			{
+				event: 'started',
+				status: 'running',
+				runCount: 1,
+				lastRunAt: true,
+				lastError: undefined,
+			},
+			{
+				event: 'completed',
+				status: 'completed',
+				runCount: 1,
+				lastRunAt: true,
+				lastError: undefined,
+				result: 'queue-event-result',
+			},
+			{
+				event: 'failed',
+				status: 'failed',
+				runCount: 1,
+				lastRunAt: true,
+				lastError: 'boom',
+				error: 'boom',
+			},
+		]);
 	});
 
 	test('persistent setup rejects after close without reopening resources', async () => {

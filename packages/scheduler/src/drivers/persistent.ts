@@ -28,6 +28,8 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 	private readonly queueName: string;
 	private readonly queueOptions: Record<string, unknown>;
 	private readonly jobTaskIds = new Map<string, string>();
+	private readonly localQueueEventJobIds = new Set<string>();
+	private readonly mirroredQueueEventStartedJobIds = new Set<string>();
 	private readonly purgeOrphansOnStartup: boolean;
 	private queue?: BullMQQueue;
 	private queueEvents?: BullMQQueueEvents;
@@ -108,6 +110,8 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 		this.worker = undefined;
 		this.queueEvents = undefined;
 		this.queue = undefined;
+		this.localQueueEventJobIds.clear();
+		this.mirroredQueueEventStartedJobIds.clear();
 		this.state = 'closed';
 	}
 
@@ -122,10 +126,13 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 
 		const taskId = typeof job.data?.taskId === 'string' ? job.data.taskId : job.name;
 		const task = this.tasks.get(taskId);
+		const jobId = jobIdFromRecord(eventRecord(job));
 
 		if (!task) {
 			throw new Error(`Scheduler task "${taskId}" is not registered`);
 		}
+
+		if (this.queueEvents && jobId) this.localQueueEventJobIds.add(jobId);
 
 		return runTask(task, this.queueEvents ? undefined : this.host);
 	}
@@ -226,8 +233,12 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 
 	private async emitQueueEventStarted(event: unknown) {
 		try {
-			const task = await this.taskFromQueueEvent(event);
-			if (task) this.host?.emit('started', { task });
+			const record = eventRecord(event);
+			const task = await this.taskFromQueueEvent(record);
+			if (task) {
+				if (this.shouldMirrorQueueEventState(record)) this.markQueueEventStarted(task, record);
+				this.host?.emit('started', { task });
+			}
 		} catch (error) {
 			this.reportQueueEventFailure('active', error);
 		}
@@ -237,7 +248,11 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 		try {
 			const record = eventRecord(event);
 			const task = await this.taskFromQueueEvent(record);
-			if (task) this.host?.emit('completed', { task, result: record.returnvalue });
+			if (task) {
+				if (this.shouldMirrorQueueEventState(record)) this.markQueueEventCompleted(task, record);
+				this.host?.emit('completed', { task, result: record.returnvalue });
+			}
+			this.clearQueueEventJob(record);
 		} catch (error) {
 			this.reportQueueEventFailure('completed', error);
 		}
@@ -247,10 +262,60 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 		try {
 			const record = eventRecord(event);
 			const task = await this.taskFromQueueEvent(record);
-			if (task) this.host?.emit('failed', { task, error: new Error(String(record.failedReason ?? 'failed')) });
+			const failure = new Error(String(record.failedReason ?? 'failed'));
+			if (task) {
+				if (this.shouldMirrorQueueEventState(record)) this.markQueueEventFailed(task, record, failure);
+				this.host?.emit('failed', { task, error: failure });
+			}
+			this.clearQueueEventJob(record);
 		} catch (error) {
 			this.reportQueueEventFailure('failed', error);
 		}
+	}
+
+	private shouldMirrorQueueEventState(record: Record<string, unknown>) {
+		const jobId = jobIdFromRecord(record);
+		return !jobId || !this.localQueueEventJobIds.has(jobId);
+	}
+
+	private markQueueEventStarted(task: ScheduledTask, record: Record<string, unknown>) {
+		const jobId = jobIdFromRecord(record);
+		if (jobId && this.mirroredQueueEventStartedJobIds.has(jobId)) return;
+
+		if (jobId) this.mirroredQueueEventStartedJobIds.add(jobId);
+		task.status = 'running';
+		task.runCount += 1;
+		task.lastRunAt = new Date();
+		task.lastError = undefined;
+	}
+
+	private markQueueEventCompleted(task: ScheduledTask, record: Record<string, unknown>) {
+		this.markQueueEventFinished(task, record);
+		task.status = 'completed';
+		task.lastError = undefined;
+	}
+
+	private markQueueEventFailed(task: ScheduledTask, record: Record<string, unknown>, error: Error) {
+		this.markQueueEventFinished(task, record);
+		task.status = 'failed';
+		task.lastError = error;
+	}
+
+	private markQueueEventFinished(task: ScheduledTask, record: Record<string, unknown>) {
+		const jobId = jobIdFromRecord(record);
+		if (jobId) {
+			if (!this.mirroredQueueEventStartedJobIds.has(jobId)) this.markQueueEventStarted(task, record);
+			return;
+		}
+
+		if (task.status !== 'running') this.markQueueEventStarted(task, record);
+	}
+
+	private clearQueueEventJob(record: Record<string, unknown>) {
+		const jobId = jobIdFromRecord(record);
+		if (!jobId) return;
+		this.localQueueEventJobIds.delete(jobId);
+		this.mirroredQueueEventStartedJobIds.delete(jobId);
 	}
 
 	private async taskFromQueueEvent(event: unknown) {
@@ -330,4 +395,10 @@ function createBullMQOptions(options: PersistentSchedulerOptions) {
 
 function eventRecord(event: unknown): Record<string, unknown> {
 	return event && typeof event === 'object' ? (event as Record<string, unknown>) : {};
+}
+
+function jobIdFromRecord(record: Record<string, unknown>) {
+	if (typeof record.jobId === 'string') return record.jobId;
+	if (typeof record.id === 'string') return record.id;
+	return undefined;
 }
