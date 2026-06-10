@@ -1,7 +1,15 @@
 import type { LoggerLike } from '@slipher/types';
-import type { Client, Logger as SeyfertLogger } from 'seyfert';
+import type { Client, PluginContextMapOf, RegisterPlugins, Logger as SeyfertLogger } from 'seyfert';
 import { Command, type CommandContext, createMiddleware, Declare, definePlugins, type Register } from 'seyfert';
-import { createEvlogAdapter, type LoggerAdapter, logger, useLogger, type WideEventLogger } from '../src';
+import {
+	createEvlogAdapter,
+	type LoggerAdapter,
+	logger,
+	loggerService,
+	type RootLogger,
+	useLogger,
+	type WideEventLogger,
+} from '../src';
 
 declare function expectType<T>(value: T): void;
 declare const context: CommandContext;
@@ -10,16 +18,17 @@ const loggerPlugin = logger();
 const plugins = definePlugins(loggerPlugin);
 
 declare module 'seyfert' {
-	interface Register {
-		plugins: typeof plugins;
-	}
+	interface Register extends RegisterPlugins<typeof plugins> {}
 }
 
 expectType<Register>({ plugins });
 expectType<WideEventLogger>(context.logger);
+expectType<WideEventLogger>({} as PluginContextMapOf<typeof plugins>['logger']);
 expectType<SeyfertLogger>(client.logger);
 // @ts-expect-error client.logger remains Seyfert's base logger; use ctx.logger or useLogger() for wide events.
 expectType<WideEventLogger>(client.logger);
+expectType<RootLogger | undefined>(client.services.get('logger'));
+expectType<RootLogger | undefined>(client.services.get(loggerService));
 expectType<LoggerLike>({} as WideEventLogger);
 
 expectType<LoggerAdapter>(createEvlogAdapter());

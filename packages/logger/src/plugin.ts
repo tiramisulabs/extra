@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { createPlugin, Logger as SeyfertLogger, type SeyfertPlugin } from 'seyfert';
+import { createPlugin, createServiceKey, Logger as SeyfertLogger, type SeyfertPlugin } from 'seyfert';
 import { LogLevels as SeyfertLogLevels } from 'seyfert/lib/common';
 
 import {
@@ -21,6 +21,14 @@ export interface LoggerPlugin extends SeyfertPlugin<{}, { logger: WideEventLogge
 	name: '@slipher/logger';
 	setup?(client: SeyfertClientLike): Awaitable<void>;
 	teardown?(client: SeyfertClientLike): Awaitable<void>;
+}
+
+export const loggerService = createServiceKey<RootLogger>('logger');
+
+declare module 'seyfert' {
+	interface RegisteredPluginServices {
+		logger: RootLogger;
+	}
 }
 
 export interface LoggerPluginOptionsFragment {
@@ -160,6 +168,7 @@ export function logger(options: LoggerPluginOptions = {}): LoggerPlugin {
 			logger: source => root.event(extractSeyfertLogContext(source, contextConfig)),
 		},
 		register(api) {
+			api.services.set(loggerService, root);
 			api.options.set(createLoggerPluginOptions(root, contextConfig));
 		},
 		setup: client => {
