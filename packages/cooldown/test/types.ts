@@ -14,7 +14,9 @@ import type {
 	WorkerClient,
 } from 'seyfert';
 import { definePlugins, Middlewares } from 'seyfert';
+import * as cooldownExports from '../src';
 import {
+	Cooldown,
 	type CooldownManager,
 	type CooldownMiddleware,
 	type CooldownMiddlewares,
@@ -33,6 +35,7 @@ declare const command: Command;
 declare const subCommand: SubCommand;
 declare const contextMenuCommand: ContextMenuCommand;
 declare const entryPointCommand: EntryPointCommand;
+declare const manager: CooldownManager;
 const cooldownPlugin = cooldown();
 const plugins = definePlugins(cooldownPlugin);
 
@@ -56,3 +59,34 @@ expectType<CooldownMiddleware>({} as RegisteredMiddlewares['cooldown']);
 expectType<CooldownMiddleware>({} as RegisteredMiddlewares['commandCooldown']);
 expectType<ReturnType<typeof Middlewares>>(Middlewares(['cooldown']));
 expectType<ReturnType<typeof Middlewares>>(Middlewares(['commandCooldown']));
+
+manager.consume();
+manager.consume({ tokens: 2 });
+manager.consume({ name: 'ping', target: 'u1', guildId: 'g1', tokens: 2 });
+manager.check();
+manager.check({ tokens: 2 });
+manager.check({ name: 'ping', target: 'u1', guildId: 'g1', tokens: 2 });
+manager.reset();
+manager.reset({ name: 'ping', target: 'u1', guildId: 'g1' });
+
+expectType<ClassDecorator>(Cooldown.user(5_000));
+expectType<ClassDecorator>(Cooldown.guild(5_000, { uses: 3, group: 'moderation' }));
+expectType<ClassDecorator>(Cooldown.custom(() => 'target', 5_000, { group: 'custom' }));
+
+const props: CooldownProps = { type: 'user', interval: 5_000, uses: 3, group: 'mod' };
+expectType<CooldownProps>(props);
+
+// @ts-expect-error use variants were removed
+manager.consume({ name: 'ping', target: 'u1', use: 'premium' });
+// @ts-expect-error remaining is intentionally not public
+manager.remaining({ name: 'ping', target: 'u1' });
+// @ts-expect-error low-level set is intentionally not public
+manager.set({ key: 'ping:user:u1', interval: 1_000, remaining: 1 });
+// @ts-expect-error context() was replaced by zero-arg verbs
+manager.context();
+// @ts-expect-error ALS plumbing is private
+cooldownExports.runWithCooldownContext;
+// @ts-expect-error ALS plumbing is private
+cooldownExports.useCooldownContext;
+// @ts-expect-error resource internals are not exported from the root package
+cooldownExports.CooldownType;

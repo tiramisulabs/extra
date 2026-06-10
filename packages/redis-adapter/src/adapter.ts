@@ -7,6 +7,7 @@ export interface RedisAdapterOptions {
 
 export class RedisAdapter implements Adapter {
 	isAsync = true;
+	readonly supportsAtomicCooldowns: boolean = true;
 
 	client: ReturnType<typeof createClient>;
 	namespace: string;

@@ -1,14 +1,6 @@
 # @slipher/cooldown
 
-Per-command cooldowns for Seyfert bots — declare them with decorators, get a rich result you can turn into a friendly retry message, and share buckets across commands.
-
-## How it works
-
-Declare a cooldown on a command (`@Cooldown.user(5_000)`, …). Before the command runs you check and consume it, getting a `CooldownResult` — allowed or not, how long is left, and why it was blocked — which you turn into a reply.
-
-Each cooldown is keyed by a **scope** (`user` / `guild` / `channel` / `global`, or a custom resolver) and stored in `client.cache`, so the backend is whatever cache adapter your bot already uses (in-memory, Redis, …). Commands that share a `group` share one bucket.
-
-The manager is a single object, reachable as `ctx.cooldown` or `client.cooldown`.
+Per-command cooldowns for Seyfert bots. Declare a cooldown with a decorator, let the optional middleware gate commands, or call the manager directly when you need custom behavior.
 
 ## Install
 
@@ -18,18 +10,19 @@ pnpm add @slipher/cooldown
 
 Requires Seyfert v5.
 
-## Plugin Setup
+## Setup
 
 ```ts
 import { Client, definePlugins } from 'seyfert';
 import { cooldown } from '@slipher/cooldown';
 
-const cooldownPlugin = cooldown();
-const plugins = definePlugins(cooldownPlugin);
+const plugins = definePlugins(
+	cooldown({
+		middleware: { global: true },
+	}),
+);
 
-const client = new Client({
-	plugins,
-});
+const client = new Client({ plugins });
 
 declare module 'seyfert' {
 	interface Register {
@@ -38,25 +31,18 @@ declare module 'seyfert' {
 }
 ```
 
-The plugin attaches a `CooldownManager` to the client (`client.cooldown`) and exposes it on every interaction context (`ctx.cooldown`). Storage is backed by `client.cache`.
+The plugin exposes one `CooldownManager` as `client.cooldown` and `ctx.cooldown`. Storage is backed by `client.cache`.
 
-### Optional middleware
+## Middleware First
 
-If you prefer Seyfert middlewares over a manual `ctx.cooldown.context()` call in each command, enable the middleware:
-
-```ts
-const cooldownPlugin = cooldown({ middleware: true });
-```
-
-The default middleware name is `cooldown`, and the package registers it in Seyfert's `RegisteredMiddlewares`, so this is typed:
+The middleware is the simplest path for command cooldowns:
 
 ```ts
-import { Command, type CommandContext, Declare, Middlewares } from 'seyfert';
+import { Command, type CommandContext, Declare } from 'seyfert';
 import { Cooldown } from '@slipher/cooldown';
 
 @Declare({ name: 'ping', description: 'Ping' })
 @Cooldown.user(5_000)
-@Middlewares(['cooldown'])
 export default class PingCommand extends Command {
 	async run(ctx: CommandContext) {
 		await ctx.write({ content: 'Pong!' });
@@ -64,13 +50,32 @@ export default class PingCommand extends Command {
 }
 ```
 
-You can also register it globally:
+With `cooldown({ middleware: { global: true } })`, every command with `cooldown` props is consumed before `run`. If you prefer explicit middleware assignment, use the default `cooldown` name:
 
 ```ts
-const cooldownPlugin = cooldown({ middleware: { global: true } });
+import { Middlewares } from 'seyfert';
+
+@Middlewares(['cooldown'])
+@Cooldown.user(5_000)
+class PingCommand extends Command {}
 ```
 
-Pass `middleware.message` to customize the stop message. If you pass a custom `middleware.name`, that runtime name is not inferred automatically by TypeScript; use `CooldownMiddlewares` to augment `RegisteredMiddlewares` in your app:
+When the middleware allows a command, it calls `next(result)`. With the default middleware name, commands can read the result from `ctx.metadata.cooldown`.
+
+Customize denied messages with `middleware.message`:
+
+```ts
+const plugins = definePlugins(
+	cooldown({
+		middleware: {
+			global: true,
+			message: (result, ctx) => `${ctx.author.username}, try again in ${Math.ceil(result.remainingMs / 1000)}s.`,
+		},
+	}),
+);
+```
+
+The default middleware name is registered in Seyfert's `RegisteredMiddlewares`. If you use a custom name, add that name to your app types:
 
 ```ts
 import type { CooldownMiddlewares } from '@slipher/cooldown';
@@ -80,183 +85,125 @@ declare module 'seyfert' {
 }
 ```
 
-## Declaring a Cooldown
-
-The simplest way is the `@Cooldown` class decorator, with typed shortcuts per scope.
-
 ```ts
-import { Command, CommandContext, Declare } from 'seyfert';
-import { Cooldown } from '@slipher/cooldown';
-
-@Declare({ name: 'ping', description: 'Ping' })
-@Cooldown.user(5_000) // 5s per user, 1 use
-export default class PingCommand extends Command {
-	async run(ctx: CommandContext) {
-		const result = await ctx.cooldown.context();
-
-		if (result && !result.allowed) {
-			if (result.reason === 'over_capacity') {
-				return ctx.write({ content: 'This command cannot consume that many cooldown tokens.' });
-			}
-
-			return ctx.write({
-				content: `Try again in ${Math.ceil(result.remainingMs / 1000)}s.`,
-			});
-		}
-
-		await ctx.write({ content: 'Pong!' });
-	}
-}
+const plugins = definePlugins(
+	cooldown({
+		middleware: { name: 'commandCooldown' },
+	}),
+);
 ```
 
-### Decorator shortcuts
+## Declaring Cooldowns
+
+Use the shortcut that matches the bucket scope:
 
 ```ts
-@Cooldown.user(5_000)                     // type: 'user', uses: { default: 1 }
-@Cooldown.guild(60_000, { default: 5 })   // type: 'guild', custom uses
-@Cooldown.channel(10_000)                 // type: 'channel'
-@Cooldown.global(1_000)                   // type: 'global' — single bucket for the whole bot
-@Cooldown.custom(ctx => `${ctx.guildId}:${ctx.author.id}`, 5_000)
+@Cooldown.user(5_000) // 1 use per user every 5s
+@Cooldown.guild(60_000, { uses: 5 })
+@Cooldown.channel(10_000)
+@Cooldown.global(1_000)
+@Cooldown.custom(ctx => `${ctx.guildId}:${ctx.author.id}`, 30_000, { group: 'heavy' })
 ```
 
-Scoped shortcuts accept an `extras` argument as the third parameter:
-
-```ts
-@Cooldown.user(5_000, { default: 1 }, { group: 'moderation' })
-```
-
-`Cooldown.custom` receives `extras` as the fourth parameter because the first argument is the resolver:
-
-```ts
-@Cooldown.custom(
-	ctx => `${ctx.guildId}:${ctx.author.id}`,
-	5_000,
-	{ default: 1 },
-	{ group: 'moderation' },
-)
-```
-
-### Raw decorator
-
-`@Cooldown(props)` accepts a full `CooldownProps` if you need every field at once:
+Or use the raw decorator when all fields should be visible:
 
 ```ts
 @Cooldown({
 	type: 'user',
 	interval: 5_000,
-	uses: { default: 3 },
+	uses: 3,
 	group: 'moderation',
 })
+class BanCommand extends Command {}
 ```
 
-## CooldownProps
+`type` defaults to `user`. `uses` defaults to `1`. `group` makes multiple commands share the same bucket.
 
 ```ts
 interface CooldownProps {
 	type?: 'user' | 'guild' | 'channel' | 'global' | ((ctx: AnyContext) => string | undefined);
-	interval: number;        // ms before the bucket refills
-	uses: { default: number; [variant: string]: number };
-	group?: string;          // shared bucket — see below
+	interval: number;
+	uses?: number;
+	group?: string;
 }
 ```
 
-`type` defaults to `'user'` when omitted. When `type` is a function, the manager calls it with the active context to resolve a string target. Returning `undefined` skips the cooldown for that invocation.
+For `guild` and `channel` scopes, DMs fall back to `author.id` because Discord may not provide `guildId` or `channelId` for every interaction. Custom target resolvers can return `undefined` to skip cooldowns for that invocation.
+
+Tiered limits such as premium users getting more uses are intentionally not part of the 1.0 surface. The likely future shape is additive: `uses?: number | ((ctx) => number)`.
+
+## Manual Manager API
+
+Inside a command, the zero-arg form resolves the active command, target, and guild from Seyfert's context scope:
+
+```ts
+const result = await ctx.cooldown.consume();
+
+if (result && !result.allowed) {
+	return ctx.write({
+		content: `Try again in ${Math.ceil(result.remainingMs / 1000)}s.`,
+	});
+}
+```
+
+Use explicit options outside a command, in admin commands, or in tests:
+
+```ts
+await client.cooldown?.check({ name: 'ping', target: userId, guildId });
+await client.cooldown?.consume({ name: 'ping', target: userId, guildId, tokens: 2 });
+await client.cooldown?.reset({ name: 'ping', target: userId, guildId });
+```
+
+`check` previews the result without mutating the bucket. `consume` decrements the bucket. `reset` deletes the bucket and returns `false` when the command has no cooldown.
+
+Calling the zero-arg form outside a Seyfert handler throws. Use the explicit form there.
 
 ## CooldownResult
 
-Every state-changing call returns a `CooldownResult`. Methods return `undefined` when the command resolves to no cooldown.
+`check` and `consume` return `undefined` when the command resolves to no cooldown.
 
 ```ts
-interface CooldownResult {
-	allowed: boolean;
-	reason?: 'rate_limited' | 'over_capacity';
-	remainingMs: number;     // 0 when allowed
-	retryAfter: Date | null; // null when reason is 'over_capacity'
-	limit: number;           // max tokens for the resolved variant
-	remainingUses: number;   // tokens left after this call
-	key: string;             // cache key, useful for logs and metrics
-}
+type CooldownResult =
+	| {
+			allowed: true;
+			remainingMs: 0;
+			retryAfter: Date;
+			limit: number;
+			remainingUses: number;
+			key: string;
+	  }
+	| {
+			allowed: false;
+			remainingMs: number;
+			retryAfter: Date;
+			limit: number;
+			remainingUses: number;
+			key: string;
+	  };
 ```
 
-`reason` is only present when `allowed` is `false`.
+Asking for more `tokens` than the bucket limit is a programmer error and throws `RangeError`.
 
-- `rate_limited` means the bucket is temporarily empty. `remainingMs` is finite and `retryAfter` is a `Date`.
-- `over_capacity` means the call asked for more tokens than the configured limit. It can never fit in this bucket, so `remainingMs` is `Infinity` and `retryAfter` is `null`.
+## Shared Buckets
 
-## Manager API
+Commands that share a `group` share the same cache key. The key shape is `${group ?? resolvedCommandName}:${typeLabel}:${target}`.
 
 ```ts
-ctx.cooldown.context();                              // resolve target, consume, return result
-ctx.cooldown.check({ name: 'ping', target: ctx.author.id });
-ctx.cooldown.consume({ name: 'ping', target: ctx.author.id });
-ctx.cooldown.remaining({ name: 'ping', target: ctx.author.id });
-ctx.cooldown.reset('ping', ctx.author.id);
+@Cooldown.user(5_000, { group: 'moderation' })
+class BanCommand extends Command {}
+
+@Cooldown.user(5_000, { group: 'moderation' })
+class KickCommand extends Command {}
 ```
 
-- `check` is read-only: it peeks at the bucket and returns the result that a `consume` *would* produce, without mutating state.
-- `consume` decrements the bucket. Returns `allowed: false` instead of mutating when the bucket is empty or `tokens` exceeds `limit`.
-- `remaining` is a thin wrapper that returns just the milliseconds left (or 0).
-- `reset` clears the bucket for a target. Returns `false` when no cooldown is configured.
-- `context` resolves the target from the active interaction context (using `type`), then calls `consume`.
+A user that runs `/ban` cannot immediately run `/kick`; both commands consume `moderation:user:<userId>`.
 
-Both `check` and `consume` accept an optional `tokens?: number` to model multi-token consumption.
+`group` only changes the bucket namespace after a cooldown is resolved. It does not make subcommands inherit cooldowns. For subcommands, the manager uses `subcommand.cooldown ?? parent.cooldown`.
 
-If `use` references an unknown variant, the manager falls back to the `default` limit and emits a warning through `client.debugger`. This keeps the bucket rate-limited instead of writing `NaN` to cache.
+## Storage Atomicity
 
-For `type: 'guild'`, DMs fall back to `author.id` because there is no `guildId`. `ctx.cooldown.context()` returns `undefined` for component and modal interactions because the command resolver only runs for commands.
+`consume` is atomic when the cache adapter explicitly opts in to `AtomicCooldownAdapter` with `supportsAtomicCooldowns: true` and a Redis-compatible `eval(script, keys, args)` method. Adapters that merely expose `eval` without the opt-in marker use the regular read-decide-write path.
 
-### Storage atomicity
+The Redis script uses Redis `TIME` as its clock source and the resource key constants from this package. `ExpirableRedisAdapter` deliberately does not opt in because its TTL and relationship bookkeeping are adapter-specific.
 
-`consume` is atomic when the cache adapter supports the Slipher Redis `eval` escape hatch (e.g. `@slipher/redis-adapter`); the default in-memory adapter is also safe for single-process usage. Other adapters fall back to a best-effort read-decide-write path.
-
-Only `consume` uses that atomic path. `check`, `remaining`, and `reset` are regular cache reads/writes, so under Redis they can observe state that changes between calls when other workers are consuming the same bucket. Use `consume` as the authority for admission decisions; treat `check` and `remaining` as display/preview helpers.
-
-## Shared Buckets (`group`)
-
-Commands that share a `group` share the same cache key. The key is built as `${group ?? resolvedCommandName}:${typeLabel}:${target}`, so different commands in the same group hit one bucket per target.
-
-```ts
-@Cooldown.user(5_000, { default: 1 }, { group: 'moderation' })
-class BanCommand extends Command { /* ... */ }
-
-@Cooldown.user(5_000, { default: 1 }, { group: 'moderation' })
-class KickCommand extends Command { /* ... */ }
-```
-
-A user that runs `/ban` cannot immediately run `/kick`; both are gated by the same `moderation:user:<userId>` bucket.
-
-`group` is only the cache namespace after a cooldown has been resolved; it does not make subcommands inherit cooldowns. For a command with subcommands, the manager resolves cooldown data as `subcommand.cooldown ?? parent.cooldown`. Put the decorator on the parent when every subcommand should be gated, or put it on individual subcommands when only some should be gated:
-
-```ts
-@Declare({ name: 'daily', description: 'Daily rewards' })
-@Cooldown.user(86_400_000, { default: 1 })
-class DailyCommand extends Command { /* claim/status subcommands */ }
-```
-
-In that shape, `/daily claim` and `/daily status` both inherit the parent cooldown. If only `claim` should be limited, assign `cooldown` to that subcommand instead of the parent.
-
-## Custom Target Resolvers
-
-When the built-in scopes are not enough, pass a resolver as `type`:
-
-```ts
-@Cooldown.custom(
-	ctx => (ctx.member?.premium ? `premium:${ctx.author.id}` : `free:${ctx.author.id}`),
-	30_000,
-)
-class HeavyCommand extends Command { /* ... */ }
-```
-
-The resolved string is used verbatim as the target portion of the cache key. The type label in the key is `custom`. Returning `undefined` skips the cooldown.
-
-To share a custom resolver bucket with other commands, pass `group` through the fourth `extras` argument:
-
-```ts
-@Cooldown.custom(
-	ctx => `${ctx.guildId}:${ctx.author.id}`,
-	30_000,
-	{ default: 2 },
-	{ group: 'heavy' },
-)
-class HeavyCommand extends Command { /* ... */ }
-```
+Only `consume` uses the atomic path. `check` and `reset` remain regular cache operations, so use `consume` as the admission authority in multi-worker bots.

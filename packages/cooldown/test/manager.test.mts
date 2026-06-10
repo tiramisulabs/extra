@@ -2,15 +2,7 @@ import { type AnyContext, Cache, Client, Command, Logger, MemoryAdapter, SubComm
 import { HandleCommand } from 'seyfert/lib/commands/handle';
 import { CommandHandler } from 'seyfert/lib/commands/handler.js';
 import { afterEach, assert, beforeEach, describe, test, vi } from 'vitest';
-import {
-	Cooldown,
-	CooldownManager,
-	type CooldownProps,
-	CooldownType,
-	cooldown as cooldownPlugin,
-	runWithCooldownContext,
-	useCooldownContext,
-} from '../src';
+import { Cooldown, CooldownManager, type CooldownProps, cooldown as cooldownPlugin } from '../src';
 import type { CooldownData } from '../src/resource';
 
 function makeCommand(overrides: Record<string, unknown>) {
@@ -24,12 +16,40 @@ function makeSub(overrides: Record<string, unknown>) {
 function commandContext(overrides: Record<string, unknown> = {}) {
 	return {
 		command: {},
-		fullCommandName: 'testCommand',
+		fullCommandName: 'ping',
 		author: { id: 'user1' },
 		guildId: 'guild1',
 		channelId: 'channel1',
 		...overrides,
 	} as unknown as AnyContext;
+}
+
+function createClient(commands: Command[] = []) {
+	const client = new Client({
+		getRC: () => ({ debug: false, intents: 0, token: '', locations: { base: '', output: '' } }),
+	});
+	const handler = new CommandHandler(new Logger({ active: false }), client);
+	handler.values = commands;
+	client.commands = handler;
+	client.handleCommand = new HandleCommand(client);
+	client.cache = new Cache(0, new MemoryAdapter(), {}, client);
+	return client;
+}
+
+function createScopedPlugin(client: Client, plugin = cooldownPlugin()) {
+	const fragments: Array<{ contextScopes?: readonly ((context: AnyContext, run: () => unknown) => unknown)[] }> = [];
+	plugin.register?.({
+		options: {
+			set(fragment) {
+				fragments.push(fragment as (typeof fragments)[number]);
+			},
+		},
+	} as never);
+	plugin.setup(client);
+
+	const scope = fragments[0]?.contextScopes?.[0];
+	if (!scope) throw new Error('Missing cooldown context scope');
+	return { plugin, scope };
 }
 
 class AtomicMemoryAdapter extends MemoryAdapter {
@@ -39,33 +59,29 @@ class AtomicMemoryAdapter extends MemoryAdapter {
 	async eval(_script: string, keys: string[], args: string[]) {
 		this.evalCalls++;
 		const [hashKey, namespace] = keys;
-		const [nowArg, intervalArg, limitArg, tokensArg, memberKey] = args;
-		const now = Number(nowArg);
+		const [intervalArg, limitArg, tokensArg, memberKey] = args;
+		const now = Date.now();
 		const interval = Number(intervalArg);
 		const limit = Number(limitArg);
 		const tokens = Number(tokensArg);
 		const data = this.get(hashKey) as CooldownData | null;
 
-		if (tokens > limit) {
-			return [0, -1, -1, limit, data?.remaining ?? limit, 2];
-		}
-
 		if (!data || now - data.lastDrip >= interval) {
 			const remaining = limit - tokens;
 			this.addToRelationship(namespace, memberKey);
 			this.set(hashKey, { interval, remaining, lastDrip: now });
-			return [1, 0, now, limit, remaining, 0];
+			return [1, 0, now, limit, remaining];
 		}
 
 		const remainingMs = interval - (now - data.lastDrip);
 		if (data.remaining - tokens < 0) {
-			return [0, remainingMs, now + remainingMs, limit, data.remaining, 1];
+			return [0, remainingMs, now + remainingMs, limit, data.remaining];
 		}
 
 		const remaining = data.remaining - tokens;
 		this.addToRelationship(namespace, memberKey);
 		this.patch(hashKey, { interval, remaining });
-		return [1, 0, now, limit, remaining, 0];
+		return [1, 0, now, limit, remaining];
 	}
 }
 
@@ -78,168 +94,7 @@ class EvalOnlyMemoryAdapter extends MemoryAdapter {
 	}
 }
 
-describe('CooldownManager — getCommandData', () => {
-	let client: Client;
-	let manager: CooldownManager;
-	let cooldownData: CooldownProps;
-
-	beforeEach(() => {
-		client = new Client({
-			getRC: () => ({ debug: true, intents: 0, token: '', locations: { base: '', output: '' } }),
-		});
-
-		const handler = new CommandHandler(new Logger({ active: true }), client);
-		cooldownData = { type: CooldownType.User, interval: 1000, uses: { default: 3 } };
-
-		const groupedSubCommand = makeSub({
-			name: 'testGroupSub',
-			aliases: ['groupSubAlias'],
-			group: 'admin',
-			description: 'Grouped subcommand cooldown test',
-		});
-
-		handler.values = [
-			makeCommand({
-				name: 'aliasedCommand',
-				aliases: ['aliasRoot'],
-				description: 'Aliased command cooldown test',
-				cooldown: cooldownData,
-			}),
-			makeCommand({
-				name: 'commandWithfakeGuildId',
-				description: 'Command with specific guild cooldown test',
-				cooldown: cooldownData,
-				guildId: ['124'],
-			}),
-			makeCommand({
-				name: 'testCommand',
-				aliases: ['testAlias'],
-				cooldown: cooldownData,
-				description: 'Root command cooldown test',
-				groups: { admin: { description: 'Admin group' } },
-				groupsAliases: { adm: 'admin' },
-				options: [
-					makeSub({
-						name: 'testSub',
-						aliases: ['subAlias'],
-						cooldown: cooldownData,
-						description: 'Subcommand cooldown test',
-					}),
-					makeSub({
-						name: 'testSubNon',
-						description: 'Subcommand without its own cooldown, should inherit from root',
-					}),
-					groupedSubCommand,
-				],
-			}),
-		];
-
-		client.commands = handler;
-		client.handleCommand = new HandleCommand(client);
-		client.cache = new Cache(0, new MemoryAdapter(), {}, client);
-		manager = new CooldownManager(client);
-	});
-
-	test('returns cooldown data for a root command', () => {
-		assert.deepEqual(manager.getCommandData('testCommand'), ['testCommand', cooldownData]);
-	});
-
-	test('returns cooldown data for a subcommand using full name', () => {
-		assert.deepEqual(manager.getCommandData('testCommand testSub'), ['testCommand testSub', cooldownData]);
-	});
-
-	test('resolves canonical names from aliases and groups', () => {
-		assert.deepEqual(manager.getCommandData('aliasRoot'), ['aliasedCommand', cooldownData]);
-		assert.deepEqual(manager.getCommandData('testAlias subAlias'), ['testCommand testSub', cooldownData]);
-		assert.deepEqual(manager.getCommandData('testCommand adm groupSubAlias'), [
-			'testCommand admin testGroupSub',
-			cooldownData,
-		]);
-	});
-
-	test('uses an overridden message resolver for shortcut compatibility', () => {
-		const parent = client.commands!.values.find(command => command.name === 'testCommand') as Command;
-		const command = parent.options!.find(
-			option => option instanceof SubCommand && option.name === 'testGroupSub',
-		) as SubCommand;
-
-		class ShortcutHandleCommand extends HandleCommand {
-			override resolveCommandFromContent(content: string, prefix: string, message: never) {
-				if (content === 'shortcut') {
-					return {
-						parent,
-						command,
-						fullCommandName: 'testCommand admin testGroupSub',
-						argsContent: '',
-					};
-				}
-				return super.resolveCommandFromContent(content, prefix, message);
-			}
-		}
-
-		client.handleCommand = new ShortcutHandleCommand(client);
-		assert.deepEqual(manager.getCommandData('shortcut'), ['testCommand admin testGroupSub', cooldownData]);
-	});
-
-	test('falls back when an overridden resolver throws', () => {
-		class ThrowingHandleCommand extends HandleCommand {
-			override resolveCommandFromContent(): never {
-				throw new Error('resolver failed');
-			}
-		}
-		client.handleCommand = new ThrowingHandleCommand(client);
-		assert.deepEqual(manager.getCommandData('testCommand'), ['testCommand', cooldownData]);
-	});
-
-	test('falls back when an overridden resolver returns nothing', () => {
-		class EmptyHandleCommand extends HandleCommand {
-			override resolveCommandFromContent() {
-				return undefined as never;
-			}
-		}
-		client.handleCommand = new EmptyHandleCommand(client);
-		assert.deepEqual(manager.getCommandData('testCommand'), ['testCommand', cooldownData]);
-	});
-
-	test('returns undefined for subcommand if root is not provided', () => {
-		assert.equal(manager.getCommandData('testSub'), undefined);
-	});
-
-	test('returns undefined for non-existent command', () => {
-		assert.equal(manager.getCommandData('nonExistentCommand'), undefined);
-	});
-
-	test('returns parent cooldown for a subcommand without its own cooldown data', () => {
-		assert.deepEqual(manager.getCommandData('testCommand testSubNon'), ['testCommand testSubNon', cooldownData]);
-	});
-
-	test('filters by guildId correctly', () => {
-		assert.equal(manager.getCommandData('testCommand', '123')?.[0], 'testCommand');
-		assert.equal(manager.getCommandData('testCommand testSub', '123')?.[0], 'testCommand testSub');
-		assert.equal(manager.getCommandData('commandWithfakeGuildId', '123'), undefined);
-		assert.equal(manager.getCommandData('commandWithfakeGuildId', '124')?.[0], 'commandWithfakeGuildId');
-		assert.equal(manager.getCommandData('commandWithfakeGuildId')?.[0], 'commandWithfakeGuildId');
-	});
-
-	test('uses Seyfert parser guild candidates for metadata lookup without guildId', () => {
-		class TrackingHandleCommand extends HandleCommand {
-			guildIds: (string | undefined)[] = [];
-
-			override resolveCommandFromContent(content: string, prefix: string, message: never) {
-				this.guildIds.push((message as { guild_id?: string }).guild_id);
-				return super.resolveCommandFromContent(content, prefix, message);
-			}
-		}
-
-		const handle = new TrackingHandleCommand(client);
-		client.handleCommand = handle;
-
-		assert.equal(manager.getCommandData('commandWithfakeGuildId')?.[0], 'commandWithfakeGuildId');
-		assert.deepEqual(handle.guildIds, [undefined, '124']);
-	});
-});
-
-describe('CooldownManager — check / consume / remaining / reset', () => {
+describe('CooldownManager — explicit check / consume / reset', () => {
 	let client: Client;
 	let manager: CooldownManager;
 
@@ -247,24 +102,23 @@ describe('CooldownManager — check / consume / remaining / reset', () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date(0));
 
-		client = new Client({
-			getRC: () => ({ debug: false, intents: 0, token: '', locations: { base: '', output: '' } }),
-		});
-		const handler = new CommandHandler(new Logger({ active: false }), client);
-		handler.values = [
+		client = createClient([
+			makeCommand({
+				name: 'guildOnly',
+				description: 'Guild command',
+				cooldown: { type: 'user', interval: 1_000, uses: 2 },
+				guildId: ['124'],
+			}),
 			makeCommand({
 				name: 'ping',
 				description: 'Ping',
-				cooldown: { type: CooldownType.User, interval: 1_000, uses: { default: 2 } },
+				cooldown: { type: 'user', interval: 1_000, uses: 2 },
 			}),
 			makeCommand({
 				name: 'unbounded',
 				description: 'No cooldown configured',
 			}),
-		];
-		client.commands = handler;
-		client.handleCommand = new HandleCommand(client);
-		client.cache = new Cache(0, new MemoryAdapter(), {}, client);
+		]);
 		manager = new CooldownManager(client);
 	});
 
@@ -272,8 +126,9 @@ describe('CooldownManager — check / consume / remaining / reset', () => {
 		vi.useRealTimers();
 	});
 
-	test('consume returns a rich CooldownResult on first call', async () => {
+	test('consume returns a rich result without a reason field', async () => {
 		const result = await manager.consume({ name: 'ping', target: 'u1' });
+
 		assert.ok(result);
 		assert.equal(result.allowed, true);
 		assert.equal(result.remainingMs, 0);
@@ -281,23 +136,26 @@ describe('CooldownManager — check / consume / remaining / reset', () => {
 		assert.equal(result.remainingUses, 1);
 		assert.equal(result.key, 'ping:user:u1');
 		assert.ok(result.retryAfter instanceof Date);
+		assert.equal('reason' in result, false);
 	});
 
 	test('consume blocks once the bucket is exhausted', async () => {
 		await manager.consume({ name: 'ping', target: 'u1' });
 		await manager.consume({ name: 'ping', target: 'u1' });
 		const blocked = await manager.consume({ name: 'ping', target: 'u1' });
+
 		assert.ok(blocked);
 		assert.equal(blocked.allowed, false);
-		assert.equal(blocked.reason, 'rate_limited');
 		assert.equal(blocked.remainingUses, 0);
 		assert.equal(blocked.remainingMs, 1_000);
 		assert.equal(blocked.retryAfter.getTime(), 1_000);
+		assert.equal('reason' in blocked, false);
 	});
 
 	test('check does not mutate bucket state and reports post-consume counts', async () => {
 		const before = await manager.check({ name: 'ping', target: 'u1' });
 		const after = await manager.check({ name: 'ping', target: 'u1' });
+
 		assert.ok(before && after);
 		assert.equal(before.allowed, true);
 		assert.equal(before.remainingUses, 1);
@@ -305,71 +163,29 @@ describe('CooldownManager — check / consume / remaining / reset', () => {
 		assert.equal(manager.resource.get('ping:user:u1'), undefined);
 	});
 
-	test('check reports post-consume counts with explicit token counts and existing buckets', async () => {
-		const fresh = await manager.check({ name: 'ping', target: 'u1', tokens: 2 });
-		assert.ok(fresh);
-		assert.equal(fresh.allowed, true);
-		assert.equal(fresh.remainingUses, 0);
-
-		await manager.consume({ name: 'ping', target: 'u1' });
-		const existing = await manager.check({ name: 'ping', target: 'u1' });
-		assert.ok(existing);
-		assert.equal(existing.allowed, true);
-		assert.equal(existing.remainingUses, 0);
-
-		const blocked = await manager.check({ name: 'ping', target: 'u1', tokens: 2 });
-		assert.ok(blocked);
-		assert.equal(blocked.allowed, false);
-		assert.equal(blocked.remainingUses, 1);
+	test('throws RangeError when tokens exceed the limit without mutating', () => {
+		assert.throws(() => manager.consume({ name: 'ping', target: 'u1', tokens: 5 }), RangeError);
+		assert.throws(() => manager.check({ name: 'ping', target: 'u1', tokens: 5 }), RangeError);
+		assert.equal(manager.resource.get('ping:user:u1'), undefined);
 	});
 
-	test('remaining returns 0 when free and ms when blocked', async () => {
-		assert.equal(await manager.remaining({ name: 'ping', target: 'u1' }), 0);
-		await manager.consume({ name: 'ping', target: 'u1' });
-		await manager.consume({ name: 'ping', target: 'u1' });
-		assert.equal(await manager.remaining({ name: 'ping', target: 'u1' }), 1_000);
-	});
+	test('reset deletes the bucket and accepts guildId in the explicit form', async () => {
+		await manager.consume({ name: 'guildOnly', target: 'u1', guildId: '124' });
+		await manager.consume({ name: 'guildOnly', target: 'u1', guildId: '124' });
 
-	test('reset clears the bucket', async () => {
-		await manager.consume({ name: 'ping', target: 'u1' });
-		await manager.consume({ name: 'ping', target: 'u1' });
-		const reset = await manager.reset('ping', 'u1');
-		assert.equal(reset, true);
-		const result = await manager.consume({ name: 'ping', target: 'u1' });
-		assert.ok(result);
-		assert.equal(result.allowed, true);
-	});
-
-	test('unknown use variant falls back to default limit and warns once', async () => {
-		const warn = vi.fn();
-		(client as Client & { debugger: { info: () => void; warn: typeof warn } }).debugger = {
-			info: () => undefined,
-			warn,
-		};
-
-		const result = await manager.consume({ name: 'ping', target: 'u1', use: 'missing' });
-
-		assert.ok(result);
-		assert.equal(result.allowed, true);
-		assert.equal(result.limit, 2);
-		assert.equal(result.remainingUses, 1);
-		assert.equal(manager.resource.get('ping:user:u1')?.remaining, 1);
-		assert.equal(Number.isNaN(manager.resource.get('ping:user:u1')?.remaining), false);
-		assert.equal(warn.mock.calls.length, 1);
-	});
-
-	test('reset with an unknown use variant restores the default bucket', async () => {
-		await manager.consume({ name: 'ping', target: 'u1' });
-		await manager.consume({ name: 'ping', target: 'u1' });
-
-		const reset = await manager.reset('ping', 'u1', 'missing');
-		const next = await manager.consume({ name: 'ping', target: 'u1' });
+		const reset = await manager.reset({ name: 'guildOnly', target: 'u1', guildId: '124' });
+		const afterReset = await manager.consume({ name: 'guildOnly', target: 'u1', guildId: '124' });
 
 		assert.equal(reset, true);
-		assert.ok(next);
-		assert.equal(next.allowed, true);
-		assert.equal(next.limit, 2);
-		assert.equal(next.remainingUses, 1);
+		assert.equal(manager.resource.get('guildOnly:user:u1')?.remaining, 1);
+		assert.ok(afterReset);
+		assert.equal(afterReset.allowed, true);
+	});
+
+	test('explicit form does not scan guild-specific commands without guildId', async () => {
+		assert.equal(await manager.consume({ name: 'guildOnly', target: 'u1' }), undefined);
+		assert.equal(await manager.consume({ name: 'guildOnly', target: 'u1', guildId: '123' }), undefined);
+		assert.ok(await manager.consume({ name: 'guildOnly', target: 'u1', guildId: '124' }));
 	});
 
 	test('consume refills after the interval elapses', async () => {
@@ -377,29 +193,278 @@ describe('CooldownManager — check / consume / remaining / reset', () => {
 		await manager.consume({ name: 'ping', target: 'u1' });
 		vi.advanceTimersByTime(1_500);
 		const result = await manager.consume({ name: 'ping', target: 'u1' });
+
 		assert.ok(result);
 		assert.equal(result.allowed, true);
 		assert.equal(result.remainingUses, 1);
 	});
 
-	test('tokens greater than limit is rejected without mutating', async () => {
-		const result = await manager.consume({ name: 'ping', target: 'u1', tokens: 5 });
-		assert.ok(result);
-		assert.equal(result.allowed, false);
-		assert.equal(result.reason, 'over_capacity');
-		assert.equal(result.remainingMs, Infinity);
-		assert.equal(result.retryAfter, null);
-		assert.equal(manager.resource.get('ping:user:u1'), undefined);
+	test('returns undefined when the command resolves to no cooldown', async () => {
+		assert.equal(await manager.consume({ name: 'unbounded', target: 'u1' }), undefined);
+		assert.equal(await manager.check({ name: 'unbounded', target: 'u1' }), undefined);
+		assert.equal(await manager.reset({ name: 'unbounded', target: 'u1' }), false);
+	});
+});
+
+describe('CooldownManager — implicit scoped check / consume / reset', () => {
+	let client: Client;
+	let command: Command;
+	let manager: CooldownManager;
+	let scope: (context: AnyContext, run: () => unknown) => unknown;
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date(0));
+
+		command = makeCommand({
+			name: 'ping',
+			description: 'Ping',
+			cooldown: { type: 'user', interval: 1_000, uses: 3 },
+		});
+		client = createClient([command]);
+		const pluginSetup = createScopedPlugin(client);
+		manager = pluginSetup.plugin.manager;
+		scope = pluginSetup.scope;
 	});
 
-	test('check reports over-capacity without mutating', async () => {
-		const result = await manager.check({ name: 'ping', target: 'u1', tokens: 5 });
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	test('zero-arg verbs throw outside a cooldown scope and point to the explicit form', () => {
+		assert.throws(() => manager.consume(), /Use the explicit/);
+		assert.throws(() => manager.check(), /Use the explicit/);
+		assert.throws(() => manager.reset(), /Use the explicit/);
+	});
+
+	test('consume uses the active command context without re-resolving by name', async () => {
+		client.handleCommand = {
+			resolveCommandFromContent() {
+				throw new Error('implicit path should not resolve the command by name');
+			},
+			getCommandFromContent() {
+				throw new Error('implicit path should not resolve the command by name');
+			},
+		} as never;
+
+		const result = await scope(commandContext({ client, command, fullCommandName: 'ping' }), () => manager.consume());
+
 		assert.ok(result);
-		assert.equal(result.allowed, false);
-		assert.equal(result.reason, 'over_capacity');
-		assert.equal(result.remainingMs, Infinity);
-		assert.equal(result.retryAfter, null);
-		assert.equal(manager.resource.get('ping:user:u1'), undefined);
+		assert.equal(result.allowed, true);
+		assert.equal(result.key, 'ping:user:user1');
+		assert.equal(manager.resource.get('ping:user:user1')?.remaining, 2);
+	});
+
+	test('implicit check and reset use the active context target', async () => {
+		const context = commandContext({ client, command, fullCommandName: 'ping' });
+		await scope(context, () => manager.consume());
+		const peek = await scope(context, () => manager.check());
+		const reset = await scope(context, () => manager.reset());
+		const afterReset = await scope(context, () => manager.consume());
+
+		assert.ok(peek);
+		assert.equal(peek.remainingUses, 1);
+		assert.equal(reset, true);
+		assert.ok(afterReset);
+		assert.equal(afterReset.allowed, true);
+		assert.equal(afterReset.remainingUses, 2);
+	});
+
+	test('implicit path falls back to parent cooldown only when a subcommand has no props', async () => {
+		const child = makeSub({
+			name: 'child',
+			description: 'Subcommand without cooldown',
+		});
+		const parent = makeCommand({
+			name: 'parent',
+			description: 'Parent',
+			cooldown: { type: 'user', interval: 1_000, uses: 1 },
+			options: [child],
+		});
+		client = createClient([parent]);
+		const pluginSetup = createScopedPlugin(client);
+		manager = pluginSetup.plugin.manager;
+		scope = pluginSetup.scope;
+
+		const result = await scope(commandContext({ client, command: child, fullCommandName: 'parent child' }), () =>
+			manager.consume(),
+		);
+
+		assert.ok(result);
+		assert.equal(result.key, 'parent child:user:user1');
+	});
+
+	test('implicit path defaults guildId from the active context', async () => {
+		const guildOnly = makeCommand({
+			name: 'guildOnly',
+			description: 'Guild command',
+			cooldown: { type: 'user', interval: 1_000, uses: 1 },
+			guildId: ['124'],
+		});
+		client = createClient([guildOnly]);
+		const pluginSetup = createScopedPlugin(client);
+		manager = pluginSetup.plugin.manager;
+		scope = pluginSetup.scope;
+
+		const result = await scope(
+			commandContext({ client, command: guildOnly, fullCommandName: 'guildOnly', guildId: '124' }),
+			() => manager.consume(),
+		);
+
+		assert.ok(result);
+		assert.equal(result.key, 'guildOnly:user:user1');
+	});
+});
+
+describe('CooldownManager — custom target resolver, shared groups, and targets', () => {
+	let client: Client;
+	let manager: CooldownManager;
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date(0));
+
+		client = createClient([
+			makeCommand({
+				name: 'custom',
+				description: 'Custom resolver',
+				cooldown: {
+					type: () => 'static-target',
+					interval: 1_000,
+				},
+			}),
+			makeCommand({
+				name: 'ban',
+				description: 'Ban moderation command',
+				cooldown: {
+					type: 'user',
+					interval: 1_000,
+					group: 'mod',
+				},
+			}),
+			makeCommand({
+				name: 'kick',
+				description: 'Kick moderation command',
+				cooldown: {
+					type: 'user',
+					interval: 1_000,
+					group: 'mod',
+				},
+			}),
+			makeCommand({
+				name: 'broadcast',
+				description: 'Bot-wide cooldown',
+				cooldown: {
+					type: 'global',
+					interval: 1_000,
+				},
+			}),
+			makeCommand({
+				name: 'guildTarget',
+				description: 'Guild target fallback',
+				cooldown: {
+					type: 'guild',
+					interval: 1_000,
+				},
+			}),
+			makeCommand({
+				name: 'channelTarget',
+				description: 'Channel target fallback',
+				cooldown: {
+					type: 'channel',
+					interval: 1_000,
+				},
+			}),
+		]);
+		manager = new CooldownManager(client);
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	test('custom resolver produces a custom type label in the key for scoped consumes', async () => {
+		const { plugin, scope } = createScopedPlugin(client);
+		manager = plugin.manager;
+		const command = client.commands!.values.find(item => item.name === 'custom')!;
+
+		const result = await scope(commandContext({ client, command, fullCommandName: 'custom' }), () => manager.consume());
+
+		assert.ok(result);
+		assert.equal(result.key, 'custom:custom:static-target');
+	});
+
+	test('shared group: two distinct commands share the same bucket', async () => {
+		const first = await manager.consume({ name: 'ban', target: 'u1' });
+		const second = await manager.consume({ name: 'kick', target: 'u1' });
+
+		assert.ok(first && second);
+		assert.equal(first.allowed, true);
+		assert.equal(first.key, 'mod:user:u1');
+		assert.equal(second.allowed, false);
+		assert.equal(second.key, 'mod:user:u1');
+	});
+
+	test('global type collapses the cache key regardless of supplied target', async () => {
+		const first = await manager.consume({ name: 'broadcast', target: 'u1' });
+		const otherUser = await manager.consume({ name: 'broadcast', target: 'u2' });
+		const reset = await manager.reset({ name: 'broadcast', target: 'u-arbitrary' });
+		const afterReset = await manager.consume({ name: 'broadcast', target: 'u3' });
+
+		assert.ok(first && otherUser && afterReset);
+		assert.equal(first.allowed, true);
+		assert.equal(first.key, 'broadcast:global:global');
+		assert.equal(otherUser.allowed, false);
+		assert.equal(otherUser.key, 'broadcast:global:global');
+		assert.equal(reset, true);
+		assert.equal(afterReset.allowed, true);
+	});
+
+	test('guild and channel targets fall back to author id in DMs', async () => {
+		const { plugin, scope } = createScopedPlugin(client);
+		manager = plugin.manager;
+		const guildCommand = client.commands!.values.find(item => item.name === 'guildTarget')!;
+		const channelCommand = client.commands!.values.find(item => item.name === 'channelTarget')!;
+
+		const guildResult = await scope(
+			commandContext({ client, command: guildCommand, fullCommandName: 'guildTarget', guildId: undefined }),
+			() => manager.consume(),
+		);
+		const channelResult = await scope(
+			commandContext({
+				client,
+				command: channelCommand,
+				fullCommandName: 'channelTarget',
+				channelId: undefined,
+			}),
+			() => manager.consume(),
+		);
+
+		assert.ok(guildResult && channelResult);
+		assert.equal(guildResult.key, 'guildTarget:guild:user1');
+		assert.equal(channelResult.key, 'channelTarget:channel:user1');
+	});
+});
+
+describe('CooldownManager — atomic storage', () => {
+	let client: Client;
+	let manager: CooldownManager;
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date(0));
+		client = createClient([
+			makeCommand({
+				name: 'ping',
+				description: 'Ping',
+				cooldown: { type: 'user', interval: 1_000, uses: 2 },
+			}),
+		]);
+		manager = new CooldownManager(client);
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
 	});
 
 	test('consume uses an atomic adapter path when the adapter opts in', async () => {
@@ -416,7 +481,6 @@ describe('CooldownManager — check / consume / remaining / reset', () => {
 		assert.equal(first.allowed, true);
 		assert.equal(second.allowed, true);
 		assert.equal(third.allowed, false);
-		assert.equal(third.reason, 'rate_limited');
 		assert.equal((adapter.get('cooldowns.ping:user:u1') as CooldownData | null)?.remaining, 0);
 	});
 
@@ -453,232 +517,60 @@ describe('CooldownManager — check / consume / remaining / reset', () => {
 		);
 		assert.equal((adapter.get('cooldowns.ping:user:u1') as CooldownData | null)?.remaining, 0);
 	});
-
-	test('returns undefined when the command resolves to no cooldown', async () => {
-		assert.equal(await manager.consume({ name: 'unbounded', target: 'u1' }), undefined);
-		assert.equal(await manager.check({ name: 'unbounded', target: 'u1' }), undefined);
-		assert.equal(await manager.reset('unbounded', 'u1'), false);
-	});
-});
-
-describe('CooldownManager — custom target resolver and shared groups', () => {
-	let client: Client;
-	let manager: CooldownManager;
-
-	beforeEach(() => {
-		client = new Client({
-			getRC: () => ({ debug: false, intents: 0, token: '', locations: { base: '', output: '' } }),
-		});
-		const handler = new CommandHandler(new Logger({ active: false }), client);
-
-		handler.values = [
-			makeCommand({
-				name: 'custom',
-				description: 'Custom resolver',
-				cooldown: {
-					type: () => 'static-target',
-					interval: 1_000,
-					uses: { default: 1 },
-				},
-			}),
-			makeCommand({
-				name: 'ban',
-				description: 'Ban moderation command',
-				cooldown: {
-					type: CooldownType.User,
-					interval: 1_000,
-					uses: { default: 1 },
-					group: 'mod',
-				},
-			}),
-			makeCommand({
-				name: 'kick',
-				description: 'Kick moderation command',
-				cooldown: {
-					type: CooldownType.User,
-					interval: 1_000,
-					uses: { default: 1 },
-					group: 'mod',
-				},
-			}),
-			makeCommand({
-				name: 'broadcast',
-				description: 'Bot-wide cooldown',
-				cooldown: {
-					type: 'global',
-					interval: 1_000,
-					uses: { default: 1 },
-				},
-			}),
-		];
-
-		client.commands = handler;
-		client.handleCommand = new HandleCommand(client);
-		client.cache = new Cache(0, new MemoryAdapter(), {}, client);
-		manager = new CooldownManager(client);
-	});
-
-	test('custom resolver produces a "custom" type label in the key', async () => {
-		const result = await manager.consume({ name: 'custom', target: 'static-target' });
-		assert.ok(result);
-		assert.equal(result.key, 'custom:custom:static-target');
-	});
-
-	test('shared group: two distinct commands share the same bucket', async () => {
-		const first = await manager.consume({ name: 'ban', target: 'u1' });
-		assert.ok(first);
-		assert.equal(first.allowed, true);
-		assert.equal(first.key, 'mod:user:u1');
-
-		const second = await manager.consume({ name: 'kick', target: 'u1' });
-		assert.ok(second);
-		assert.equal(second.allowed, false);
-		assert.equal(second.key, 'mod:user:u1');
-	});
-
-	test('global type collapses the cache key regardless of the supplied target', async () => {
-		const first = await manager.consume({ name: 'broadcast', target: 'u1' });
-		assert.ok(first);
-		assert.equal(first.allowed, true);
-		assert.equal(first.key, 'broadcast:global:global');
-
-		const otherUser = await manager.consume({ name: 'broadcast', target: 'u2' });
-		assert.ok(otherUser);
-		assert.equal(otherUser.allowed, false);
-		assert.equal(otherUser.key, 'broadcast:global:global');
-
-		const peek = await manager.check({ name: 'broadcast', target: 'u999' });
-		assert.ok(peek);
-		assert.equal(peek.key, 'broadcast:global:global');
-
-		const cleared = await manager.reset('broadcast', 'u-arbitrary');
-		assert.equal(cleared, true);
-		const afterReset = await manager.consume({ name: 'broadcast', target: 'u3' });
-		assert.ok(afterReset);
-		assert.equal(afterReset.allowed, true);
-	});
-});
-
-describe('CooldownManager — context scope', () => {
-	let client: Client;
-	let manager: CooldownManager;
-
-	beforeEach(() => {
-		vi.useFakeTimers();
-		vi.setSystemTime(new Date(0));
-
-		client = new Client({
-			getRC: () => ({ debug: false, intents: 0, token: '', locations: { base: '', output: '' } }),
-		});
-		const handler = new CommandHandler(new Logger({ active: false }), client);
-		handler.values = [
-			makeCommand({
-				name: 'commandWithfakeGuildId',
-				description: 'Command with specific guild cooldown test',
-				cooldown: { type: CooldownType.User, interval: 1_000, uses: { default: 3 } },
-				guildId: ['124'],
-			}),
-			makeCommand({
-				name: 'testCommand',
-				description: 'Root command cooldown test',
-				cooldown: { type: CooldownType.User, interval: 1_000, uses: { default: 3 } },
-			}),
-		];
-		client.commands = handler;
-		client.handleCommand = new HandleCommand(client);
-		client.cache = new Cache(0, new MemoryAdapter(), {}, client);
-		manager = new CooldownManager(client);
-	});
-
-	afterEach(() => {
-		vi.useRealTimers();
-	});
-
-	test('context throws a clear error when called without an active cooldown scope', () => {
-		assert.throws(() => manager.context(), /outside of a Seyfert cooldown scope/);
-	});
-
-	test('context uses the current scoped command context when omitted', async () => {
-		const result = await runWithCooldownContext(commandContext(), async () => manager.context());
-
-		assert.ok(result);
-		assert.equal(result.allowed, true);
-		assert.equal(result.key, 'testCommand:user:user1');
-		assert.equal(manager.resource.get('testCommand:user:user1')?.remaining, 2);
-	});
-
-	test('context accepts scoped options without manually passing the context', async () => {
-		const result = await runWithCooldownContext(
-			commandContext({ fullCommandName: 'commandWithfakeGuildId' }),
-			async () => manager.context({ guildId: '124' }),
-		);
-
-		assert.ok(result);
-		assert.equal(result.allowed, true);
-		assert.equal(result.key, 'commandWithfakeGuildId:user:user1');
-		assert.equal(manager.resource.get('commandWithfakeGuildId:user:user1')?.remaining, 2);
-	});
 });
 
 describe('Cooldown decorator shortcuts', () => {
-	test('Cooldown.user assigns a user-scoped CooldownProps', () => {
+	test('Cooldown.user assigns user-scoped props with one default use', () => {
 		@Cooldown.user(5_000)
 		class Cmd {}
+
 		const props = (new Cmd() as Cmd & { cooldown: CooldownProps }).cooldown;
 		assert.equal(props.type, 'user');
 		assert.equal(props.interval, 5_000);
-		assert.deepEqual(props.uses, { default: 1 });
+		assert.equal(props.uses, 1);
 	});
 
-	test('Cooldown.guild / .channel / .global emit correct type', () => {
-		@Cooldown.guild(1_000, { default: 3 })
+	test('Cooldown.guild / .channel / .global emit correct types', () => {
+		@Cooldown.guild(1_000, { uses: 3 })
 		class G {}
 		@Cooldown.channel(1_000)
 		class C {}
 		@Cooldown.global(1_000)
 		class Gl {}
+
 		assert.equal((new G() as G & { cooldown: CooldownProps }).cooldown.type, 'guild');
-		assert.equal((new G() as G & { cooldown: CooldownProps }).cooldown.uses.default, 3);
+		assert.equal((new G() as G & { cooldown: CooldownProps }).cooldown.uses, 3);
 		assert.equal((new C() as C & { cooldown: CooldownProps }).cooldown.type, 'channel');
 		assert.equal((new Gl() as Gl & { cooldown: CooldownProps }).cooldown.type, 'global');
 	});
 
-	test('Cooldown.user accepts a shared group via extras', () => {
-		@Cooldown.user(1_000, { default: 1 }, { group: 'mod' })
+	test('Cooldown.user accepts a shared group in the options bag', () => {
+		@Cooldown.user(1_000, { uses: 1, group: 'mod' })
 		class Cmd {}
+
 		assert.equal((new Cmd() as Cmd & { cooldown: CooldownProps }).cooldown.group, 'mod');
 	});
 
-	test('Cooldown.custom assigns a resolver function as type', () => {
+	test('Cooldown.custom assigns a resolver and accepts a shared group', () => {
 		const resolver = () => 'k';
-		@Cooldown.custom(resolver, 1_000)
-		class Cmd {}
-		assert.equal((new Cmd() as Cmd & { cooldown: CooldownProps }).cooldown.type, resolver);
-	});
 
-	test('Cooldown.custom accepts a shared group via extras', () => {
-		const resolver = () => 'k';
-		@Cooldown.custom(resolver, 1_000, undefined, { group: 'mod' })
+		@Cooldown.custom(resolver, 1_000, { group: 'mod' })
 		class Cmd {}
-		assert.equal((new Cmd() as Cmd & { cooldown: CooldownProps }).cooldown.group, 'mod');
+
+		const props = (new Cmd() as Cmd & { cooldown: CooldownProps }).cooldown;
+		assert.equal(props.type, resolver);
+		assert.equal(props.group, 'mod');
 	});
 });
 
 describe('cooldown() plugin', () => {
 	function createClientForPlugin(cooldownData: CooldownProps) {
-		const client = new Client({
-			getRC: () => ({ debug: false, intents: 0, ['token']: '', locations: { base: '', output: '' } }),
-		});
-		const handler = new CommandHandler(new Logger({ active: true }), client);
 		const command = makeCommand({
 			name: 'testCommand',
 			description: 'Command with cooldown',
 			cooldown: cooldownData,
 		});
-		handler.values = [command];
-		client.commands = handler;
-		client.handleCommand = new HandleCommand(client);
-		client.cache = new Cache(0, new MemoryAdapter(), {}, client);
+		const client = createClient([command]);
 		return { client, command };
 	}
 
@@ -694,13 +586,14 @@ describe('cooldown() plugin', () => {
 		assert.equal(plugin.client?.cooldown({} as never), plugin.manager);
 		assert.equal(plugin.ctx?.cooldown({} as never, {} as never), plugin.manager);
 
-		const optionFragments: { contextScopes?: readonly unknown[] }[] = [];
-		plugin.register?.({ options: { set: fragment => optionFragments.push(fragment) } } as never);
-		const scope = optionFragments[0]?.contextScopes?.[0];
-		assert.equal(typeof scope, 'function');
-		await (scope as (context: AnyContext, run: () => unknown) => unknown)(commandContext(), async () => {
-			assert.equal(useCooldownContext().fullCommandName, 'testCommand');
-		});
+		const { client, command } = createClientForPlugin({ interval: 1_000 });
+		const { scope } = createScopedPlugin(client, plugin);
+		const result = await scope(commandContext({ client, command, fullCommandName: 'testCommand' }), () =>
+			plugin.manager.consume(),
+		);
+
+		assert.ok(result);
+		assert.equal(result.key, 'testCommand:user:user1');
 	});
 
 	test('does not register a middleware by default', () => {
@@ -722,7 +615,7 @@ describe('cooldown() plugin', () => {
 			const plugin = cooldownPlugin({
 				middleware: {
 					global: true,
-					message: result => `Retry in ${result.remainingMs}ms`,
+					message: (result, context) => `${context.fullCommandName}:${result.remainingMs}`,
 					name: 'commandCooldown',
 				},
 			});
@@ -736,6 +629,8 @@ describe('cooldown() plugin', () => {
 				name: string;
 				options?: { global?: boolean };
 			}[] = [];
+			const fragments: Array<{ contextScopes?: readonly ((context: AnyContext, run: () => unknown) => unknown)[] }> =
+				[];
 
 			plugin.register?.({
 				middlewares: {
@@ -743,7 +638,11 @@ describe('cooldown() plugin', () => {
 						registered.push({ name, middleware, options });
 					},
 				},
-				options: { set() {} },
+				options: {
+					set(fragment) {
+						fragments.push(fragment as (typeof fragments)[number]);
+					},
+				},
 			} as never);
 
 			assert.equal(registered.length, 1);
@@ -752,15 +651,15 @@ describe('cooldown() plugin', () => {
 
 			const { client, command } = createClientForPlugin({
 				interval: 1_000,
-				type: CooldownType.User,
-				uses: { default: 1 },
+				type: 'user',
 			});
 			plugin.setup(client);
-			const context = commandContext({ client, command });
+			const context = commandContext({ client, command, fullCommandName: 'testCommand' });
 			const nextCalls: unknown[] = [];
 			const stops: string[] = [];
+			const scope = fragments[0]!.contextScopes![0]!;
 
-			await runWithCooldownContext(context, () =>
+			await scope(context, () =>
 				registered[0]!.middleware({
 					context,
 					next: result => nextCalls.push(result),
@@ -770,7 +669,7 @@ describe('cooldown() plugin', () => {
 					stop: message => stops.push(message),
 				}),
 			);
-			await runWithCooldownContext(context, () =>
+			await scope(context, () =>
 				registered[0]!.middleware({
 					context,
 					next: result => nextCalls.push(result),
@@ -783,7 +682,7 @@ describe('cooldown() plugin', () => {
 
 			assert.equal(nextCalls.length, 1);
 			assert.equal((nextCalls[0] as { allowed: boolean }).allowed, true);
-			assert.deepEqual(stops, ['Retry in 1000ms']);
+			assert.deepEqual(stops, ['testCommand:1000']);
 		} finally {
 			vi.useRealTimers();
 		}
@@ -804,6 +703,8 @@ describe('cooldown() plugin', () => {
 				name: string;
 				options?: { global?: boolean };
 			}[] = [];
+			const fragments: Array<{ contextScopes?: readonly ((context: AnyContext, run: () => unknown) => unknown)[] }> =
+				[];
 
 			plugin.register?.({
 				middlewares: {
@@ -811,7 +712,11 @@ describe('cooldown() plugin', () => {
 						registered.push({ name, middleware, options });
 					},
 				},
-				options: { set() {} },
+				options: {
+					set(fragment) {
+						fragments.push(fragment as (typeof fragments)[number]);
+					},
+				},
 			} as never);
 
 			assert.equal(registered.length, 1);
@@ -820,14 +725,14 @@ describe('cooldown() plugin', () => {
 
 			const { client, command } = createClientForPlugin({
 				interval: 1_000,
-				type: CooldownType.User,
-				uses: { default: 1 },
+				type: 'user',
 			});
 			plugin.setup(client);
-			const context = commandContext({ client, command });
+			const context = commandContext({ client, command, fullCommandName: 'testCommand' });
 			const stops: string[] = [];
+			const scope = fragments[0]!.contextScopes![0]!;
 
-			await runWithCooldownContext(context, () =>
+			await scope(context, () =>
 				registered[0]!.middleware({
 					context,
 					next: () => {},
@@ -837,7 +742,7 @@ describe('cooldown() plugin', () => {
 					stop: message => stops.push(message),
 				}),
 			);
-			await runWithCooldownContext(context, () =>
+			await scope(context, () =>
 				registered[0]!.middleware({
 					context,
 					next: () => {},
@@ -856,10 +761,7 @@ describe('cooldown() plugin', () => {
 
 	test('setup attaches the manager to the client', () => {
 		const plugin = cooldownPlugin();
-		const client = new Client({
-			getRC: () => ({ debug: false, intents: 0, token: '', locations: { base: '', output: '' } }),
-		});
-		client.cache = new Cache(0, new MemoryAdapter(), {}, client);
+		const client = createClient();
 		plugin.setup(client);
 		assert.equal((client as Client & { cooldown: CooldownManager }).cooldown, plugin.manager);
 	});

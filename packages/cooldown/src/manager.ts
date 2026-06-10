@@ -11,22 +11,15 @@ import { CacheFrom, type ReturnCache } from 'seyfert/lib/cache';
 import type { BaseClient } from 'seyfert/lib/client/base';
 import type { UsingClient } from 'seyfert/lib/commands';
 import type { CommandFromContent } from 'seyfert/lib/commands/handle';
-import { type Awaitable, fakePromise, type PickPartial } from 'seyfert/lib/common';
-import { type CooldownData, CooldownResource, type CooldownType } from './resource';
+import { type Awaitable, fakePromise } from 'seyfert/lib/common';
+import { COOLDOWN_RESOURCE_FIELD_PREFIX, COOLDOWN_RESOURCE_RELATIONSHIP_SUFFIX, CooldownResource } from './resource';
 
-export type CooldownTargetType = `${CooldownType}` | 'global';
+export type CooldownTargetType = 'user' | 'guild' | 'channel' | 'global';
 export type CooldownTargetResolver = (context: AnyContext) => string | undefined;
 
 const cooldownContexts = new AsyncLocalStorage<AnyContext>();
 
-export type CooldownContextScope = ContextScope;
-
-export interface CooldownContextOptions {
-	use?: keyof UsesProps;
-	guildId?: string;
-}
-
-export type CooldownMiddlewareMessage = string | ((result: CooldownResult) => string);
+export type CooldownMiddlewareMessage = string | ((result: CooldownResult, context: AnyContext) => string);
 
 export interface CooldownMiddlewareOptions {
 	global?: boolean;
@@ -34,37 +27,22 @@ export interface CooldownMiddlewareOptions {
 	name?: string;
 }
 
-export function runWithCooldownContext<T>(context: AnyContext, run: () => Awaitable<T>) {
-	return cooldownContexts.run(context, run);
-}
-
-export function useCooldownContext() {
-	const context = cooldownContexts.getStore();
-	if (!context) throw new Error('Cannot access cooldown context outside of a Seyfert cooldown scope.');
-
-	return context;
-}
-
-export interface UsesProps {
-	default: number;
-	[variant: string]: number;
-}
-
 export interface CooldownProps {
-	/** Cooldown target. Either a built-in scope or a resolver invoked with the active context. */
+	/**
+	 * Cooldown target. `guild` and `channel` fall back to `author.id` in DMs
+	 * because Discord does not provide `guildId`/`channelId` for every context.
+	 */
 	type?: CooldownTargetType | CooldownTargetResolver;
 	/** Interval in ms before a token refills. */
 	interval: number;
-	/** Available tokens per variant. `default` is required. */
-	uses: UsesProps;
+	/** Available tokens in the bucket. Defaults to 1. */
+	uses?: number;
 	/** Shared bucket name. When set, the cache key uses this name instead of the resolved command. */
 	group?: string;
 }
 
-export type CooldownDenyReason = 'rate_limited' | 'over_capacity';
-
 interface CooldownResultBase {
-	/** Maximum tokens for the resolved variant. */
+	/** Maximum tokens for the bucket. */
 	limit: number;
 	/** Tokens still available after the operation. */
 	remainingUses: number;
@@ -75,38 +53,34 @@ interface CooldownResultBase {
 export type CooldownResult =
 	| (CooldownResultBase & {
 			allowed: true;
-			reason?: undefined;
 			remainingMs: 0;
 			retryAfter: Date;
 	  })
 	| (CooldownResultBase & {
 			allowed: false;
-			reason: 'rate_limited';
 			remainingMs: number;
 			retryAfter: Date;
-	  })
-	| (CooldownResultBase & {
-			allowed: false;
-			reason: 'over_capacity';
-			remainingMs: number;
-			retryAfter: null;
 	  });
 
 export type CooldownMiddleware = MiddlewareContext<CooldownResult | undefined, AnyContext>;
 export type CooldownMiddlewares<Name extends string = 'cooldown'> = Record<Name, CooldownMiddleware>;
 
-export interface CooldownCheckOptions {
+export interface CooldownImplicitOptions {
+	tokens?: number;
+}
+
+export interface CooldownCheckOptions extends CooldownImplicitOptions {
 	name: string;
 	target: string;
-	use?: keyof UsesProps;
 	guildId?: string;
-	tokens?: number;
 }
 
 export type CooldownConsumeOptions = CooldownCheckOptions;
 
-export interface CooldownSetOptions extends PickPartial<CooldownData, 'lastDrip'> {
-	key: string;
+export interface CooldownResetOptions {
+	name: string;
+	target: string;
+	guildId?: string;
 }
 
 interface ResolvedBucket {
@@ -121,7 +95,6 @@ type AtomicCooldownResult = [
 	retryAfterMs: number,
 	limit: number,
 	remainingUses: number,
-	reasonCode: number,
 ];
 
 export interface AtomicCooldownAdapter {
@@ -129,40 +102,51 @@ export interface AtomicCooldownAdapter {
 	eval<T = unknown>(script: string, keys: string[], args: string[]): Awaitable<T>;
 }
 
+interface CooldownCommandLike {
+	cooldown?: CooldownProps;
+	guildId?: string[];
+	name?: string;
+}
+
+interface CooldownContextLike {
+	author?: { id?: string };
+	channelId?: string;
+	command?: CooldownCommandLike;
+	fullCommandName?: string;
+	guildId?: string;
+}
+
 const ATOMIC_CONSUME_SCRIPT = `
 local hashKey = KEYS[1]
 local namespaceKey = KEYS[2]
-local now = tonumber(ARGV[1])
-local interval = tonumber(ARGV[2])
-local limit = tonumber(ARGV[3])
-local tokens = tonumber(ARGV[4])
-local memberKey = ARGV[5]
+local interval = tonumber(ARGV[1])
+local limit = tonumber(ARGV[2])
+local tokens = tonumber(ARGV[3])
+local memberKey = ARGV[4]
 
-local remaining = tonumber(redis.call('HGET', hashKey, 'N_remaining'))
-local lastDrip = tonumber(redis.call('HGET', hashKey, 'N_lastDrip'))
+local time = redis.call('TIME')
+local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
 
-if tokens > limit then
-	if remaining == nil then remaining = limit end
-	return {0, -1, -1, limit, remaining, 2}
-end
+local remaining = tonumber(redis.call('HGET', hashKey, '${COOLDOWN_RESOURCE_FIELD_PREFIX}remaining'))
+local lastDrip = tonumber(redis.call('HGET', hashKey, '${COOLDOWN_RESOURCE_FIELD_PREFIX}lastDrip'))
 
 if remaining == nil or lastDrip == nil or now - lastDrip >= interval then
 	local newRemaining = limit - tokens
-	redis.call('SADD', namespaceKey .. ':set', memberKey)
-	redis.call('HSET', hashKey, 'N_interval', tostring(interval), 'N_remaining', tostring(newRemaining), 'N_lastDrip', tostring(now))
-	return {1, 0, now, limit, newRemaining, 0}
+	redis.call('SADD', namespaceKey .. '${COOLDOWN_RESOURCE_RELATIONSHIP_SUFFIX}', memberKey)
+	redis.call('HSET', hashKey, '${COOLDOWN_RESOURCE_FIELD_PREFIX}interval', tostring(interval), '${COOLDOWN_RESOURCE_FIELD_PREFIX}remaining', tostring(newRemaining), '${COOLDOWN_RESOURCE_FIELD_PREFIX}lastDrip', tostring(now))
+	return {1, 0, now, limit, newRemaining}
 end
 
 local elapsed = now - lastDrip
 local newRemaining = remaining - tokens
 if newRemaining < 0 then
 	local remainingMs = interval - elapsed
-	return {0, remainingMs, now + remainingMs, limit, remaining, 1}
+	return {0, remainingMs, now + remainingMs, limit, remaining}
 end
 
-redis.call('SADD', namespaceKey .. ':set', memberKey)
-redis.call('HSET', hashKey, 'N_interval', tostring(interval), 'N_remaining', tostring(newRemaining))
-return {1, 0, now, limit, newRemaining, 0}
+redis.call('SADD', namespaceKey .. '${COOLDOWN_RESOURCE_RELATIONSHIP_SUFFIX}', memberKey)
+redis.call('HSET', hashKey, '${COOLDOWN_RESOURCE_FIELD_PREFIX}interval', tostring(interval), '${COOLDOWN_RESOURCE_FIELD_PREFIX}remaining', tostring(newRemaining))
+return {1, 0, now, limit, newRemaining}
 `;
 
 export class CooldownManager {
@@ -173,6 +157,7 @@ export class CooldownManager {
 		if (client) this.attach(client);
 	}
 
+	/** @internal */
 	attach(client: BaseClient): this {
 		this._client = client;
 		const target = client as BaseClient & { cooldown?: CooldownManager };
@@ -189,6 +174,7 @@ export class CooldownManager {
 		return this._client;
 	}
 
+	/** @internal */
 	get resource(): CooldownResource {
 		if (!this._resource)
 			throw new Error(
@@ -233,17 +219,7 @@ export class CooldownManager {
 	}
 
 	private *commandResolverGuildIds(guildId?: string): Iterable<string | undefined> {
-		if (guildId) {
-			yield guildId;
-			return;
-		}
-
-		yield undefined;
-		for (const command of this.client.commands.values) {
-			for (const commandGuildId of command.guildId ?? []) {
-				yield commandGuildId;
-			}
-		}
+		yield guildId;
 	}
 
 	private getFullCommandName({ command, parent, fullCommandName }: CommandFromContent) {
@@ -253,7 +229,7 @@ export class CooldownManager {
 		return command.name || fullCommandName;
 	}
 
-	getCommandData(name: string, guildId?: string): [name: string, data: CooldownProps | undefined] | undefined {
+	private getCommandData(name: string, guildId?: string): [name: string, data: CooldownProps | undefined] | undefined {
 		this.debugger?.info(`Resolving cooldown data for command ${name} with guildId ${guildId}`);
 
 		const { command, parent, fullCommandName } = this.resolveCommand(name, guildId);
@@ -288,33 +264,61 @@ export class CooldownManager {
 		return `${namespace}:${typeLabel}:${target}`;
 	}
 
-	private resolveBucket(options: CooldownCheckOptions): ResolvedBucket | undefined {
+	private resolveExplicitBucket(options: CooldownCheckOptions): ResolvedBucket | undefined {
 		const [resolvedName, props] = this.getCommandData(options.name, options.guildId) ?? [];
 		if (!(resolvedName && props)) return undefined;
 		return { props, resolvedName, key: this.buildKey(props, resolvedName, options.target) };
 	}
 
-	private resolveLimit(props: CooldownProps, use?: keyof UsesProps) {
-		const variant = use ?? 'default';
-		const limit = props.uses[variant];
-		if (typeof limit === 'number' && Number.isFinite(limit)) return { variant, limit };
+	private resolveScopedBucket(): ResolvedBucket | undefined {
+		const context = this.getCooldownContext();
+		const { command, fullCommandName } = context;
+		if (!(command && fullCommandName)) return undefined;
 
-		this.debugger?.warn(
-			`Unknown cooldown use variant "${String(variant)}"; falling back to the "default" cooldown limit.`,
-		);
-		return { variant: 'default', limit: props.uses.default };
+		let props = command.cooldown;
+		let resolvedName = fullCommandName;
+
+		if (!props) {
+			const resolved = this.getCommandData(fullCommandName, context.guildId);
+			if (!resolved) return undefined;
+			[resolvedName, props] = resolved;
+		}
+
+		if (!props) return undefined;
+		const target = this.resolveContextTarget(context, props);
+		if (target === undefined) return undefined;
+
+		this.debugger?.info(`Using target ${target} for cooldown of command ${resolvedName}`);
+		return { props, resolvedName, key: this.buildKey(props, resolvedName, target) };
 	}
 
-	private overCapacityResult(key: string, limit: number, remainingUses: number): CooldownResult {
-		return {
-			allowed: false,
-			reason: 'over_capacity',
-			remainingMs: Infinity,
-			retryAfter: null,
-			limit,
-			remainingUses,
-			key,
-		};
+	private resolveBucket(
+		options: CooldownCheckOptions | CooldownImplicitOptions | undefined,
+	): ResolvedBucket | undefined {
+		if (isExplicitOptions(options)) return this.resolveExplicitBucket(options);
+		return this.resolveScopedBucket();
+	}
+
+	private getCooldownContext(): CooldownContextLike {
+		const context = cooldownContexts.getStore() as CooldownContextLike | undefined;
+		if (!context) {
+			throw new Error(
+				'Cannot resolve an implicit cooldown outside of a Seyfert cooldown scope. Use the explicit form, for example client.cooldown.consume({ name, target, guildId }).',
+			);
+		}
+
+		return context;
+	}
+
+	private resolveLimit(props: CooldownProps) {
+		const limit = props.uses ?? 1;
+		if (!(Number.isFinite(limit) && limit > 0)) throw new RangeError('Cooldown uses must be a positive number.');
+		return limit;
+	}
+
+	private assertTokensWithinLimit(tokens: number, limit: number) {
+		if (!(Number.isFinite(tokens) && tokens > 0)) throw new RangeError('Cooldown tokens must be a positive number.');
+		if (tokens > limit) throw new RangeError(`Cooldown tokens (${tokens}) cannot exceed the bucket limit (${limit}).`);
 	}
 
 	private rateLimitedResult(
@@ -326,7 +330,6 @@ export class CooldownManager {
 	): CooldownResult {
 		return {
 			allowed: false,
-			reason: 'rate_limited',
 			remainingMs,
 			retryAfter: new Date(now + remainingMs),
 			limit,
@@ -360,12 +363,11 @@ export class CooldownManager {
 		limit: number,
 		tokens: number,
 	): ReturnCache<CooldownResult> {
-		const now = Date.now();
 		return fakePromise(
 			adapter.eval<AtomicCooldownResult>(
 				ATOMIC_CONSUME_SCRIPT,
 				[this.resource.hashId(key), this.resource.namespace],
-				[String(now), String(props.interval), String(limit), String(tokens), key],
+				[String(props.interval), String(limit), String(tokens), key],
 			),
 		).then(result => this.fromAtomicResult(key, result));
 	}
@@ -376,13 +378,10 @@ export class CooldownManager {
 		const retryAfterMs = Number(result[2]);
 		const limit = Number(result[3]);
 		const remainingUses = Number(result[4]);
-		const reasonCode = Number(result[5]);
 
-		if (reasonCode === 2) return this.overCapacityResult(key, limit, remainingUses);
 		if (!allowed) {
 			return {
 				allowed: false,
-				reason: 'rate_limited',
 				remainingMs,
 				retryAfter: new Date(retryAfterMs),
 				limit,
@@ -405,21 +404,20 @@ export class CooldownManager {
 	 * Inspect the bucket without consuming a token.
 	 * Returns `undefined` when the command resolves to no cooldown.
 	 */
-	check(options: CooldownCheckOptions): ReturnCache<CooldownResult | undefined> {
+	check(): ReturnCache<CooldownResult | undefined>;
+	check(options: CooldownImplicitOptions): ReturnCache<CooldownResult | undefined>;
+	check(options: CooldownCheckOptions): ReturnCache<CooldownResult | undefined>;
+	check(options?: CooldownCheckOptions | CooldownImplicitOptions): ReturnCache<CooldownResult | undefined> {
 		const resolved = this.resolveBucket(options);
 		if (!resolved) return undefined;
 
 		const { props, key } = resolved;
-		const use = options.use ?? 'default';
-		const tokens = options.tokens ?? 1;
-		const { limit } = this.resolveLimit(props, use);
+		const tokens = options?.tokens ?? 1;
+		const limit = this.resolveLimit(props);
+		this.assertTokensWithinLimit(tokens, limit);
 
 		return fakePromise(this.resource.get(key)).then(data => {
 			const now = Date.now();
-
-			if (tokens > limit) {
-				return this.overCapacityResult(key, limit, data?.remaining ?? limit);
-			}
 
 			if (!data) {
 				return this.allowedResult(key, limit, limit - tokens, now);
@@ -441,32 +439,34 @@ export class CooldownManager {
 	 * Consume a token from the bucket.
 	 * Returns `undefined` when the command resolves to no cooldown.
 	 */
-	consume(options: CooldownConsumeOptions): ReturnCache<CooldownResult | undefined> {
+	consume(): ReturnCache<CooldownResult | undefined>;
+	consume(options: CooldownImplicitOptions): ReturnCache<CooldownResult | undefined>;
+	consume(options: CooldownConsumeOptions): ReturnCache<CooldownResult | undefined>;
+	consume(options?: CooldownConsumeOptions | CooldownImplicitOptions): ReturnCache<CooldownResult | undefined> {
 		const resolved = this.resolveBucket(options);
 		if (!resolved) return undefined;
 
 		const { props, key } = resolved;
-		const use = options.use ?? 'default';
-		const tokens = options.tokens ?? 1;
-		const { limit } = this.resolveLimit(props, use);
+		const tokens = options?.tokens ?? 1;
+		const limit = this.resolveLimit(props);
+		this.assertTokensWithinLimit(tokens, limit);
 
 		this.debugger?.info(`Consuming cooldown ${key} (tokens=${tokens})`);
 
 		const atomicAdapter = this.getAtomicAdapter();
-		if (atomicAdapter && tokens <= limit) return this.consumeAtomic(atomicAdapter, key, props, limit, tokens);
+		if (atomicAdapter) return this.consumeAtomic(atomicAdapter, key, props, limit, tokens);
 
 		return fakePromise(this.resource.get(key)).then(data => {
 			const now = Date.now();
 
-			if (tokens > limit) {
-				return this.overCapacityResult(key, limit, data?.remaining ?? limit);
-			}
-
 			if (!data) {
 				const remaining = limit - tokens;
-				return fakePromise(this.set({ key, interval: props.interval, remaining })).then(() =>
-					this.allowedResult(key, limit, remaining, now),
-				);
+				return fakePromise(
+					this.resource.set(CacheFrom.Gateway, key, {
+						interval: props.interval,
+						remaining,
+					}),
+				).then(() => this.allowedResult(key, limit, remaining, now));
 			}
 
 			const elapsed = now - data.lastDrip;
@@ -492,71 +492,34 @@ export class CooldownManager {
 		});
 	}
 
-	/** Milliseconds remaining before the bucket allows another consume. 0 when free or unconfigured. */
-	remaining(options: CooldownCheckOptions): ReturnCache<number> {
-		return fakePromise(this.check(options)).then(result => result?.remainingMs ?? 0);
-	}
-
-	/** Clear the bucket for a given command/target. Returns false when no cooldown is configured. */
-	reset(name: string, target: string, use: keyof UsesProps = 'default'): ReturnCache<boolean> {
-		const resolved = this.resolveBucket({ name, target });
+	/** Clear the bucket. Returns false when no cooldown is configured. */
+	reset(): ReturnCache<boolean>;
+	reset(options: CooldownResetOptions): ReturnCache<boolean>;
+	reset(options?: CooldownResetOptions): ReturnCache<boolean> {
+		const resolved = options ? this.resolveExplicitBucket(options) : this.resolveScopedBucket();
 		if (!resolved) return false;
-		const { props, key } = resolved;
-		const { limit } = this.resolveLimit(props, use);
+		const { key } = resolved;
 		this.debugger?.info(`Resetting cooldown ${key}`);
-		return fakePromise(this.resource.patch(CacheFrom.Gateway, key, { remaining: limit })).then(() => true);
+		return fakePromise(this.resource.remove(key)).then(() => true);
 	}
 
-	/** Low-level: write a bucket directly by its cache key. */
-	set(options: CooldownSetOptions): Awaitable<void> {
-		return this.resource.set(CacheFrom.Gateway, options.key, {
-			interval: options.interval,
-			remaining: options.remaining,
-			lastDrip: options.lastDrip,
-		});
-	}
-
-	/**
-	 * Resolve target from the current interaction context and consume a token.
-	 * Returns `undefined` when the command resolves to no cooldown or when a custom resolver yields no target.
-	 */
-	context(options: CooldownContextOptions = {}): ReturnCache<CooldownResult | undefined> {
-		return this.contextFrom(useCooldownContext(), options.use, options.guildId);
-	}
-
-	private contextFrom(context: AnyContext, use?: keyof UsesProps, guildId?: string) {
-		if (!('command' in context)) return undefined;
-		if (!('fullCommandName' in context)) return undefined;
-		const name = context.fullCommandName;
-
-		const [resolvedName, props] = this.getCommandData(name, guildId) ?? [];
-		if (!(resolvedName && props)) return undefined;
-
-		const target = this.resolveContextTarget(context, props);
-		if (target === undefined) return undefined;
-
-		this.debugger?.info(`Using target ${target} for cooldown of command ${resolvedName}`);
-		return this.consume({ name, target, use, guildId });
-	}
-
-	private resolveContextTarget(context: AnyContext, props: CooldownProps): string | undefined {
+	private resolveContextTarget(context: CooldownContextLike, props: CooldownProps): string | undefined {
 		const type = props.type;
-		if (typeof type === 'function') return type(context);
+		if (typeof type === 'function') return type(context as AnyContext);
 		switch (type) {
 			case 'guild':
-				return context.guildId ?? context.author.id;
+				return context.guildId ?? context.author?.id;
 			case 'channel':
-				return context.channelId ?? context.author.id;
+				return context.channelId ?? context.author?.id;
 			case 'global':
 				return 'global';
 			default:
-				return context.author.id;
+				return context.author?.id;
 		}
 	}
 }
 
 export interface CooldownPluginOptions {
-	manager?: CooldownManager;
 	middleware?: boolean | CooldownMiddlewareOptions;
 }
 
@@ -567,8 +530,8 @@ export interface CooldownPlugin extends SeyfertPlugin<{ cooldown: CooldownManage
 }
 
 export function cooldown(options: CooldownPluginOptions = {}): CooldownPlugin {
-	const manager = options.manager ?? new CooldownManager();
-	const contextScope: CooldownContextScope = (context, run) => runWithCooldownContext(context as AnyContext, run);
+	const manager = new CooldownManager();
+	const contextScope: ContextScope = (context, run) => cooldownContexts.run(context as AnyContext, run);
 	const middleware = resolveCooldownMiddleware(options.middleware, manager);
 
 	return createPlugin({
@@ -596,6 +559,16 @@ export function cooldown(options: CooldownPluginOptions = {}): CooldownPlugin {
 	});
 }
 
+function isExplicitOptions(
+	options: CooldownCheckOptions | CooldownImplicitOptions | undefined,
+): options is CooldownCheckOptions {
+	return (
+		!!options &&
+		typeof (options as CooldownCheckOptions).name === 'string' &&
+		typeof (options as CooldownCheckOptions).target === 'string'
+	);
+}
+
 function resolveCooldownMiddleware(input: CooldownPluginOptions['middleware'], manager: CooldownManager) {
 	if (!input) return undefined;
 	const options = input === true ? {} : input;
@@ -607,19 +580,19 @@ function resolveCooldownMiddleware(input: CooldownPluginOptions['middleware'], m
 }
 
 function createCooldownMiddleware(manager: CooldownManager, options: CooldownMiddlewareOptions): CooldownMiddleware {
-	return async ({ next, stop }) => {
-		const result = await manager.context();
+	return async ({ context, next, stop }) => {
+		const result = await manager.consume();
 		if (!result || result.allowed) return next(result);
-		return stop(resolveCooldownMiddlewareMessage(result, options.message));
+		return stop(resolveCooldownMiddlewareMessage(result, context, options.message));
 	};
 }
 
 function resolveCooldownMiddlewareMessage(
 	result: CooldownResult & { allowed: false },
+	context: AnyContext,
 	message?: CooldownMiddlewareMessage,
 ) {
-	if (typeof message === 'function') return message(result);
+	if (typeof message === 'function') return message(result, context);
 	if (message) return message;
-	if (result.reason === 'over_capacity') return 'This command cannot run with its current cooldown settings.';
 	return `This command is cooling down. Try again ${Formatter.timestamp(result.retryAfter)}.`;
 }

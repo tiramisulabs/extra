@@ -1,5 +1,5 @@
 import { assert, describe, test } from 'vitest';
-import { RedisAdapter } from '../src';
+import { ExpirableRedisAdapter, RedisAdapter } from '../src';
 
 describe('RedisAdapter eval escape hatch', () => {
 	test('forwards scripts with namespaced keys and arguments', async () => {
@@ -12,6 +12,7 @@ describe('RedisAdapter eval escape hatch', () => {
 		};
 		const adapter = new RedisAdapter({ client: client as never, namespace: 'custom' });
 
+		assert.equal(adapter.supportsAtomicCooldowns, true);
 		const result = await adapter.eval('return KEYS[1]', ['cooldowns.ping:user:u1', 'cooldowns'], ['arg1']);
 
 		assert.deepEqual(result, ['ok']);
@@ -24,5 +25,11 @@ describe('RedisAdapter eval escape hatch', () => {
 				},
 			},
 		]);
+	});
+
+	test('does not opt the expirable adapter into atomic cooldown scripts', () => {
+		const adapter = new ExpirableRedisAdapter({ client: {} as never, namespace: 'custom' });
+
+		assert.equal(adapter.supportsAtomicCooldowns, false);
 	});
 });
