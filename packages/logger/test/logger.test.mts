@@ -1,5 +1,5 @@
 import { initLogger } from 'evlog';
-import { Logger as SeyfertLogger, type SeyfertPluginApi } from 'seyfert';
+import { Logger as SeyfertLogger } from 'seyfert';
 import { LogLevels } from 'seyfert/lib/common';
 import { assert, describe, test } from 'vitest';
 import {
@@ -71,16 +71,7 @@ function commandContext(loggerInstance: WideEventLogger) {
 }
 
 function getLoggerPluginOptions(plugin: LoggerPlugin): LoggerPluginOptionsFragment {
-	const fragments: LoggerPluginOptionsFragment[] = [];
-	plugin.register?.({
-		options: {
-			set(fragment) {
-				fragments.push(fragment as LoggerPluginOptionsFragment);
-			},
-		},
-	} as SeyfertPluginApi);
-
-	const fragment = fragments[0];
+	const fragment = plugin.options?.({} as never) as LoggerPluginOptionsFragment | undefined;
 	if (!fragment) throw new Error('Logger plugin did not register options.');
 	return fragment;
 }
@@ -92,14 +83,14 @@ function getLoggerContext(plugin: LoggerPlugin, source: unknown): { logger: Wide
 }
 
 describe('logger plugin', () => {
-	test('returns a Seyfert Plugin API v3 plugin with context and lifecycle defaults', () => {
+	test('returns a Seyfert plugin with context and lifecycle defaults', () => {
 		const plugin: LoggerPlugin = logger({ adapter: new RecordingAdapter() });
 		const options = getLoggerPluginOptions(plugin);
 
 		assert.equal(plugin.name, '@slipher/logger');
 		assert.equal(typeof plugin.setup, 'function');
 		assert.equal(typeof plugin.ctx?.logger, 'function');
-		assert.equal(typeof plugin.register, 'function');
+		assert.equal(typeof plugin.options, 'function');
 		assert.equal(typeof options.commands?.defaults?.onAfterRun, 'function');
 		assert.equal(typeof options.components?.defaults?.onAfterRun, 'function');
 		assert.equal(typeof options.modals?.defaults?.onAfterRun, 'function');

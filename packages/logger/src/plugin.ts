@@ -159,8 +159,8 @@ export function logger(options: LoggerPluginOptions = {}): LoggerPlugin {
 		ctx: {
 			logger: source => root.event(extractSeyfertLogContext(source, contextConfig)),
 		},
-		register(api) {
-			api.options.set(createLoggerPluginOptions(root, contextConfig));
+		options() {
+			return createLoggerPluginOptions(root, contextConfig);
 		},
 		setup: client => {
 			installation?.restoreInternalLogger();

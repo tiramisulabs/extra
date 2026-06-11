@@ -21,7 +21,7 @@ Requires Seyfert v5.
 Install the plugin once on the client:
 
 ```ts
-import { Client, definePlugins } from 'seyfert';
+import { Client, definePlugins, type RegisterPlugins } from 'seyfert';
 import { logger } from '@slipher/logger';
 
 const loggerPlugin = logger({
@@ -35,9 +35,7 @@ const client = new Client({
 });
 
 declare module 'seyfert' {
-	interface Register {
-		plugins: typeof plugins;
-	}
+	interface Register extends RegisterPlugins<typeof plugins> {}
 }
 ```
 
