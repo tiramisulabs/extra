@@ -30,7 +30,7 @@ pnpm add bullmq
 Declare queues with `RegisteredQueues`. Named jobs use a `job` discriminant; that field is type-only and becomes BullMQ's native job name.
 
 ```ts
-import { Client, definePlugins } from 'seyfert';
+import { Client, definePlugins, type RegisterPlugins } from 'seyfert';
 import {
 	OnQueueEvent,
 	OnWorkerEvent,
@@ -89,9 +89,7 @@ const queuesPlugin = queues({
 const plugins = definePlugins(queuesPlugin);
 
 declare module 'seyfert' {
-	interface Register {
-		plugins: typeof plugins;
-	}
+	interface Register extends RegisterPlugins<typeof plugins> {}
 }
 
 export const registry = queuesPlugin.registry;

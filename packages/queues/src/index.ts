@@ -1203,33 +1203,35 @@ export function queues(options: QueuesPluginOptions): QueuesPlugin {
 	let hadPreviousQueues = false;
 	let previousQueues: QueuesRegistry | undefined;
 
-	return createPlugin({
-		name: '@slipher/queues',
-		registry,
-		client: {
-			queues: () => registry,
-		},
-		ctx: {
-			queues: () => registry,
-		},
-		setup: async client => {
-			installedClient = client;
-			hadPreviousQueues = Object.prototype.hasOwnProperty.call(client, 'queues');
-			previousQueues = client.queues;
-			installQueues(client, registry);
-			await registry.setup(client);
-		},
-		teardown: async client => {
-			try {
-				await registry.close();
-			} finally {
-				restoreQueues(client ?? installedClient, registry, hadPreviousQueues, previousQueues);
-				installedClient = undefined;
-				hadPreviousQueues = false;
-				previousQueues = undefined;
-			}
-		},
-	});
+	return Object.assign(
+		createPlugin({
+			name: '@slipher/queues',
+			client: {
+				queues: () => registry,
+			},
+			ctx: {
+				queues: () => registry,
+			},
+			setup: async client => {
+				installedClient = client;
+				hadPreviousQueues = Object.prototype.hasOwnProperty.call(client, 'queues');
+				previousQueues = client.queues;
+				installQueues(client, registry);
+				await registry.setup(client);
+			},
+			teardown: async client => {
+				try {
+					await registry.close();
+				} finally {
+					restoreQueues(client ?? installedClient, registry, hadPreviousQueues, previousQueues);
+					installedClient = undefined;
+					hadPreviousQueues = false;
+					previousQueues = undefined;
+				}
+			},
+		}),
+		{ registry },
+	);
 }
 
 export function installQueues<TClient extends QueuesClientLike>(
