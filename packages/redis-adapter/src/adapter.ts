@@ -7,6 +7,7 @@ export interface RedisAdapterOptions {
 
 export class RedisAdapter implements Adapter {
 	isAsync = true;
+	readonly supportsAtomicCooldowns: boolean = true;
 
 	client: ReturnType<typeof createClient>;
 	namespace: string;
@@ -99,6 +100,13 @@ export class RedisAdapter implements Adapter {
 
 	async patch(id: string, data: any): Promise<void> {
 		await this.client.hSet(this.buildKey(id), toDb(data));
+	}
+
+	async eval<T = unknown>(script: string, keys: string[] = [], args: string[] = []): Promise<T> {
+		return this.client.eval(script, {
+			keys: keys.map(key => this.buildKey(key)),
+			arguments: args,
+		}) as Promise<T>;
 	}
 
 	async values(to: string): Promise<any[]> {

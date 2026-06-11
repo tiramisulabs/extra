@@ -28,7 +28,9 @@ export interface ExpirableRedisAdapterOptions {
 }
 
 export class ExpirableRedisAdapter extends RedisAdapter {
+	override readonly supportsAtomicCooldowns = false;
 	options: MakeRequired<ExpirableRedisAdapterOptions, 'default'>;
+
 	constructor(
 		data: ({ client: ReturnType<typeof createClient> } | { redisOptions: RedisClientOptions }) & RedisAdapterOptions = {
 			redisOptions: {},

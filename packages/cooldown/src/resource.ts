@@ -1,20 +1,18 @@
 import { BaseResource, type CacheFrom } from 'seyfert/lib/cache';
 import type { PickPartial } from 'seyfert/lib/common';
 
+export const COOLDOWN_RESOURCE_NAMESPACE = 'cooldowns';
+export const COOLDOWN_RESOURCE_FIELD_PREFIX = 'N_';
+export const COOLDOWN_RESOURCE_RELATIONSHIP_SUFFIX = ':set';
+
 export interface CooldownData {
 	remaining: number;
 	interval: number;
 	lastDrip: number;
 }
 
-export enum CooldownType {
-	User = 'user',
-	Guild = 'guild',
-	Channel = 'channel',
-}
-
 export class CooldownResource extends BaseResource<CooldownData> {
-	namespace = 'cooldowns';
+	namespace = COOLDOWN_RESOURCE_NAMESPACE;
 
 	filter(_data: CooldownData, _id: string): boolean {
 		return true;
