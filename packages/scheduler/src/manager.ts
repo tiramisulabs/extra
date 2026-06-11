@@ -209,28 +209,26 @@ export function createScheduler(options: CreateSchedulerOptions) {
 export function scheduler(options: CreateSchedulerOptions): SchedulerPlugin {
 	const registry = createScheduler(options);
 
-	return Object.assign(
-		createPlugin({
-			name: '@slipher/scheduler',
-			client: {
-				scheduler: () => registry,
-			},
-			ctx: {
-				scheduler: () => registry,
-			},
-			async setup(client) {
-				if (client.scheduler !== registry) client.scheduler = registry;
+	return createPlugin({
+		name: '@slipher/scheduler',
+		registry,
+		client: {
+			scheduler: () => registry,
+		},
+		ctx: {
+			scheduler: () => registry,
+		},
+		async setup(client) {
+			if (client.scheduler !== registry) client.scheduler = registry;
 
-				if (client.logger) {
-					registry.setLogger(client.logger);
-				}
+			if (client.logger) {
+				registry.setLogger(client.logger);
+			}
 
-				await registry.setup(client);
-			},
-			async teardown() {
-				await registry.close();
-			},
-		}),
-		{ registry },
-	) as SchedulerPlugin;
+			await registry.setup(client);
+		},
+		async teardown() {
+			await registry.close();
+		},
+	}) as SchedulerPlugin;
 }
