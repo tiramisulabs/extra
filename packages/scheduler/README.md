@@ -27,7 +27,7 @@ pnpm add bullmq@^5.23.0
 Pick the driver explicitly:
 
 ```ts
-import { Client, definePlugins } from 'seyfert';
+import { Client, definePlugins, type RegisterPlugins } from 'seyfert';
 import { Interval, memory, scheduler } from '@slipher/scheduler';
 
 class MaintenanceTasks {
@@ -44,9 +44,7 @@ const schedulerPlugin = scheduler({
 const plugins = definePlugins(schedulerPlugin);
 
 declare module 'seyfert' {
-	interface Register {
-		plugins: typeof plugins;
-	}
+	interface Register extends RegisterPlugins<typeof plugins> {}
 }
 
 export const registry = schedulerPlugin.registry;
@@ -115,7 +113,11 @@ registry.cron('daily-cleanup', '0 0 * * *', async () => {
 registry.add('poller', '10s', async task => {
 	void task.runCount;
 });
+
+await registry.setup();
 ```
+
+When you use the registry without the Seyfert plugin, call `registry.setup()` after registering tasks. The `memory()` driver creates Croner jobs paused and resumes them during setup; the plugin does this for you when the client starts.
 
 ## Decorators
 
@@ -137,7 +139,7 @@ When using `persistent()`, every decorated task must provide an explicit non-emp
 
 ## Drivers
 
-`memory()` uses Croner in the current process. It is ideal for local workers and single-process jobs.
+`memory()` uses Croner in the current process. It is ideal for local workers and single-process jobs. Jobs are paused until setup so tasks cannot fire before the Seyfert client/plugin lifecycle is ready.
 
 `memory()` intervals tick at 1-second resolution. Values below or between whole seconds, such as `'500ms'` or `'1.5s'`, pass duration parsing but Croner rounds them to the next whole-second tick. If you need sub-second precision, use a different scheduling mechanism.
 
@@ -160,7 +162,7 @@ const registry = createScheduler({
 For a Seyfert bot, create the plugin, register it on the client, and start the client so plugin setup opens Redis/BullMQ resources:
 
 ```ts
-import { Client, definePlugins } from 'seyfert';
+import { Client, definePlugins, type RegisterPlugins } from 'seyfert';
 import { persistent, scheduler } from '@slipher/scheduler';
 
 const schedulerPlugin = scheduler({
@@ -172,9 +174,7 @@ const schedulerPlugin = scheduler({
 const plugins = definePlugins(schedulerPlugin);
 
 declare module 'seyfert' {
-	interface Register {
-		plugins: typeof plugins;
-	}
+	interface Register extends RegisterPlugins<typeof plugins> {}
 }
 
 const client = new Client({
