@@ -540,33 +540,31 @@ export function cooldown<const TOptions extends CooldownPluginOptions = {}>(
 	const contextScope: ContextScope = (context, run) => cooldownContexts.run(context as AnyContext, run);
 	const middleware = resolveCooldownMiddleware(options.middleware, manager);
 
-	return Object.assign(
-		createPlugin({
-			name: '@slipher/cooldown',
-			client: {
-				cooldown: () => manager,
-			},
-			ctx: {
-				cooldown: () => manager,
-			},
-			options() {
-				return { contextScopes: [contextScope] };
-			},
-			register(api) {
-				if (middleware) {
-					api.middlewares.add(
-						middleware.name,
-						middleware.run,
-						middleware.global === undefined ? undefined : { global: middleware.global },
-					);
-				}
-			},
-			setup(client) {
-				manager.attach(client);
-			},
-		}),
-		{ manager },
-	) as CooldownPlugin<CooldownPluginMiddlewares<TOptions>>;
+	return createPlugin({
+		name: '@slipher/cooldown',
+		manager,
+		client: {
+			cooldown: () => manager,
+		},
+		ctx: {
+			cooldown: () => manager,
+		},
+		options() {
+			return { contextScopes: [contextScope] };
+		},
+		register(api) {
+			if (middleware) {
+				api.middlewares.add(
+					middleware.name,
+					middleware.run,
+					middleware.global === undefined ? undefined : { global: middleware.global },
+				);
+			}
+		},
+		setup(client) {
+			manager.attach(client);
+		},
+	}) as CooldownPlugin<CooldownPluginMiddlewares<TOptions>>;
 }
 
 function isExplicitOptions(
