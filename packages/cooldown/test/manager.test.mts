@@ -5,6 +5,8 @@ import { afterEach, assert, beforeEach, describe, test, vi } from 'vitest';
 import { Cooldown, CooldownManager, type CooldownProps, cooldown as cooldownPlugin } from '../src';
 import type { CooldownData } from '../src/resource';
 
+type CooldownContextScope = (context: AnyContext, run: () => unknown) => unknown;
+
 function makeCommand(overrides: Record<string, unknown>) {
 	return Object.assign(new (class extends Command {})(), overrides);
 }
@@ -37,19 +39,15 @@ function createClient(commands: Command[] = []) {
 }
 
 function createScopedPlugin(client: Client, plugin = cooldownPlugin()) {
-	const fragments: Array<{ contextScopes?: readonly ((context: AnyContext, run: () => unknown) => unknown)[] }> = [];
-	plugin.register?.({
-		options: {
-			set(fragment) {
-				fragments.push(fragment as (typeof fragments)[number]);
-			},
-		},
-	} as never);
 	plugin.setup(client);
 
-	const scope = fragments[0]?.contextScopes?.[0];
+	const scope = getPluginContextScope(plugin);
 	if (!scope) throw new Error('Missing cooldown context scope');
 	return { plugin, scope };
+}
+
+function getPluginContextScope(plugin: ReturnType<typeof cooldownPlugin>): CooldownContextScope | undefined {
+	return plugin.options?.({} as never).contextScopes?.[0] as CooldownContextScope | undefined;
 }
 
 class AtomicMemoryAdapter extends MemoryAdapter {
@@ -642,20 +640,13 @@ describe('cooldown() plugin', () => {
 				name: string;
 				options?: { global?: boolean };
 			}[] = [];
-			const fragments: Array<{ contextScopes?: readonly ((context: AnyContext, run: () => unknown) => unknown)[] }> =
-				[];
-
 			plugin.register?.({
 				middlewares: {
 					add(name, middleware, options) {
 						registered.push({ name, middleware, options });
 					},
 				},
-				options: {
-					set(fragment) {
-						fragments.push(fragment as (typeof fragments)[number]);
-					},
-				},
+				options: { set() {} },
 			} as never);
 
 			assert.equal(registered.length, 1);
@@ -670,7 +661,7 @@ describe('cooldown() plugin', () => {
 			const context = commandContext({ client, command, fullCommandName: 'testCommand' });
 			const nextCalls: unknown[] = [];
 			const stops: string[] = [];
-			const scope = fragments[0]!.contextScopes![0]!;
+			const scope = getPluginContextScope(plugin)!;
 
 			await scope(context, () =>
 				registered[0]!.middleware({
@@ -716,20 +707,13 @@ describe('cooldown() plugin', () => {
 				name: string;
 				options?: { global?: boolean };
 			}[] = [];
-			const fragments: Array<{ contextScopes?: readonly ((context: AnyContext, run: () => unknown) => unknown)[] }> =
-				[];
-
 			plugin.register?.({
 				middlewares: {
 					add(name, middleware, options) {
 						registered.push({ name, middleware, options });
 					},
 				},
-				options: {
-					set(fragment) {
-						fragments.push(fragment as (typeof fragments)[number]);
-					},
-				},
+				options: { set() {} },
 			} as never);
 
 			assert.equal(registered.length, 1);
@@ -743,7 +727,7 @@ describe('cooldown() plugin', () => {
 			plugin.setup(client);
 			const context = commandContext({ client, command, fullCommandName: 'testCommand' });
 			const stops: string[] = [];
-			const scope = fragments[0]!.contextScopes![0]!;
+			const scope = getPluginContextScope(plugin)!;
 
 			await scope(context, () =>
 				registered[0]!.middleware({

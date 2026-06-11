@@ -13,7 +13,7 @@ Requires Seyfert v5.
 ## Setup
 
 ```ts
-import { Client, definePlugins } from 'seyfert';
+import { Client, definePlugins, type RegisterPlugins } from 'seyfert';
 import { cooldown } from '@slipher/cooldown';
 
 const plugins = definePlugins(
@@ -25,9 +25,7 @@ const plugins = definePlugins(
 const client = new Client({ plugins });
 
 declare module 'seyfert' {
-	interface Register {
-		plugins: typeof plugins;
-	}
+	interface Register extends RegisterPlugins<typeof plugins> {}
 }
 ```
 
