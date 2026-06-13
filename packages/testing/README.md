@@ -239,6 +239,29 @@ Options are parsed by Seyfert's default message args parser, so command options
 use flag-style syntax such as `-text hello` unless your bot supplies a custom
 parser through `clientOptions`.
 
+### i18n
+
+Provide translations programmatically with `langs` and set a fallback with
+`defaultLang`. Dispatchers already accept `locale`, so localized assertions can
+stay on the real `ctx.t` path:
+
+```ts
+const bot = await createMockBot({
+	commands: [HelloCommand],
+	langs: {
+		'en-US': { greeting: 'Hello!' },
+		'es-ES': { greeting: '¡Hola!' },
+	},
+	defaultLang: 'en-US',
+});
+
+expect((await bot.slash({ name: 'hello' })).content).toBe('Hello!');
+expect((await bot.slash({ name: 'hello', locale: 'es-ES' })).content).toBe('¡Hola!');
+```
+
+App-level `DefaultLocale` augmentation works unchanged; the mock only feeds the
+same translation data that Seyfert would normally load from lang files.
+
 ### Autocomplete and context menus
 
 Autocomplete uses the real Seyfert option callback and returns the choices it

@@ -2,6 +2,7 @@ import { Client, type Command, type ContextMenuCommand, ModalCommand, type Using
 import { CacheFrom } from 'seyfert/lib/cache';
 import { HandleCommand } from 'seyfert/lib/commands/handle';
 import type { ClientEvent } from 'seyfert/lib/events/event';
+import type { LangInstance } from 'seyfert/lib/langs/handler';
 import type { APIInteraction, APIInteractionResponse, GatewayDispatchPayload } from 'seyfert/lib/types';
 import { mockId } from '../id';
 import { registerWorldDefaults } from './defaults';
@@ -167,6 +168,10 @@ export interface MockBotOptions {
 	clientOptions?: ClientConstructorOptions;
 	prefixes?: string[];
 	mentionAsPrefix?: boolean;
+	/** Translations keyed by locale, e.g. { 'en-US': { greeting: 'Hello!' } }. */
+	langs?: Record<string, Record<string, unknown>>;
+	/** Fallback locale when the interaction's locale has no langs entry. */
+	defaultLang?: string;
 }
 
 export class MockBot {
@@ -718,6 +723,20 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 		handleCommand: HandleCommand,
 		...(options.middlewares ? { middlewares: options.middlewares } : {}),
 	});
+	if (options.langs) {
+		client.langs.set(
+			Object.entries(options.langs).map(
+				([name, file]): LangInstance => ({
+					name,
+					file: { default: file } as LangInstance['file'],
+					path: `${name}.ts`,
+				}),
+			),
+		);
+	}
+	if (options.defaultLang) {
+		client.langs.defaultLang = options.defaultLang;
+	}
 	client.botId = botId;
 	client.applicationId = options.applicationId ?? 'slipher-test-application';
 

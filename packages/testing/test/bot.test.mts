@@ -17,6 +17,7 @@ import {
 	ModalCommand,
 	type ModalContext,
 	Options,
+	type ParseLocales,
 	type ParseMiddlewares,
 	StringSelectMenu,
 	type StringSelectMenuInteraction,
@@ -38,6 +39,12 @@ import {
 import { apiError, MockApiError, MockApiHandler } from '../src/bot/rest';
 import { Routes } from '../src/bot/routes';
 import { mockWorld } from '../src/bot/world';
+
+const englishLang = { greeting: 'Hello!' };
+
+declare module 'seyfert' {
+	interface DefaultLocale extends ParseLocales<typeof englishLang> {}
+}
 
 describe('api payload factories', () => {
 	test('apiUser produces a snake_case user with unique ids', () => {
@@ -1022,6 +1029,36 @@ describe('message (prefix) commands', () => {
 		const result = await bot.say('<@slipher-test-bot> echo -text hi');
 
 		expect(result.content).toBe('echo: hi');
+		await bot.close();
+	});
+});
+
+describe('i18n', () => {
+	@Declare({ name: 'hello', description: 'Localized greeting' })
+	class HelloCommand extends Command {
+		async run(ctx: CommandContext) {
+			await ctx.write({ content: ctx.t.get().greeting });
+		}
+	}
+
+	test('replies use the dispatching locale', async () => {
+		const bot = await createMockBot({
+			commands: [HelloCommand],
+			langs: {
+				'en-US': englishLang,
+				'es-ES': { greeting: '¡Hola!' },
+			},
+			defaultLang: 'en-US',
+		});
+
+		const en = await bot.slash({ name: 'hello' });
+		expect(en.reply?.body).toMatchObject({ data: { content: 'Hello!' } });
+
+		const es = await bot.slash({ name: 'hello', locale: 'es-ES' });
+		expect(es.reply?.body).toMatchObject({ data: { content: '¡Hola!' } });
+
+		const fr = await bot.slash({ name: 'hello', locale: 'fr' });
+		expect(fr.reply?.body).toMatchObject({ data: { content: 'Hello!' } });
 		await bot.close();
 	});
 });
