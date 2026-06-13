@@ -7,6 +7,7 @@ import {
 } from '../src/bot/interactions';
 import { apiChannel, apiGuild, apiMember, apiMessage, apiUser } from '../src/bot/payloads';
 import { MockApiHandler } from '../src/bot/rest';
+import { mockWorld } from '../src/bot/world';
 
 describe('api payload factories', () => {
 	test('apiUser produces a snake_case user with unique ids', () => {
@@ -126,5 +127,20 @@ describe('MockApiHandler', () => {
 		await expect(pending).resolves.toMatchObject({ method: 'POST' });
 
 		await expect(rest.waitForAction(action => action.route === '/never', 20)).rejects.toThrow(/timed out/);
+	});
+});
+
+describe('mockWorld', () => {
+	test('builds linked guilds, channels, users and members', () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ name: 'Lab' });
+		const channel = world.registerChannel(guild.id, { name: 'general' });
+		const member = world.registerMember(guild.id, { nick: 'soc' });
+		const built = world.build();
+
+		expect(built.guilds).toHaveLength(1);
+		expect(channel.guild_id).toBe(guild.id);
+		expect(built.members[0]).toMatchObject({ guildId: guild.id, member: { nick: 'soc' } });
+		expect(built.users.some(user => user.id === member.user.id)).toBe(true);
 	});
 });
