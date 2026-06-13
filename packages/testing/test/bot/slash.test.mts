@@ -9,8 +9,8 @@ import {
 	ConfirmButton,
 	FeedbackModal,
 	GreetCommand,
-	guardCalls,
 	GuardedCommand,
+	guardCalls,
 	SlowCommand,
 	testMiddlewares,
 } from './_setup';

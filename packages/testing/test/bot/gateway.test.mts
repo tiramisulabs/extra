@@ -51,9 +51,7 @@ describe('mock gateway', () => {
 		const bot = await createMockBot({
 			clientOptions: {
 				handleSendPayload: async (_shardId, payload) =>
-					payload.op === GatewayOpcodes.Heartbeat && payload.d === 1
-						? { op: GatewayOpcodes.Heartbeat, d: 99 }
-						: null,
+					payload.op === GatewayOpcodes.Heartbeat && payload.d === 1 ? { op: GatewayOpcodes.Heartbeat, d: 99 } : null,
 			},
 		});
 

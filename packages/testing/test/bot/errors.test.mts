@@ -1,7 +1,7 @@
 import { Command, type CommandContext, Declare, Middlewares, type ParseLocales } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
-import { globalCalls, GreetCommand, testMiddlewares } from './_setup';
+import { GreetCommand, globalCalls, testMiddlewares } from './_setup';
 
 const englishLang = { greeting: 'Hello!' };
 

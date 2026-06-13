@@ -890,7 +890,8 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	const client = new Client(clientOptions);
 	const gateway = new MockGateway(options.shards ?? 1, options.shardLatency ?? 0);
 	// Client#setServices wraps the custom gateway's existing send hook; seed it from clientOptions first.
-	if (options.clientOptions?.handleSendPayload) gateway.options.handleSendPayload = options.clientOptions.handleSendPayload;
+	if (options.clientOptions?.handleSendPayload)
+		gateway.options.handleSendPayload = options.clientOptions.handleSendPayload;
 
 	client.setServices({
 		rest,
