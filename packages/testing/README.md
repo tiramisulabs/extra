@@ -164,6 +164,7 @@ for the rare assertion where the Discord wire shape itself is the contract. Pref
 - `onUnhandledRest` - warn, throw, or stay silent for unmatched shape fallback reads
 - `clientOptions` - forwarded to the Seyfert `Client` constructor, including plugins
 - `botId`, `applicationId`
+- `prefixes`, `mentionAsPrefix` - enable prefix/message-command dispatch with `say()`
 
 ### Execution model
 
@@ -196,6 +197,7 @@ await bot.userMenu({ name: 'Report User', target: apiUser({ id: '42' }) });
 await bot.clickButton('confirm');
 await bot.selectMenu('pick-color', ['red']);
 await bot.fillModal('feedback', { rating: '5' });
+await bot.say('!echo -text hello');
 await bot.emitEvent('GUILD_MEMBER_ADD', rawMemberPayload);
 ```
 
@@ -214,6 +216,28 @@ await bot.slash({
 	options: { user: userOption(apiUser({ id: '42' })), reason: 'spam' },
 });
 ```
+
+### Prefix commands
+
+Prefix commands use Seyfert's real message-command pipeline. Configure prefixes
+on the mock client, then call `say()` with a raw message string:
+
+```ts
+const bot = await createMockBot({ commands: [EchoCommand], prefixes: ['!'] });
+const result = await bot.say('!echo -text hello');
+
+expect(result.content).toBe('echo: hello');
+expect(result.messages).toMatchObject([{ content: 'echo: hello' }]);
+```
+
+`say()` returns message-create REST calls in `result.messages`; the complete REST
+trail is still in `result.actions`. Message commands do not use interaction
+responses, so they do not populate `result.reply`.
+
+Set `mentionAsPrefix: true` to include `<@botId>` and `<@!botId>` as prefixes.
+Options are parsed by Seyfert's default message args parser, so command options
+use flag-style syntax such as `-text hello` unless your bot supplies a custom
+parser through `clientOptions`.
 
 ### Autocomplete and context menus
 

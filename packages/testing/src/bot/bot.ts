@@ -3,6 +3,7 @@ import { CacheFrom } from 'seyfert/lib/cache';
 import { HandleCommand } from 'seyfert/lib/commands/handle';
 import type { ClientEvent } from 'seyfert/lib/events/event';
 import type { APIInteraction, APIInteractionResponse, GatewayDispatchPayload } from 'seyfert/lib/types';
+import { mockId } from '../id';
 import { registerWorldDefaults } from './defaults';
 import {
 	type ApiInteractionPayload,
@@ -25,7 +26,7 @@ import {
 	type UserCommandInteractionOptions,
 	userCommandInteraction,
 } from './interactions';
-import { type ApiUser, apiMessage, apiUser } from './payloads';
+import { type ApiChannel, type ApiMemberOptions, type ApiUser, apiMember, apiMessage, apiUser } from './payloads';
 import { computeChannelPermissions } from './permissions';
 import { type MatchedAction, MockApiHandler, type RecordedAction, type RouteMatcher } from './rest';
 import { FOLLOWUP_ROUTE, ORIGINAL_RESPONSE_ROUTE } from './routes';
@@ -56,6 +57,25 @@ export interface DispatchResult {
 	edits: OutgoingMessage[];
 	followups: OutgoingMessage[];
 	actions: RecordedAction[];
+	content?: string;
+}
+
+/**
+ * Identity bag for say() uses the same field names as interaction dispatchers,
+ * so copied `user` and `channel` test setup stays meaningful.
+ */
+export interface DispatchMessageOptions {
+	/** The message author; equivalent to `user` on every interaction dispatcher. */
+	user?: ApiUser;
+	member?: Omit<ApiMemberOptions, 'user'>;
+	/** Pass null for a DM message. */
+	guildId?: string | null;
+	channel?: ApiChannel;
+}
+
+export interface SayResult {
+	actions: RecordedAction[];
+	messages: OutgoingMessage[];
 	content?: string;
 }
 
@@ -145,6 +165,8 @@ export interface MockBotOptions {
 	botId?: string;
 	applicationId?: string;
 	clientOptions?: ClientConstructorOptions;
+	prefixes?: string[];
+	mentionAsPrefix?: boolean;
 }
 
 export class MockBot {
@@ -623,6 +645,33 @@ export class MockBot {
 		return this.dispatchInteraction(modalSubmitInteraction(prepared));
 	}
 
+	say(content: string, options: DispatchMessageOptions = {}): Dispatch<SayResult> {
+		const author = options.user ?? this.defaultUser;
+		const dm = options.guildId === null;
+		const guildId = dm ? undefined : (options.guildId ?? mockId());
+		const member = apiMember({ user: author, ...(options.member ?? {}) });
+		const { user: _user, ...gatewayMember } = member;
+		const raw = {
+			...apiMessage({
+				author,
+				content,
+				channelId: options.channel?.id,
+				...(guildId ? { guildId } : {}),
+			}),
+			...(dm ? {} : { member: gatewayMember }),
+		};
+
+		return new Dispatch(this.rest, this.client, author.id, async () => {
+			const startSeq = this.rest.actions.length;
+			await this.client.handleCommand.message(raw as Parameters<HandleCommand['message']>[0], -1);
+			const actions = this.rest.actions.slice(startSeq);
+			const messages = actions
+				.filter(action => action.method === 'POST' && /\/channels\/[^/]+\/messages$/.test(action.route))
+				.map(action => (action.body ?? {}) as OutgoingMessage);
+			return { actions, messages, content: messages.at(-1)?.content };
+		});
+	}
+
 	async emitEvent<TName extends GatewayDispatchPayload['t']>(
 		name: TName,
 		payload: Partial<Extract<GatewayDispatchPayload, { t: TName }>['d']> & Record<string, unknown>,
@@ -651,14 +700,25 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 			? (options.world as WorldBuilder).build()
 			: (options.world as MockWorld | undefined);
 	const world = built ? structuredClone(built) : undefined;
-	const client = new Client(options.clientOptions);
+	const botId = options.botId ?? 'slipher-test-bot';
+	const prefixList = [...(options.prefixes ?? []), ...(options.mentionAsPrefix ? [`<@${botId}>`, `<@!${botId}>`] : [])];
+	const clientOptions: ClientConstructorOptions = prefixList.length
+		? {
+				...options.clientOptions,
+				commands: {
+					...options.clientOptions?.commands,
+					prefix: async () => prefixList,
+				},
+			}
+		: options.clientOptions;
+	const client = new Client(clientOptions);
 
 	client.setServices({
 		rest,
 		handleCommand: HandleCommand,
 		...(options.middlewares ? { middlewares: options.middlewares } : {}),
 	});
-	client.botId = options.botId ?? 'slipher-test-bot';
+	client.botId = botId;
 	client.applicationId = options.applicationId ?? 'slipher-test-application';
 
 	if (options.commands) {
