@@ -4,10 +4,18 @@ import type { ClientEvent } from 'seyfert/lib/events/event';
 import type { APIInteraction, APIInteractionResponse, GatewayDispatchPayload } from 'seyfert/lib/types';
 import {
 	type ApiInteractionPayload,
+	type AutocompleteInteractionOptions,
 	type ChatInputInteractionOptions,
+	type EntryPointInteractionOptions,
+	type MessageCommandInteractionOptions,
 	type ModalSubmitInteractionOptions,
+	type UserCommandInteractionOptions,
+	autocompleteInteraction,
 	chatInputInteraction,
+	entryPointInteraction,
+	messageCommandInteraction,
 	modalSubmitInteraction,
+	userCommandInteraction,
 } from './interactions';
 import { type ApiUser, apiUser } from './payloads';
 import { type MatchedAction, MockApiHandler, type RecordedAction, type RouteMatcher } from './rest';
@@ -39,6 +47,10 @@ export interface DispatchResult {
 	followups: OutgoingMessage[];
 	actions: RecordedAction[];
 	content?: string;
+}
+
+export interface AutocompleteResult extends DispatchResult {
+	choices?: { name: string; value: string | number }[];
 }
 
 export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
@@ -241,6 +253,31 @@ export class MockBot {
 	slash(options: ChatInputInteractionOptions): Dispatch<DispatchResult> {
 		this.assertCommandRegistered(options.name);
 		return this.dispatchInteraction(chatInputInteraction({ user: this.defaultUser, ...options }));
+	}
+
+	autocomplete(options: AutocompleteInteractionOptions): Dispatch<AutocompleteResult> {
+		this.assertCommandRegistered(options.name);
+		const payload = autocompleteInteraction({ user: this.defaultUser, ...options });
+		const userId = payload.member?.user.id ?? payload.user?.id;
+		return new Dispatch(this.rest, this.client, userId, async () => {
+			const result = await this.runInteraction(payload);
+			const body = result.reply?.body;
+			return { ...result, choices: body?.type === 8 ? body.data?.choices : undefined };
+		});
+	}
+
+	userMenu(options: UserCommandInteractionOptions): Dispatch<DispatchResult> {
+		this.assertCommandRegistered(options.name);
+		return this.dispatchInteraction(userCommandInteraction({ user: this.defaultUser, ...options }));
+	}
+
+	messageMenu(options: MessageCommandInteractionOptions): Dispatch<DispatchResult> {
+		this.assertCommandRegistered(options.name);
+		return this.dispatchInteraction(messageCommandInteraction({ user: this.defaultUser, ...options }));
+	}
+
+	entryPoint(options: EntryPointInteractionOptions = {}): Dispatch<DispatchResult> {
+		return this.dispatchInteraction(entryPointInteraction({ user: this.defaultUser, ...options }));
 	}
 
 	fillModal(

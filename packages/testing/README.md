@@ -189,6 +189,8 @@ deadlock.
 
 ```ts
 await bot.slash({ name: 'admin', group: 'users', subcommand: 'kick', options: { reason: 'spam' } });
+await bot.autocomplete({ name: 'search', focused: 'query', value: 'sey' });
+await bot.userMenu({ name: 'Report User', target: apiUser({ id: '42' }) });
 await bot.fillModal('feedback', { rating: '5' });
 await bot.emitEvent('GUILD_MEMBER_ADD', rawMemberPayload);
 ```
@@ -206,6 +208,29 @@ import { apiUser, userOption } from '@slipher/testing';
 await bot.slash({
 	name: 'ban',
 	options: { user: userOption(apiUser({ id: '42' })), reason: 'spam' },
+});
+```
+
+### Autocomplete and context menus
+
+Autocomplete uses the real Seyfert option callback and returns the choices it
+responded with:
+
+```ts
+const result = await bot.autocomplete({ name: 'search', focused: 'query', value: 'sey' });
+expect(result.choices).toEqual([{ name: 'result:sey', value: 'sey' }]);
+```
+
+Context-menu commands dispatch through the same interaction pipeline as slash
+commands. The raw reply remains available for wire-level assertions:
+
+```ts
+const target = apiUser({ id: '42', username: 'spammer' });
+const result = await bot.userMenu({ name: 'Report User', target });
+
+expect(result.reply?.body).toMatchObject({
+	type: 4,
+	data: { content: 'Reported spammer' },
 });
 ```
 

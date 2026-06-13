@@ -110,6 +110,7 @@ interface ApiCommandDataOption {
 	name: string;
 	type: number;
 	value?: string | number | boolean;
+	focused?: boolean;
 	options?: ApiCommandDataOption[];
 }
 
@@ -119,6 +120,7 @@ interface ResolvedData {
 	channels?: Record<string, unknown>;
 	roles?: Record<string, unknown>;
 	attachments?: Record<string, unknown>;
+	messages?: Record<string, unknown>;
 }
 
 function isEncodedOption(value: OptionInput): value is EncodedOption {
@@ -203,6 +205,7 @@ export interface ApiInteractionPayload {
 		component_type?: number;
 		options?: ApiCommandDataOption[];
 		resolved?: ResolvedData;
+		target_id?: string;
 		components?: { type: 1; components: { type: 4; custom_id: string; value: string }[] }[];
 	};
 	message?: ApiMessage;
@@ -257,6 +260,89 @@ export function chatInputInteraction(options: ChatInputInteractionOptions): ApiI
 		options: dataOptions,
 		...(Object.keys(resolved).length > 0 ? { resolved } : {}),
 	};
+	return payload;
+}
+
+export interface AutocompleteInteractionOptions extends BaseInteractionOptions {
+	name: string;
+	group?: string;
+	subcommand?: string;
+	focused: string;
+	value?: string | number;
+	options?: Record<string, OptionInput>;
+}
+
+export function autocompleteInteraction(options: AutocompleteInteractionOptions): ApiInteractionPayload {
+	const payload = baseInteraction(options, 4);
+	const { options: encoded, resolved } = encodeOptions(options.options ?? {});
+	const focusedOption = {
+		name: options.focused,
+		type: typeof options.value === 'number' ? OptionType.Integer : OptionType.String,
+		value: options.value ?? '',
+		focused: true,
+	};
+	let dataOptions = [...encoded, focusedOption];
+	if (options.subcommand) {
+		dataOptions = [{ name: options.subcommand, type: OptionType.SubCommand, options: dataOptions }];
+	}
+	if (options.group) {
+		if (!options.subcommand) throw new TypeError('autocompleteInteraction: "group" requires "subcommand"');
+		dataOptions = [{ name: options.group, type: OptionType.SubCommandGroup, options: dataOptions }];
+	}
+
+	payload.data = {
+		id: mockId(),
+		name: options.name,
+		type: 1,
+		options: dataOptions,
+		...(Object.keys(resolved).length > 0 ? { resolved } : {}),
+	};
+	return payload;
+}
+
+export interface UserCommandInteractionOptions extends BaseInteractionOptions {
+	name: string;
+	target?: ApiUser;
+}
+
+export function userCommandInteraction(options: UserCommandInteractionOptions): ApiInteractionPayload {
+	const payload = baseInteraction(options, 2);
+	const target = options.target ?? apiUser();
+	payload.data = {
+		id: mockId(),
+		name: options.name,
+		type: 2,
+		target_id: target.id,
+		resolved: { users: { [target.id]: target } },
+	};
+	return payload;
+}
+
+export interface MessageCommandInteractionOptions extends BaseInteractionOptions {
+	name: string;
+	target?: ApiMessage;
+}
+
+export function messageCommandInteraction(options: MessageCommandInteractionOptions): ApiInteractionPayload {
+	const payload = baseInteraction(options, 2);
+	const target = options.target ?? apiMessage({ channelId: payload.channel_id });
+	payload.data = {
+		id: mockId(),
+		name: options.name,
+		type: 3,
+		target_id: target.id,
+		resolved: { messages: { [target.id]: target } },
+	};
+	return payload;
+}
+
+export interface EntryPointInteractionOptions extends BaseInteractionOptions {
+	name?: string;
+}
+
+export function entryPointInteraction(options: EntryPointInteractionOptions = {}): ApiInteractionPayload {
+	const payload = baseInteraction(options, 2);
+	payload.data = { id: mockId(), name: options.name ?? 'launch', type: 4 };
 	return payload;
 }
 

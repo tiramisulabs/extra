@@ -4,7 +4,9 @@ import {
 	type CommandContext,
 	ComponentCommand,
 	type ComponentContext,
+	ContextMenuCommand,
 	Declare,
+	type MenuCommandContext,
 	Middlewares,
 	ModalCommand,
 	type ModalContext,
@@ -13,7 +15,9 @@ import {
 	createEvent,
 	createMiddleware,
 	createStringOption,
+	type UserCommandInteraction,
 } from 'seyfert';
+import { ApplicationCommandType } from 'seyfert/lib/types';
 import { createMockBot } from '../src/bot/bot';
 import {
 	buttonInteraction,
@@ -303,5 +307,48 @@ describe('createMockBot', () => {
 		const main = await import('../src/index');
 		expect(main.createMockBot).toBeTypeOf('function');
 		expect(main.mockCommandContext).toBeTypeOf('function');
+	});
+});
+
+const searchOptions = {
+	query: createStringOption({
+		description: 'Search term',
+		required: true,
+		autocomplete: async interaction => {
+			const partial = interaction.getInput();
+			await interaction.respond([{ name: `result:${partial}`, value: partial }]);
+		},
+	}),
+};
+
+@Declare({ name: 'search', description: 'Searches things' })
+@Options(searchOptions)
+class SearchCommand extends Command {
+	async run(ctx: CommandContext<typeof searchOptions>) {
+		await ctx.write({ content: ctx.options.query });
+	}
+}
+
+@Declare({ name: 'Report User', type: ApplicationCommandType.User })
+class ReportUser extends ContextMenuCommand {
+	async run(ctx: MenuCommandContext<UserCommandInteraction>) {
+		await ctx.write({ content: `Reported ${ctx.target.username}` });
+	}
+}
+
+describe('autocomplete and context menus', () => {
+	test('autocomplete returns the responded choices', async () => {
+		const bot = await createMockBot({ commands: [SearchCommand] });
+		const result = await bot.autocomplete({ name: 'search', focused: 'query', value: 'sey' });
+		expect(result.choices).toEqual([{ name: 'result:sey', value: 'sey' }]);
+		await bot.close();
+	});
+
+	test('userMenu resolves the target user', async () => {
+		const bot = await createMockBot({ commands: [ReportUser] });
+		const target = apiUser({ id: '42', username: 'spammer' });
+		const result = await bot.userMenu({ name: 'Report User', target });
+		expect(result.reply?.body).toMatchObject({ type: 4, data: { content: 'Reported spammer' } });
+		await bot.close();
 	});
 });
