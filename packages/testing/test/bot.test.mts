@@ -1,5 +1,21 @@
 import { describe, expect, test } from 'vitest';
 import {
+	Command,
+	type CommandContext,
+	ComponentCommand,
+	type ComponentContext,
+	Declare,
+	Middlewares,
+	ModalCommand,
+	type ModalContext,
+	Options,
+	type ParseMiddlewares,
+	createEvent,
+	createMiddleware,
+	createStringOption,
+} from 'seyfert';
+import { createMockBot } from '../src/bot/bot';
+import {
 	buttonInteraction,
 	chatInputInteraction,
 	modalSubmitInteraction,
@@ -142,5 +158,150 @@ describe('mockWorld', () => {
 		expect(channel.guild_id).toBe(guild.id);
 		expect(built.members[0]).toMatchObject({ guildId: guild.id, member: { nick: 'soc' } });
 		expect(built.users.some(user => user.id === member.user.id)).toBe(true);
+	});
+});
+
+const greetOptions = {
+	name: createStringOption({ description: 'Who to greet', required: true }),
+};
+
+@Declare({ name: 'greet', description: 'Greets someone' })
+@Options(greetOptions)
+class GreetCommand extends Command {
+	async run(ctx: CommandContext<typeof greetOptions>) {
+		await ctx.write({ content: `Hello, ${ctx.options.name}!` });
+	}
+}
+
+@Declare({ name: 'slow', description: 'Defers then follows up' })
+class SlowCommand extends Command {
+	async run(ctx: CommandContext) {
+		await ctx.deferReply();
+		await ctx.editOrReply({ content: 'done' });
+		await ctx.followup({ content: 'extra' });
+	}
+}
+
+class ConfirmButton extends ComponentCommand {
+	componentType = 'Button' as const;
+	filter(ctx: ComponentContext<'Button'>) {
+		return ctx.customId === 'confirm';
+	}
+	async run(ctx: ComponentContext<'Button'>) {
+		await ctx.write({ content: 'Confirmed!' });
+	}
+}
+
+class FeedbackModal extends ModalCommand {
+	filter(ctx: ModalContext) {
+		return ctx.customId === 'feedback';
+	}
+	async run(ctx: ModalContext) {
+		await ctx.write({ content: 'Thanks!' });
+	}
+}
+
+const guardCalls: string[] = [];
+const guard = createMiddleware<void>(middle => {
+	guardCalls.push('guard');
+	middle.next();
+});
+const testMiddlewares = { guard };
+
+declare module 'seyfert' {
+	interface RegisteredMiddlewares extends ParseMiddlewares<typeof testMiddlewares> {}
+}
+
+@Declare({ name: 'guarded', description: 'Guarded command' })
+@Middlewares(['guard'])
+class GuardedCommand extends Command {
+	async run(ctx: CommandContext) {
+		await ctx.write({ content: 'passed' });
+	}
+}
+
+describe('createMockBot', () => {
+	test('dispatches a slash command through the real pipeline and captures the reply', async () => {
+		const bot = await createMockBot({ commands: [GreetCommand] });
+		const result = await bot.slash({ name: 'greet', options: { name: 'slipher' } });
+		expect(result.content).toBe('Hello, slipher!');
+		expect(result.reply?.body).toMatchObject({ type: 4, data: { content: 'Hello, slipher!' } });
+		await bot.close();
+	});
+
+	test('classifies deferrals, edits and followups semantically', async () => {
+		const bot = await createMockBot({ commands: [SlowCommand] });
+		const result = await bot.slash({ name: 'slow' });
+
+		expect(result.deferred).toBe(true);
+		expect(result.edits).toMatchObject([{ content: 'done' }]);
+		expect(result.followups).toMatchObject([{ content: 'extra' }]);
+		expect(result.content).toBe('done');
+		expect(result.reply?.body).toMatchObject({ type: 5 });
+		expect(result.actions.some(action => action.method === 'PATCH')).toBe(true);
+		await bot.close();
+	});
+
+	test('runs registered middlewares (fully typed, no casts)', async () => {
+		const bot = await createMockBot({
+			commands: [GuardedCommand],
+			middlewares: testMiddlewares,
+		});
+		const result = await bot.slash({ name: 'guarded' });
+		expect(guardCalls).toEqual(['guard']);
+		expect(result.reply?.body).toMatchObject({ data: { content: 'passed' } });
+		await bot.close();
+	});
+
+	test('seeds the world so ctx.guild() resolves from cache', async () => {
+		let seen: string | undefined;
+
+		@Declare({ name: 'where', description: 'Reads the guild from cache' })
+		class WhereCommand extends Command {
+			async run(ctx: CommandContext) {
+				const guild = await ctx.guild();
+				seen = guild?.name;
+				await ctx.write({ content: seen ?? 'nowhere' });
+			}
+		}
+
+		const world = mockWorld();
+		const guild = world.registerGuild({ name: 'Slipher Lab' });
+		world.registerChannel(guild.id);
+		const bot = await createMockBot({ commands: [WhereCommand], world: world.build() });
+		await bot.slash({ name: 'where', guildId: guild.id });
+		expect(seen).toBe('Slipher Lab');
+		await bot.close();
+	});
+
+	test('dispatches modals to component commands', async () => {
+		const bot = await createMockBot({ components: [ConfirmButton, FeedbackModal] });
+		const modal = await bot.fillModal('feedback', { rating: '5' });
+		expect(modal.content).toBe('Thanks!');
+		await bot.close();
+	});
+
+	test('emits gateway events to registered event handlers', async () => {
+		const joined: string[] = [];
+		const onJoin = createEvent({
+			data: { name: 'guildMemberAdd' },
+			run(member) {
+				joined.push(member.user.username);
+			},
+		});
+
+		const bot = await createMockBot({ events: [onJoin] });
+		await bot.emitEvent('GUILD_MEMBER_ADD', {
+			...apiMember({ user: apiUser({ username: 'newbie' }) }),
+			guild_id: '123',
+		});
+		expect(joined).toEqual(['newbie']);
+		await bot.close();
+	});
+
+	test('main entry exports both layers', async () => {
+		const main = await import('../src/index');
+		expect(main.createMockBot).toBeTypeOf('function');
+		expect(main.mockCommandContext).toBeTypeOf('function');
 	});
 });

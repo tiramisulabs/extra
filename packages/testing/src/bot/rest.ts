@@ -58,6 +58,11 @@ function compileRoute(route: string): { pattern: RegExp; names: string[] } {
 	return { pattern: new RegExp(`^/${source}$`), names };
 }
 
+function definedBody(body: Record<string, unknown> | undefined): Record<string, unknown> {
+	if (!body) return {};
+	return Object.fromEntries(Object.entries(body).filter(([, value]) => value !== undefined));
+}
+
 export class MockApiHandler extends ApiHandler {
 	readonly actions: RecordedAction[] = [];
 	private listeners: ((action: RecordedAction) => void)[] = [];
@@ -274,7 +279,7 @@ export class MockApiHandler extends ApiHandler {
 			const ids = /\/channels\/([^/]+)\/messages\/([^/]+)$/.exec(pending.route);
 			return {
 				...apiMessage(ids ? { channelId: ids[1], id: ids[2] } : {}),
-				...(pending.body ?? {}),
+				...definedBody(pending.body),
 			};
 		}
 		return {};
