@@ -1,0 +1,14 @@
+{
+	"extends": "../../tsconfig.json",
+	"compilerOptions": {
+		"rootDir": ".",
+		"outDir": "../.generated/fixtures",
+		"declaration": false,
+		"sourceMap": false,
+		"noEmit": false
+	},
+	"include": [
+		"commands/**/*.ts"
+	],
+	"exclude": []
+}
