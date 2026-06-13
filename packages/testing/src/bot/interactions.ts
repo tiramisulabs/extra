@@ -1,4 +1,5 @@
 import { mockId } from '../id';
+import { TEST_APPLICATION_ID } from './constants';
 import {
 	type ApiAttachment,
 	type ApiChannel,
@@ -242,7 +243,7 @@ function baseInteraction(options: BaseInteractionOptions, type: number): ApiInte
 
 	return {
 		id,
-		application_id: options.applicationId ?? 'slipher-test-application',
+		application_id: options.applicationId ?? TEST_APPLICATION_ID,
 		type,
 		token: `slipher-mock-interaction-token-${id}`,
 		version: 1,

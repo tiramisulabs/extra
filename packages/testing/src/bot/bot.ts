@@ -1,11 +1,20 @@
-import { Client, type Command, type ContextMenuCommand, ModalCommand, type UsingClient } from 'seyfert';
+import {
+	Client,
+	type Command,
+	type ContextMenuCommand,
+	type EntryPointCommand,
+	ModalCommand,
+	type UsingClient,
+} from 'seyfert';
 import { CacheFrom } from 'seyfert/lib/cache';
 import { HandleCommand } from 'seyfert/lib/commands/handle';
 import type { ClientEvent } from 'seyfert/lib/events/event';
 import type { LangInstance } from 'seyfert/lib/langs/handler';
 import type { APIInteraction, APIInteractionResponse, GatewayDispatchPayload } from 'seyfert/lib/types';
 import { mockId } from '../id';
+import { TEST_APPLICATION_ID, TEST_BOT_ID, TEST_USER_ID } from './constants';
 import { registerWorldDefaults } from './defaults';
+import { MockGateway } from './gateway';
 import {
 	type ApiInteractionPayload,
 	type AutocompleteInteractionOptions,
@@ -27,7 +36,15 @@ import {
 	type UserCommandInteractionOptions,
 	userCommandInteraction,
 } from './interactions';
-import { type ApiChannel, type ApiMemberOptions, type ApiUser, apiMember, apiMessage, apiUser } from './payloads';
+import {
+	type ApiChannel,
+	type ApiMember,
+	type ApiMemberOptions,
+	type ApiUser,
+	apiMember,
+	apiMessage,
+	apiUser,
+} from './payloads';
 import { computeChannelPermissions } from './permissions';
 import { type MatchedAction, MockApiHandler, type RecordedAction, type RouteMatcher } from './rest';
 import { FOLLOWUP_ROUTE, ORIGINAL_RESPONSE_ROUTE } from './routes';
@@ -35,13 +52,17 @@ import { type ChannelView, type GuildView, WorldState } from './state';
 import { type MockWorld, seedWorld, type WorldBuilder } from './world';
 
 type ClientConstructorOptions = ConstructorParameters<typeof Client>[0];
+type ClientOptions = NonNullable<ClientConstructorOptions>;
 type ServicesOptions = Parameters<Client['setServices']>[0];
 
 export interface CapturedReply {
+	/** Discord interaction callback body captured before it would be sent. */
 	body: APIInteractionResponse;
+	/** Raw files passed with the reply, if any. */
 	files?: unknown;
 }
 
+/** Message-shaped body sent through followups, edits, prefix commands, or REST echoes. */
 export interface OutgoingMessage {
 	content?: string;
 	embeds?: unknown[];
@@ -49,15 +70,25 @@ export interface OutgoingMessage {
 	[key: string]: unknown;
 }
 
+/** Semantic result produced by interaction dispatchers. */
 export interface DispatchResult {
+	/** Immediate interaction callback replies, in order. */
 	replies: CapturedReply[];
+	/** The first immediate interaction callback, when present. */
 	reply?: CapturedReply;
+	/** True when the interaction deferred before sending final content. */
 	deferred: boolean;
+	/** True when the immediate response carried Discord's ephemeral flag. */
 	ephemeral: boolean;
+	/** Modal metadata when the interaction opened a modal. */
 	modal?: { customId?: string; title?: string };
+	/** Original-response edits made during the dispatch. */
 	edits: OutgoingMessage[];
+	/** Followup messages sent during the dispatch. */
 	followups: OutgoingMessage[];
+	/** REST actions scoped to this dispatch. */
 	actions: RecordedAction[];
+	/** Best-effort final user-visible content across replies, edits, and followups. */
 	content?: string;
 }
 
@@ -75,15 +106,68 @@ export interface DispatchMessageOptions {
 }
 
 export interface SayResult {
+	/** REST actions scoped to this prefix message dispatch. */
 	actions: RecordedAction[];
+	/** Message-create REST bodies emitted by the command. */
 	messages: OutgoingMessage[];
+	/** Last message content, when the command wrote a message. */
 	content?: string;
 }
 
+/** Identity and location bound to an Actor for repeated multi-step flows. */
+export interface ActorOptions {
+	user?: ApiUser;
+	/**
+	 * Full world member, including user. Dispatcher `member` bags intentionally
+	 * use member options without a user; actor() accepts the seeded world shape.
+	 */
+	member?: ApiMember;
+	guildId?: string | null;
+	channel?: ApiChannel;
+}
+
+/** Bound dispatcher facade that reuses one identity across a flow. */
+export interface Actor {
+	slash(options: ChatInputInteractionOptions): Dispatch<DispatchResult>;
+	autocomplete(options: AutocompleteInteractionOptions): Dispatch<AutocompleteResult>;
+	userMenu(options: UserCommandInteractionOptions): Dispatch<DispatchResult>;
+	messageMenu(options: MessageCommandInteractionOptions): Dispatch<DispatchResult>;
+	entryPoint(options?: EntryPointInteractionOptions): Dispatch<DispatchResult>;
+	fillModal(
+		customId: string,
+		fields?: Record<string, string>,
+		options?: Omit<ModalSubmitInteractionOptions, 'customId' | 'fields'>,
+	): Dispatch<DispatchResult>;
+	clickButton(customId: string, options?: Parameters<MockBot['clickButton']>[1]): Dispatch<DispatchResult>;
+	selectMenu(
+		customId: string,
+		values: string[],
+		options?: Parameters<MockBot['selectMenu']>[2],
+	): Dispatch<DispatchResult>;
+	say(content: string, options?: DispatchMessageOptions): Dispatch<SayResult>;
+}
+
+/** Autocomplete dispatch result with the responded choices lifted out semantically. */
 export interface AutocompleteResult extends DispatchResult {
 	choices?: { name: string; value: string | number }[];
 }
 
+/**
+ * Canonical user-action dispatcher list. Add a matrix row whenever this grows.
+ */
+export const DISPATCHER_VERBS = [
+	'slash',
+	'clickButton',
+	'selectMenu',
+	'fillModal',
+	'say',
+	'autocomplete',
+	'userMenu',
+	'messageMenu',
+	'entryPoint',
+] as const satisfies readonly (keyof MockBot)[];
+
+/** Lazy, step-able handle returned by every user-action dispatcher. */
 export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 	private execution?: Promise<T>;
 	private releasePending?: () => void;
@@ -99,6 +183,10 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 	private start(): Promise<T> {
 		this.execution ??= this.executor();
 		return this.execution;
+	}
+
+	get started(): boolean {
+		return this.execution !== undefined;
 	}
 
 	private releaseCheckpoint(): void {
@@ -150,40 +238,78 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 	}
 }
 
-export type MockCommandClass = new () => Command | ContextMenuCommand;
+export type MockCommandClass = new () => Command | ContextMenuCommand | EntryPointCommand;
 export type MockEvent = Omit<ClientEvent, 'data'> & {
 	data: Omit<ClientEvent['data'], 'once'> & { once?: boolean };
 };
 
+/** Options used to boot an in-process Seyfert client without network transport. */
 export interface MockBotOptions {
+	/** Command classes to register directly. */
 	commands?: MockCommandClass[];
+	/** Component and modal command classes to register directly. */
 	components?: Parameters<Client['components']['set']>[0];
+	/** Event definitions to register directly. */
 	events?: MockEvent[];
+	/** Middleware registry passed to client.setServices(). */
 	middlewares?: ServicesOptions['middlewares'];
+	/** World entities to clone into the client cache and REST defaults. */
 	world?: MockWorld | WorldBuilder;
+	/** How unmatched fallback GET requests are handled. */
 	onUnhandledRest?: 'warn' | 'error' | 'silent';
+	/** Emit matching cache/gateway events for stateful REST mutations. */
 	simulateGateway?: boolean;
+	/** Number of mock gateway shards to expose. */
+	shards?: number;
+	/** Latency value reported by each mock shard. */
+	shardLatency?: number;
+	/** Bot user id used by the mock client identity. */
 	botId?: string;
+	/** Application id used for interactions and webhook routes. */
 	applicationId?: string;
+	/** Raw Seyfert client constructor options. */
 	clientOptions?: ClientConstructorOptions;
+	/** Global middlewares forwarded to the real Seyfert client. */
+	globalMiddlewares?: ClientOptions['globalMiddlewares'];
+	/** Prefixes enabled for message command dispatch through say(). */
 	prefixes?: string[];
+	/** Include bot mentions as valid prefixes for say(). */
 	mentionAsPrefix?: boolean;
 	/** Translations keyed by locale, e.g. { 'en-US': { greeting: 'Hello!' } }. */
 	langs?: Record<string, Record<string, unknown>>;
 	/** Fallback locale when the interaction's locale has no langs entry. */
 	defaultLang?: string;
+	/**
+	 * Load the real bot from its seyfert.config locations before plugin setup.
+	 */
+	loadFromConfig?: boolean;
+	/** Explicit commands directory; overrides config-resolved command locations. */
+	commandsDir?: string;
+	/** Explicit components directory; overrides config-resolved component locations. */
+	componentsDir?: string;
+	/** Explicit events directory; overrides config-resolved event locations. */
+	eventsDir?: string;
+	/** Explicit langs directory; overrides config-resolved lang locations. */
+	langsDir?: string;
 }
 
 export class MockBot {
-	readonly defaultUser: ApiUser = apiUser({ id: 'slipher-default-user', username: 'slipher-tester' });
+	readonly defaultUser: ApiUser = apiUser({ id: TEST_USER_ID, username: 'slipher-tester' });
 	private readonly unregisteredMemberWarnings = new Set<string>();
+	private readonly dispatches: Dispatch<unknown>[] = [];
 
 	constructor(
 		readonly client: Client,
 		readonly rest: MockApiHandler,
+		readonly gateway: MockGateway,
 		protected readonly world?: MockWorld,
 		readonly state: WorldState = new WorldState(world),
 	) {}
+
+	private track<T>(dispatch: Dispatch<T>): Dispatch<T> {
+		this.dispatches.push(dispatch as Dispatch<unknown>);
+		return dispatch;
+	}
 
 	private applyWorldPermissions<T extends BaseInteractionOptions>(options: T): T {
 		if (
@@ -480,7 +606,7 @@ export class MockBot {
 
 	dispatchInteraction(payload: ApiInteractionPayload): Dispatch<DispatchResult> {
 		const userId = payload.member?.user.id ?? payload.user?.id;
-		return new Dispatch(this.rest, this.client, userId, () => this.runInteraction(payload));
+		return this.track(new Dispatch(this.rest, this.client, userId, () => this.runInteraction(payload)));
 	}
 
 	private materializeInteractionResponse(payload: ApiInteractionPayload, body: APIInteractionResponse): void {
@@ -497,6 +623,7 @@ export class MockBot {
 		const startSeq = this.rest.actions.length;
 		const replies: CapturedReply[] = [];
 		this.state.registerInteractionToken(payload.token, payload.channel_id);
+		// The builders preserve Discord's payload shape while exposing a wider test input type.
 		await this.client.handleCommand.interaction(payload as unknown as APIInteraction, -1, async reply => {
 			replies.push(reply);
 			this.materializeInteractionResponse(payload, reply.body);
@@ -507,6 +634,7 @@ export class MockBot {
 				action => action.method === 'POST' && action.route === `/interactions/${payload.id}/${payload.token}/callback`,
 			);
 			if (callback?.body) {
+				// Seyfert's callback body is the same interaction response union after transport shaping.
 				const reply = { body: callback.body as unknown as APIInteractionResponse, files: callback.files };
 				replies.push(reply);
 				this.materializeInteractionResponse(payload, reply.body);
@@ -576,11 +704,13 @@ export class MockBot {
 		this.assertCommandRegistered(options.name);
 		const payload = autocompleteInteraction(this.applyWorldPermissions({ user: this.defaultUser, ...options }));
 		const userId = payload.member?.user.id ?? payload.user?.id;
-		return new Dispatch(this.rest, this.client, userId, async () => {
-			const result = await this.runInteraction(payload);
-			const body = result.reply?.body;
-			return { ...result, choices: body?.type === 8 ? body.data?.choices : undefined };
-		});
+		return this.track(
+			new Dispatch(this.rest, this.client, userId, async () => {
+				const result = await this.runInteraction(payload);
+				const body = result.reply?.body;
+				return { ...result, choices: body?.type === 8 ? body.data?.choices : undefined };
+			}),
+		);
 	}
 
 	userMenu(options: UserCommandInteractionOptions): Dispatch<DispatchResult> {
@@ -666,15 +796,41 @@ export class MockBot {
 			...(dm ? {} : { member: gatewayMember }),
 		};
 
-		return new Dispatch(this.rest, this.client, author.id, async () => {
-			const startSeq = this.rest.actions.length;
-			await this.client.handleCommand.message(raw as Parameters<HandleCommand['message']>[0], -1);
-			const actions = this.rest.actions.slice(startSeq);
-			const messages = actions
-				.filter(action => action.method === 'POST' && /\/channels\/[^/]+\/messages$/.test(action.route))
-				.map(action => (action.body ?? {}) as OutgoingMessage);
-			return { actions, messages, content: messages.at(-1)?.content };
-		});
+		return this.track(
+			new Dispatch(this.rest, this.client, author.id, async () => {
+				const startSeq = this.rest.actions.length;
+				await this.client.handleCommand.message(raw as Parameters<HandleCommand['message']>[0], -1);
+				const actions = this.rest.actions.slice(startSeq);
+				const messages = actions
+					.filter(action => action.method === 'POST' && /\/channels\/[^/]+\/messages$/.test(action.route))
+					.map(action => (action.body ?? {}) as OutgoingMessage);
+				return { actions, messages, content: messages.at(-1)?.content };
+			}),
+		);
+	}
+
+	actor(options: ActorOptions): Actor {
+		const entry = options.member
+			? this.world?.members.find(candidate => candidate.member.user.id === options.member?.user.id)
+			: undefined;
+		const user = options.user ?? options.member?.user;
+		const guildId = options.guildId ?? entry?.guildId;
+		const channel =
+			options.channel ??
+			(entry ? this.world?.channels.find(candidate => candidate.guild_id === entry.guildId) : undefined);
+		const base = { user, guildId, channel };
+
+		return {
+			slash: options => this.slash({ ...base, ...options }),
+			autocomplete: options => this.autocomplete({ ...base, ...options }),
+			userMenu: options => this.userMenu({ ...base, ...options }),
+			messageMenu: options => this.messageMenu({ ...base, ...options }),
+			entryPoint: options => this.entryPoint({ ...base, ...options }),
+			fillModal: (customId, fields, options = {}) => this.fillModal(customId, fields, { ...base, ...options }),
+			clickButton: (customId, options = {}) => this.clickButton(customId, { ...base, ...options }),
+			selectMenu: (customId, values, options = {}) => this.selectMenu(customId, values, { ...base, ...options }),
+			say: (content, options = {}) => this.say(content, { ...base, ...options }),
+		};
 	}
 
 	async emitEvent<TName extends GatewayDispatchPayload['t']>(
@@ -694,7 +850,16 @@ export class MockBot {
 	}
 
 	async close(): Promise<void> {
+		const unstarted = this.dispatches.filter(dispatch => !dispatch.started);
+		if (unstarted.length) {
+			console.warn(`[@slipher/testing] ${unstarted.length} dispatch(es) were created but never awaited or stepped.`);
+		}
+		this.rest.releasePending();
 		await this.client.close();
+	}
+
+	async [Symbol.asyncDispose](): Promise<void> {
+		await this.close();
 	}
 }
 
@@ -705,21 +870,32 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 			? (options.world as WorldBuilder).build()
 			: (options.world as MockWorld | undefined);
 	const world = built ? structuredClone(built) : undefined;
-	const botId = options.botId ?? 'slipher-test-bot';
+	const botId = options.botId ?? TEST_BOT_ID;
 	const prefixList = [...(options.prefixes ?? []), ...(options.mentionAsPrefix ? [`<@${botId}>`, `<@!${botId}>`] : [])];
-	const clientOptions: ClientConstructorOptions = prefixList.length
-		? {
-				...options.clientOptions,
-				commands: {
-					...options.clientOptions?.commands,
-					prefix: async () => prefixList,
-				},
-			}
-		: options.clientOptions;
+	const clientOptions: ClientConstructorOptions =
+		prefixList.length || options.globalMiddlewares
+			? {
+					...options.clientOptions,
+					...(options.globalMiddlewares ? { globalMiddlewares: options.globalMiddlewares } : {}),
+					...(prefixList.length
+						? {
+								commands: {
+									...options.clientOptions?.commands,
+									prefix: async () => prefixList,
+								},
+							}
+						: {}),
+				}
+			: options.clientOptions;
 	const client = new Client(clientOptions);
+	const gateway = new MockGateway(options.shards ?? 1, options.shardLatency ?? 0);
+	// Client#setServices wraps the custom gateway's existing send hook; seed it from clientOptions first.
+	if (options.clientOptions?.handleSendPayload) gateway.options.handleSendPayload = options.clientOptions.handleSendPayload;
 
 	client.setServices({
 		rest,
+		// ShardManager is a concrete class in Seyfert; MockGateway mirrors the runtime surface bots test against.
+		gateway: gateway as unknown as Client['gateway'],
 		handleCommand: HandleCommand,
 		...(options.middlewares ? { middlewares: options.middlewares } : {}),
 	});
@@ -738,18 +914,27 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 		client.langs.defaultLang = options.defaultLang;
 	}
 	client.botId = botId;
-	client.applicationId = options.applicationId ?? 'slipher-test-application';
+	client.applicationId = options.applicationId ?? TEST_APPLICATION_ID;
 
 	if (options.commands) {
+		// Seyfert's command handler accepts constructor arrays at runtime, but its type expects loaded command metadata.
 		client.commands.set(options.commands as unknown as Parameters<Client['commands']['set']>[0]);
 	}
 	if (options.components) client.components.set(options.components);
 	if (options.events) {
 		const events = options.events.map(event => ({ ...event, data: { once: false, ...event.data } }));
+		// Tests pass public event definitions; Seyfert fills the internal loader-only fields when executing.
 		client.events.set(events as Parameters<Client['events']['set']>[0]);
 	}
+	const loadFromConfig = options.loadFromConfig === true;
+	if (loadFromConfig || options.commandsDir) await client.loadCommands(options.commandsDir);
+	if (loadFromConfig || options.componentsDir) await client.loadComponents(options.componentsDir);
+	if (loadFromConfig || options.eventsDir) await client.loadEvents(options.eventsDir);
+	if (loadFromConfig || options.langsDir) await client.loadLangs(options.langsDir);
 
+	// setupPlugins is intentionally not public on Client, but production start() calls the same hook.
 	await (client as unknown as { setupPlugins(): Promise<void> }).setupPlugins();
+	// seedWorld only needs the UsingClient cache/rest surface already installed above.
 	if (world) await seedWorld(client as unknown as UsingClient, world);
 	const state = new WorldState(world);
 	registerWorldDefaults(rest, world, {
@@ -765,5 +950,5 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 		botId: client.botId,
 	});
 
-	return new MockBot(client, rest, world, state);
+	return new MockBot(client, rest, gateway, world, state);
 }

@@ -1,5 +1,6 @@
 import type { UsingClient } from 'seyfert';
 import { CacheFrom } from 'seyfert/lib/cache';
+import { TEST_BOT_ID } from './constants';
 import {
 	type ApiChannel,
 	type ApiChannelOptions,
@@ -118,7 +119,7 @@ export class WorldBuilder {
 
 	registerBotMember(guildId: string, options: { roles?: string[]; botId?: string } = {}): ApiMember {
 		return this.registerMember(guildId, {
-			user: apiUser({ id: options.botId ?? 'slipher-test-bot', bot: true, username: 'slipher-test-bot' }),
+			user: apiUser({ id: options.botId ?? TEST_BOT_ID, bot: true, username: TEST_BOT_ID }),
 			roles: options.roles,
 		});
 	}

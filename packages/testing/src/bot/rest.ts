@@ -57,6 +57,18 @@ interface Interceptor {
 	responder: RouteResponder;
 }
 
+interface ActionListener {
+	onAction(action: RecordedAction): void;
+	timer: ReturnType<typeof setTimeout>;
+	reject(error: Error): void;
+}
+
+interface RequestGate {
+	test(action: RecordedAction): boolean;
+	hold(): Promise<void>;
+	release(): void;
+}
+
 function compileRoute(route: string): { pattern: RegExp; names: string[] } {
 	const names: string[] = [];
 	const source = route
@@ -80,9 +92,9 @@ function definedBody(body: Record<string, unknown> | undefined): Record<string, 
 
 export class MockApiHandler extends ApiHandler {
 	readonly actions: RecordedAction[] = [];
-	private listeners: ((action: RecordedAction) => void)[] = [];
+	private listeners: ActionListener[] = [];
 	private interceptors: Interceptor[] = [];
-	private gates: { test(action: RecordedAction): boolean; hold(): Promise<void> }[] = [];
+	private gates: RequestGate[] = [];
 	private seq = 0;
 	private readonly unhandled: 'warn' | 'error' | 'silent';
 	private readonly routeCache = new Map<string, { pattern: RegExp; names: string[] }>();
@@ -128,6 +140,16 @@ export class MockApiHandler extends ApiHandler {
 
 	clearActions(): void {
 		this.actions.length = 0;
+	}
+
+	releasePending(): void {
+		for (const listener of this.listeners) {
+			clearTimeout(listener.timer);
+			listener.reject(new Error('MockApiHandler released pending waitForAction listeners during close().'));
+		}
+		this.listeners = [];
+		for (const entry of this.gates) entry.release();
+		this.gates = [];
 	}
 
 	private matchParams(
@@ -199,17 +221,21 @@ export class MockApiHandler extends ApiHandler {
 		if (existing) return Promise.resolve(enrich(existing));
 
 		return new Promise((resolve, reject) => {
-			const listener = (action: RecordedAction) => {
-				if (!predicate(action)) return;
-				clearTimeout(timer);
-				this.listeners = this.listeners.filter(entry => entry !== listener);
-				resolve(enrich(action));
+			let listener!: ActionListener;
+			listener = {
+				timer: setTimeout(() => {
+					this.listeners = this.listeners.filter(entry => entry !== listener);
+					const seen = this.actions.map(action => `${action.method} ${action.route}`).join('\n  ') || '(none)';
+					reject(new Error(`waitForAction timed out after ${timeoutMs}ms. Actions seen:\n  ${seen}`));
+				}, timeoutMs),
+				reject,
+				onAction: (action: RecordedAction) => {
+					if (!predicate(action)) return;
+					clearTimeout(listener.timer);
+					this.listeners = this.listeners.filter(entry => entry !== listener);
+					resolve(enrich(action));
+				},
 			};
-			const timer = setTimeout(() => {
-				this.listeners = this.listeners.filter(entry => entry !== listener);
-				const seen = this.actions.map(action => `${action.method} ${action.route}`).join('\n  ') || '(none)';
-				reject(new Error(`waitForAction timed out after ${timeoutMs}ms. Actions seen:\n  ${seen}`));
-			}, timeoutMs);
 			this.listeners.push(listener);
 		});
 	}
@@ -223,7 +249,7 @@ export class MockApiHandler extends ApiHandler {
 		const test = (action: RecordedAction) =>
 			action.seq >= startSeq &&
 			(!matcher || (typeof matcher === 'function' ? matcher(action) : this.matches(matcher, action)));
-		const entry = { test, hold: () => g.open };
+		const entry = { test, hold: () => g.open, release: g.release };
 		this.gates.push(entry);
 		const hit = this.waitForAction(test).finally(() => {
 			this.gates = this.gates.filter(other => other !== entry);
@@ -247,7 +273,7 @@ export class MockApiHandler extends ApiHandler {
 		};
 		const action: RecordedAction = { seq: this.seq++, ...pending, response: undefined };
 		this.actions.push(action);
-		for (const listener of [...this.listeners]) listener(action);
+		for (const listener of [...this.listeners]) listener.onAction(action);
 
 		for (const entry of [...this.gates]) {
 			if (entry.test(action)) {

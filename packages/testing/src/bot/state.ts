@@ -1,4 +1,5 @@
 import { mockId } from '../id';
+import { TEST_BOT_ID } from './constants';
 import {
 	type ApiChannel,
 	type ApiMessage,
@@ -268,7 +269,7 @@ export class WorldState {
 						...apiUser({ id: String(rawAuthor.id) }),
 						...rawAuthor,
 					} as ApiUser)
-				: apiUser({ id: stringValue(raw.author_id) ?? 'slipher-test-bot', bot: true });
+				: apiUser({ id: stringValue(raw.author_id) ?? TEST_BOT_ID, bot: true });
 		const message = apiMessage({
 			id: stringValue(raw.id),
 			channelId,

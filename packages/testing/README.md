@@ -36,7 +36,10 @@ test('command replies', async () => {
 
 	// MockCommandContext models the Seyfert fields most command tests touch, but
 	// it is intentionally not a full CommandContext implementation.
-	await command.run(ctx as never);
+	const run = async (context: typeof ctx) => {
+		await context.write({ content: `Banned ${context.options.user.id}` });
+	};
+	await run(ctx);
 
 	expect(ctx.responses.at(-1)).toMatchObject({ content: expect.stringContaining('Banned') });
 });
@@ -143,11 +146,10 @@ import { expect, test } from 'vitest';
 import { GreetCommand } from '../src/commands/greet';
 
 test('greet replies through the real pipeline', async () => {
-	const bot = await createMockBot({ commands: [GreetCommand] });
+	await using bot = await createMockBot({ commands: [GreetCommand] });
 	const result = await bot.slash({ name: 'greet', options: { name: 'slipher' } });
 
 	expect(result.content).toBe('Hello, slipher!');
-	await bot.close();
 });
 ```
 
@@ -159,12 +161,54 @@ for the rare assertion where the Discord wire shape itself is the contract. Pref
 
 - `commands`, `components`, `events` - your real classes, registered programmatically
 - `middlewares` - same record you would pass to `client.setServices`
+- `globalMiddlewares` - forwarded to Seyfert's global middleware hooks
 - `world` - entities to seed into the client cache
 - `simulateGateway` - emit matching member update/remove events for stateful writes; defaults to `true`
 - `onUnhandledRest` - warn, throw, or stay silent for unmatched shape fallback reads
 - `clientOptions` - forwarded to the Seyfert `Client` constructor, including plugins
+- `loadFromConfig`, `commandsDir`, `componentsDir`, `eventsDir`, `langsDir` - load the real bot through Seyfert's loaders
+- `shards`, `shardLatency` - shape the in-process `MockGateway`
 - `botId`, `applicationId`
 - `prefixes`, `mentionAsPrefix` - enable prefix/message-command dispatch with `say()`
+
+### Test your real bot
+
+Import the classes you ship. Commands, events, and components are registered
+the same way as production:
+
+```ts
+import { createMockBot } from '@slipher/testing';
+import { BanCommand } from '../src/commands/moderation/ban';
+import { ConfirmButton } from '../src/components/confirm';
+import guildMemberAdd from '../src/events/guildMemberAdd';
+
+await using bot = await createMockBot({
+	commands: [BanCommand],
+	components: [ConfirmButton],
+	events: [guildMemberAdd],
+});
+```
+
+Or boot the production set from `seyfert.config`, using the same loaders
+`client.start()` would use:
+
+```ts
+await using bot = await createMockBot({ loadFromConfig: true });
+await bot.slash({ name: 'ping' });
+```
+
+The config must be resolvable from the test runner's working directory. Bot
+configs usually point at compiled output, so build before running broad
+integration specs. Explicit directories override the config:
+
+```ts
+import { join } from 'node:path';
+
+await using bot = await createMockBot({
+	loadFromConfig: true,
+	commandsDir: join(process.cwd(), 'dist/commands'),
+});
+```
 
 ### Execution model
 
@@ -187,6 +231,38 @@ deadlock.
 | `dispatch.until(...)` resolved | the matched call started; `response` is still `undefined` while suspended |
 | `await emitEvent(...)` | REST work the handler awaited |
 | nothing | only `waitForAction(...)` observes fire-and-forget work |
+
+### Step-by-step flows
+
+The mock bot is long-lived: cache, collectors, plugin state, cooldowns, and
+world mutations persist across dispatches. Bind an identity once with
+`bot.actor()` instead of repeating `user`, `guildId`, and `channel` on every
+call:
+
+```ts
+await using bot = await createMockBot({ commands: [PurgeCommand], world: world.build() });
+const alice = bot.actor({ member: aliceMember, guildId: guild.id, channel });
+
+await alice.slash({ name: 'poll' });
+await alice.clickButton('poll/yes');
+await bot.emitEvent('GUILD_MEMBER_ADD', newMember);
+const result = await alice.slash({ name: 'results' });
+
+expect(result.content).toContain('1 vote');
+```
+
+To pause inside a single command, step the same dispatch instead of awaiting it
+immediately:
+
+```ts
+const dispatch = bot.slash({ name: 'ban', options: { user: userOption(target) } });
+
+const ban = await dispatch.until(Routes.ban);
+expect(ban.body).toMatchObject({ delete_message_seconds: 0 });
+
+const result = await dispatch;
+expect(result.content).toBe('Banned');
+```
 
 ### Dispatching
 
@@ -217,13 +293,42 @@ await bot.slash({
 });
 ```
 
+### Fully typed tests
+
+The mock boots a real Seyfert client, so app augmentations such as
+`RegisteredMiddlewares`, `UsingClient`, and `DefaultLocale` apply in tests too:
+
+```ts
+import type { ParseMiddlewares } from 'seyfert';
+import { InteractionResponseType } from 'seyfert/lib/types';
+import { TEST_BOT_ID, createMockBot } from '@slipher/testing';
+import { GuardedCommand } from '../src/commands/guarded';
+import { middlewares } from '../src/middlewares';
+
+declare module 'seyfert' {
+	interface RegisteredMiddlewares extends ParseMiddlewares<typeof middlewares> {}
+}
+
+await using bot = await createMockBot({
+	botId: TEST_BOT_ID,
+	commands: [GuardedCommand],
+	middlewares,
+});
+const result = await bot.slash({ name: 'guarded' });
+
+expect(result.reply?.body).toMatchObject({
+	type: InteractionResponseType.ChannelMessageWithSource,
+	data: { content: 'passed' },
+});
+```
+
 ### Prefix commands
 
 Prefix commands use Seyfert's real message-command pipeline. Configure prefixes
 on the mock client, then call `say()` with a raw message string:
 
 ```ts
-const bot = await createMockBot({ commands: [EchoCommand], prefixes: ['!'] });
+await using bot = await createMockBot({ commands: [EchoCommand], prefixes: ['!'] });
 const result = await bot.say('!echo -text hello');
 
 expect(result.content).toBe('echo: hello');
@@ -246,7 +351,7 @@ Provide translations programmatically with `langs` and set a fallback with
 stay on the real `ctx.t` path:
 
 ```ts
-const bot = await createMockBot({
+await using bot = await createMockBot({
 	commands: [HelloCommand],
 	langs: {
 		'en-US': { greeting: 'Hello!' },
@@ -280,7 +385,7 @@ const target = apiUser({ id: '42', username: 'spammer' });
 const result = await bot.userMenu({ name: 'Report User', target });
 
 expect(result.reply?.body).toMatchObject({
-	type: 4,
+	type: InteractionResponseType.ChannelMessageWithSource,
 	data: { content: 'Reported spammer' },
 });
 ```
@@ -369,7 +474,7 @@ const guild = world.registerGuild({ name: 'Slipher Lab' });
 world.registerChannel(guild.id);
 world.registerMember(guild.id, { nick: 'soc' });
 
-const bot = await createMockBot({ commands: [WhereCommand], world });
+await using bot = await createMockBot({ commands: [WhereCommand], world });
 await bot.slash({ name: 'where', guildId: guild.id });
 ```
 
@@ -415,7 +520,7 @@ const denied = world.registerChannel(guild.id, {
 });
 world.registerBotMember(guild.id, { roles: [mod.id] });
 
-const bot = await createMockBot({ commands: [BanCommand], world });
+await using bot = await createMockBot({ commands: [BanCommand], world });
 await bot.slash({ name: 'ban', guildId: guild.id, channel: denied, user: member.user });
 ```
 
@@ -456,14 +561,14 @@ role changes, timeouts, and channel overwrites. DMs are queryable by user:
 expect(bot.dm(user.id)?.lastMessage?.content).toBe('Check your inbox');
 ```
 
-Seed message history with `registerMessage`; `client.channels.fetchMessages()`
+Seed message history with `registerMessage`; `bot.client.channels.fetchMessages()`
 then returns newest-first without an interceptor:
 
 ```ts
 world.registerMessage(channel.id, { content: 'old' });
 world.registerMessage(channel.id, { content: 'new' });
 
-expect(await client.channels.fetchMessages(channel.id)).toMatchObject([
+expect(await bot.client.channels.fetchMessages(channel.id)).toMatchObject([
 	{ content: 'new' },
 	{ content: 'old' },
 ]);
@@ -481,7 +586,7 @@ import { expect, test } from 'vitest';
 import { BanCommand } from '../../src/commands/ban';
 
 test('/ban bans the target and confirms', async () => {
-	const bot = await createMockBot({ commands: [BanCommand] });
+	await using bot = await createMockBot({ commands: [BanCommand] });
 	const target = apiUser({ id: '42', username: 'spammer' });
 
 	const result = await bot.slash({
@@ -492,7 +597,6 @@ test('/ban bans the target and confirms', async () => {
 	expect(result.content).toBe('Banned spammer');
 	const ban = await bot.waitForAction(Routes.ban);
 	expect(ban.reason).toBe('raid');
-	await bot.close();
 });
 ```
 
@@ -504,7 +608,80 @@ const bot = await createMockBot({
 	commands: [PingCommand],
 	clientOptions: { plugins: [myPlugin()] },
 });
+
+await bot.close();
 ```
+
+### MockGateway
+
+`createMockBot()` installs an in-process `MockGateway` where Seyfert expects its
+gateway manager. It records presence updates and raw sends, exposes controllable
+shards, and lets infra handlers exercise disconnect/reconnect hooks without a
+WebSocket:
+
+```ts
+import { ActivityType, GatewayOpcodes, PresenceUpdateStatus } from 'seyfert/lib/types';
+
+await using bot = await createMockBot({ shards: 3, shardLatency: 12 });
+
+bot.client.gateway.setPresence({
+	activities: [{ name: 'testing', type: ActivityType.Playing }],
+	afk: false,
+	since: null,
+	status: PresenceUpdateStatus.Online,
+});
+await bot.client.gateway.send(0, { op: GatewayOpcodes.Heartbeat, d: null });
+await bot.gateway.simulateDisconnect(0);
+
+expect(bot.gateway.presences.at(-1)).toMatchObject({ status: PresenceUpdateStatus.Online });
+expect([...bot.gateway.values()]).toHaveLength(3);
+expect(bot.gateway.sent.at(-1)).toMatchObject({ shardId: 0 });
+```
+
+`MockGateway` is not a transport emulator; it only models the surface bots touch
+in tests.
+
+### Structuring a real suite
+
+- Use one fresh bot per test by default. Boot is in-process and cheap, and state
+  isolation comes free.
+- Hand-pick classes for focused specs (`commands: [BanCommand]`). Reserve
+  `loadFromConfig: true` for broad smoke specs such as "every command registers".
+- Share fixtures as functions. `createMockBot` deep-clones the world, but
+  module-level state in your command files still persists within a worker.
+- Prefer `await using bot = ...`; use `afterEach(() => bot.close())` only when
+  your runner or transpiler cannot handle explicit resource management.
+- Parallel test files are safe because each worker owns fully in-process bots.
+
+### Troubleshooting
+
+- **"command X is not registered"** - check `@Declare({ name })`, the dispatch
+  name, and whether the class reached `commands` or compiled `loadFromConfig`
+  output.
+- **My collector never fires** - send a real message first, click as the same
+  user, and avoid passing a stale `source`.
+- **My modal flow hangs** - `waitFor` uses real timers; the usual cause is a
+  different user between the opener dispatch and `fillModal()`.
+- **`no interceptor or world entity matched GET ...`** - seed the world,
+  `intercept()` the route, or set `onUnhandledRest: 'silent'` for that test.
+- **Decorator/transform errors on `@Declare`** - enable
+  `experimentalDecorators` in the test transform config.
+- **Cache looks stale after `emitEvent`** - emit full Discord event shapes, not
+  partial patches.
+- **Passes alone, fails in CI** - reset module-level state in your command files
+  with `beforeEach`.
+
+### Stability
+
+Stable across minor versions: the single default user (`TEST_USER_ID`),
+`onUnhandledRest` defaulting to `'warn'`, empty collection GET fallbacks,
+newest-first message lists, route-id echoing for message fallbacks, and command
+errors flowing through Seyfert hooks instead of rejecting `Dispatch`.
+
+Options bags only gain optional fields. Build tests through `createMockBot()` and
+`mockWorld()` rather than subclassing exported classes. Unspecified and subject
+to change during 0.x: `mockId()` format, warning text, `RecordedAction.seq`,
+`MockGateway`, and raw `bot.state` internals.
 
 ### Scope
 
