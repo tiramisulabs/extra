@@ -1,4 +1,5 @@
 import { mockId } from '../id';
+import type { ChannelOverwriteLike, PermissionInput } from './permissions';
 
 export interface ApiUserOptions {
 	id?: string;
@@ -33,6 +34,7 @@ export interface ApiGuildOptions {
 	name?: string;
 	ownerId?: string;
 	preferredLocale?: string;
+	everyonePermissions?: PermissionInput;
 }
 
 export interface ApiGuild {
@@ -65,11 +67,48 @@ export function apiGuild(options: ApiGuildOptions = {}): ApiGuild {
 	};
 }
 
+export interface ApiRoleOptions {
+	id?: string;
+	name?: string;
+	permissions?: string;
+	position?: number;
+}
+
+export interface ApiRole {
+	id: string;
+	name: string;
+	permissions: string;
+	position: number;
+	color: number;
+	colors: { primary_color: number; secondary_color: number | null; tertiary_color: number | null };
+	flags: number;
+	hoist: boolean;
+	managed: boolean;
+	mentionable: boolean;
+}
+
+export function apiRole(options: ApiRoleOptions = {}): ApiRole {
+	return {
+		id: options.id ?? mockId(),
+		name: options.name ?? 'slipher-test-role',
+		permissions: options.permissions ?? '0',
+		position: options.position ?? 0,
+		color: 0,
+		colors: { primary_color: 0, secondary_color: null, tertiary_color: null },
+		flags: 0,
+		hoist: false,
+		managed: false,
+		mentionable: false,
+	};
+}
+
 export interface ApiChannelOptions {
 	id?: string;
 	guildId?: string | null;
 	name?: string;
 	type?: number;
+	parentId?: string;
+	permissionOverwrites?: ChannelOverwriteLike[];
 }
 
 export interface ApiChannel {
@@ -77,8 +116,9 @@ export interface ApiChannel {
 	type: number;
 	name: string;
 	guild_id?: string;
+	parent_id?: string;
 	position: number;
-	permission_overwrites: never[];
+	permission_overwrites: ChannelOverwriteLike[];
 	nsfw: boolean;
 }
 
@@ -89,8 +129,9 @@ export function apiChannel(options: ApiChannelOptions = {}): ApiChannel {
 		type: options.type ?? 0,
 		name: options.name ?? 'general',
 		...(guildId === null ? {} : { guild_id: guildId }),
+		...(options.parentId === undefined ? {} : { parent_id: options.parentId }),
 		position: 0,
-		permission_overwrites: [],
+		permission_overwrites: options.permissionOverwrites ?? [],
 		nsfw: false,
 	};
 }
@@ -101,6 +142,7 @@ export interface ApiMemberOptions {
 	roles?: string[];
 	joinedAt?: string;
 	permissions?: string;
+	communicationDisabledUntil?: string | null;
 }
 
 export interface ApiMember {
@@ -112,6 +154,7 @@ export interface ApiMember {
 	mute: boolean;
 	flags: number;
 	permissions?: string;
+	communication_disabled_until?: string | null;
 }
 
 export function apiMember(options: ApiMemberOptions = {}): ApiMember {
@@ -124,6 +167,9 @@ export function apiMember(options: ApiMemberOptions = {}): ApiMember {
 		mute: false,
 		flags: 0,
 		...(options.permissions === undefined ? {} : { permissions: options.permissions }),
+		...(options.communicationDisabledUntil === undefined
+			? {}
+			: { communication_disabled_until: options.communicationDisabledUntil }),
 	};
 }
 
@@ -133,6 +179,9 @@ export interface ApiMessageOptions {
 	guildId?: string;
 	author?: ApiUser;
 	content?: string;
+	embeds?: unknown[];
+	components?: unknown[];
+	flags?: number;
 }
 
 export interface ApiMessage {
@@ -145,11 +194,11 @@ export interface ApiMessage {
 	edited_timestamp: null;
 	tts: boolean;
 	mention_everyone: boolean;
-	mentions: never[];
-	mention_roles: never[];
-	attachments: never[];
-	embeds: never[];
-	components: never[];
+	mentions: unknown[];
+	mention_roles: string[];
+	attachments: unknown[];
+	embeds: unknown[];
+	components: unknown[];
 	pinned: boolean;
 	type: number;
 	flags: number;
@@ -169,11 +218,11 @@ export function apiMessage(options: ApiMessageOptions = {}): ApiMessage {
 		mentions: [],
 		mention_roles: [],
 		attachments: [],
-		embeds: [],
-		components: [],
+		embeds: options.embeds ?? [],
+		components: options.components ?? [],
 		pinned: false,
 		type: 0,
-		flags: 0,
+		flags: options.flags ?? 0,
 	};
 }
 

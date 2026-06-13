@@ -21,6 +21,7 @@ export const Routes = {
 	fetchMember: { method: 'GET', route: '/guilds/:guildId/members/:userId' },
 	fetchGuild: { method: 'GET', route: '/guilds/:guildId' },
 	fetchUser: { method: 'GET', route: '/users/:userId' },
+	fetchOriginalResponse: { method: 'GET', route: '/webhooks/:applicationId/:interactionToken/messages/@original' },
 	editOriginalResponse: { method: 'PATCH', route: '/webhooks/:applicationId/:interactionToken/messages/@original' },
 	deleteOriginalResponse: { method: 'DELETE', route: '/webhooks/:applicationId/:interactionToken/messages/@original' },
 	followup: { method: 'POST', route: '/webhooks/:applicationId/:interactionToken' },

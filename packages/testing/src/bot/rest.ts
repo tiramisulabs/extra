@@ -15,6 +15,21 @@ export interface RecordedAction {
 	response: unknown;
 }
 
+export class MockApiError extends Error {
+	constructor(
+		readonly status: number,
+		readonly code: number,
+		message: string,
+	) {
+		super(message);
+		this.name = 'MockApiError';
+	}
+}
+
+export function apiError(status: number, code: number, message: string): never {
+	throw new MockApiError(status, code, message);
+}
+
 export function gate(): { open: Promise<void>; release: () => void } {
 	let release!: () => void;
 	const open = new Promise<void>(resolve => {

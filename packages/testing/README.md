@@ -160,6 +160,8 @@ for the rare assertion where the Discord wire shape itself is the contract. Pref
 - `commands`, `components`, `events` - your real classes, registered programmatically
 - `middlewares` - same record you would pass to `client.setServices`
 - `world` - entities to seed into the client cache
+- `simulateGateway` - emit matching member update/remove events for stateful writes; defaults to `true`
+- `onUnhandledRest` - warn, throw, or stay silent for unmatched shape fallback reads
 - `clientOptions` - forwarded to the Seyfert `Client` constructor, including plugins
 - `botId`, `applicationId`
 
@@ -275,6 +277,102 @@ await bot.slash({ name: 'where', guildId: guild.id });
 Entities are written into the real client cache (`CacheFrom.Test`), so
 `ctx.guild()`, `ctx.channel()`, and related cache reads resolve like production
 cache hits.
+
+### Permissions
+
+Bare dispatches stay permissive: `DEFAULT_PERMISSIONS` includes every bit,
+including `Administrator`, so Seyfert skips missing-permission paths. Restrict a
+test explicitly when you want `onPermissionsFail` or `onBotPermissionsFail`:
+
+```ts
+await bot.slash({ name: 'ban', memberPermissions: [] });
+await bot.slash({ name: 'ban', permissions: [] });
+```
+
+Use helpers for readable bitfields:
+
+```ts
+import { apiRole, permissionBits } from '@slipher/testing';
+
+const mod = apiRole({ id: 'mod', permissions: permissionBits(['BanMembers']) });
+await bot.slash({ name: 'ban', memberRoles: [mod] });
+```
+
+For Discord-like permission tests, seed the world and dispatch as a registered
+member. The mock computes `member.permissions` and `app_permissions` from
+`@everyone`, member roles, the bot member, and channel overwrites:
+
+```ts
+const world = mockWorld();
+const guild = world.registerGuild({
+	id: 'guild',
+	ownerId: 'owner-user', // apiGuild otherwise mints a random owner id
+	everyonePermissions: ['SendMessages'],
+});
+const mod = world.registerRole(guild.id, { permissions: ['BanMembers'], position: 5 });
+const member = world.registerMember(guild.id, { roles: [mod.id] });
+const denied = world.registerChannel(guild.id, {
+	overwrites: [{ id: mod.id, type: 'role', deny: ['BanMembers'] }],
+});
+world.registerBotMember(guild.id, { roles: [mod.id] });
+
+const bot = await createMockBot({ commands: [BanCommand], world });
+await bot.slash({ name: 'ban', guildId: guild.id, channel: denied, user: member.user });
+```
+
+Role positions are written into Seyfert's role cache, so hierarchy checks can
+read `client.cache.roles.values(guildId)` just like production. If a dispatch
+targets a seeded guild with an unregistered user, the mock warns once; register
+that user with `world.registerMember(...)` or pass explicit `memberPermissions`.
+
+Use `apiError()` to drive REST error branches:
+
+```ts
+bot.rest.intercept(Routes.ban, () => apiError(403, 50013, 'Missing Permissions'));
+```
+
+`MockApiError` is intentionally small; commands that branch on Seyfert's real
+error classes should test that real parse path separately.
+
+### Querying world state
+
+Recorded actions prove calls happened. World state proves what the bot built:
+
+```ts
+const channel = bot.guild(guild.id)?.channel('acme-s1');
+
+expect(channel?.lastMessage?.content).toContain('Welcome');
+expect(channel?.lastMessage?.button('Approve')).toMatchObject({ customId: 'approve' });
+expect(channel?.lastMessage?.embeds[0]).toMatchObject({
+	title: 'Acme S1',
+	fields: [{ name: 'Budget', value: '$5,000' }],
+});
+```
+
+State includes seeded entities and writes made during the test: created
+channels/threads, messages, interaction replies, edits, followups, DMs, bans,
+role changes, timeouts, and channel overwrites. DMs are queryable by user:
+
+```ts
+expect(bot.dm(user.id)?.lastMessage?.content).toBe('Check your inbox');
+```
+
+Seed message history with `registerMessage`; `client.channels.fetchMessages()`
+then returns newest-first without an interceptor:
+
+```ts
+world.registerMessage(channel.id, { content: 'old' });
+world.registerMessage(channel.id, { content: 'new' });
+
+expect(await client.channels.fetchMessages(channel.id)).toMatchObject([
+	{ content: 'new' },
+	{ content: 'old' },
+]);
+```
+
+Use `ChannelView.overwrites` for permission-matrix assertions. Direct replies
+also remain available as `result.reply?.body.data` when the channel view is not
+the clearest assertion surface.
 
 ### Real-world recipes
 

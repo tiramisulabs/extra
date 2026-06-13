@@ -1,4 +1,3 @@
-import { PermissionFlagsBits } from 'seyfert/lib/types';
 import { mockId } from '../id';
 import {
 	type ApiAttachment,
@@ -6,6 +5,7 @@ import {
 	type ApiMember,
 	type ApiMemberOptions,
 	type ApiMessage,
+	type ApiRole,
 	type ApiUser,
 	apiAttachment,
 	apiChannel,
@@ -13,6 +13,7 @@ import {
 	apiMessage,
 	apiUser,
 } from './payloads';
+import { ALL_PERMISSIONS, combineRolePermissions, type PermissionInput, permissionBits } from './permissions';
 
 /** Discord ApplicationCommandOptionType values used by the encoder. */
 const OptionType = {
@@ -30,12 +31,10 @@ const OptionType = {
 } as const;
 
 /**
- * Permissive default for app_permissions / member.permissions: every
+ * String payload default for app_permissions / member.permissions: every
  * permission bit the installed seyfert knows, ORed together.
  */
-export const DEFAULT_PERMISSIONS = Object.values(PermissionFlagsBits)
-	.reduce((bits, bit) => bits | bit, 0n)
-	.toString();
+export const DEFAULT_PERMISSIONS = ALL_PERMISSIONS.toString();
 
 export interface EncodedOption {
 	__slipherOption: true;
@@ -77,7 +76,7 @@ export function channelOption(channel: ApiChannel = apiChannel()): EncodedOption
 	};
 }
 
-export function roleOption(role: { id: string; name: string }): EncodedOption {
+export function roleOption(role: ApiRole | { id: string; name: string }): EncodedOption {
 	return {
 		__slipherOption: true,
 		type: OptionType.Role,
@@ -166,7 +165,12 @@ export interface BaseInteractionOptions {
 	channel?: ApiChannel;
 	locale?: string;
 	applicationId?: string;
-	permissions?: string;
+	/** Bot/app permissions in the channel (app_permissions). Defaults to all. */
+	permissions?: PermissionInput;
+	/** Invoking member's permissions. Defaults to `permissions` (and ultimately all). */
+	memberPermissions?: PermissionInput;
+	/** Convenience: roles whose permissions are OR-combined into memberPermissions. */
+	memberRoles?: ApiRole[];
 	/** Discord interaction context: 0 = guild, 1 = bot DM, 2 = private channel. Defaults from guildId. */
 	context?: number;
 	integrationOwners?: Record<string, string>;
@@ -217,8 +221,23 @@ function baseInteraction(options: BaseInteractionOptions, type: number): ApiInte
 	const dm = options.guildId === null;
 	const guildId = dm ? undefined : (options.guildId ?? mockId());
 	const channel = options.channel ?? apiChannel({ guildId: guildId ?? null });
-	const permissions = options.permissions ?? DEFAULT_PERMISSIONS;
-	const member = dm ? undefined : { ...apiMember({ user, permissions, ...(options.member ?? {}) }), user };
+	const permissions = permissionBits(options.permissions ?? DEFAULT_PERMISSIONS);
+	const memberPermissions =
+		options.memberPermissions !== undefined
+			? permissionBits(options.memberPermissions)
+			: options.member?.permissions !== undefined
+				? permissionBits(options.member.permissions)
+				: options.memberRoles !== undefined
+					? combineRolePermissions(options.memberRoles)
+					: permissions;
+	const memberRoleIds = options.memberRoles?.map(role => role.id) ?? [];
+	const memberRoles = [...new Set([...(options.member?.roles ?? []), ...memberRoleIds])];
+	const member = dm
+		? undefined
+		: {
+				...apiMember({ user, ...(options.member ?? {}), permissions: memberPermissions, roles: memberRoles }),
+				user,
+			};
 
 	return {
 		id,
