@@ -286,6 +286,10 @@ export class MockApiHandler extends ApiHandler {
 				this.reportUnhandled(pending);
 				return { threads: [], members: [] };
 			}
+			if (/\/messages\/[^/]+$/.test(pending.route)) {
+				if (!/\/webhooks\//.test(pending.route)) this.reportUnhandled(pending);
+				return apiMessage();
+			}
 			if (!/\/webhooks\//.test(pending.route)) this.reportUnhandled(pending);
 			return {};
 		}

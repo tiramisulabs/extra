@@ -210,6 +210,7 @@ export interface ApiInteractionPayload {
 		options?: ApiCommandDataOption[];
 		resolved?: ResolvedData;
 		target_id?: string;
+		values?: string[];
 		components?: { type: 1; components: { type: 4; custom_id: string; value: string }[] }[];
 	};
 	message?: ApiMessage;
@@ -373,6 +374,39 @@ export interface ButtonInteractionOptions extends BaseInteractionOptions {
 export function buttonInteraction(options: ButtonInteractionOptions): ApiInteractionPayload {
 	const payload = baseInteraction(options, 3);
 	payload.data = { custom_id: options.customId, component_type: 2 };
+	payload.message =
+		options.message ??
+		apiMessage({
+			channelId: payload.channel_id,
+			...(payload.guild_id === undefined ? {} : { guildId: payload.guild_id }),
+		});
+	return payload;
+}
+
+export interface SelectMenuInteractionOptions extends BaseInteractionOptions {
+	customId: string;
+	values: string[];
+	componentType?: 'string' | 'user' | 'role' | 'mentionable' | 'channel' | 3 | 5 | 6 | 7 | 8;
+	message?: ApiMessage;
+	resolved?: {
+		users?: Record<string, unknown>;
+		members?: Record<string, unknown>;
+		roles?: Record<string, unknown>;
+		channels?: Record<string, unknown>;
+	};
+}
+
+export function selectMenuInteraction(options: SelectMenuInteractionOptions): ApiInteractionPayload {
+	const payload = baseInteraction(options, 3);
+	const selectTypes = { string: 3, user: 5, role: 6, mentionable: 7, channel: 8 } as const;
+	const componentType =
+		typeof options.componentType === 'string' ? selectTypes[options.componentType] : (options.componentType ?? 3);
+	payload.data = {
+		custom_id: options.customId,
+		component_type: componentType,
+		values: options.values,
+		...(options.resolved ? { resolved: options.resolved } : {}),
+	};
 	payload.message =
 		options.message ??
 		apiMessage({

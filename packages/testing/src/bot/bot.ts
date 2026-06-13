@@ -1,4 +1,4 @@
-import { Client, type Command, type ContextMenuCommand, type UsingClient } from 'seyfert';
+import { Client, type Command, type ContextMenuCommand, ModalCommand, type UsingClient } from 'seyfert';
 import { CacheFrom } from 'seyfert/lib/cache';
 import { HandleCommand } from 'seyfert/lib/commands/handle';
 import type { ClientEvent } from 'seyfert/lib/events/event';
@@ -9,18 +9,23 @@ import {
 	type AutocompleteInteractionOptions,
 	autocompleteInteraction,
 	type BaseInteractionOptions,
+	type ButtonInteractionOptions,
+	buttonInteraction,
 	type ChatInputInteractionOptions,
 	chatInputInteraction,
+	DEFAULT_PERMISSIONS,
 	type EntryPointInteractionOptions,
 	entryPointInteraction,
 	type MessageCommandInteractionOptions,
 	type ModalSubmitInteractionOptions,
 	messageCommandInteraction,
 	modalSubmitInteraction,
+	type SelectMenuInteractionOptions,
+	selectMenuInteraction,
 	type UserCommandInteractionOptions,
 	userCommandInteraction,
 } from './interactions';
-import { type ApiUser, apiUser } from './payloads';
+import { type ApiUser, apiMessage, apiUser } from './payloads';
 import { computeChannelPermissions } from './permissions';
 import { type MatchedAction, MockApiHandler, type RecordedAction, type RouteMatcher } from './rest';
 import { FOLLOWUP_ROUTE, ORIGINAL_RESPONSE_ROUTE } from './routes';
@@ -239,6 +244,175 @@ export class MockBot {
 		return next;
 	}
 
+	private componentCommands(): readonly unknown[] {
+		return this.client.components.commands;
+	}
+
+	private hasComponentCommand(): boolean {
+		return this.componentCommands().some(command => !(command instanceof ModalCommand));
+	}
+
+	private hasModalCommand(): boolean {
+		return this.componentCommands().some(command => command instanceof ModalCommand);
+	}
+
+	private assertComponentHandleable(verb: string, customId: string, message?: { id: string }): void {
+		if (message || this.hasComponentCommand()) return;
+		throw new TypeError(
+			`${verb}: no source message resolved for "${customId}" and no ComponentCommand is registered. ` +
+				`Send or pass a source message for collectors, or register a ComponentCommand handler.`,
+		);
+	}
+
+	private assertModalHandleable(customId: string, userId: string): void {
+		if (this.client.components.modals.has(userId) || this.hasModalCommand()) return;
+		throw new TypeError(
+			`fillModal: no modal "${customId}" is waiting for user "${userId}" and no ModalCommand is registered. ` +
+				`Did you pass the same 'user' as the dispatch that opened the modal?`,
+		);
+	}
+
+	lastSentMessage(): { id: string; channel_id?: string } | undefined {
+		for (let i = this.rest.actions.length - 1; i >= 0; i--) {
+			const action = this.rest.actions[i];
+			const response = action.response as { id?: unknown; channel_id?: unknown } | undefined;
+			if (response && typeof response.id === 'string' && /\/messages(\/|$)|\/webhooks\//.test(action.route)) {
+				return {
+					id: response.id,
+					...(typeof response.channel_id === 'string' ? { channel_id: response.channel_id } : {}),
+				};
+			}
+		}
+		return undefined;
+	}
+
+	private resolveMessageSource(source?: string | RecordedAction): { id: string; channel_id?: string } | undefined {
+		if (typeof source === 'string') return { id: source };
+		if (source) {
+			const response = source.response as { id?: unknown; channel_id?: unknown } | undefined;
+			if (response && typeof response.id === 'string') {
+				return {
+					id: response.id,
+					...(typeof response.channel_id === 'string' ? { channel_id: response.channel_id } : {}),
+				};
+			}
+		}
+		return this.lastSentMessage();
+	}
+
+	private normalizedSelectType(componentType: SelectMenuInteractionOptions['componentType']): 3 | 5 | 6 | 7 | 8 {
+		if (componentType === undefined || componentType === 'string') return 3;
+		if (componentType === 'user') return 5;
+		if (componentType === 'role') return 6;
+		if (componentType === 'mentionable') return 7;
+		if (componentType === 'channel') return 8;
+		return componentType;
+	}
+
+	private unknownSelectId(kind: string, customId: string, value: string, seeded: string[]): never {
+		throw new TypeError(
+			`selectMenu: unknown ${kind} id "${value}" for "${customId}". Seeded ${kind}s: ${seeded.join(', ') || '(none)'}.`,
+		);
+	}
+
+	private resolveSelectResolved(
+		customId: string,
+		values: string[],
+		options: Omit<SelectMenuInteractionOptions, 'customId' | 'values' | 'message'>,
+	): SelectMenuInteractionOptions['resolved'] {
+		if (options.resolved) return options.resolved;
+		const type = this.normalizedSelectType(options.componentType);
+		if (type === 3) return undefined;
+		if (!this.world) {
+			throw new TypeError(`selectMenu: "${customId}" is an entity select but no world or resolved data was provided.`);
+		}
+
+		if (type === 6) {
+			const roles = this.world.roles.map(entry => entry.role);
+			return {
+				roles: Object.fromEntries(
+					values.map(value => {
+						const role = roles.find(entry => entry.id === value);
+						if (!role)
+							this.unknownSelectId(
+								'role',
+								customId,
+								value,
+								roles.map(entry => entry.id),
+							);
+						return [value, role];
+					}),
+				),
+			};
+		}
+
+		if (type === 8) {
+			const channels = this.world.channels;
+			return {
+				channels: Object.fromEntries(
+					values.map(value => {
+						const channel = channels.find(entry => entry.id === value);
+						if (!channel)
+							this.unknownSelectId(
+								'channel',
+								customId,
+								value,
+								channels.map(entry => entry.id),
+							);
+						return [value, { ...channel, permissions: DEFAULT_PERMISSIONS }];
+					}),
+				),
+			};
+		}
+
+		const users: Record<string, unknown> = {};
+		const members: Record<string, unknown> = {};
+		const roles: Record<string, unknown> = {};
+		for (const value of values) {
+			const role = this.world.roles.find(entry => entry.role.id === value)?.role;
+			const user = this.world.users.find(entry => entry.id === value);
+			const member = this.world.members.find(
+				entry =>
+					entry.member.user.id === value &&
+					(options.guildId === undefined || options.guildId === null || entry.guildId === options.guildId),
+			);
+			if (type === 5) {
+				const resolvedUser = user ?? member?.member.user;
+				if (!resolvedUser)
+					this.unknownSelectId(
+						'user',
+						customId,
+						value,
+						this.world.users.map(entry => entry.id),
+					);
+				users[value] = resolvedUser;
+				if (member) members[value] = member.member;
+				continue;
+			}
+			if (role) {
+				roles[value] = role;
+				continue;
+			}
+			const resolvedUser = user ?? member?.member.user;
+			if (resolvedUser) {
+				users[value] = resolvedUser;
+				if (member) members[value] = member.member;
+				continue;
+			}
+			this.unknownSelectId('mentionable', customId, value, [
+				...this.world.roles.map(entry => entry.role.id),
+				...this.world.users.map(entry => entry.id),
+				...this.world.members.map(entry => entry.member.user.id),
+			]);
+		}
+
+		return {
+			...(Object.keys(users).length ? { users } : {}),
+			...(Object.keys(members).length ? { members } : {}),
+			...(Object.keys(roles).length ? { roles } : {}),
+		};
+	}
+
 	get actions(): readonly RecordedAction[] {
 		return this.rest.actions;
 	}
@@ -402,12 +576,50 @@ export class MockBot {
 		);
 	}
 
+	clickButton(
+		customId: string,
+		options: Omit<ButtonInteractionOptions, 'customId' | 'message'> & { source?: string | RecordedAction } = {},
+	): Dispatch<DispatchResult> {
+		const { source, ...rest } = options;
+		const message = this.resolveMessageSource(source);
+		this.assertComponentHandleable('clickButton', customId, message);
+		const prepared = this.applyWorldPermissions({ user: this.defaultUser, ...rest, customId });
+		return this.dispatchInteraction(
+			buttonInteraction({
+				...prepared,
+				...(message?.id ? { message: apiMessage({ id: message.id, channelId: message.channel_id }) } : {}),
+			}),
+		);
+	}
+
+	selectMenu(
+		customId: string,
+		values: string[],
+		options: Omit<SelectMenuInteractionOptions, 'customId' | 'values' | 'message'> & {
+			source?: string | RecordedAction;
+		} = {},
+	): Dispatch<DispatchResult> {
+		const { source, ...rest } = options;
+		const message = this.resolveMessageSource(source);
+		this.assertComponentHandleable('selectMenu', customId, message);
+		const base = { user: this.defaultUser, ...rest, customId, values };
+		const resolved = this.resolveSelectResolved(customId, values, base);
+		const prepared = this.applyWorldPermissions({ ...base, ...(resolved ? { resolved } : {}) });
+		return this.dispatchInteraction(
+			selectMenuInteraction({
+				...prepared,
+				...(message?.id ? { message: apiMessage({ id: message.id, channelId: message.channel_id }) } : {}),
+			}),
+		);
+	}
+
 	fillModal(
 		customId: string,
 		fields: Record<string, string> = {},
 		extra: Omit<ModalSubmitInteractionOptions, 'customId' | 'fields'> = {},
 	): Dispatch<DispatchResult> {
 		const prepared = this.applyWorldPermissions({ user: this.defaultUser, ...extra, customId, fields });
+		this.assertModalHandleable(customId, prepared.user?.id ?? this.defaultUser.id);
 		return this.dispatchInteraction(modalSubmitInteraction(prepared));
 	}
 

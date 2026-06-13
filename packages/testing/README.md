@@ -193,6 +193,8 @@ deadlock.
 await bot.slash({ name: 'admin', group: 'users', subcommand: 'kick', options: { reason: 'spam' } });
 await bot.autocomplete({ name: 'search', focused: 'query', value: 'sey' });
 await bot.userMenu({ name: 'Report User', target: apiUser({ id: '42' }) });
+await bot.clickButton('confirm');
+await bot.selectMenu('pick-color', ['red']);
 await bot.fillModal('feedback', { rating: '5' });
 await bot.emitEvent('GUILD_MEMBER_ADD', rawMemberPayload);
 ```
@@ -235,6 +237,56 @@ expect(result.reply?.body).toMatchObject({
 	data: { content: 'Reported spammer' },
 });
 ```
+
+### Component collectors and modals
+
+For messages with component collectors, fetch the message, register the collector,
+then dispatch the component. `clickButton()` and `selectMenu()` default to the
+latest message-shaped REST response (`lastSentMessage()`), so most tests do not
+thread message ids by hand:
+
+```ts
+class PollCommand extends Command {
+	async run(ctx: CommandContext) {
+		await ctx.write({ content: 'Vote now', components: [row] });
+		const message = await ctx.fetchResponse();
+		message.createComponentCollector().run('poll/yes', async interaction => {
+			await interaction.write({ content: 'Voted!' });
+		});
+	}
+}
+
+await bot.slash({ name: 'poll' });
+await bot.clickButton('poll/yes');
+```
+
+Pass `source` when a flow has multiple messages:
+
+```ts
+const sent = bot.lastSentMessage();
+await bot.clickButton('approve', { source: sent?.id });
+await bot.selectMenu('settings/mod', [role.id], { source: sent, componentType: 'role' });
+```
+
+Entity selects auto-resolve seeded world users, members, roles, and channels.
+Use explicit `resolved` when testing a raw Discord payload. For a
+`ComponentCommand` select-menu path without a collector, build the raw payload
+with `selectMenuInteraction()` and pass it to `dispatchInteraction()`.
+
+Awaited modal flows must keep the opener dispatch alive, because
+`interaction.modal(..., { waitFor })` resumes inside the opener after the submit:
+
+```ts
+const dispatch = bot.clickButton('open-feedback', { user });
+await dispatch.untilModal();
+const modal = await bot.fillModal('feedback-modal', { rating: '5' }, { user });
+await dispatch;
+
+expect(modal.content).toBe('thanks');
+```
+
+Use the same `user` for the opener and `fillModal()`. Collector `idle`/`timeout`
+and modal `waitFor` options use real timers, so keep them short in tests.
 
 ### Recorded actions
 
