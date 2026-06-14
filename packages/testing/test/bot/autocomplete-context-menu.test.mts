@@ -3,7 +3,7 @@ import { InteractionResponseType } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { apiUser } from '../../src/bot/payloads';
-import { ReportUser, SearchCommand } from './_setup';
+import { ReportMessage, ReportUser, SearchCommand } from './_setup';
 
 const englishLang = { greeting: 'Hello!' };
 
@@ -27,6 +27,15 @@ describe('autocomplete and context menus', () => {
 			type: InteractionResponseType.ChannelMessageWithSource,
 			data: { content: 'Reported spammer' },
 		});
+		await bot.close();
+	});
+
+	test('context menu dispatchers require a matching command type', async () => {
+		const bot = await createMockBot({ commands: [ReportUser, ReportMessage] });
+
+		expect(() => bot.userMenu({ name: 'Report Message' })).toThrow(/userMenu: command "Report Message"/);
+		expect(() => bot.messageMenu({ name: 'Report User' })).toThrow(/messageMenu: command "Report User"/);
+
 		await bot.close();
 	});
 });

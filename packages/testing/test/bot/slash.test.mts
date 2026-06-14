@@ -33,6 +33,28 @@ describe('createMockBot', () => {
 		await bot.close();
 	});
 
+	test('omitted guild and channel ids are stable across dispatches', async () => {
+		const seen: { guildId?: string; channelId?: string }[] = [];
+
+		@Declare({ name: 'location', description: 'Captures dispatch location' })
+		class LocationCommand extends Command {
+			async run(ctx: CommandContext) {
+				seen.push({ guildId: ctx.guildId, channelId: ctx.channelId });
+				await ctx.write({ content: `${ctx.guildId}:${ctx.channelId}` });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [LocationCommand] });
+		await bot.slash({ name: 'location' });
+		await bot.slash({ name: 'location' });
+
+		expect(seen).toEqual([
+			{ guildId: 'slipher-test-guild', channelId: 'slipher-test-channel' },
+			{ guildId: 'slipher-test-guild', channelId: 'slipher-test-channel' },
+		]);
+		await bot.close();
+	});
+
 	test('classifies deferrals, edits and followups semantically', async () => {
 		const bot = await createMockBot({ commands: [SlowCommand] });
 		const result = await bot.slash({ name: 'slow' });
@@ -43,6 +65,27 @@ describe('createMockBot', () => {
 		expect(result.content).toBe('done');
 		expect(result.reply?.body).toMatchObject({ type: InteractionResponseType.DeferredChannelMessageWithSource });
 		expect(result.actions.some(action => action.method === 'PATCH')).toBe(true);
+		await bot.close();
+	});
+
+	test('preserves files on deferred edits and followups', async () => {
+		const editFile = { filename: 'edited.txt', data: 'edited' };
+		const followupFile = { filename: 'followup.txt', data: 'followup' };
+
+		@Declare({ name: 'files', description: 'Sends files after a defer' })
+		class FilesCommand extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.deferReply();
+				await ctx.editOrReply({ content: 'edited', files: [editFile] });
+				await ctx.followup({ content: 'followup', files: [followupFile] });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [FilesCommand] });
+		const result = await bot.slash({ name: 'files' });
+
+		expect(result.edits[0]?.files).toMatchObject([{ filename: 'edited.txt' }]);
+		expect(result.followups[0]?.files).toMatchObject([{ filename: 'followup.txt' }]);
 		await bot.close();
 	});
 

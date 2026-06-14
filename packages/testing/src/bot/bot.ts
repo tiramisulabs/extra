@@ -10,9 +10,13 @@ import { CacheFrom } from 'seyfert/lib/cache';
 import { HandleCommand } from 'seyfert/lib/commands/handle';
 import type { ClientEvent } from 'seyfert/lib/events/event';
 import type { LangInstance } from 'seyfert/lib/langs/handler';
-import type { APIInteraction, APIInteractionResponse, GatewayDispatchPayload } from 'seyfert/lib/types';
-import { mockId } from '../id';
-import { TEST_APPLICATION_ID, TEST_BOT_ID, TEST_USER_ID } from './constants';
+import {
+	type APIInteraction,
+	type APIInteractionResponse,
+	ApplicationCommandType,
+	type GatewayDispatchPayload,
+} from 'seyfert/lib/types';
+import { TEST_APPLICATION_ID, TEST_BOT_ID, TEST_CHANNEL_ID, TEST_GUILD_ID, TEST_USER_ID } from './constants';
 import { registerWorldDefaults } from './defaults';
 import { MockGateway } from './gateway';
 import {
@@ -67,6 +71,7 @@ export interface OutgoingMessage {
 	content?: string;
 	embeds?: unknown[];
 	components?: unknown[];
+	files?: unknown[];
 	[key: string]: unknown;
 }
 
@@ -539,7 +544,7 @@ export class MockBot {
 						this.world.users.map(entry => entry.id),
 					);
 				users[value] = resolvedUser;
-				if (member) members[value] = member.member;
+				if (member) members[value] = { permissions: DEFAULT_PERMISSIONS, ...member.member };
 				continue;
 			}
 			if (role) {
@@ -549,7 +554,7 @@ export class MockBot {
 			const resolvedUser = user ?? member?.member.user;
 			if (resolvedUser) {
 				users[value] = resolvedUser;
-				if (member) members[value] = member.member;
+				if (member) members[value] = { permissions: DEFAULT_PERMISSIONS, ...member.member };
 				continue;
 			}
 			this.unknownSelectId('mentionable', customId, value, [
@@ -640,6 +645,10 @@ export class MockBot {
 				this.materializeInteractionResponse(payload, reply.body);
 			}
 		}
+		const toOutgoingMessage = (action: RecordedAction): OutgoingMessage => ({
+			...((action.body ?? {}) as OutgoingMessage),
+			...(action.files ? { files: action.files } : {}),
+		});
 		const edits = actions
 			.filter(
 				action =>
@@ -647,12 +656,12 @@ export class MockBot {
 					ORIGINAL_RESPONSE_ROUTE.test(action.route) &&
 					action.route.includes(payload.token),
 			)
-			.map(action => (action.body ?? {}) as OutgoingMessage);
+			.map(toOutgoingMessage);
 		const followups = actions
 			.filter(
 				action => action.method === 'POST' && FOLLOWUP_ROUTE.test(action.route) && action.route.includes(payload.token),
 			)
-			.map(action => (action.body ?? {}) as OutgoingMessage);
+			.map(toOutgoingMessage);
 
 		return {
 			replies,
@@ -685,23 +694,27 @@ export class MockBot {
 		};
 	}
 
-	private assertCommandRegistered(name: string): void {
-		const registered = this.client.commands.values.map(command => command.name);
+	private assertCommandRegistered(name: string, type: ApplicationCommandType, verb: string): void {
+		const registered = this.client.commands.values
+			.filter(command => command.type === type)
+			.map(command => command.name);
 		if (!registered.includes(name)) {
+			const typeName = ApplicationCommandType[type] ?? String(type);
 			throw new TypeError(
-				`slash: command "${name}" is not registered. Registered commands: ${registered.join(', ') || '(none)'}`,
+				`${verb}: command "${name}" is not registered as ${typeName}. ` +
+					`Registered ${typeName} commands: ${registered.join(', ') || '(none)'}`,
 			);
 		}
 	}
 
 	slash(options: ChatInputInteractionOptions): Dispatch<DispatchResult> {
-		this.assertCommandRegistered(options.name);
+		this.assertCommandRegistered(options.name, ApplicationCommandType.ChatInput, 'slash');
 		const prepared = this.applyWorldPermissions({ user: this.defaultUser, ...options });
 		return this.dispatchInteraction(chatInputInteraction(prepared));
 	}
 
 	autocomplete(options: AutocompleteInteractionOptions): Dispatch<AutocompleteResult> {
-		this.assertCommandRegistered(options.name);
+		this.assertCommandRegistered(options.name, ApplicationCommandType.ChatInput, 'autocomplete');
 		const payload = autocompleteInteraction(this.applyWorldPermissions({ user: this.defaultUser, ...options }));
 		const userId = payload.member?.user.id ?? payload.user?.id;
 		return this.track(
@@ -714,14 +727,14 @@ export class MockBot {
 	}
 
 	userMenu(options: UserCommandInteractionOptions): Dispatch<DispatchResult> {
-		this.assertCommandRegistered(options.name);
+		this.assertCommandRegistered(options.name, ApplicationCommandType.User, 'userMenu');
 		return this.dispatchInteraction(
 			userCommandInteraction(this.applyWorldPermissions({ user: this.defaultUser, ...options })),
 		);
 	}
 
 	messageMenu(options: MessageCommandInteractionOptions): Dispatch<DispatchResult> {
-		this.assertCommandRegistered(options.name);
+		this.assertCommandRegistered(options.name, ApplicationCommandType.Message, 'messageMenu');
 		return this.dispatchInteraction(
 			messageCommandInteraction(this.applyWorldPermissions({ user: this.defaultUser, ...options })),
 		);
@@ -783,14 +796,14 @@ export class MockBot {
 	say(content: string, options: DispatchMessageOptions = {}): Dispatch<SayResult> {
 		const author = options.user ?? this.defaultUser;
 		const dm = options.guildId === null;
-		const guildId = dm ? undefined : (options.guildId ?? mockId());
+		const guildId = dm ? undefined : (options.guildId ?? options.channel?.guild_id ?? TEST_GUILD_ID);
 		const member = apiMember({ user: author, ...(options.member ?? {}) });
 		const { user: _user, ...gatewayMember } = member;
 		const raw = {
 			...apiMessage({
 				author,
 				content,
-				channelId: options.channel?.id,
+				channelId: options.channel?.id ?? TEST_CHANNEL_ID,
 				...(guildId ? { guildId } : {}),
 			}),
 			...(dm ? {} : { member: gatewayMember }),
@@ -814,7 +827,7 @@ export class MockBot {
 			? this.world?.members.find(candidate => candidate.member.user.id === options.member?.user.id)
 			: undefined;
 		const user = options.user ?? options.member?.user;
-		const guildId = options.guildId ?? entry?.guildId;
+		const guildId = options.guildId ?? entry?.guildId ?? options.channel?.guild_id ?? TEST_GUILD_ID;
 		const channel =
 			options.channel ??
 			(entry ? this.world?.channels.find(candidate => candidate.guild_id === entry.guildId) : undefined);
@@ -901,6 +914,7 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 		...(options.middlewares ? { middlewares: options.middlewares } : {}),
 	});
 	if (options.langs) {
+		const localeNames = Object.keys(options.langs);
 		client.langs.set(
 			Object.entries(options.langs).map(
 				([name, file]): LangInstance => ({
@@ -909,6 +923,10 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 					path: `${name}.ts`,
 				}),
 			),
+		);
+		client.langs.defaultLang = options.defaultLang ?? (localeNames.includes('en-US') ? 'en-US' : localeNames[0]);
+		(client as unknown as { langBaseValues: typeof client.langs.values }).langBaseValues = structuredClone(
+			client.langs.values,
 		);
 	}
 	if (options.defaultLang) {
@@ -933,8 +951,9 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	if (loadFromConfig || options.eventsDir) await client.loadEvents(options.eventsDir);
 	if (loadFromConfig || options.langsDir) await client.loadLangs(options.langsDir);
 
-	// setupPlugins is intentionally not public on Client, but production start() calls the same hook.
+	// Plugin setup/contribution refresh are intentionally not public on Client, but production start() calls them.
 	await (client as unknown as { setupPlugins(): Promise<void> }).setupPlugins();
+	await (client as unknown as { reloadPluginContributions(): Promise<void> }).reloadPluginContributions();
 	// seedWorld only needs the UsingClient cache/rest surface already installed above.
 	if (world) await seedWorld(client as unknown as UsingClient, world);
 	const state = new WorldState(world);

@@ -102,8 +102,8 @@ describe('interaction payload builders', () => {
 		expect(modal.data).toMatchObject({ custom_id: 'feedback' });
 		expect(modal.data.components).toEqual([
 			{
-				type: ComponentType.ActionRow,
-				components: [{ type: ComponentType.TextInput, custom_id: 'rating', value: '5' }],
+				type: ComponentType.Label,
+				component: { type: ComponentType.TextInput, custom_id: 'rating', value: '5' },
 			},
 		]);
 	});

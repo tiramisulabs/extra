@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { type ParseLocales } from 'seyfert';
+import { Command, type CommandContext, createPlugin, Declare, type ParseLocales } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 
@@ -17,6 +17,27 @@ describe('real bot loading', () => {
 
 		const result = await bot.slash({ name: 'ping' });
 		expect(result.content).toBe('pong');
+		await bot.close();
+	});
+
+	test('dispatches plugin-contributed command classes', async () => {
+		@Declare({ name: 'plugin-ping', description: 'Plugin ping' })
+		class PluginPingCommand extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.write({ content: 'plugin pong' });
+			}
+		}
+
+		const plugin = createPlugin({
+			name: 'testing-plugin-command',
+			register(api) {
+				api.commands.add(PluginPingCommand);
+			},
+		});
+
+		const bot = await createMockBot({ clientOptions: { plugins: [plugin] } });
+		const result = await bot.slash({ name: 'plugin-ping' });
+		expect(result.content).toBe('plugin pong');
 		await bot.close();
 	});
 });

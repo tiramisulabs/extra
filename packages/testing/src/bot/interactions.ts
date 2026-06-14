@@ -1,5 +1,5 @@
 import { mockId } from '../id';
-import { TEST_APPLICATION_ID } from './constants';
+import { TEST_APPLICATION_ID, TEST_CHANNEL_ID, TEST_GUILD_ID } from './constants';
 import {
 	type ApiAttachment,
 	type ApiChannel,
@@ -212,7 +212,10 @@ export interface ApiInteractionPayload {
 		resolved?: ResolvedData;
 		target_id?: string;
 		values?: string[];
-		components?: { type: 1; components: { type: 4; custom_id: string; value: string }[] }[];
+		components?: (
+			| { type: 1; components: { type: 4; custom_id: string; value: string }[] }
+			| { type: 18; component: { type: 4; custom_id: string; value: string } }
+		)[];
 	};
 	message?: ApiMessage;
 }
@@ -221,8 +224,8 @@ function baseInteraction(options: BaseInteractionOptions, type: number): ApiInte
 	const id = mockId();
 	const user = options.user ?? apiUser();
 	const dm = options.guildId === null;
-	const guildId = dm ? undefined : (options.guildId ?? mockId());
-	const channel = options.channel ?? apiChannel({ guildId: guildId ?? null });
+	const guildId = dm ? undefined : (options.guildId ?? options.channel?.guild_id ?? TEST_GUILD_ID);
+	const channel = options.channel ?? apiChannel({ id: TEST_CHANNEL_ID, guildId: guildId ?? null });
 	const permissions = permissionBits(options.permissions ?? DEFAULT_PERMISSIONS);
 	const memberPermissions =
 		options.memberPermissions !== undefined
@@ -428,8 +431,8 @@ export function modalSubmitInteraction(options: ModalSubmitInteractionOptions): 
 	payload.data = {
 		custom_id: options.customId,
 		components: Object.entries(options.fields ?? {}).map(([customId, value]) => ({
-			type: 1 as const,
-			components: [{ type: 4 as const, custom_id: customId, value }],
+			type: 18 as const,
+			component: { type: 4 as const, custom_id: customId, value },
 		})),
 	};
 	return payload;

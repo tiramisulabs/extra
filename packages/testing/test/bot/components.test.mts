@@ -8,6 +8,8 @@ import {
 	Declare,
 	Label,
 	Modal,
+	ModalCommand,
+	type ModalContext,
 	type ParseLocales,
 	StringSelectMenu,
 	type StringSelectMenuInteraction,
@@ -127,6 +129,56 @@ describe('component flows', () => {
 				user: actor.user,
 			}),
 		).toThrow(/Seeded roles: select-guild, select-role/);
+		await bot.close();
+	});
+
+	test('selectMenu resolves seeded guild members without explicit permissions', async () => {
+		const seen: string[][] = [];
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'user-select-guild' });
+		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'user-select-actor' }) });
+		const target = world.registerMember(guild.id, {
+			user: apiUser({ id: 'user-select-target', username: 'target' }),
+		});
+		const channel = world.registerChannel(guild.id);
+
+		class UserSelectComponent extends ComponentCommand {
+			componentType = 'UserSelect' as const;
+			filter(ctx: ComponentContext<'UserSelect'>) {
+				return ctx.customId === 'settings/user';
+			}
+			async run(ctx: ComponentContext<'UserSelect'>) {
+				seen.push(ctx.interaction.members.map(entry => entry.user.id));
+				await ctx.write({ content: ctx.interaction.members.map(entry => entry.user.username).join(',') });
+			}
+		}
+
+		const bot = await createMockBot({ components: [UserSelectComponent], world });
+		const result = await bot.selectMenu('settings/user', [target.user.id], {
+			componentType: 'user',
+			guildId: guild.id,
+			channel,
+			user: actor.user,
+		});
+		expect(seen).toEqual([[target.user.id]]);
+		expect(result.content).toBe('target');
+		await bot.close();
+	});
+
+	test('fillModal reaches values through ModalContext getInputValue', async () => {
+		class ProfileModal extends ModalCommand {
+			filter(ctx: ModalContext) {
+				return ctx.customId === 'profile';
+			}
+			async run(ctx: ModalContext) {
+				const username = ctx.interaction.getInputValue('username', true);
+				await ctx.write({ content: `profile:${username}` });
+			}
+		}
+
+		const bot = await createMockBot({ components: [ProfileModal] });
+		const result = await bot.fillModal('profile', { username: 'neo' });
+		expect(result.content).toBe('profile:neo');
 		await bot.close();
 	});
 

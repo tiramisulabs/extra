@@ -36,4 +36,17 @@ describe('i18n', () => {
 		expect(fr.reply?.body).toMatchObject({ data: { content: 'Hello!' } });
 		await bot.close();
 	});
+
+	test('langs auto-select a default locale when none is configured', async () => {
+		const bot = await createMockBot({
+			commands: [HelloCommand],
+			langs: {
+				'en-US': englishLang,
+			},
+		});
+
+		const result = await bot.slash({ name: 'hello', locale: 'de' });
+		expect(result.reply?.body).toMatchObject({ data: { content: 'Hello!' } });
+		await bot.close();
+	});
 });
