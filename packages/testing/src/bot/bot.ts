@@ -89,6 +89,8 @@ const CommandOptionType = {
 interface CommandOptionDefinition {
 	name: string;
 	type: number;
+	/** Set on a SubCommand instance when it belongs to a group; seyfert keys group membership here, not via a nested type-2 option. */
+	group?: string;
 	required?: boolean;
 	choices?: { name: string; value: string | number }[];
 	min_value?: number;
@@ -505,17 +507,20 @@ export class MockBot {
 		) as CommandWithOptions | undefined;
 	}
 
+	// seyfert stores subcommands flat on `command.options`, each carrying `.group` for its group; the type-2
+	// SubcommandGroup wrapper only exists in the wire payload, never in the registered command metadata.
+	private subcommandsOf(name: string): CommandOptionDefinition[] {
+		return (this.chatCommand(name)?.options ?? []).filter(option => option.type === CommandOptionType.SubCommand);
+	}
+
 	private optionDefinitionsFor(options: Pick<ChatInputInteractionOptions, 'name' | 'group' | 'subcommand'>) {
 		let definitions = this.chatCommand(options.name)?.options ?? [];
-		if (options.group) {
-			definitions =
-				definitions.find(option => option.type === CommandOptionType.SubCommandGroup && option.name === options.group)
-					?.options ?? [];
-		}
 		if (options.subcommand) {
-			definitions =
-				definitions.find(option => option.type === CommandOptionType.SubCommand && option.name === options.subcommand)
-					?.options ?? [];
+			const sub = this.subcommandsOf(options.name).find(
+				option =>
+					option.name === options.subcommand && (options.group ? option.group === options.group : !option.group),
+			);
+			definitions = sub?.options ?? [];
 		}
 		return definitions.filter(
 			option => option.type !== CommandOptionType.SubCommand && option.type !== CommandOptionType.SubCommandGroup,
@@ -524,20 +529,17 @@ export class MockBot {
 
 	private assertSubcommandTarget(options: Pick<ChatInputInteractionOptions, 'name' | 'group' | 'subcommand'>): void {
 		if (!options.group && !options.subcommand) return;
-		const rootOptions = this.chatCommand(options.name)?.options ?? [];
-		const scope = options.group
-			? rootOptions.find(option => option.type === CommandOptionType.SubCommandGroup && option.name === options.group)
-			: undefined;
-		if (options.group && !scope) {
+		const subcommands = this.subcommandsOf(options.name);
+		if (options.group && !subcommands.some(sub => sub.group === options.group)) {
 			throw new TypeError(`slash: subcommand group "${options.group}" is not registered on "${options.name}".`);
 		}
 		if (!options.subcommand) return;
-		const candidates = options.group ? (scope?.options ?? []) : rootOptions;
-		const found = candidates.some(
-			option => option.type === CommandOptionType.SubCommand && option.name === options.subcommand,
+		const found = subcommands.some(
+			sub => sub.name === options.subcommand && (options.group ? sub.group === options.group : !sub.group),
 		);
 		if (!found) {
-			throw new TypeError(`slash: subcommand "${options.subcommand}" is not registered on "${options.name}".`);
+			const where = options.group ? `group "${options.group}"` : `"${options.name}"`;
+			throw new TypeError(`slash: subcommand "${options.subcommand}" is not registered on ${where}.`);
 		}
 	}
 

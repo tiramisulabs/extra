@@ -8,6 +8,8 @@ import {
 	createStringOption,
 	Declare,
 	EntryPointCommand,
+	Group,
+	Groups,
 	type MenuCommandContext,
 	type MessageCommandInteraction,
 	Middlewares,
@@ -140,6 +142,19 @@ export class ConfigSetSub extends SubCommand {
 @Declare({ name: 'config', description: 'Config command' })
 @Options([ConfigSetSub])
 export class ConfigCommand extends Command {}
+
+@Declare({ name: 'add', description: 'Add an item' })
+@Group('items')
+export class InventoryAddSub extends SubCommand {
+	async run(ctx: CommandContext) {
+		await ctx.write({ content: 'added' });
+	}
+}
+
+@Declare({ name: 'inventory', description: 'Inventory command' })
+@Groups({ items: { defaultDescription: 'Item management' } })
+@Options([InventoryAddSub])
+export class InventoryCommand extends Command {}
 
 const searchOptions = {
 	query: createStringOption({

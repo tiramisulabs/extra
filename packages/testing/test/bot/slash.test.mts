@@ -15,6 +15,7 @@ import {
 	GreetCommand,
 	GuardedCommand,
 	guardCalls,
+	InventoryCommand,
 	SlowCommand,
 	testMiddlewares,
 } from './_setup';
@@ -163,6 +164,14 @@ describe('createMockBot', () => {
 		const sub = await bot.slash({ name: 'config', subcommand: 'set' });
 		expect(sub.command).toEqual({ name: 'config', subcommand: 'set' });
 
+		await bot.close();
+	});
+
+	test('dispatches a grouped subcommand and reports the group leaf', async () => {
+		const bot = await createMockBot({ commands: [InventoryCommand] });
+		const res = await bot.slash({ name: 'inventory', group: 'items', subcommand: 'add' });
+		expect(res.content).toBe('added');
+		expect(res.command).toEqual({ name: 'inventory', group: 'items', subcommand: 'add' });
 		await bot.close();
 	});
 
