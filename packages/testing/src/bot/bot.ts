@@ -355,6 +355,12 @@ export interface MockBotOptions {
 	botId?: string;
 	/** Application id used for interactions and webhook routes. */
 	applicationId?: string;
+	/**
+	 * Use this already-constructed Client instead of creating one. The mock REST and gateway are installed
+	 * onto it, so a bot's module-level `client` singleton becomes the same instance the dispatchers drive —
+	 * REST/cache through that singleton is captured. Pass an unstarted client; `clientOptions`/prefixes are ignored.
+	 */
+	client?: Client;
 	/** Raw Seyfert client constructor options. */
 	clientOptions?: ClientConstructorOptions;
 	/** Global middlewares forwarded to the real Seyfert client. */
@@ -1309,7 +1315,7 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 						: {}),
 				}
 			: options.clientOptions;
-	const client = new Client(clientOptions);
+	const client = options.client ?? new Client(clientOptions);
 	const gateway = new MockGateway(options.shards ?? 1, options.shardLatency ?? 0);
 	// Client#setServices wraps the custom gateway's existing send hook; seed it from clientOptions first.
 	if (options.clientOptions?.handleSendPayload)
@@ -1341,8 +1347,8 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	if (options.defaultLang) {
 		client.langs.defaultLang = options.defaultLang;
 	}
-	client.botId = botId;
-	client.applicationId = options.applicationId ?? TEST_APPLICATION_ID;
+	client.botId = options.botId ?? ((options.client && client.botId) || botId);
+	client.applicationId = options.applicationId ?? ((options.client && client.applicationId) || TEST_APPLICATION_ID);
 
 	if (options.commands) {
 		// Seyfert's command handler accepts constructor arrays at runtime, but its type expects loaded command metadata.
