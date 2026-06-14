@@ -1,5 +1,5 @@
 import { mockId } from '../id';
-import type { ChannelOverwriteLike, PermissionInput } from './permissions';
+import type { ChannelOverwriteLike } from './permissions';
 
 export interface ApiUserOptions {
 	id?: string;
@@ -34,7 +34,6 @@ export interface ApiGuildOptions {
 	name?: string;
 	ownerId?: string;
 	preferredLocale?: string;
-	everyonePermissions?: PermissionInput;
 }
 
 export interface ApiGuild {

@@ -1,18 +1,32 @@
 import { createServer } from 'node:http';
 import nacl from 'tweetnacl';
 
+const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
+
 export const init = (options: AppOptions) => {
 	const server = createServer((req, res) => {
 		if (req.method !== 'POST') return res.writeHead(405).end();
 		if (req.url !== options.path) return res.writeHead(401).end();
 
 		let rawBody = '';
+		let bodySize = 0;
+		let bodyRejected = false;
 
 		req.on('data', chunk => {
-			rawBody += chunk.toString(); // Append each chunk of data
+			if (bodyRejected) return;
+			const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+			bodySize += buffer.length;
+			if (bodySize > MAX_WEBHOOK_BODY_BYTES) {
+				bodyRejected = true;
+				rawBody = '';
+				res.writeHead(413).end();
+				return;
+			}
+			rawBody += buffer.toString();
 		});
 
 		req.on('end', () => {
+			if (bodyRejected) return;
 			let verify: boolean;
 			try {
 				verify = verifySignature({
@@ -53,9 +67,15 @@ function parseWebhookPayload(rawBody: string): WebhookPingEventPayload | Webhook
 	}
 
 	if (!body || typeof body !== 'object' || Array.isArray(body)) return;
-	const payload = body as { type?: unknown; event?: unknown };
+	const payload = body as { type?: unknown; event?: unknown; version?: unknown; application_id?: unknown };
+	if (payload.version !== 1 || typeof payload.application_id !== 'string') return;
 	if (payload.type === WebhookRequestType.PING) return body as WebhookPingEventPayload;
-	if (payload.type === WebhookRequestType.Event && payload.event && typeof payload.event === 'object') {
+	if (
+		payload.type === WebhookRequestType.Event &&
+		payload.event &&
+		typeof payload.event === 'object' &&
+		!Array.isArray(payload.event)
+	) {
 		return body as WebhookEventPayload;
 	}
 	return;

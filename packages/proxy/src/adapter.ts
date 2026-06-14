@@ -105,6 +105,7 @@ export function readBuffer(res: HttpResponse) {
 					ok(Buffer.concat(buffers));
 				} catch (e) {
 					res.close();
+					rej(e);
 					return;
 				}
 			} else {

@@ -6,6 +6,14 @@ const packageName = process.argv[2];
 if (!packageName) {
 	throw new TypeError('Usage: node scripts/vendor-internal.mjs <package-name>');
 }
+if (
+	packageName.includes('/') ||
+	packageName.includes('\\') ||
+	packageName.includes('..') ||
+	packageName.startsWith('.')
+) {
+	throw new TypeError(`Invalid package name: ${packageName}`);
+}
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const internalLib = resolve(root, 'packages/internal/lib');

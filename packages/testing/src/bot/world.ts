@@ -48,6 +48,10 @@ export type WorldRoleOptions = Omit<ApiRoleOptions, 'permissions'> & {
 	permissions?: PermissionInput;
 };
 
+export type WorldGuildOptions = ApiGuildOptions & {
+	everyonePermissions?: PermissionInput;
+};
+
 export class WorldBuilder {
 	private readonly world: MockWorld = { guilds: [], channels: [], users: [], members: [], roles: [], messages: [] };
 
@@ -63,7 +67,7 @@ export class WorldBuilder {
 		throw new TypeError(`mockWorld: channel "${channelId}" is not registered. Seeded channels: ${seeded}.`);
 	}
 
-	registerGuild(options: ApiGuildOptions = {}): ApiGuild {
+	registerGuild(options: WorldGuildOptions = {}): ApiGuild {
 		const guild = apiGuild(options);
 		this.world.guilds.push(guild);
 		this.world.roles.push({

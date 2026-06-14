@@ -15,6 +15,7 @@
 	"scripts": {
 		"dev": "tsc --watch",
 		"build": "tsc",
+		"test": "vitest run --config ./test/vitest.config.mts",
 		"lint": "biome lint --write ./src",
 		"format": "biome format --write ./src",
 		"checkb": "biome check --write --no-errors-on-unmatched ./src",
