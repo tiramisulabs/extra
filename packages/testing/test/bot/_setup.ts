@@ -15,6 +15,7 @@ import {
 	type ModalContext,
 	Options,
 	type ParseMiddlewares,
+	SubCommand,
 	type UserCommandInteraction,
 } from 'seyfert';
 import { ApplicationCommandType, EntryPointCommandHandlerType } from 'seyfert/lib/types';
@@ -97,7 +98,14 @@ export const blocker = createMiddleware<void>(middle => {
 	middle.stop('blocked');
 });
 
-export const testMiddlewares = { blocker, globalCounter, guard };
+// Production guard pattern: deny by replying and returning, WITHOUT next()/stop()/pass().
+export const denierCalls: string[] = [];
+export const denier = createMiddleware<void>(middle => {
+	denierCalls.push('denier');
+	middle.context.editOrReply({ content: 'denied' });
+});
+
+export const testMiddlewares = { blocker, denier, globalCounter, guard };
 
 declare module 'seyfert' {
 	interface RegisteredMiddlewares extends ParseMiddlewares<typeof testMiddlewares> {}
@@ -110,6 +118,28 @@ export class GuardedCommand extends Command {
 		await ctx.write({ content: 'passed' });
 	}
 }
+
+export const deniedBodyRan: string[] = [];
+
+@Declare({ name: 'denied', description: 'Denied command' })
+@Middlewares(['denier'])
+export class DeniedCommand extends Command {
+	async run(ctx: CommandContext) {
+		deniedBodyRan.push('run');
+		await ctx.write({ content: 'should not run' });
+	}
+}
+
+@Declare({ name: 'set', description: 'Set a config value' })
+export class ConfigSetSub extends SubCommand {
+	async run(ctx: CommandContext) {
+		await ctx.write({ content: 'set' });
+	}
+}
+
+@Declare({ name: 'config', description: 'Config command' })
+@Options([ConfigSetSub])
+export class ConfigCommand extends Command {}
 
 const searchOptions = {
 	query: createStringOption({

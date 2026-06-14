@@ -6,7 +6,11 @@ import { TEST_USER_ID } from '../../src/bot/constants';
 import { apiMember, apiUser } from '../../src/bot/payloads';
 import { mockWorld } from '../../src/bot/world';
 import {
+	ConfigCommand,
 	ConfirmButton,
+	DeniedCommand,
+	deniedBodyRan,
+	denierCalls,
 	FeedbackModal,
 	GreetCommand,
 	GuardedCommand,
@@ -132,6 +136,40 @@ describe('createMockBot', () => {
 		const result = await bot.slash({ name: 'guarded' });
 		expect(guardCalls).toEqual(['guard']);
 		expect(result.reply?.body).toMatchObject({ data: { content: 'passed' } });
+		await bot.close();
+	});
+
+	test('settles when a middleware denies via editOrReply without next()/stop()/pass()', async () => {
+		denierCalls.length = 0;
+		deniedBodyRan.length = 0;
+		const bot = await createMockBot({
+			commands: [DeniedCommand],
+			middlewares: testMiddlewares,
+		});
+		// Without the denial settle this dispatch would hang forever (the middleware chain never resolves).
+		const result = await bot.slash({ name: 'denied' });
+		expect(denierCalls).toEqual(['denier']);
+		expect(deniedBodyRan).toEqual([]);
+		expect(result.content).toBe('denied');
+		await bot.close();
+	});
+
+	test('res.command identifies the leaf for flat and subcommand dispatches', async () => {
+		const bot = await createMockBot({ commands: [GreetCommand, ConfigCommand] });
+
+		const flat = await bot.slash({ name: 'greet', options: { name: 'x' } });
+		expect(flat.command).toEqual({ name: 'greet' });
+
+		const sub = await bot.slash({ name: 'config', subcommand: 'set' });
+		expect(sub.command).toEqual({ name: 'config', subcommand: 'set' });
+
+		await bot.close();
+	});
+
+	test('res.command is undefined for component dispatches', async () => {
+		const bot = await createMockBot({ components: [ConfirmButton] });
+		const result = await bot.clickButton('confirm');
+		expect(result.command).toBeUndefined();
 		await bot.close();
 	});
 

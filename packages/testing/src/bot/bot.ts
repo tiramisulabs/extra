@@ -118,6 +118,15 @@ function isEncodedOption(value: OptionInput): value is EncodedOptionLike {
 	return typeof value === 'object' && value !== null && '__slipherOption' in value;
 }
 
+type MiddlewareControl = (...args: never[]) => unknown;
+interface MiddlewareControls {
+	context: unknown;
+	next: MiddlewareControl;
+	stop: MiddlewareControl;
+	pass: MiddlewareControl;
+}
+type WrappedMiddleware = (controls: MiddlewareControls) => unknown;
+
 function optionEntries(options: OptionInputBag | undefined): [string, OptionInput][] {
 	if (!options) return [];
 	return Array.isArray(options) ? options.map(option => [option.name, option.value]) : Object.entries(options);
@@ -167,6 +176,8 @@ export interface DispatchResult {
 	actions: RecordedAction[];
 	/** Best-effort latest user-visible content across replies, edits, and followups. */
 	content?: string;
+	/** Command leaf that handled the dispatch (chat input & context menus); undefined for components/modals. */
+	command?: { name: string; group?: string; subcommand?: string };
 }
 
 /**
@@ -830,6 +841,30 @@ export class MockBot {
 		}
 	}
 
+	private commandLeaf(payload: ApiInteractionPayload): DispatchResult['command'] {
+		if (
+			payload.type !== InteractionType.ApplicationCommand &&
+			payload.type !== InteractionType.ApplicationCommandAutocomplete
+		) {
+			return undefined;
+		}
+		const data = payload.data as
+			| { name?: string; options?: { name: string; type: number; options?: { name: string; type: number }[] }[] }
+			| undefined;
+		if (!data?.name) return undefined;
+		let group: string | undefined;
+		let subcommand: string | undefined;
+		const first = Array.isArray(data.options) ? data.options[0] : undefined;
+		if (first?.type === CommandOptionType.SubCommandGroup) {
+			group = first.name;
+			const nested = first.options?.[0];
+			if (nested?.type === CommandOptionType.SubCommand) subcommand = nested.name;
+		} else if (first?.type === CommandOptionType.SubCommand) {
+			subcommand = first.name;
+		}
+		return { name: data.name, ...(group ? { group } : {}), ...(subcommand ? { subcommand } : {}) };
+	}
+
 	private async runInteraction(payload: ApiInteractionPayload): Promise<DispatchResult> {
 		const startSeq = this.rest.actions.length;
 		const replies: CapturedReply[] = [];
@@ -879,13 +914,59 @@ export class MockBot {
 				componentHooks.onModalSubmit = onModalSubmit;
 			});
 		}
+		// Denial detection: seyfert's __runMiddlewares only resolves on next()/stop()/pass(). A guard that
+		// replies and returns without calling any of them leaves the chain pending forever, so command.run is
+		// structurally never reached and handleCommand.interaction never settles. Wrap each middleware to notice
+		// when it terminates the chain and settle the dispatch with whatever was already captured.
+		let resolveDenial: (() => void) | undefined;
+		const denialSettled = new Promise<void>(resolve => {
+			resolveDenial = resolve;
+		});
+		const middlewares = this.client.middlewares as Record<string, WrappedMiddleware> | undefined;
+		if (middlewares) {
+			for (const key of Object.keys(middlewares)) {
+				const real = middlewares[key];
+				middlewares[key] = (controls: MiddlewareControls) => {
+					let progressed = false;
+					const mark =
+						(fn: MiddlewareControl): MiddlewareControl =>
+						(...args) => {
+							progressed = true;
+							return fn(...args);
+						};
+					const result = real({
+						...controls,
+						next: mark(controls.next),
+						stop: mark(controls.stop),
+						pass: mark(controls.pass),
+					});
+					Promise.resolve(result).then(
+						() => {
+							if (progressed) return;
+							// Let any in-flight editOrReply callback flush before declaring the chain dead.
+							setImmediate(() => {
+								if (!progressed) resolveDenial?.();
+							});
+						},
+						() => {},
+					);
+					return result;
+				};
+				restoreHooks.push(() => {
+					middlewares[key] = real;
+				});
+			}
+		}
 		this.state.registerInteractionToken(payload.token, payload.channel_id);
 		// The builders preserve Discord's payload shape while exposing a wider test input type.
 		try {
-			await this.client.handleCommand.interaction(payload as unknown as APIInteraction, -1, async reply => {
-				replies.push(reply);
-				this.materializeInteractionResponse(payload, reply.body);
-			});
+			await Promise.race([
+				this.client.handleCommand.interaction(payload as unknown as APIInteraction, -1, async reply => {
+					replies.push(reply);
+					this.materializeInteractionResponse(payload, reply.body);
+				}),
+				denialSettled,
+			]);
 		} finally {
 			for (const restore of restoreHooks.reverse()) restore();
 		}
@@ -955,6 +1036,7 @@ export class MockBot {
 		];
 		const embeds = messages.flatMap(message => message.embeds ?? []);
 		const files = messages.flatMap(message => message.files ?? []);
+		const command = this.commandLeaf(payload);
 
 		return {
 			replies,
@@ -964,6 +1046,7 @@ export class MockBot {
 			embeds,
 			files,
 			actions,
+			command,
 			get reply() {
 				return replies[0];
 			},
