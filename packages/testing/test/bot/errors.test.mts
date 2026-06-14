@@ -94,4 +94,18 @@ describe('middlewares and error hooks', () => {
 		expect(result.content).toBe('default handled');
 		await bot.close();
 	});
+
+	test('close is idempotent and reset clears recorded REST actions for reuse', async () => {
+		const bot = await createMockBot({ commands: [AlsoGreetCommand] });
+		await bot.rest.request('POST', '/channels/reset/messages', { body: { content: 'before reset' } });
+		expect(bot.actions.length).toBeGreaterThan(0);
+
+		bot.reset();
+		expect(bot.actions).toHaveLength(0);
+		await expect(bot.slash({ name: 'also-greet' })).resolves.toMatchObject({ content: 'also' });
+
+		await bot.close();
+		await expect(bot.close()).resolves.toBeUndefined();
+		expect(() => bot.slash({ name: 'also-greet' })).toThrow(/closed/i);
+	});
 });

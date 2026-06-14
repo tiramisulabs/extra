@@ -106,4 +106,36 @@ describe('world state views', () => {
 		expect(bot.guild(guild.id)).not.toBe(bot.guild(guild.id));
 		await bot.close();
 	});
+
+	test('materializes followup edit and delete webhook routes', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'followup-guild' });
+		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'followup-actor' }) });
+		const channel = world.registerChannel(guild.id, { id: 'followup-channel' });
+		let followupId: string | undefined;
+
+		@Declare({ name: 'followup-lifecycle', description: 'Mutates a followup' })
+		class FollowupLifecycle extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.write({ content: 'original' });
+				const followup = await ctx.followup({ content: 'followup' });
+				followupId = followup.id;
+				await ctx.interaction.editMessage(followup.id, { content: 'followup edited' });
+				await ctx.interaction.deleteMessage(followup.id);
+				await ctx.editOrReply({ content: 'original edited' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [FollowupLifecycle], world });
+		await bot.slash({ name: 'followup-lifecycle', guildId: guild.id, channel, user: actor.user });
+
+		expect(followupId).toBeDefined();
+		expect(
+			bot
+				.guild(guild.id)
+				?.channel(channel.id)
+				?.messages.map(message => message.content),
+		).toEqual(['original edited']);
+		await bot.close();
+	});
 });

@@ -15,6 +15,8 @@ import {
 	type APIInteractionResponse,
 	ApplicationCommandType,
 	type GatewayDispatchPayload,
+	InteractionResponseType,
+	InteractionType,
 } from 'seyfert/lib/types';
 import { TEST_APPLICATION_ID, TEST_BOT_ID, TEST_CHANNEL_ID, TEST_GUILD_ID, TEST_USER_ID } from './constants';
 import { registerWorldDefaults } from './defaults';
@@ -35,6 +37,8 @@ import {
 	type ModalSubmitInteractionOptions,
 	messageCommandInteraction,
 	modalSubmitInteraction,
+	type OptionInput,
+	type OptionInputBag,
 	type SelectMenuInteractionOptions,
 	selectMenuInteraction,
 	type UserCommandInteractionOptions,
@@ -50,14 +54,74 @@ import {
 	apiUser,
 } from './payloads';
 import { computeChannelPermissions } from './permissions';
-import { type MatchedAction, MockApiHandler, type RecordedAction, type RouteMatcher } from './rest';
-import { FOLLOWUP_ROUTE, ORIGINAL_RESPONSE_ROUTE } from './routes';
+import {
+	type ActionFilter,
+	type ActionMatcher,
+	type ActionPredicate,
+	type MatchedAction,
+	MockApiHandler,
+	type RecordedAction,
+	type RouteActionFilter,
+	type RouteMatcher,
+} from './rest';
+import { FOLLOWUP_ROUTE, WEBHOOK_MESSAGE_ROUTE } from './routes';
 import { type ChannelView, type GuildView, WorldState } from './state';
 import { type MockWorld, seedWorld, type WorldBuilder } from './world';
 
 type ClientConstructorOptions = ConstructorParameters<typeof Client>[0];
 type ClientOptions = NonNullable<ClientConstructorOptions>;
 type ServicesOptions = Parameters<Client['setServices']>[0];
+
+const CommandOptionType = {
+	SubCommand: 1,
+	SubCommandGroup: 2,
+	String: 3,
+	Integer: 4,
+	Boolean: 5,
+	User: 6,
+	Channel: 7,
+	Role: 8,
+	Mentionable: 9,
+	Number: 10,
+	Attachment: 11,
+} as const;
+
+interface CommandOptionDefinition {
+	name: string;
+	type: number;
+	required?: boolean;
+	choices?: { name: string; value: string | number }[];
+	min_value?: number;
+	max_value?: number;
+	min_length?: number;
+	max_length?: number;
+	channel_types?: number[];
+	options?: CommandOptionDefinition[];
+}
+
+interface CommandWithOptions {
+	name: string;
+	type: ApplicationCommandType;
+	options?: CommandOptionDefinition[];
+}
+
+interface EncodedOptionLike {
+	__slipherOption: true;
+	type: number;
+	value: string | number | boolean;
+	resolved?: {
+		channels?: Record<string, { type?: number }>;
+	};
+}
+
+function isEncodedOption(value: OptionInput): value is EncodedOptionLike {
+	return typeof value === 'object' && value !== null && '__slipherOption' in value;
+}
+
+function optionEntries(options: OptionInputBag | undefined): [string, OptionInput][] {
+	if (!options) return [];
+	return Array.isArray(options) ? options.map(option => [option.name, option.value]) : Object.entries(options);
+}
 
 export interface CapturedReply {
 	/** Discord interaction callback body captured before it would be sent. */
@@ -91,9 +155,17 @@ export interface DispatchResult {
 	edits: OutgoingMessage[];
 	/** Followup messages sent during the dispatch. */
 	followups: OutgoingMessage[];
+	/** User-visible messages produced by replies, updates, edits, and followups in dispatch order. */
+	messages: OutgoingMessage[];
+	/** Embeds flattened from `messages`, in dispatch order. */
+	embeds: unknown[];
+	/** First embed from `embeds`, for simple one-embed assertions. */
+	embed?: unknown;
+	/** Files flattened from `messages`, in dispatch order. */
+	files: unknown[];
 	/** REST actions scoped to this dispatch. */
 	actions: RecordedAction[];
-	/** Best-effort final user-visible content across replies, edits, and followups. */
+	/** Best-effort latest user-visible content across replies, edits, and followups. */
 	content?: string;
 }
 
@@ -284,6 +356,8 @@ export interface MockBotOptions {
 	langs?: Record<string, Record<string, unknown>>;
 	/** Fallback locale when the interaction's locale has no langs entry. */
 	defaultLang?: string;
+	/** Validate supplied slash options against registered command metadata before dispatching. */
+	validateOptions?: boolean;
 	/**
 	 * Load the real bot from its seyfert.config locations before plugin setup.
 	 */
@@ -302,6 +376,7 @@ export class MockBot {
 	readonly defaultUser: ApiUser = apiUser({ id: TEST_USER_ID, username: 'slipher-tester' });
 	private readonly unregisteredMemberWarnings = new Set<string>();
 	private readonly dispatches: Dispatch<unknown>[] = [];
+	private closed = false;
 
 	constructor(
 		readonly client: Client,
@@ -309,7 +384,12 @@ export class MockBot {
 		readonly gateway: MockGateway,
 		protected readonly world?: MockWorld,
 		readonly state: WorldState = new WorldState(world),
+		private readonly validateOptions = false,
 	) {}
+
+	private assertOpen(verb: string): void {
+		if (this.closed) throw new Error(`${verb}: MockBot is closed.`);
+	}
 
 	private track<T>(dispatch: Dispatch<T>): Dispatch<T> {
 		this.dispatches.push(dispatch as Dispatch<unknown>);
@@ -402,6 +482,124 @@ export class MockBot {
 		return next;
 	}
 
+	private chatCommand(name: string): CommandWithOptions | undefined {
+		return this.client.commands.values.find(
+			command => command.type === ApplicationCommandType.ChatInput && command.name === name,
+		) as CommandWithOptions | undefined;
+	}
+
+	private optionDefinitionsFor(options: Pick<ChatInputInteractionOptions, 'name' | 'group' | 'subcommand'>) {
+		let definitions = this.chatCommand(options.name)?.options ?? [];
+		if (options.group) {
+			definitions =
+				definitions.find(option => option.type === CommandOptionType.SubCommandGroup && option.name === options.group)
+					?.options ?? [];
+		}
+		if (options.subcommand) {
+			definitions =
+				definitions.find(option => option.type === CommandOptionType.SubCommand && option.name === options.subcommand)
+					?.options ?? [];
+		}
+		return definitions.filter(
+			option => option.type !== CommandOptionType.SubCommand && option.type !== CommandOptionType.SubCommandGroup,
+		);
+	}
+
+	private assertSubcommandTarget(options: Pick<ChatInputInteractionOptions, 'name' | 'group' | 'subcommand'>): void {
+		if (!options.group && !options.subcommand) return;
+		const rootOptions = this.chatCommand(options.name)?.options ?? [];
+		const scope = options.group
+			? rootOptions.find(option => option.type === CommandOptionType.SubCommandGroup && option.name === options.group)
+			: undefined;
+		if (options.group && !scope) {
+			throw new TypeError(`slash: subcommand group "${options.group}" is not registered on "${options.name}".`);
+		}
+		if (!options.subcommand) return;
+		const candidates = options.group ? (scope?.options ?? []) : rootOptions;
+		const found = candidates.some(
+			option => option.type === CommandOptionType.SubCommand && option.name === options.subcommand,
+		);
+		if (!found) {
+			throw new TypeError(`slash: subcommand "${options.subcommand}" is not registered on "${options.name}".`);
+		}
+	}
+
+	private optionTypesFor(definitions: CommandOptionDefinition[]): Record<string, number> {
+		return Object.fromEntries(definitions.map(option => [option.name, option.type]));
+	}
+
+	private validateChatInputOptions(options: ChatInputInteractionOptions, definitions: CommandOptionDefinition[]): void {
+		const entries = new Map(optionEntries(options.options));
+		for (const definition of definitions) {
+			const input = entries.get(definition.name);
+			if (input === undefined) {
+				if (definition.required) throw new TypeError(`slash: option "${definition.name}" is required.`);
+				continue;
+			}
+
+			const actualType = isEncodedOption(input) ? input.type : undefined;
+			const value = isEncodedOption(input) ? input.value : input;
+			if (actualType !== undefined && actualType !== definition.type) {
+				throw new TypeError(`slash: option "${definition.name}" has type ${actualType}, expected ${definition.type}.`);
+			}
+			if (definition.choices?.length && !definition.choices.some(choice => Object.is(choice.value, value))) {
+				throw new TypeError(
+					`slash: option "${definition.name}" must be one of: ${definition.choices
+						.map(choice => String(choice.value))
+						.join(', ')}.`,
+				);
+			}
+
+			if (definition.type === CommandOptionType.String) {
+				if (typeof value !== 'string') throw new TypeError(`slash: option "${definition.name}" must be a string.`);
+				if (definition.min_length !== undefined && value.length < definition.min_length) {
+					throw new TypeError(`slash: option "${definition.name}" is shorter than ${definition.min_length}.`);
+				}
+				if (definition.max_length !== undefined && value.length > definition.max_length) {
+					throw new TypeError(`slash: option "${definition.name}" is longer than ${definition.max_length}.`);
+				}
+				continue;
+			}
+
+			if (definition.type === CommandOptionType.Integer || definition.type === CommandOptionType.Number) {
+				if (typeof value !== 'number') throw new TypeError(`slash: option "${definition.name}" must be a number.`);
+				if (definition.type === CommandOptionType.Integer && !Number.isInteger(value)) {
+					throw new TypeError(`slash: option "${definition.name}" must be an integer.`);
+				}
+				if (definition.min_value !== undefined && value < definition.min_value) {
+					throw new TypeError(`slash: option "${definition.name}" is less than ${definition.min_value}.`);
+				}
+				if (definition.max_value !== undefined && value > definition.max_value) {
+					throw new TypeError(`slash: option "${definition.name}" is greater than ${definition.max_value}.`);
+				}
+				continue;
+			}
+
+			if (definition.type === CommandOptionType.Channel && definition.channel_types?.length && isEncodedOption(input)) {
+				const channel = input.resolved?.channels?.[String(input.value)];
+				if (channel?.type !== undefined && !definition.channel_types.includes(channel.type)) {
+					throw new TypeError(
+						`slash: option "${definition.name}" channel type ${channel.type} is not allowed. ` +
+							`Allowed: ${definition.channel_types.join(', ')}.`,
+					);
+				}
+			}
+		}
+	}
+
+	private prepareChatInputOptions(options: ChatInputInteractionOptions): ChatInputInteractionOptions {
+		this.assertSubcommandTarget(options);
+		const definitions = this.optionDefinitionsFor(options);
+		if (this.validateOptions) this.validateChatInputOptions(options, definitions);
+		return {
+			...options,
+			optionTypes: {
+				...(options.optionTypes ?? {}),
+				...this.optionTypesFor(definitions),
+			},
+		};
+	}
+
 	private componentCommands(): readonly unknown[] {
 		return this.client.components.commands;
 	}
@@ -456,6 +654,11 @@ export class MockBot {
 			}
 		}
 		return this.lastSentMessage();
+	}
+
+	private worldMemberFor(guildId: string | null | undefined, user: ApiUser | undefined): ApiMember | undefined {
+		if (!this.world || !guildId || !user) return undefined;
+		return this.world.members.find(entry => entry.guildId === guildId && entry.member.user.id === user.id)?.member;
 	}
 
 	private normalizedSelectType(componentType: SelectMenuInteractionOptions['componentType']): 3 | 5 | 6 | 7 | 8 {
@@ -576,25 +779,27 @@ export class MockBot {
 	}
 
 	waitForAction(
-		matcherOrPredicate: RouteMatcher | ((action: RecordedAction) => boolean),
+		matcherOrPredicate: RouteMatcher | ActionFilter | ActionPredicate,
 		timeoutMs?: number,
 	): Promise<RecordedAction> {
 		if (typeof matcherOrPredicate === 'function') return this.rest.waitForAction(matcherOrPredicate, timeoutMs);
 		return this.rest.waitForAction(matcherOrPredicate, timeoutMs);
 	}
 
-	calls(
-		matcher: RouteMatcher | ((action: RecordedAction) => boolean),
-		params?: Record<string, string>,
-	): MatchedAction[] {
-		return this.rest.calls(matcher, params);
+	calls(matcher: RouteMatcher | ActionPredicate, params?: Record<string, string>): MatchedAction[];
+	calls(matcher: RouteMatcher, filter: RouteActionFilter): MatchedAction[];
+	calls(matcher: ActionFilter | ActionPredicate): MatchedAction[];
+	calls(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction[];
+	calls(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction[] {
+		return this.rest.calls(matcher, paramsOrFilter);
 	}
 
-	call(
-		matcher: RouteMatcher | ((action: RecordedAction) => boolean),
-		params?: Record<string, string>,
-	): MatchedAction | undefined {
-		return this.rest.call(matcher, params);
+	call(matcher: RouteMatcher | ActionPredicate, params?: Record<string, string>): MatchedAction | undefined;
+	call(matcher: RouteMatcher, filter: RouteActionFilter): MatchedAction | undefined;
+	call(matcher: ActionFilter | ActionPredicate): MatchedAction | undefined;
+	call(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction | undefined;
+	call(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction | undefined {
+		return this.rest.call(matcher, paramsOrFilter);
 	}
 
 	clearActions(): void {
@@ -610,6 +815,7 @@ export class MockBot {
 	}
 
 	dispatchInteraction(payload: ApiInteractionPayload): Dispatch<DispatchResult> {
+		this.assertOpen('dispatchInteraction');
 		const userId = payload.member?.user.id ?? payload.user?.id;
 		return this.track(new Dispatch(this.rest, this.client, userId, () => this.runInteraction(payload)));
 	}
@@ -627,12 +833,82 @@ export class MockBot {
 	private async runInteraction(payload: ApiInteractionPayload): Promise<DispatchResult> {
 		const startSeq = this.rest.actions.length;
 		const replies: CapturedReply[] = [];
+		const componentHooks = this.client.components as unknown as {
+			execute?: (...args: unknown[]) => Promise<unknown>;
+			onComponent?: (id: string, interaction: { customId: string }) => Promise<unknown>;
+			hasComponent?: (id: string, customId: string) => boolean | undefined;
+			onModalSubmit?: (interaction: { user: { id: string } }) => unknown;
+		};
+		const isComponentPayload = payload.type === InteractionType.MessageComponent;
+		const isModalPayload = payload.type === InteractionType.ModalSubmit;
+		let componentCommandExecuted = false;
+		let collectorMatched = false;
+		let modalMatched = false;
+		const restoreHooks: (() => void)[] = [];
+		const canDetectComponentCommand = typeof componentHooks.execute === 'function';
+		const canDetectCollector =
+			typeof componentHooks.onComponent === 'function' && typeof componentHooks.hasComponent === 'function';
+		const canDetectModalCollector = typeof componentHooks.onModalSubmit === 'function';
+		if ((isComponentPayload || isModalPayload) && canDetectComponentCommand) {
+			const execute = componentHooks.execute?.bind(componentHooks);
+			componentHooks.execute = async (...args: unknown[]) => {
+				componentCommandExecuted = true;
+				return execute?.(...args);
+			};
+			restoreHooks.push(() => {
+				componentHooks.execute = execute;
+			});
+		}
+		if (isComponentPayload && canDetectCollector) {
+			const onComponent = componentHooks.onComponent?.bind(componentHooks);
+			componentHooks.onComponent = async (id, interaction) => {
+				collectorMatched = Boolean(componentHooks.hasComponent?.(id, interaction.customId));
+				return onComponent?.(id, interaction);
+			};
+			restoreHooks.push(() => {
+				componentHooks.onComponent = onComponent;
+			});
+		}
+		if (isModalPayload && canDetectModalCollector) {
+			const onModalSubmit = componentHooks.onModalSubmit?.bind(componentHooks);
+			componentHooks.onModalSubmit = interaction => {
+				modalMatched = true;
+				return onModalSubmit?.(interaction);
+			};
+			restoreHooks.push(() => {
+				componentHooks.onModalSubmit = onModalSubmit;
+			});
+		}
 		this.state.registerInteractionToken(payload.token, payload.channel_id);
 		// The builders preserve Discord's payload shape while exposing a wider test input type.
-		await this.client.handleCommand.interaction(payload as unknown as APIInteraction, -1, async reply => {
-			replies.push(reply);
-			this.materializeInteractionResponse(payload, reply.body);
-		});
+		try {
+			await this.client.handleCommand.interaction(payload as unknown as APIInteraction, -1, async reply => {
+				replies.push(reply);
+				this.materializeInteractionResponse(payload, reply.body);
+			});
+		} finally {
+			for (const restore of restoreHooks.reverse()) restore();
+		}
+		if (
+			isComponentPayload &&
+			canDetectCollector &&
+			canDetectComponentCommand &&
+			!collectorMatched &&
+			!componentCommandExecuted
+		) {
+			throw new TypeError(
+				`clickButton/selectMenu: no component handler resolved for "${payload.data.custom_id ?? '(unknown)'}".`,
+			);
+		}
+		if (
+			isModalPayload &&
+			canDetectModalCollector &&
+			canDetectComponentCommand &&
+			!modalMatched &&
+			!componentCommandExecuted
+		) {
+			throw new TypeError(`fillModal: no modal handler resolved for "${payload.data.custom_id ?? '(unknown)'}".`);
+		}
 		const actions = this.rest.actions.slice(startSeq);
 		if (replies.length === 0) {
 			const callback = actions.find(
@@ -649,24 +925,44 @@ export class MockBot {
 			...((action.body ?? {}) as OutgoingMessage),
 			...(action.files ? { files: action.files } : {}),
 		});
-		const edits = actions
-			.filter(
-				action =>
-					action.method === 'PATCH' &&
-					ORIGINAL_RESPONSE_ROUTE.test(action.route) &&
-					action.route.includes(payload.token),
-			)
-			.map(toOutgoingMessage);
-		const followups = actions
-			.filter(
-				action => action.method === 'POST' && FOLLOWUP_ROUTE.test(action.route) && action.route.includes(payload.token),
-			)
-			.map(toOutgoingMessage);
+		const normalizeFiles = (files: unknown): unknown[] | undefined => {
+			if (files === undefined) return undefined;
+			return Array.isArray(files) ? files : [files];
+		};
+		const replyToMessage = (reply: CapturedReply): OutgoingMessage | undefined => {
+			const body = reply.body;
+			if (
+				body.type !== InteractionResponseType.ChannelMessageWithSource &&
+				body.type !== InteractionResponseType.UpdateMessage
+			) {
+				return undefined;
+			}
+			const data = 'data' in body ? ((body.data ?? {}) as OutgoingMessage) : {};
+			return {
+				...data,
+				...(reply.files ? { files: normalizeFiles(reply.files) } : {}),
+			};
+		};
+		const isWebhookMessageEdit = (action: RecordedAction) =>
+			action.method === 'PATCH' && WEBHOOK_MESSAGE_ROUTE.test(action.route) && action.route.includes(payload.token);
+		const isFollowup = (action: RecordedAction) =>
+			action.method === 'POST' && FOLLOWUP_ROUTE.test(action.route) && action.route.includes(payload.token);
+		const edits = actions.filter(isWebhookMessageEdit).map(toOutgoingMessage);
+		const followups = actions.filter(isFollowup).map(toOutgoingMessage);
+		const messages = [
+			...replies.map(replyToMessage).filter((message): message is OutgoingMessage => message !== undefined),
+			...actions.filter(action => isWebhookMessageEdit(action) || isFollowup(action)).map(toOutgoingMessage),
+		];
+		const embeds = messages.flatMap(message => message.embeds ?? []);
+		const files = messages.flatMap(message => message.files ?? []);
 
 		return {
 			replies,
 			edits,
 			followups,
+			messages,
+			embeds,
+			files,
 			actions,
 			get reply() {
 				return replies[0];
@@ -675,9 +971,16 @@ export class MockBot {
 				return replies[0]?.body.type === 5 || replies[0]?.body.type === 6;
 			},
 			get ephemeral() {
-				const body = replies[0]?.body;
-				const data = body && 'data' in body ? (body.data as { flags?: number } | undefined) : undefined;
-				return Boolean(data?.flags && data.flags & 64);
+				const replyEphemeral = replies.some(reply => {
+					const data = 'data' in reply.body ? (reply.body.data as { flags?: number } | undefined) : undefined;
+					return Boolean(typeof data?.flags === 'number' && data.flags & 64);
+				});
+				return (
+					replyEphemeral || messages.some(message => Boolean(typeof message.flags === 'number' && message.flags & 64))
+				);
+			},
+			get embed() {
+				return embeds[0];
 			},
 			get modal() {
 				const body = replies[0]?.body;
@@ -686,10 +989,7 @@ export class MockBot {
 				return { customId: data?.custom_id, title: data?.title };
 			},
 			get content() {
-				const reply = replies[0];
-				const replyContent =
-					reply && 'data' in reply.body ? (reply.body.data as { content?: string } | undefined)?.content : undefined;
-				return edits.at(-1)?.content ?? replyContent;
+				return [...messages].reverse().find(message => typeof message.content === 'string')?.content;
 			},
 		};
 	}
@@ -708,14 +1008,23 @@ export class MockBot {
 	}
 
 	slash(options: ChatInputInteractionOptions): Dispatch<DispatchResult> {
+		this.assertOpen('slash');
 		this.assertCommandRegistered(options.name, ApplicationCommandType.ChatInput, 'slash');
-		const prepared = this.applyWorldPermissions({ user: this.defaultUser, ...options });
+		const prepared = this.applyWorldPermissions({ user: this.defaultUser, ...this.prepareChatInputOptions(options) });
 		return this.dispatchInteraction(chatInputInteraction(prepared));
 	}
 
 	autocomplete(options: AutocompleteInteractionOptions): Dispatch<AutocompleteResult> {
+		this.assertOpen('autocomplete');
 		this.assertCommandRegistered(options.name, ApplicationCommandType.ChatInput, 'autocomplete');
-		const payload = autocompleteInteraction(this.applyWorldPermissions({ user: this.defaultUser, ...options }));
+		const definitions = this.optionDefinitionsFor(options);
+		const payload = autocompleteInteraction(
+			this.applyWorldPermissions({
+				user: this.defaultUser,
+				...options,
+				optionTypes: { ...(options.optionTypes ?? {}), ...this.optionTypesFor(definitions) },
+			}),
+		);
 		const userId = payload.member?.user.id ?? payload.user?.id;
 		return this.track(
 			new Dispatch(this.rest, this.client, userId, async () => {
@@ -727,13 +1036,15 @@ export class MockBot {
 	}
 
 	userMenu(options: UserCommandInteractionOptions): Dispatch<DispatchResult> {
+		this.assertOpen('userMenu');
 		this.assertCommandRegistered(options.name, ApplicationCommandType.User, 'userMenu');
-		return this.dispatchInteraction(
-			userCommandInteraction(this.applyWorldPermissions({ user: this.defaultUser, ...options })),
-		);
+		const prepared = this.applyWorldPermissions({ user: this.defaultUser, ...options });
+		const targetMember = options.targetMember ?? this.worldMemberFor(prepared.guildId, prepared.target);
+		return this.dispatchInteraction(userCommandInteraction({ ...prepared, ...(targetMember ? { targetMember } : {}) }));
 	}
 
 	messageMenu(options: MessageCommandInteractionOptions): Dispatch<DispatchResult> {
+		this.assertOpen('messageMenu');
 		this.assertCommandRegistered(options.name, ApplicationCommandType.Message, 'messageMenu');
 		return this.dispatchInteraction(
 			messageCommandInteraction(this.applyWorldPermissions({ user: this.defaultUser, ...options })),
@@ -741,6 +1052,7 @@ export class MockBot {
 	}
 
 	entryPoint(options: EntryPointInteractionOptions = {}): Dispatch<DispatchResult> {
+		this.assertOpen('entryPoint');
 		return this.dispatchInteraction(
 			entryPointInteraction(this.applyWorldPermissions({ user: this.defaultUser, ...options })),
 		);
@@ -750,6 +1062,7 @@ export class MockBot {
 		customId: string,
 		options: Omit<ButtonInteractionOptions, 'customId' | 'message'> & { source?: string | RecordedAction } = {},
 	): Dispatch<DispatchResult> {
+		this.assertOpen('clickButton');
 		const { source, ...rest } = options;
 		const message = this.resolveMessageSource(source);
 		this.assertComponentHandleable('clickButton', customId, message);
@@ -769,6 +1082,7 @@ export class MockBot {
 			source?: string | RecordedAction;
 		} = {},
 	): Dispatch<DispatchResult> {
+		this.assertOpen('selectMenu');
 		const { source, ...rest } = options;
 		const message = this.resolveMessageSource(source);
 		this.assertComponentHandleable('selectMenu', customId, message);
@@ -788,12 +1102,14 @@ export class MockBot {
 		fields: Record<string, string> = {},
 		extra: Omit<ModalSubmitInteractionOptions, 'customId' | 'fields'> = {},
 	): Dispatch<DispatchResult> {
+		this.assertOpen('fillModal');
 		const prepared = this.applyWorldPermissions({ user: this.defaultUser, ...extra, customId, fields });
 		this.assertModalHandleable(customId, prepared.user?.id ?? this.defaultUser.id);
 		return this.dispatchInteraction(modalSubmitInteraction(prepared));
 	}
 
 	say(content: string, options: DispatchMessageOptions = {}): Dispatch<SayResult> {
+		this.assertOpen('say');
 		const author = options.user ?? this.defaultUser;
 		const dm = options.guildId === null;
 		const guildId = dm ? undefined : (options.guildId ?? options.channel?.guild_id ?? TEST_GUILD_ID);
@@ -853,6 +1169,7 @@ export class MockBot {
 	): Promise<void>;
 	async emitEvent(name: string, payload: Record<string, unknown>, options?: { updateCache?: boolean }): Promise<void>;
 	async emitEvent(name: string, payload: Record<string, unknown>, { updateCache = true } = {}): Promise<void> {
+		this.assertOpen('emitEvent');
 		await this.client.events.runEvent(
 			name as Parameters<Client['events']['runEvent']>[0],
 			this.client,
@@ -862,7 +1179,16 @@ export class MockBot {
 		);
 	}
 
+	reset(): void {
+		this.assertOpen('reset');
+		this.rest.clearActions();
+		this.rest.releasePending();
+		this.dispatches.length = 0;
+	}
+
 	async close(): Promise<void> {
+		if (this.closed) return;
+		this.closed = true;
 		const unstarted = this.dispatches.filter(dispatch => !dispatch.started);
 		if (unstarted.length) {
 			console.warn(`[@slipher/testing] ${unstarted.length} dispatch(es) were created but never awaited or stepped.`);
@@ -970,5 +1296,5 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 		botId: client.botId,
 	});
 
-	return new MockBot(client, rest, gateway, world, state);
+	return new MockBot(client, rest, gateway, world, state, options.validateOptions ?? false);
 }

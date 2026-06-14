@@ -62,13 +62,16 @@ describe('createMockBot', () => {
 		expect(result.deferred).toBe(true);
 		expect(result.edits).toMatchObject([{ content: 'done' }]);
 		expect(result.followups).toMatchObject([{ content: 'extra' }]);
-		expect(result.content).toBe('done');
+		expect(result.messages).toMatchObject([{ content: 'done' }, { content: 'extra' }]);
+		expect(result.content).toBe('extra');
 		expect(result.reply?.body).toMatchObject({ type: InteractionResponseType.DeferredChannelMessageWithSource });
 		expect(result.actions.some(action => action.method === 'PATCH')).toBe(true);
 		await bot.close();
 	});
 
 	test('preserves files on deferred edits and followups', async () => {
+		const editEmbed = { title: 'Edited' };
+		const followupEmbed = { title: 'Followup' };
 		const editFile = { filename: 'edited.txt', data: 'edited' };
 		const followupFile = { filename: 'followup.txt', data: 'followup' };
 
@@ -76,8 +79,8 @@ describe('createMockBot', () => {
 		class FilesCommand extends Command {
 			async run(ctx: CommandContext) {
 				await ctx.deferReply();
-				await ctx.editOrReply({ content: 'edited', files: [editFile] });
-				await ctx.followup({ content: 'followup', files: [followupFile] });
+				await ctx.editOrReply({ content: 'edited', embeds: [editEmbed], files: [editFile] });
+				await ctx.followup({ content: 'followup', embeds: [followupEmbed], files: [followupFile], flags: 64 });
 			}
 		}
 
@@ -86,6 +89,38 @@ describe('createMockBot', () => {
 
 		expect(result.edits[0]?.files).toMatchObject([{ filename: 'edited.txt' }]);
 		expect(result.followups[0]?.files).toMatchObject([{ filename: 'followup.txt' }]);
+		expect(result.messages).toMatchObject([
+			{ content: 'edited', embeds: [editEmbed], files: [{ filename: 'edited.txt' }] },
+			{ content: 'followup', embeds: [followupEmbed], files: [{ filename: 'followup.txt' }], flags: 64 },
+		]);
+		expect(result.embeds).toEqual([editEmbed, followupEmbed]);
+		expect(result.embed).toEqual(editEmbed);
+		expect(result.files).toMatchObject([{ filename: 'edited.txt' }, { filename: 'followup.txt' }]);
+		expect(result.content).toBe('followup');
+		expect(result.ephemeral).toBe(true);
+		await bot.close();
+	});
+
+	test('includes followup edits in semantic messages and latest content', async () => {
+		@Declare({ name: 'followup-edit', description: 'Edits a followup' })
+		class FollowupEditCommand extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.write({ content: 'original' });
+				const followup = await ctx.followup({ content: 'followup' });
+				await ctx.interaction.editMessage(followup.id, { content: 'followup edited' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [FollowupEditCommand] });
+		const result = await bot.slash({ name: 'followup-edit' });
+
+		expect(result.edits).toMatchObject([{ content: 'followup edited' }]);
+		expect(result.messages).toMatchObject([
+			{ content: 'original' },
+			{ content: 'followup' },
+			{ content: 'followup edited' },
+		]);
+		expect(result.content).toBe('followup edited');
 		await bot.close();
 	});
 

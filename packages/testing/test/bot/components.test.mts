@@ -64,6 +64,13 @@ describe('component flows', () => {
 		await bot.close();
 	});
 
+	test('component dispatch throws when no collector or component command handles the customId', async () => {
+		const bot = await createMockBot({ components: [ConfirmButton] });
+
+		await expect(bot.clickButton('missing-confirm')).rejects.toThrow(/no component handler resolved/i);
+		await bot.close();
+	});
+
 	test('selectMenu reaches a component collector and exposes selected values', async () => {
 		const selected: string[][] = [];
 
@@ -179,6 +186,22 @@ describe('component flows', () => {
 		const bot = await createMockBot({ components: [ProfileModal] });
 		const result = await bot.fillModal('profile', { username: 'neo' });
 		expect(result.content).toBe('profile:neo');
+		await bot.close();
+	});
+
+	test('modal dispatch throws when no waiting modal or modal command handles the customId', async () => {
+		class ProfileModal extends ModalCommand {
+			filter(ctx: ModalContext) {
+				return ctx.customId === 'profile';
+			}
+			async run(ctx: ModalContext) {
+				await ctx.write({ content: 'profile' });
+			}
+		}
+
+		const bot = await createMockBot({ components: [ProfileModal] });
+
+		await expect(bot.fillModal('missing-profile', { username: 'neo' })).rejects.toThrow(/no modal handler resolved/i);
 		await bot.close();
 	});
 

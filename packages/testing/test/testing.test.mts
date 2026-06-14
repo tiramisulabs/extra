@@ -1,14 +1,18 @@
 import { assert, describe, expect, test } from 'vitest';
 import {
+	channelOption,
 	mockChannel,
 	mockClient,
 	mockCommandContext,
+	mockComponentContext,
 	mockGuild,
 	mockMember,
+	mockModalContext,
 	mockQueues,
 	mockScheduler,
 	mockUser,
 	resetMockIds,
+	userOption,
 } from '../src';
 
 describe('entity factories', () => {
@@ -44,6 +48,26 @@ describe('entity factories', () => {
 		const user = mockUser({ username: 'socram', globalName: null });
 
 		assert.equal(user.globalName, null);
+		assert.equal(user.global_name, null);
+	});
+
+	test('factory outputs can be used directly as interaction option payloads', () => {
+		const user = mockUser({ id: 'factory-user', username: 'socram', globalName: 'Socram' });
+		const channel = mockChannel({ id: 'factory-channel', guildId: 'factory-guild' });
+		const member = mockMember({ user, joinedAt: '2026-06-14T00:00:00.000Z' });
+
+		const encodedUser = userOption(user);
+		const encodedChannel = channelOption(channel);
+
+		assert.equal(user.global_name, 'Socram');
+		assert.equal(channel.guild_id, 'factory-guild');
+		assert.equal(member.joined_at, '2026-06-14T00:00:00.000Z');
+		assert.deepEqual(encodedUser.resolved?.users?.['factory-user'], user);
+		const resolvedChannel = encodedChannel.resolved?.channels?.['factory-channel'] as
+			| { guild_id?: string; permissions?: string }
+			| undefined;
+		assert.equal(resolvedChannel?.guild_id, 'factory-guild');
+		assert.equal(typeof resolvedChannel?.permissions, 'string');
 	});
 
 	test('reject non-integer mock ID reset values before conversion', () => {
@@ -143,6 +167,32 @@ describe('mockCommandContext', () => {
 		assert.deepEqual(ctx.logger.entries.at(-1), { level: 'info', args: ['through-client'] });
 		assert.deepEqual(ctx.queues.get('welcome').jobs.at(-1)?.payload, { userId: ctx.author.id });
 		assert.equal(ctx.scheduler.tasks.at(-1)?.name, 'reminder');
+	});
+});
+
+describe('standalone interaction contexts', () => {
+	test('mockComponentContext captures writes, updates and deferUpdate calls', async () => {
+		const ctx = mockComponentContext({ customId: 'confirm', values: ['a', 'b'] });
+
+		await ctx.write({ content: 'created' });
+		await ctx.update({ content: 'updated' });
+		await ctx.deferUpdate();
+
+		assert.equal(ctx.customId, 'confirm');
+		assert.deepEqual(ctx.interaction.values, ['a', 'b']);
+		assert.deepEqual(ctx.responses, [{ content: 'created' }, { content: 'updated' }]);
+		assert.equal(ctx.deferredUpdate, true);
+	});
+
+	test('mockModalContext exposes submitted fields through getInputValue', async () => {
+		const ctx = mockModalContext({ customId: 'profile', fields: { username: 'neo' } });
+
+		await ctx.write({ content: ctx.interaction.getInputValue('username', true) });
+
+		assert.equal(ctx.customId, 'profile');
+		assert.equal(ctx.interaction.getInputValue('username'), 'neo');
+		assert.throws(() => ctx.interaction.getInputValue('missing', true), /missing/);
+		assert.deepEqual(ctx.responses, [{ content: 'neo' }]);
 	});
 });
 

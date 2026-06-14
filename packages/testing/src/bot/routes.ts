@@ -24,6 +24,9 @@ export const Routes = {
 	fetchOriginalResponse: { method: 'GET', route: '/webhooks/:applicationId/:interactionToken/messages/@original' },
 	editOriginalResponse: { method: 'PATCH', route: '/webhooks/:applicationId/:interactionToken/messages/@original' },
 	deleteOriginalResponse: { method: 'DELETE', route: '/webhooks/:applicationId/:interactionToken/messages/@original' },
+	fetchWebhookMessage: { method: 'GET', route: '/webhooks/:applicationId/:interactionToken/messages/:messageId' },
+	editWebhookMessage: { method: 'PATCH', route: '/webhooks/:applicationId/:interactionToken/messages/:messageId' },
+	deleteWebhookMessage: { method: 'DELETE', route: '/webhooks/:applicationId/:interactionToken/messages/:messageId' },
 	followup: { method: 'POST', route: '/webhooks/:applicationId/:interactionToken' },
 	fetchMessages: { method: 'GET', route: '/channels/:channelId/messages' },
 	fetchRoles: { method: 'GET', route: '/guilds/:guildId/roles' },
@@ -40,4 +43,5 @@ export const Routes = {
 } as const satisfies Record<string, RouteMatcher>;
 
 export const ORIGINAL_RESPONSE_ROUTE = /\/webhooks\/[^/]+\/[^/]+\/messages\/@original$/;
+export const WEBHOOK_MESSAGE_ROUTE = /\/webhooks\/[^/]+\/[^/]+\/messages\/[^/]+$/;
 export const FOLLOWUP_ROUTE = /\/webhooks\/[^/]+\/[^/]+$/;

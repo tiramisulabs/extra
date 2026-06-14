@@ -80,6 +80,10 @@ export function registerWorldDefaults(
 		Routes.fetchOriginalResponse,
 		(_pending, params) => hooks.state.messageForToken(params.interactionToken) ?? {},
 	);
+	rest.intercept(
+		Routes.fetchWebhookMessage,
+		(_pending, params) => hooks.state.webhookMessage(params.interactionToken, params.messageId) ?? {},
+	);
 
 	rest.intercept(Routes.createDm, pending => {
 		const recipientId = String(bodyRecord(pending.body).recipient_id ?? '');
@@ -145,6 +149,13 @@ export function registerWorldDefaults(
 	);
 	rest.intercept(Routes.deleteOriginalResponse, (_pending, params) => {
 		hooks.state.deleteOriginalResponse(params.interactionToken);
+		return {};
+	});
+	rest.intercept(Routes.editWebhookMessage, (pending, params) =>
+		hooks.state.editWebhookMessage(params.interactionToken, params.messageId, bodyRecord(pending.body), hooks.botId),
+	);
+	rest.intercept(Routes.deleteWebhookMessage, (_pending, params) => {
+		hooks.state.deleteWebhookMessage(params.interactionToken, params.messageId);
 		return {};
 	});
 	rest.intercept(Routes.followup, (pending, params) =>

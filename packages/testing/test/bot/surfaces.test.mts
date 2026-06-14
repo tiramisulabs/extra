@@ -2,7 +2,9 @@ import {
 	Command,
 	type CommandContext,
 	createAttachmentOption,
+	createIntegerOption,
 	createMentionableOption,
+	createNumberOption,
 	Declare,
 	EntryPointCommand,
 	Label,
@@ -16,7 +18,7 @@ import { describe, expect, test, vi } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { TEST_USER_ID } from '../../src/bot/constants';
 import { attachmentOption, chatInputInteraction, mentionableOption } from '../../src/bot/interactions';
-import { apiAttachment, apiRole, apiUser } from '../../src/bot/payloads';
+import { apiAttachment, apiUser } from '../../src/bot/payloads';
 import { Routes } from '../../src/bot/routes';
 import { mockWorld } from '../../src/bot/world';
 
@@ -114,6 +116,21 @@ describe('additional command surfaces', () => {
 		}
 	}
 
+	const numericOptions = {
+		count: createIntegerOption({ description: 'Whole count', required: true, min_value: 1, max_value: 10 }),
+		ratio: createNumberOption({ description: 'Decimal ratio', required: true }),
+	};
+	const numericPayloads: unknown[] = [];
+
+	@Declare({ name: 'numeric-check', description: 'Checks numeric option encoding' })
+	@Options(numericOptions)
+	class NumericCheckCommand extends Command {
+		async run(ctx: CommandContext<typeof numericOptions>) {
+			numericPayloads.push(ctx.interaction.data.options);
+			await ctx.write({ content: `${ctx.options.count}:${ctx.options.ratio}` });
+		}
+	}
+
 	test('attachment options resolve through the real option resolver', async () => {
 		const bot = await createMockBot({ commands: [AttachmentCheckCommand] });
 		const result = await bot.slash({
@@ -126,7 +143,7 @@ describe('additional command surfaces', () => {
 
 	test('mentionable options resolve users and roles', async () => {
 		const user = apiUser({ id: 'mention-user' });
-		const role = apiRole({ id: 'mention-role', name: 'mod' });
+		const role = { id: 'mention-role', name: 'mod' };
 		const bot = await createMockBot({ commands: [MentionableCheckCommand] });
 
 		await expect(
@@ -142,10 +159,12 @@ describe('additional command surfaces', () => {
 		const payload = chatInputInteraction({
 			name: 'context-check',
 			context: 1,
+			guildLocale: 'es-ES',
 			integrationOwners: { '1': 'owner-user' },
 		});
 
 		expect(payload.context).toBe(1);
+		expect(payload.guild_locale).toBe('es-ES');
 		expect(payload.authorizing_integration_owners).toEqual({ '1': 'owner-user' });
 	});
 
@@ -241,6 +260,43 @@ describe('additional command surfaces', () => {
 			body: { content: 'side' },
 			params: { channelId: 'route-channel' },
 		});
+		await bot.close();
+	});
+
+	test('slash accepts array-form option inputs and preserves declared number option types', async () => {
+		numericPayloads.length = 0;
+		const bot = await createMockBot({ commands: [NumericCheckCommand] });
+		const result = await bot.slash({
+			name: 'numeric-check',
+			options: [
+				{ name: 'ratio', value: 1 },
+				{ name: 'count', value: 2 },
+			],
+		});
+
+		expect(result.content).toBe('2:1');
+		expect(numericPayloads[0]).toEqual([
+			{ name: 'ratio', type: 10, value: 1 },
+			{ name: 'count', type: 4, value: 2 },
+		]);
+		await bot.close();
+	});
+
+	test('slash can validate options before dispatching to Seyfert', async () => {
+		const bot = await createMockBot({ commands: [NumericCheckCommand], validateOptions: true });
+
+		expect(() => bot.slash({ name: 'numeric-check', options: { count: 11, ratio: 1 } })).toThrow(
+			/count.*greater than 10/i,
+		);
+		await bot.close();
+	});
+
+	test('slash throws for an unregistered subcommand target', async () => {
+		const bot = await createMockBot({ commands: [NumericCheckCommand] });
+
+		expect(() => bot.slash({ name: 'numeric-check', subcommand: 'missing', options: { count: 2, ratio: 1 } })).toThrow(
+			/subcommand "missing" is not registered/i,
+		);
 		await bot.close();
 	});
 });

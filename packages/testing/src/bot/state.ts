@@ -221,6 +221,12 @@ export class WorldState {
 		return channelId && messageId ? this.rawMessage(channelId, messageId) : undefined;
 	}
 
+	webhookMessage(token: string, messageId: string): Record<string, unknown> | undefined {
+		if (messageId === '@original') return this.messageForToken(token);
+		const channelId = this.channelIdByToken.get(token);
+		return channelId ? this.rawMessage(channelId, messageId) : undefined;
+	}
+
 	channelForToken(token: string): string | undefined {
 		return this.channelIdByToken.get(token);
 	}
@@ -374,6 +380,20 @@ export class WorldState {
 		return this.rawMessage(channelId, messageId) ?? {};
 	}
 
+	/** @internal Mock internals normally call this for webhook edits of any interaction message. */
+	editWebhookMessage(
+		token: string,
+		messageId: string,
+		raw: Record<string, unknown>,
+		authorId: string,
+	): Record<string, unknown> {
+		if (messageId === '@original') return this.upsertOriginalResponse(token, raw, authorId);
+		const channelId = this.channelIdByToken.get(token);
+		if (!channelId) return {};
+		this.editMessage(channelId, messageId, raw);
+		return this.rawMessage(channelId, messageId) ?? {};
+	}
+
 	/** @internal Mock internals normally call this for webhook followups. */
 	addFollowup(token: string, raw: Record<string, unknown>, authorId: string): Record<string, unknown> {
 		const channelId = this.channelIdByToken.get(token);
@@ -388,6 +408,16 @@ export class WorldState {
 		const messageId = this.messageIdByToken.get(token);
 		if (channelId && messageId) this.deleteMessage(channelId, messageId);
 		this.messageIdByToken.delete(token);
+	}
+
+	/** @internal Mock internals normally call this for webhook deletes of any interaction message. */
+	deleteWebhookMessage(token: string, messageId: string): void {
+		if (messageId === '@original') {
+			this.deleteOriginalResponse(token);
+			return;
+		}
+		const channelId = this.channelIdByToken.get(token);
+		if (channelId) this.deleteMessage(channelId, messageId);
 	}
 
 	private channelView(channel: ApiChannel): ChannelView {

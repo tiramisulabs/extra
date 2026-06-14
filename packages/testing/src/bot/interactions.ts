@@ -12,6 +12,7 @@ import {
 	apiChannel,
 	apiMember,
 	apiMessage,
+	apiRole,
 	apiUser,
 } from './payloads';
 import { ALL_PERMISSIONS, combineRolePermissions, type PermissionInput, permissionBits } from './permissions';
@@ -51,19 +52,25 @@ export interface EncodedOption {
 }
 
 export type OptionInput = string | number | boolean | EncodedOption;
+export interface NamedOptionInput {
+	name: string;
+	value: OptionInput;
+}
+export type OptionInputBag = Record<string, OptionInput> | readonly NamedOptionInput[];
 
 export function rawOption(type: number, value: string | number | boolean): EncodedOption {
 	return { __slipherOption: true, type, value };
 }
 
 export function userOption(user: ApiUser = apiUser(), member?: Omit<ApiMember, 'user'>): EncodedOption {
+	const memberPayload = member ? resolvedMember(member) : undefined;
 	return {
 		__slipherOption: true,
 		type: OptionType.User,
 		value: user.id,
 		resolved: {
 			users: { [user.id]: user },
-			...(member ? { members: { [user.id]: { permissions: DEFAULT_PERMISSIONS, ...member } } } : {}),
+			...(memberPayload ? { members: { [user.id]: memberPayload } } : {}),
 		},
 	};
 }
@@ -77,23 +84,49 @@ export function channelOption(channel: ApiChannel = apiChannel()): EncodedOption
 	};
 }
 
+function resolvedMember(member: Omit<ApiMember, 'user'> | ApiMember): Omit<ApiMember, 'user'> | ApiMember {
+	const raw = member as Partial<ApiMember> & Omit<ApiMember, 'user'>;
+	return {
+		...raw,
+		permissions: raw.permissions ?? DEFAULT_PERMISSIONS,
+	};
+}
+
+function resolvedRole(role: ApiRole | { id: string; name: string }): ApiRole {
+	const raw = role as Partial<ApiRole> & { id: string; name: string };
+	return {
+		...apiRole({ id: raw.id, name: raw.name, permissions: raw.permissions, position: raw.position }),
+		...raw,
+	};
+}
+
 export function roleOption(role: ApiRole | { id: string; name: string }): EncodedOption {
+	const rolePayload = resolvedRole(role);
 	return {
 		__slipherOption: true,
 		type: OptionType.Role,
-		value: role.id,
-		resolved: { roles: { [role.id]: role } },
+		value: rolePayload.id,
+		resolved: { roles: { [rolePayload.id]: rolePayload } },
 	};
 }
 
 /** A user or a role. Pass the entity object. */
 export function mentionableOption(entity: ApiUser | { id: string; name: string }): EncodedOption {
 	const isUser = 'username' in entity;
+	if (isUser) {
+		return {
+			__slipherOption: true,
+			type: OptionType.Mentionable,
+			value: entity.id,
+			resolved: { users: { [entity.id]: entity } },
+		};
+	}
+	const role = resolvedRole(entity);
 	return {
 		__slipherOption: true,
 		type: OptionType.Mentionable,
 		value: entity.id,
-		resolved: isUser ? { users: { [entity.id]: entity } } : { roles: { [entity.id]: entity } },
+		resolved: { roles: { [role.id]: role } },
 	};
 }
 
@@ -127,14 +160,21 @@ function isEncodedOption(value: OptionInput): value is EncodedOption {
 	return typeof value === 'object' && value !== null && '__slipherOption' in value;
 }
 
-function encodeOptions(options: Record<string, OptionInput>): {
+function optionEntries(options: OptionInputBag): [string, OptionInput][] {
+	return Array.isArray(options) ? options.map(option => [option.name, option.value]) : Object.entries(options);
+}
+
+function encodeOptions(
+	options: OptionInputBag,
+	optionTypes: Record<string, number | undefined> = {},
+): {
 	options: ApiCommandDataOption[];
 	resolved: ResolvedData;
 } {
 	const encoded: ApiCommandDataOption[] = [];
 	const resolved: ResolvedData = {};
 
-	for (const [name, value] of Object.entries(options)) {
+	for (const [name, value] of optionEntries(options)) {
 		if (isEncodedOption(value)) {
 			encoded.push({ name, type: value.type, value: value.value });
 			for (const key of ['users', 'members', 'channels', 'roles', 'attachments'] as const) {
@@ -144,10 +184,13 @@ function encodeOptions(options: Record<string, OptionInput>): {
 			continue;
 		}
 
+		const declaredType = optionTypes[name];
 		if (typeof value === 'string') {
 			encoded.push({ name, type: OptionType.String, value });
 		} else if (typeof value === 'boolean') {
 			encoded.push({ name, type: OptionType.Boolean, value });
+		} else if (declaredType === OptionType.Number || declaredType === OptionType.Integer) {
+			encoded.push({ name, type: declaredType, value });
 		} else if (Number.isInteger(value)) {
 			encoded.push({ name, type: OptionType.Integer, value });
 		} else {
@@ -165,6 +208,7 @@ export interface BaseInteractionOptions {
 	guildId?: string | null;
 	channel?: ApiChannel;
 	locale?: string;
+	guildLocale?: string;
 	applicationId?: string;
 	/** Bot/app permissions in the channel (app_permissions). Defaults to all. */
 	permissions?: PermissionInput;
@@ -181,7 +225,9 @@ export interface ChatInputInteractionOptions extends BaseInteractionOptions {
 	name: string;
 	group?: string;
 	subcommand?: string;
-	options?: Record<string, OptionInput>;
+	options?: OptionInputBag;
+	/** Declared Discord option types, usually supplied by MockBot from registered command metadata. */
+	optionTypes?: Record<string, number | undefined>;
 }
 
 export interface ApiInteractionPayload {
@@ -252,7 +298,7 @@ function baseInteraction(options: BaseInteractionOptions, type: number): ApiInte
 		version: 1,
 		attachment_size_limit: 26214400,
 		locale: options.locale ?? 'en-US',
-		...(dm ? {} : { guild_locale: 'en-US', guild_id: guildId }),
+		...(dm ? {} : { guild_locale: options.guildLocale ?? 'en-US', guild_id: guildId }),
 		channel,
 		channel_id: channel.id,
 		...(dm ? { user } : { member }),
@@ -266,7 +312,7 @@ function baseInteraction(options: BaseInteractionOptions, type: number): ApiInte
 
 export function chatInputInteraction(options: ChatInputInteractionOptions): ApiInteractionPayload {
 	const payload = baseInteraction(options, 2);
-	const { options: encoded, resolved } = encodeOptions(options.options ?? {});
+	const { options: encoded, resolved } = encodeOptions(options.options ?? {}, options.optionTypes);
 
 	let dataOptions = encoded;
 	if (options.subcommand) {
@@ -293,15 +339,22 @@ export interface AutocompleteInteractionOptions extends BaseInteractionOptions {
 	subcommand?: string;
 	focused: string;
 	value?: string | number;
-	options?: Record<string, OptionInput>;
+	options?: OptionInputBag;
+	optionTypes?: Record<string, number | undefined>;
 }
 
 export function autocompleteInteraction(options: AutocompleteInteractionOptions): ApiInteractionPayload {
 	const payload = baseInteraction(options, 4);
-	const { options: encoded, resolved } = encodeOptions(options.options ?? {});
+	const { options: encoded, resolved } = encodeOptions(options.options ?? {}, options.optionTypes);
+	const focusedType = options.optionTypes?.[options.focused];
 	const focusedOption = {
 		name: options.focused,
-		type: typeof options.value === 'number' ? OptionType.Integer : OptionType.String,
+		type:
+			focusedType === OptionType.Number || focusedType === OptionType.Integer
+				? focusedType
+				: typeof options.value === 'number'
+					? OptionType.Integer
+					: OptionType.String,
 		value: options.value ?? '',
 		focused: true,
 	};
@@ -327,17 +380,22 @@ export function autocompleteInteraction(options: AutocompleteInteractionOptions)
 export interface UserCommandInteractionOptions extends BaseInteractionOptions {
 	name: string;
 	target?: ApiUser;
+	targetMember?: Omit<ApiMember, 'user'> | ApiMember;
 }
 
 export function userCommandInteraction(options: UserCommandInteractionOptions): ApiInteractionPayload {
 	const payload = baseInteraction(options, 2);
 	const target = options.target ?? apiUser();
+	const targetMember = options.targetMember ? resolvedMember(options.targetMember) : undefined;
 	payload.data = {
 		id: mockId(),
 		name: options.name,
 		type: 2,
 		target_id: target.id,
-		resolved: { users: { [target.id]: target } },
+		resolved: {
+			users: { [target.id]: target },
+			...(targetMember ? { members: { [target.id]: targetMember } } : {}),
+		},
 	};
 	return payload;
 }

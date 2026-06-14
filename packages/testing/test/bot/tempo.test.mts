@@ -62,7 +62,8 @@ describe('actors and dispatch tempo', () => {
 	test('await alone runs the whole dispatch', async () => {
 		const bot = await createMockBot({ commands: [SlowBanCommand] });
 		const result = await bot.slash({ name: 'slowban' });
-		expect(result.content).toBe('banned');
+		expect(result.content).toBe('logged');
+		expect(result.messages).toMatchObject([{ content: 'banned' }, { content: 'logged' }]);
 		expect(result.followups).toMatchObject([{ content: 'logged' }]);
 		await bot.close();
 	});
@@ -77,7 +78,7 @@ describe('actors and dispatch tempo', () => {
 		expect(bot.call(Routes.ban)?.params).toMatchObject({ guildId: '1', userId: '42' });
 
 		const result = await dispatch;
-		expect(result.content).toBe('banned');
+		expect(result.content).toBe('logged');
 		await bot.close();
 	});
 
@@ -91,7 +92,7 @@ describe('actors and dispatch tempo', () => {
 		expect(log.body).toMatchObject({ content: 'logged' });
 
 		const result = await dispatch;
-		expect(result.content).toBe('banned');
+		expect(result.content).toBe('logged');
 		expect(result.followups).toMatchObject([{ content: 'logged' }]);
 		await bot.close();
 	});
