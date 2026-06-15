@@ -218,6 +218,20 @@ export function registerWorldDefaults(
 		await removeMember(params.guildId, params.userId, false);
 		return {};
 	});
+	rest.intercept(Routes.unban, (_pending, params) => {
+		hooks.state.unban(params.guildId, params.userId);
+		return {};
+	});
+	rest.intercept(Routes.fetchBans, (_pending, params) =>
+		hooks.state.bans(params.guildId).map(userId => ({
+			user: world?.users.find(user => user.id === userId) ?? apiUser({ id: userId }),
+		})),
+	);
+	rest.intercept(Routes.editChannel, (pending, params) => {
+		const updated = hooks.state.editChannel(params.channelId, bodyRecord(pending.body));
+		return updated ?? { ...apiChannel({ id: params.channelId }), ...bodyRecord(pending.body) };
+	});
+	rest.intercept(Routes.triggerTyping, () => ({}));
 	const interceptRoleMutation = (
 		route: RouteMatcher,
 		mutate: (member: ApiMember, roleId: string) => string[] | undefined,

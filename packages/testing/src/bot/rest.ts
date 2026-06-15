@@ -1,7 +1,7 @@
 import { ApiHandler } from 'seyfert';
 import type { ApiRequestOptions, HttpMethods } from 'seyfert/lib/api/shared';
 import { apiMessage } from './payloads';
-import { CHANNEL_MESSAGE_POST, WEBHOOK_EXECUTE_POST } from './routes';
+import { CHANNEL_MESSAGE_POST, Routes, WEBHOOK_EXECUTE_POST } from './routes';
 
 export interface RecordedAction {
 	seq: number;
@@ -112,6 +112,15 @@ function compileRoute(route: string): { pattern: RegExp; names: string[] } {
 	return { pattern: new RegExp(`^/${source}$`), names };
 }
 
+const MODELED_ROUTES: { method: HttpMethods; pattern: RegExp }[] = Object.values(Routes).map(route => ({
+	method: route.method,
+	pattern: compileRoute(route.route).pattern,
+}));
+
+function matchesModeledRoute(method: HttpMethods, route: string): boolean {
+	return MODELED_ROUTES.some(entry => entry.method === method && entry.pattern.test(route));
+}
+
 function definedBody(body: Record<string, unknown> | undefined): Record<string, unknown> {
 	if (!body) return {};
 	return Object.fromEntries(Object.entries(body).filter(([, value]) => value !== undefined));
@@ -196,12 +205,13 @@ export class MockApiHandler extends ApiHandler {
 	private reportUnhandled(pending: PendingAction): void {
 		if (this.unhandled === 'silent') return;
 		const message =
-			`[@slipher/testing] no interceptor or world entity matched GET ${pending.route} - ` +
+			`[@slipher/testing] no interceptor or world entity matched ${pending.method} ${pending.route} - ` +
 			`answered with a synthetic fallback. Seed the world, stub it with intercept(), ` +
 			`or pass onUnhandledRest: 'silent' to createMockBot.`;
 		if (this.unhandled === 'error') throw new Error(message);
-		if (this.warnedRoutes.has(pending.route)) return;
-		this.warnedRoutes.add(pending.route);
+		const key = `${pending.method} ${pending.route}`;
+		if (this.warnedRoutes.has(key)) return;
+		this.warnedRoutes.add(key);
 		console.warn(message);
 	}
 
@@ -475,6 +485,17 @@ export class MockApiHandler extends ApiHandler {
 			return interceptor.responder(pending, params);
 		}
 
+		// No interceptor handled a request that matches a modeled Route: surface the gap
+		// (respecting onUnhandledRest) instead of silently answering with a synthetic.
+		if (matchesModeledRoute(pending.method, pending.route)) {
+			this.reportUnhandled(pending);
+			return this.syntheticResponse(pending);
+		}
+
+		return this.syntheticResponse(pending);
+	}
+
+	private syntheticResponse(pending: PendingAction): unknown {
 		if (pending.method === 'GET') {
 			if (/\/(messages|bans|roles|channels|pins|invites|emojis|stickers|members)(\?|$)/.test(pending.route)) {
 				this.reportUnhandled(pending);

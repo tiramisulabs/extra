@@ -410,6 +410,27 @@ export class WorldState {
 		}
 	}
 
+	/** @internal Mock internals normally call this when Discord lifts a ban. */
+	unban(guildId: string, userId: string): void {
+		this.bansByGuild.get(guildId)?.delete(userId);
+	}
+
+	/** The user ids currently banned in a guild. */
+	bans(guildId: string): string[] {
+		return [...(this.bansByGuild.get(guildId) ?? new Set<string>())];
+	}
+
+	/** @internal Mock internals normally call this when Discord edits a channel. */
+	editChannel(channelId: string, patch: Record<string, unknown>): Record<string, unknown> | undefined {
+		const channel = this.world.channels.find(entry => entry.id === channelId);
+		if (!channel) return undefined;
+		if ('name' in patch) channel.name = stringValue(patch.name) ?? channel.name;
+		if ('type' in patch && numberValue(patch.type) !== undefined) channel.type = numberValue(patch.type)!;
+		if ('parent_id' in patch) channel.parent_id = stringValue(patch.parent_id);
+		if ('permission_overwrites' in patch) channel.permission_overwrites = normalizeOverwrites(patch.permission_overwrites);
+		return { ...channel };
+	}
+
 	/** @internal Mock internals normally call this when Discord rewrites member roles. */
 	setMemberRoles(guildId: string, userId: string, roles: string[]): void {
 		const entry = this.world.members.find(member => member.guildId === guildId && member.member.user.id === userId);

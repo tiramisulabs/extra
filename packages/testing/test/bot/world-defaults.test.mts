@@ -161,6 +161,90 @@ describe('stateful world defaults', () => {
 		await bot.close();
 	});
 
+	test('fetchBans lists banned members and unban clears them from the world', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'ban-list-guild' });
+		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'ban-list-actor' }) });
+		const target = world.registerMember(guild.id, { user: apiUser({ id: 'ban-list-target' }) });
+		const channel = world.registerChannel(guild.id);
+
+		@Declare({ name: 'ban-then-list', description: 'Bans the target then lists bans' })
+		class BanThenList extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.client.members.ban(ctx.guildId ?? '', target.user.id);
+				const bans = await ctx.client.bans.list(ctx.guildId ?? '', undefined, true);
+				await ctx.write({ content: bans.map(ban => ban.user.id).join(',') });
+			}
+		}
+
+		@Declare({ name: 'unban-then-list', description: 'Unbans the target then lists bans' })
+		class UnbanThenList extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.client.bans.remove(ctx.guildId ?? '', target.user.id);
+				const bans = await ctx.client.bans.list(ctx.guildId ?? '', undefined, true);
+				await ctx.write({ content: bans.length ? bans.map(ban => ban.user.id).join(',') : 'none' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [BanThenList, UnbanThenList], world });
+		await expect(
+			bot.slash({ name: 'ban-then-list', guildId: guild.id, channel, user: actor.user }),
+		).resolves.toMatchObject({ content: target.user.id });
+		expect(bot.cachedGuild(guild.id)?.bans).toContain(target.user.id);
+		await expect(
+			bot.slash({ name: 'unban-then-list', guildId: guild.id, channel, user: actor.user }),
+		).resolves.toMatchObject({ content: 'none' });
+		expect(bot.cachedGuild(guild.id)?.bans).not.toContain(target.user.id);
+		await bot.close();
+	});
+
+	test('editChannel patches the channel name in the world', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'edit-channel-guild' });
+		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'edit-channel-actor' }) });
+		const channel = world.registerChannel(guild.id, { name: 'before' });
+
+		@Declare({ name: 'rename-channel', description: 'Renames a channel' })
+		class RenameChannel extends Command {
+			async run(ctx: CommandContext) {
+				const updated = await ctx.client.channels.edit(channel.id, { name: 'after' }, { guildId: ctx.guildId });
+				await ctx.write({ content: 'name' in updated ? (updated.name ?? '') : '' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [RenameChannel], world });
+		await expect(
+			bot.slash({ name: 'rename-channel', guildId: guild.id, channel, user: actor.user }),
+		).resolves.toMatchObject({ content: 'after' });
+		expect(bot.cachedGuild(guild.id)?.channel(channel.id)?.name).toBe('after');
+		await bot.close();
+	});
+
+	test('an unhandled modeled route fails loud under onUnhandledRest: error', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'fail-loud-guild' });
+		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'fail-loud-actor' }) });
+		const channel = world.registerChannel(guild.id);
+
+		@Declare({ name: 'make-invite', description: 'Creates an invite' })
+		class MakeInvite extends Command {
+			async run(ctx: CommandContext) {
+				try {
+					await ctx.client.invites.channels.create({ channelId: channel.id });
+					await ctx.write({ content: 'created' });
+				} catch {
+					await ctx.write({ content: 'rejected' });
+				}
+			}
+		}
+
+		const bot = await createMockBot({ commands: [MakeInvite], world, onUnhandledRest: 'error' });
+		await expect(
+			bot.slash({ name: 'make-invite', guildId: guild.id, channel, user: actor.user }),
+		).resolves.toMatchObject({ content: 'rejected' });
+		await bot.close();
+	});
+
 	test('world-backed user fetches return seeded and synthetic users', async () => {
 		@Declare({ name: 'fetch-users', description: 'Fetches users through REST' })
 		class FetchUsers extends Command {
