@@ -75,7 +75,7 @@ importers:
         specifier: ^2.18.1
         version: 2.18.1(vite@7.3.1(@types/node@25.0.10))
       seyfert:
-        specifier: github:tiramisulabs/seyfert#c6a5e3051c09fabe09f95a6ca9bf056476b7c091
+        specifier: github:tiramisulabs/seyfert#socram/plugin-contract-polish-spike
         version: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/c6a5e3051c09fabe09f95a6ca9bf056476b7c091
       typescript:
         specifier: ^5.9.3
