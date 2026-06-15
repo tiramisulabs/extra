@@ -1,4 +1,4 @@
-import { mockId } from '../id';
+import { mockId, mockTimestamp } from '../id';
 import type { ChannelOverwriteLike } from './permissions';
 
 export interface ApiUserOptions {
@@ -161,7 +161,7 @@ export function apiMember(options: ApiMemberOptions = {}): ApiMember {
 		user: options.user ?? apiUser(),
 		nick: options.nick ?? null,
 		roles: options.roles ?? [],
-		joined_at: options.joinedAt ?? new Date(0).toISOString(),
+		joined_at: options.joinedAt ?? mockTimestamp(),
 		deaf: false,
 		mute: false,
 		flags: 0,
@@ -250,7 +250,7 @@ export function apiMessage(options: ApiMessageOptions = {}): ApiMessage {
 		...(options.guildId === undefined ? {} : { guild_id: options.guildId }),
 		author: options.author ?? apiUser(),
 		content: options.content ?? '',
-		timestamp: new Date(0).toISOString(),
+		timestamp: mockTimestamp(),
 		edited_timestamp: null,
 		tts: false,
 		mention_everyone: false,

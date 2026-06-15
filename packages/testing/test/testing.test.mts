@@ -77,7 +77,7 @@ describe('entity factories', () => {
 
 		resetMockIds(' 42 ');
 
-		assert.equal(mockUser().id, '42');
+		assert.equal(mockUser().id, '661720242761760810');
 	});
 });
 

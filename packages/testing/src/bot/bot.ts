@@ -18,6 +18,7 @@ import {
 	InteractionResponseType,
 	InteractionType,
 } from 'seyfert/lib/types';
+import { resetMockIds } from '../id';
 import { TEST_APPLICATION_ID, TEST_BOT_ID, TEST_CHANNEL_ID, TEST_GUILD_ID, TEST_USER_ID } from './constants';
 import { registerWorldDefaults } from './defaults';
 import { MockGateway } from './gateway';
@@ -1421,6 +1422,7 @@ export class MockBot {
 }
 
 export async function createMockBot(options: MockBotOptions = {}): Promise<MockBot> {
+	resetMockIds();
 	const rest = new MockApiHandler({ onUnhandledRest: options.onUnhandledRest });
 	const built =
 		options.world && typeof (options.world as WorldBuilder).build === 'function'
