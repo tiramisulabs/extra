@@ -455,6 +455,45 @@ export interface MockBotOptions {
 	langsDir?: string;
 }
 
+type WorldEventMutator = (state: WorldState, d: Record<string, unknown>) => void;
+
+const WORLD_EVENT_MUTATORS: Record<string, WorldEventMutator> = {
+	GUILD_MEMBER_ADD: (state, d) => {
+		const guildId = typeof d.guild_id === 'string' ? d.guild_id : undefined;
+		if (guildId) state.addMember(guildId, d);
+	},
+	GUILD_MEMBER_REMOVE: (state, d) => {
+		const guildId = typeof d.guild_id === 'string' ? d.guild_id : undefined;
+		const user = d.user as { id?: string } | undefined;
+		if (guildId && user?.id) state.removeMember(guildId, user.id, false);
+	},
+	GUILD_MEMBER_UPDATE: (state, d) => {
+		const guildId = typeof d.guild_id === 'string' ? d.guild_id : undefined;
+		const user = d.user as { id?: string } | undefined;
+		if (guildId && user?.id) {
+			state.patchMember(guildId, user.id, {
+				...('nick' in d ? { nick: d.nick as string | null } : {}),
+				...(Array.isArray(d.roles) ? { roles: d.roles.map(String) } : {}),
+				...('communication_disabled_until' in d
+					? { communication_disabled_until: d.communication_disabled_until as string | null }
+					: {}),
+			});
+		}
+	},
+	CHANNEL_CREATE: (state, d) => state.addChannel(typeof d.guild_id === 'string' ? d.guild_id : undefined, d),
+	CHANNEL_DELETE: (state, d) => {
+		if (typeof d.id === 'string') state.removeChannel(d.id);
+	},
+	MESSAGE_CREATE: (state, d) => {
+		if (typeof d.channel_id === 'string') state.addMessage(d.channel_id, d);
+	},
+	MESSAGE_DELETE: (state, d) => {
+		if (typeof d.channel_id === 'string' && typeof d.id === 'string') state.deleteMessage(d.channel_id, d.id);
+	},
+};
+
+export const WORLD_EVENT_NAMES = Object.keys(WORLD_EVENT_MUTATORS) as readonly string[];
+
 export class MockBot {
 	readonly defaultUser: ApiUser = apiUser({ id: TEST_USER_ID, username: 'slipher-tester' });
 	private readonly unregisteredMemberWarnings = new Set<string>();
@@ -1430,39 +1469,7 @@ export class MockBot {
 	}
 
 	private applyWorldEvent(name: string, d: Record<string, unknown>): void {
-		const guildId = typeof d.guild_id === 'string' ? d.guild_id : undefined;
-		const user = d.user as { id?: string } | undefined;
-		switch (name) {
-			case 'GUILD_MEMBER_ADD':
-				if (guildId) this.state.addMember(guildId, d);
-				return;
-			case 'GUILD_MEMBER_REMOVE':
-				if (guildId && user?.id) this.state.removeMember(guildId, user.id, false);
-				return;
-			case 'GUILD_MEMBER_UPDATE':
-				if (guildId && user?.id) {
-					this.state.patchMember(guildId, user.id, {
-						...('nick' in d ? { nick: d.nick as string | null } : {}),
-						...(Array.isArray(d.roles) ? { roles: d.roles.map(String) } : {}),
-						...('communication_disabled_until' in d
-							? { communication_disabled_until: d.communication_disabled_until as string | null }
-							: {}),
-					});
-				}
-				return;
-			case 'CHANNEL_CREATE':
-				this.state.addChannel(guildId, d);
-				return;
-			case 'CHANNEL_DELETE':
-				if (typeof d.id === 'string') this.state.removeChannel(d.id);
-				return;
-			case 'MESSAGE_CREATE':
-				if (typeof d.channel_id === 'string') this.state.addMessage(d.channel_id, d);
-				return;
-			case 'MESSAGE_DELETE':
-				if (typeof d.channel_id === 'string' && typeof d.id === 'string') this.state.deleteMessage(d.channel_id, d.id);
-				return;
-		}
+		WORLD_EVENT_MUTATORS[name]?.(this.state, d);
 	}
 
 	reset(): void {

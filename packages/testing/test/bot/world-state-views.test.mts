@@ -1,7 +1,7 @@
 import { Command, type CommandContext, Declare } from 'seyfert';
 import { ChannelType } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
-import { createMockBot } from '../../src/bot/bot';
+import { createMockBot, WORLD_EVENT_NAMES } from '../../src/bot/bot';
 import { apiMember, apiUser } from '../../src/bot/payloads';
 import { mockWorld } from '../../src/bot/world';
 
@@ -228,5 +228,19 @@ describe('emitEvent bridges into world views', () => {
 		expect(bot.cachedMember(guild.id, 'cached-target')?.roles).toContain('cached-role');
 		expect(bot.cachedMember(guild.id, 'absent')).toBeUndefined();
 		await bot.close();
+	});
+
+	test('WORLD_EVENT_NAMES exposes the bridged event set', () => {
+		expect([...WORLD_EVENT_NAMES].sort()).toEqual(
+			[
+				'CHANNEL_CREATE',
+				'CHANNEL_DELETE',
+				'GUILD_MEMBER_ADD',
+				'GUILD_MEMBER_REMOVE',
+				'GUILD_MEMBER_UPDATE',
+				'MESSAGE_CREATE',
+				'MESSAGE_DELETE',
+			].sort(),
+		);
 	});
 });
