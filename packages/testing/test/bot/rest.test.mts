@@ -29,10 +29,10 @@ describe('MockApiHandler', () => {
 			reason: 'cleanup',
 		});
 		expect(
-			rest.calls({ method: 'POST', route: /\/channels\/123\/messages$/, body: { content: 'hello' } }),
+			rest.findCalls({ method: 'POST', route: /\/channels\/123\/messages$/, body: { content: 'hello' } }),
 		).toHaveLength(1);
 		expect(
-			rest.calls(Routes.createMessage, {
+			rest.findCalls(Routes.createMessage, {
 				params: { channelId: '123' },
 				body: { content: 'hello' },
 				query: { wait: true },
@@ -40,7 +40,7 @@ describe('MockApiHandler', () => {
 			}),
 		).toHaveLength(1);
 		expect(
-			rest.calls({
+			rest.findCalls({
 				method: 'POST',
 				route: '/channels/:channelId/messages',
 				params: { channelId: '123' },
@@ -90,8 +90,8 @@ describe('MockApiHandler', () => {
 		await expect(byError).resolves.toMatchObject({ error: expect.any(Error) });
 		expect(rest.actions[0]?.error).toBeInstanceOf(Error);
 		expect(
-			rest.calls({ method: 'GET', route: '/explode', error: (error: unknown) => error instanceof Error }),
+			rest.findCalls({ method: 'GET', route: '/explode', error: (error: unknown) => error instanceof Error }),
 		).toHaveLength(1);
-		expect(rest.calls({ method: 'GET', route: '/explode', error: 'stub failed' })).toHaveLength(1);
+		expect(rest.findCalls({ method: 'GET', route: '/explode', error: 'stub failed' })).toHaveLength(1);
 	});
 });

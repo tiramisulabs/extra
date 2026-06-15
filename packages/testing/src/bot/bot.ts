@@ -872,27 +872,27 @@ export class MockBot {
 		return this.rest.waitForAction(matcherOrPredicate, timeoutMs);
 	}
 
-	calls(matcher: RouteMatcher | ActionPredicate, params?: Record<string, string>): MatchedAction[];
-	calls(matcher: RouteMatcher, filter: RouteActionFilter): MatchedAction[];
-	calls(matcher: ActionFilter | ActionPredicate): MatchedAction[];
-	calls(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction[];
-	calls(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction[] {
-		return this.rest.calls(matcher, paramsOrFilter);
+	findCalls(matcher: RouteMatcher | ActionPredicate, params?: Record<string, string>): MatchedAction[];
+	findCalls(matcher: RouteMatcher, filter: RouteActionFilter): MatchedAction[];
+	findCalls(matcher: ActionFilter | ActionPredicate): MatchedAction[];
+	findCalls(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction[];
+	findCalls(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction[] {
+		return this.rest.findCalls(matcher, paramsOrFilter);
 	}
 
-	call(matcher: RouteMatcher | ActionPredicate, params?: Record<string, string>): MatchedAction | undefined;
-	call(matcher: RouteMatcher, filter: RouteActionFilter): MatchedAction | undefined;
-	call(matcher: ActionFilter | ActionPredicate): MatchedAction | undefined;
-	call(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction | undefined;
-	call(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction | undefined {
-		return this.rest.call(matcher, paramsOrFilter);
+	findCall(matcher: RouteMatcher | ActionPredicate, params?: Record<string, string>): MatchedAction | undefined;
+	findCall(matcher: RouteMatcher, filter: RouteActionFilter): MatchedAction | undefined;
+	findCall(matcher: ActionFilter | ActionPredicate): MatchedAction | undefined;
+	findCall(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction | undefined;
+	findCall(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction | undefined {
+		return this.rest.findCall(matcher, paramsOrFilter);
 	}
 
 	clearActions(): void {
 		this.rest.clearActions();
 	}
 
-	guild(guildId: string): GuildView | undefined {
+	cachedGuild(guildId: string): GuildView | undefined {
 		return this.state.guild(guildId);
 	}
 
@@ -901,7 +901,7 @@ export class MockBot {
 		return this.world?.members.find(entry => entry.guildId === guildId && entry.member.user.id === userId)?.member;
 	}
 
-	dm(userId: string): ChannelView | undefined {
+	cachedDm(userId: string): ChannelView | undefined {
 		return this.state.dm(userId);
 	}
 

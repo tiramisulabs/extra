@@ -238,7 +238,7 @@ describe('additional command surfaces', () => {
 		const bot = await createMockBot({ commands: [CloneBanCommand], world });
 		await bot.slash({ name: 'clone-ban', guildId: guild.id, channel, user: actor.user });
 
-		expect(bot.guild(guild.id)?.member('clone-target')).toBeUndefined();
+		expect(bot.cachedGuild(guild.id)?.member('clone-target')).toBeUndefined();
 		expect(world.build().members.some(entry => entry.member.user.id === 'clone-target')).toBe(true);
 		await bot.close();
 	});
@@ -249,7 +249,7 @@ describe('additional command surfaces', () => {
 
 		const result = await bot.slash({ name: 'route-fetch-guild', guildId: '9' });
 		expect(result.content).toBe('Stubbed');
-		expect(bot.call(Routes.fetchGuild)?.params).toMatchObject({ guildId: '9' });
+		expect(bot.findCall(Routes.fetchGuild)?.params).toMatchObject({ guildId: '9' });
 		await bot.close();
 	});
 

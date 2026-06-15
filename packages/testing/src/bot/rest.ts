@@ -283,11 +283,11 @@ export class MockApiHandler extends ApiHandler {
 		return this.matchParams({ method: filter.method ?? action.method, route: filter.route }, action) ?? {};
 	}
 
-	calls(matcher: RouteMatcher | ActionPredicate, params?: Record<string, string>): MatchedAction[];
-	calls(matcher: RouteMatcher, filter: RouteActionFilter): MatchedAction[];
-	calls(matcher: ActionFilter | ActionPredicate): MatchedAction[];
-	calls(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction[];
-	calls(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction[] {
+	findCalls(matcher: RouteMatcher | ActionPredicate, params?: Record<string, string>): MatchedAction[];
+	findCalls(matcher: RouteMatcher, filter: RouteActionFilter): MatchedAction[];
+	findCalls(matcher: ActionFilter | ActionPredicate): MatchedAction[];
+	findCalls(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction[];
+	findCalls(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction[] {
 		const out: MatchedAction[] = [];
 		for (const action of this.actions) {
 			if (typeof matcher === 'function') {
@@ -309,12 +309,12 @@ export class MockApiHandler extends ApiHandler {
 		return out;
 	}
 
-	call(matcher: RouteMatcher | ActionPredicate, params?: Record<string, string>): MatchedAction | undefined;
-	call(matcher: RouteMatcher, filter: RouteActionFilter): MatchedAction | undefined;
-	call(matcher: ActionFilter | ActionPredicate): MatchedAction | undefined;
-	call(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction | undefined;
-	call(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction | undefined {
-		return this.calls(matcher, paramsOrFilter)[0];
+	findCall(matcher: RouteMatcher | ActionPredicate, params?: Record<string, string>): MatchedAction | undefined;
+	findCall(matcher: RouteMatcher, filter: RouteActionFilter): MatchedAction | undefined;
+	findCall(matcher: ActionFilter | ActionPredicate): MatchedAction | undefined;
+	findCall(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction | undefined;
+	findCall(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction | undefined {
+		return this.findCalls(matcher, paramsOrFilter)[0];
 	}
 
 	waitForAction(matcher: RouteMatcher | ActionFilter, timeoutMs?: number): Promise<MatchedAction>;

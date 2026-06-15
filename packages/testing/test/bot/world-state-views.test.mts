@@ -43,7 +43,7 @@ describe('world state views', () => {
 
 		const bot = await createMockBot({ commands: [BuildCampaign], world });
 		await bot.slash({ name: 'build-campaign', guildId: guild.id, channel: dispatchChannel, user: actor.user });
-		const channel = bot.guild(guild.id)?.channel('acme-s1');
+		const channel = bot.cachedGuild(guild.id)?.channel('acme-s1');
 		expect(channel?.lastMessage?.content).toContain('Welcome Acme S1');
 		expect(channel?.lastMessage?.buttons).toMatchObject([{ customId: 'approve', label: 'Approve' }]);
 		expect(channel?.lastMessage?.embeds[0]).toMatchObject({
@@ -74,10 +74,10 @@ describe('world state views', () => {
 
 		const bot = await createMockBot({ commands: [ReplyState], world });
 		await bot.slash({ name: 'reply-state', guildId: guild.id, channel, user: actor.user });
-		const messages = bot.guild(guild.id)?.channel(channel.id)?.messages;
+		const messages = bot.cachedGuild(guild.id)?.channel(channel.id)?.messages;
 		expect(messages?.map(message => message.content)).toEqual(['edited', 'followup']);
 		expect(messages?.[0]?.id).toBe(fetchedOriginalId);
-		expect(bot.dm(actor.user.id)?.lastMessage?.content).toBe('dm hi');
+		expect(bot.cachedDm(actor.user.id)?.lastMessage?.content).toBe('dm hi');
 		await bot.close();
 	});
 
@@ -103,9 +103,9 @@ describe('world state views', () => {
 		const bot = await createMockBot({ commands: [FetchHistory], world });
 		const result = await bot.slash({ name: 'fetch-history', guildId: guild.id, channel: second, user: actor.user });
 		expect(result.content).toBe('new-message,old-message');
-		expect(bot.guild(guild.id)?.channel('dupe')?.id).toBe(first.id);
-		expect(bot.guild(guild.id)?.bans).toEqual([]);
-		expect(bot.guild(guild.id)).not.toBe(bot.guild(guild.id));
+		expect(bot.cachedGuild(guild.id)?.channel('dupe')?.id).toBe(first.id);
+		expect(bot.cachedGuild(guild.id)?.bans).toEqual([]);
+		expect(bot.cachedGuild(guild.id)).not.toBe(bot.cachedGuild(guild.id));
 		await bot.close();
 	});
 
@@ -134,7 +134,7 @@ describe('world state views', () => {
 		expect(followupId).toBeDefined();
 		expect(
 			bot
-				.guild(guild.id)
+				.cachedGuild(guild.id)
 				?.channel(channel.id)
 				?.messages.map(message => message.content),
 		).toEqual(['original edited']);
@@ -152,7 +152,7 @@ describe('emitEvent bridges into world views', () => {
 			guild_id: guild.id,
 			...apiMember({ user: apiUser({ id: 'joiner' }), roles: ['r1'] }),
 		});
-		expect(bot.guild(guild.id)?.member('joiner')?.roles).toEqual(['r1']);
+		expect(bot.cachedGuild(guild.id)?.member('joiner')?.roles).toEqual(['r1']);
 
 		await bot.emitEvent('GUILD_MEMBER_UPDATE', {
 			guild_id: guild.id,
@@ -160,12 +160,12 @@ describe('emitEvent bridges into world views', () => {
 			roles: ['r1', 'r2'],
 			nick: 'Joey',
 		});
-		expect(bot.guild(guild.id)?.member('joiner')?.roles).toEqual(['r1', 'r2']);
-		expect(bot.guild(guild.id)?.member('joiner')?.nick).toBe('Joey');
+		expect(bot.cachedGuild(guild.id)?.member('joiner')?.roles).toEqual(['r1', 'r2']);
+		expect(bot.cachedGuild(guild.id)?.member('joiner')?.nick).toBe('Joey');
 
 		await bot.emitEvent('GUILD_MEMBER_REMOVE', { guild_id: guild.id, user: apiUser({ id: 'joiner' }) });
-		expect(bot.guild(guild.id)?.member('joiner')).toBeUndefined();
-		expect(bot.guild(guild.id)?.bans).toEqual([]);
+		expect(bot.cachedGuild(guild.id)?.member('joiner')).toBeUndefined();
+		expect(bot.cachedGuild(guild.id)?.bans).toEqual([]);
 		expect(bot.cachedMember(guild.id, 'joiner')).toBeUndefined();
 		await bot.close();
 	});
@@ -176,16 +176,16 @@ describe('emitEvent bridges into world views', () => {
 		const bot = await createMockBot({ world });
 
 		await bot.emitEvent('CHANNEL_CREATE', { id: 'c1', guild_id: guild.id, name: 'new-chan', type: 0 });
-		expect(bot.guild(guild.id)?.channel('new-chan')?.id).toBe('c1');
+		expect(bot.cachedGuild(guild.id)?.channel('new-chan')?.id).toBe('c1');
 
 		await bot.emitEvent('MESSAGE_CREATE', { id: 'm1', channel_id: 'c1', author: apiUser({ id: 'u1' }), content: 'hi' });
-		expect(bot.guild(guild.id)?.channel('c1')?.lastMessage?.content).toBe('hi');
+		expect(bot.cachedGuild(guild.id)?.channel('c1')?.lastMessage?.content).toBe('hi');
 
 		await bot.emitEvent('MESSAGE_DELETE', { id: 'm1', channel_id: 'c1' });
-		expect(bot.guild(guild.id)?.channel('c1')?.messages).toEqual([]);
+		expect(bot.cachedGuild(guild.id)?.channel('c1')?.messages).toEqual([]);
 
 		await bot.emitEvent('CHANNEL_DELETE', { id: 'c1', guild_id: guild.id });
-		expect(bot.guild(guild.id)?.channel('new-chan')).toBeUndefined();
+		expect(bot.cachedGuild(guild.id)?.channel('new-chan')).toBeUndefined();
 		await bot.close();
 	});
 
@@ -200,7 +200,7 @@ describe('emitEvent bridges into world views', () => {
 			{ updateCache: false },
 		);
 
-		expect(bot.guild(guild.id)?.member('ghost')).toBeUndefined();
+		expect(bot.cachedGuild(guild.id)?.member('ghost')).toBeUndefined();
 		await bot.close();
 	});
 

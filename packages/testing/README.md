@@ -543,7 +543,7 @@ error classes should test that real parse path separately.
 Recorded actions prove calls happened. World state proves what the bot built:
 
 ```ts
-const channel = bot.guild(guild.id)?.channel('acme-s1');
+const channel = bot.cachedGuild(guild.id)?.channel('acme-s1');
 
 expect(channel?.lastMessage?.content).toContain('Welcome');
 expect(channel?.lastMessage?.button('Approve')).toMatchObject({ customId: 'approve' });
@@ -558,7 +558,7 @@ channels/threads, messages, interaction replies, edits, followups, DMs, bans,
 role changes, timeouts, and channel overwrites. DMs are queryable by user:
 
 ```ts
-expect(bot.dm(user.id)?.lastMessage?.content).toBe('Check your inbox');
+expect(bot.cachedDm(user.id)?.lastMessage?.content).toBe('Check your inbox');
 ```
 
 Seed message history with `registerMessage`; `bot.client.channels.fetchMessages()`

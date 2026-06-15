@@ -91,8 +91,8 @@ describe('stateful world defaults', () => {
 		).resolves.toMatchObject({
 			content: 'banned',
 		});
-		expect(bot.guild(guild.id)?.member(target.user.id)).toBeUndefined();
-		expect(bot.guild(guild.id)?.bans).toContain(target.user.id);
+		expect(bot.cachedGuild(guild.id)?.member(target.user.id)).toBeUndefined();
+		expect(bot.cachedGuild(guild.id)?.bans).toContain(target.user.id);
 		await expect(Promise.resolve(bot.client.cache.members?.get(target.user.id, guild.id))).resolves.toBeUndefined();
 		await expect(
 			bot.slash({ name: 'fetch-banned', guildId: guild.id, channel, user: actor.user }),
@@ -134,8 +134,8 @@ describe('stateful world defaults', () => {
 		const bot = await createMockBot({ commands: [MutateMember], events: [onUpdate], world, simulateGateway: false });
 		const result = await bot.slash({ name: 'mutate-member', guildId: guild.id, channel, user: actor.user });
 		expect(result.content).toBe(`${role.id}:${timeoutAt}`);
-		expect(bot.guild(guild.id)?.member(target.user.id)?.roles).toEqual([role.id]);
-		expect(bot.guild(guild.id)?.member(target.user.id)?.communicationDisabledUntil).toBe(timeoutAt);
+		expect(bot.cachedGuild(guild.id)?.member(target.user.id)?.roles).toEqual([role.id]);
+		expect(bot.cachedGuild(guild.id)?.member(target.user.id)?.communicationDisabledUntil).toBe(timeoutAt);
 		expect(updates).toEqual([]);
 		await bot.close();
 	});
@@ -157,7 +157,7 @@ describe('stateful world defaults', () => {
 		bot.rest.intercept(Routes.ban, () => apiError(403, 50013, 'Missing Permissions'));
 		const result = await bot.slash({ name: 'catch-rest-error' });
 		expect(result.content).toBe('no permission');
-		expect(bot.call(Routes.ban)).toMatchObject({ method: 'PUT' });
+		expect(bot.findCall(Routes.ban)).toMatchObject({ method: 'PUT' });
 		await bot.close();
 	});
 

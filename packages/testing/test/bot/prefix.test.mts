@@ -38,7 +38,7 @@ describe('message (prefix) commands', () => {
 	test('non-matching prefix does nothing', async () => {
 		const bot = await createMockBot({ commands: [EchoCommand], prefixes: ['!'] });
 		await bot.say('?echo -text hello');
-		expect(bot.calls(Routes.createMessage)).toHaveLength(0);
+		expect(bot.findCalls(Routes.createMessage)).toHaveLength(0);
 		await bot.close();
 	});
 
@@ -57,7 +57,7 @@ describe('message (prefix) commands', () => {
 		const result = await bot.say('!guild-echo -text hello', { guildId });
 		expect(result.content).toBe('guild: hello');
 		await bot.say('!guild-echo -text nope', { guildId: 'other-guild' });
-		expect(bot.calls(Routes.createMessage)).toHaveLength(1);
+		expect(bot.findCalls(Routes.createMessage)).toHaveLength(1);
 		await bot.close();
 	});
 
