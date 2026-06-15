@@ -964,6 +964,25 @@ export class MockBot {
 		return undefined;
 	}
 
+	/**
+	 * Wait until the mock REST surface stops changing: the recorded-action count must hold steady across a
+	 * macrotask AND no request may be in flight. This replaces a fixed single-tick guess so a denial guard whose
+	 * reply needs multiple async hops (or whose REST responder awaits) still records before the dispatch settles.
+	 * Bounded by `timeoutMs` so a guard that genuinely never replies cannot hang the dispatch.
+	 */
+	private async drainUntilQuiescent(aborted: () => boolean, timeoutMs = 2000): Promise<void> {
+		const deadline = Date.now() + timeoutMs;
+		let lastCount = -1;
+		while (!aborted()) {
+			const count = this.rest.actions.length;
+			const quiet = count === lastCount && !this.rest.hasPendingRequests();
+			if (quiet) return;
+			lastCount = count;
+			if (Date.now() > deadline) return;
+			await new Promise<void>(resolve => setImmediate(resolve));
+		}
+	}
+
 	private async runInteraction(payload: ApiInteractionPayload): Promise<DispatchResult> {
 		const startSeq = this.rest.actions.length;
 		const replies: CapturedReply[] = [];
@@ -1042,8 +1061,10 @@ export class MockBot {
 					Promise.resolve(result).then(
 						() => {
 							if (progressed) return;
-							// Let any in-flight editOrReply callback flush before declaring the chain dead.
-							setImmediate(() => {
+							// The middleware denied (replied + returned without next/stop/pass). Its reply may still be
+							// recording through async REST hops, so don't settle after a single tick. Drain until the
+							// REST surface is quiescent: action count stable across a tick AND no in-flight requests.
+							void this.drainUntilQuiescent(() => progressed).then(() => {
 								if (!progressed) resolveDenial?.();
 							});
 						},

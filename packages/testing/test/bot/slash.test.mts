@@ -16,7 +16,10 @@ import {
 	GuardedCommand,
 	guardCalls,
 	InventoryCommand,
+	SLOW_DENIER_CHANNEL_ID,
 	SlowCommand,
+	SlowDeniedCommand,
+	slowDenierCalls,
 	testMiddlewares,
 } from './_setup';
 
@@ -152,6 +155,27 @@ describe('createMockBot', () => {
 		// Without the denial settle this dispatch would hang forever (the middleware chain never resolves).
 		const result = await bot.slash({ name: 'denied' });
 		expect(denierCalls).toEqual(['denier']);
+		expect(deniedBodyRan).toEqual([]);
+		expect(result.content).toBe('denied');
+		await bot.close();
+	});
+
+	test('captures the reply when a guard denies after a slow multi-tick REST hop', async () => {
+		slowDenierCalls.length = 0;
+		deniedBodyRan.length = 0;
+		const bot = await createMockBot({
+			commands: [SlowDeniedCommand],
+			middlewares: testMiddlewares,
+		});
+		// The guard awaits a slow channel fetch before replying, so the denial reply's callback request only lands
+		// several macrotasks after the middleware promise settles. A single-tick denial settle would finalize the
+		// dispatch first and drop the reply; the REST-quiescence drain keeps waiting until the surface is quiet.
+		bot.rest.intercept('GET', `/channels/${SLOW_DENIER_CHANNEL_ID}`, async () => {
+			for (let i = 0; i < 5; i++) await new Promise<void>(resolve => setImmediate(resolve));
+			return { id: SLOW_DENIER_CHANNEL_ID, type: 0 };
+		});
+		const result = await bot.slash({ name: 'slow-denied' });
+		expect(slowDenierCalls).toEqual(['slowDenier']);
 		expect(deniedBodyRan).toEqual([]);
 		expect(result.content).toBe('denied');
 		await bot.close();

@@ -106,7 +106,24 @@ export const denier = createMiddleware<void>(middle => {
 	middle.context.editOrReply({ content: 'denied' });
 });
 
-export const testMiddlewares = { blocker, denier, globalCounter, guard };
+export const slowDenierCalls: string[] = [];
+/** Channel the slowDenier guard fetches before replying; the test stubs that GET with a slow responder. */
+export const SLOW_DENIER_CHANNEL_ID = 'slow-denier-channel';
+// Realistic guard: deny without next/stop/pass. It kicks off a slow REST lookup (a channel fetch) and only
+// replies once that resolves, returning synchronously so the chain is never progressed and the middleware
+// promise settles immediately. The lookup stays in flight across several macrotasks; the denial reply's
+// callback request lands only after it. A fixed single-tick denial settle would finalize the dispatch between
+// the two and drop the reply. The REST-quiescence drain keeps waiting while a request is in flight.
+export const slowDenier = createMiddleware<void>(middle => {
+	slowDenierCalls.push('slowDenier');
+	const ctx = middle.context as {
+		client: { channels: { fetch(id: string): Promise<unknown> } };
+		editOrReply(body: { content: string }): Promise<unknown>;
+	};
+	void ctx.client.channels.fetch(SLOW_DENIER_CHANNEL_ID).then(() => ctx.editOrReply({ content: 'denied' }));
+});
+
+export const testMiddlewares = { blocker, denier, globalCounter, guard, slowDenier };
 
 declare module 'seyfert' {
 	interface SeyfertRegistry {
@@ -127,6 +144,15 @@ export const deniedBodyRan: string[] = [];
 @Declare({ name: 'denied', description: 'Denied command' })
 @Middlewares(['denier'])
 export class DeniedCommand extends Command {
+	async run(ctx: CommandContext) {
+		deniedBodyRan.push('run');
+		await ctx.write({ content: 'should not run' });
+	}
+}
+
+@Declare({ name: 'slow-denied', description: 'Denied by a multi-hop async guard' })
+@Middlewares(['slowDenier'])
+export class SlowDeniedCommand extends Command {
 	async run(ctx: CommandContext) {
 		deniedBodyRan.push('run');
 		await ctx.write({ content: 'should not run' });

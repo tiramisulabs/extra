@@ -193,6 +193,7 @@ export class MockApiHandler extends ApiHandler {
 	private defaultInterceptors: Interceptor[] = [];
 	private gates: RequestGate[] = [];
 	private seq = 0;
+	private inFlight = 0;
 	private readonly unhandled: 'warn' | 'error' | 'silent';
 	private readonly routeCache = new Map<string, { pattern: RegExp; names: string[] }>();
 	private readonly warnedRoutes = new Set<string>();
@@ -452,25 +453,39 @@ export class MockApiHandler extends ApiHandler {
 		};
 		const action: RecordedAction = { seq: this.seq++, ...pending, response: undefined };
 		this.actions.push(action);
+		this.inFlight++;
 		this.notifyListeners(action, 'pending');
 
-		for (const entry of [...this.gates]) {
-			if (entry.test(action)) {
-				this.gates = this.gates.filter(other => other !== entry);
-				await entry.hold();
-			}
-		}
-
 		try {
-			const response = await this.resolveResponse(pending);
-			action.response = response;
-			this.notifyListeners(action, 'settled');
-			return response as T;
-		} catch (error) {
-			action.error = error;
-			this.notifyListeners(action, 'settled');
-			throw error;
+			for (const entry of [...this.gates]) {
+				if (entry.test(action)) {
+					this.gates = this.gates.filter(other => other !== entry);
+					await entry.hold();
+				}
+			}
+
+			try {
+				const response = await this.resolveResponse(pending);
+				action.response = response;
+				this.notifyListeners(action, 'settled');
+				return response as T;
+			} catch (error) {
+				action.error = error;
+				this.notifyListeners(action, 'settled');
+				throw error;
+			}
+		} finally {
+			this.inFlight--;
 		}
+	}
+
+	/** Number of REST requests currently between request() entry and settlement (includes gated/parked requests). */
+	pendingRequestCount(): number {
+		return this.inFlight;
+	}
+
+	hasPendingRequests(): boolean {
+		return this.inFlight > 0;
 	}
 
 	private resolveResponse(pending: PendingAction): unknown {
