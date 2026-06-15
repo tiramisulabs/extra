@@ -1,5 +1,5 @@
 import { type ApiMember, apiChannel, apiGuild, apiMember, apiMessage, apiUser } from './payloads';
-import { apiError, type MockApiHandler } from './rest';
+import { apiError, type MockApiHandler, type RouteMatcher, type RouteResponder } from './rest';
 import { Routes } from './routes';
 import type { WorldState } from './state';
 import type { MockWorld } from './world';
@@ -15,6 +15,15 @@ interface WorldDefaultHooks {
 
 function bodyRecord(body: Record<string, unknown> | undefined): Record<string, unknown> {
 	return body ?? {};
+}
+
+function interceptFetchOne<T>(
+	rest: MockApiHandler,
+	route: RouteMatcher,
+	find: (params: Record<string, string>) => T | undefined,
+	fallback: (params: Record<string, string>) => T,
+): void {
+	rest.intercept(route, (_pending, params) => find(params) ?? fallback(params));
 }
 
 // Synthesized channel webhooks encode their channel into the id, so an execute
@@ -55,14 +64,17 @@ export function registerWorldDefaults(
 		}
 	};
 
-	rest.intercept(
+	interceptFetchOne(
+		rest,
 		Routes.fetchGuild,
-		(_pending, params) => world?.guilds.find(guild => guild.id === params.guildId) ?? apiGuild({ id: params.guildId }),
+		params => world?.guilds.find(guild => guild.id === params.guildId),
+		params => apiGuild({ id: params.guildId }),
 	);
-	rest.intercept(
+	interceptFetchOne(
+		rest,
 		Routes.fetchChannel,
-		(_pending, params) =>
-			world?.channels.find(channel => channel.id === params.channelId) ?? apiChannel({ id: params.channelId }),
+		params => world?.channels.find(channel => channel.id === params.channelId),
+		params => apiChannel({ id: params.channelId }),
 	);
 	rest.intercept(Routes.fetchMember, (_pending, params) => {
 		if (removed.has(key(params.guildId, params.userId))) {
@@ -71,9 +83,11 @@ export function registerWorldDefaults(
 		const entry = findMember(params.guildId, params.userId);
 		return entry?.member ?? apiMember({ user: apiUser({ id: params.userId }) });
 	});
-	rest.intercept(
+	interceptFetchOne(
+		rest,
 		Routes.fetchUser,
-		(_pending, params) => world?.users.find(user => user.id === params.userId) ?? apiUser({ id: params.userId }),
+		params => world?.users.find(user => user.id === params.userId),
+		params => apiUser({ id: params.userId }),
 	);
 	rest.intercept(
 		Routes.fetchRoles,
@@ -130,22 +144,15 @@ export function registerWorldDefaults(
 	rest.intercept(Routes.createChannel, (pending, params) =>
 		hooks.state.addChannel(params.guildId, { ...bodyRecord(pending.body), guild_id: params.guildId }),
 	);
-	rest.intercept(Routes.createThread, (pending, params) =>
+	const threadResponder: RouteResponder = (pending, params) =>
 		hooks.state.addChannel(undefined, {
 			...bodyRecord(pending.body),
 			parent_id: params.channelId,
 			guild_id: world?.channels.find(channel => channel.id === params.channelId)?.guild_id,
 			type: bodyRecord(pending.body).type ?? 11,
-		}),
-	);
-	rest.intercept(Routes.startThreadFromMessage, (pending, params) =>
-		hooks.state.addChannel(undefined, {
-			...bodyRecord(pending.body),
-			parent_id: params.channelId,
-			guild_id: world?.channels.find(channel => channel.id === params.channelId)?.guild_id,
-			type: bodyRecord(pending.body).type ?? 11,
-		}),
-	);
+		});
+	rest.intercept(Routes.createThread, threadResponder);
+	rest.intercept(Routes.startThreadFromMessage, threadResponder);
 	rest.intercept(Routes.deleteChannel, (_pending, params) => {
 		const existing = world?.channels.find(channel => channel.id === params.channelId);
 		hooks.state.removeChannel(params.channelId);
@@ -211,24 +218,24 @@ export function registerWorldDefaults(
 		await removeMember(params.guildId, params.userId, false);
 		return {};
 	});
-	rest.intercept(Routes.addRole, async (_pending, params) => {
-		const entry = findMember(params.guildId, params.userId);
-		if (entry && !entry.member.roles.includes(params.roleId)) {
-			entry.member.roles.push(params.roleId);
-			hooks.state.setMemberRoles(params.guildId, params.userId, entry.member.roles);
-			await emitMemberUpdate(params.guildId, entry.member);
-		}
-		return {};
-	});
-	rest.intercept(Routes.removeRole, async (_pending, params) => {
-		const entry = findMember(params.guildId, params.userId);
-		if (entry) {
-			entry.member.roles = entry.member.roles.filter(role => role !== params.roleId);
-			hooks.state.setMemberRoles(params.guildId, params.userId, entry.member.roles);
-			await emitMemberUpdate(params.guildId, entry.member);
-		}
-		return {};
-	});
+	const interceptRoleMutation = (
+		route: RouteMatcher,
+		mutate: (member: ApiMember, roleId: string) => string[] | undefined,
+	) =>
+		rest.intercept(route, async (_pending, params) => {
+			const entry = findMember(params.guildId, params.userId);
+			const roles = entry && mutate(entry.member, params.roleId);
+			if (entry && roles) {
+				entry.member.roles = roles;
+				hooks.state.setMemberRoles(params.guildId, params.userId, roles);
+				await emitMemberUpdate(params.guildId, entry.member);
+			}
+			return {};
+		});
+	interceptRoleMutation(Routes.addRole, (member, roleId) =>
+		member.roles.includes(roleId) ? undefined : [...member.roles, roleId],
+	);
+	interceptRoleMutation(Routes.removeRole, (member, roleId) => member.roles.filter(role => role !== roleId));
 	rest.intercept(Routes.editMember, async (pending, params) => {
 		const entry = findMember(params.guildId, params.userId);
 		if (!entry) return apiMember({ user: apiUser({ id: params.userId }) });
