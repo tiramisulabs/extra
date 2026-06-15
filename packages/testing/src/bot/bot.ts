@@ -215,29 +215,33 @@ export interface DispatchMessageOptions {
 	channel?: ApiChannel;
 }
 
-export interface SayResult {
-	/** REST actions scoped to this prefix message dispatch. */
+export interface MessageResultBase {
 	actions: RecordedAction[];
-	/** Message-create REST bodies emitted by the command. */
 	messages: OutgoingMessage[];
-	/** Last message content, when the command wrote a message. */
+	embeds: unknown[];
+	embed?: unknown;
+	files: unknown[];
 	content?: string;
 }
 
+export interface SayResult extends MessageResultBase {}
+
 /** Result of emitEvent: REST the event handler produced, derived from channel-message writes. */
-export interface EventDispatchResult {
-	/** REST actions scoped to this event emit. */
-	actions: RecordedAction[];
-	/** Channel-message REST bodies the event handler wrote. */
-	messages: OutgoingMessage[];
-	/** Embeds flattened from `messages`, in order. */
-	embeds: unknown[];
-	/** First embed, for one-embed assertions. */
-	embed?: unknown;
-	/** Files flattened from `messages`. */
-	files: unknown[];
-	/** Last message content the event produced. */
-	content?: string;
+export interface EventDispatchResult extends MessageResultBase {}
+
+function messageParts(actions: RecordedAction[], messages: OutgoingMessage[]): MessageResultBase {
+	const embeds = messages.flatMap(message => message.embeds ?? []);
+	const files = messages.flatMap(message => message.files ?? []);
+	return {
+		actions,
+		messages,
+		embeds,
+		files,
+		content: messages.at(-1)?.content,
+		get embed() {
+			return embeds[0];
+		},
+	};
 }
 
 /** Identity and location bound to an Actor for repeated multi-step flows. */
@@ -1386,7 +1390,7 @@ export class MockBot {
 				const messages = actions
 					.filter(isOutgoingMessagePost)
 					.map(action => (action.body ?? {}) as OutgoingMessage);
-				return { actions, messages, content: messages.at(-1)?.content };
+				return messageParts(actions, messages);
 			}),
 		);
 	}
@@ -1452,18 +1456,7 @@ export class MockBot {
 				const messages = actions
 					.filter(isOutgoingMessagePost)
 					.map(action => (action.body ?? {}) as OutgoingMessage);
-				const embeds = messages.flatMap(message => message.embeds ?? []);
-				const files = messages.flatMap(message => message.files ?? []);
-				return {
-					actions,
-					messages,
-					embeds,
-					files,
-					content: messages.at(-1)?.content,
-					get embed() {
-						return embeds[0];
-					},
-				};
+				return messageParts(actions, messages);
 			}),
 		);
 	}
