@@ -28,6 +28,7 @@ export const Routes = {
 	editWebhookMessage: { method: 'PATCH', route: '/webhooks/:applicationId/:interactionToken/messages/:messageId' },
 	deleteWebhookMessage: { method: 'DELETE', route: '/webhooks/:applicationId/:interactionToken/messages/:messageId' },
 	followup: { method: 'POST', route: '/webhooks/:applicationId/:interactionToken' },
+	interactionCallback: { method: 'POST', route: '/interactions/:id/:token/callback' },
 	fetchMessages: { method: 'GET', route: '/channels/:channelId/messages' },
 	fetchRoles: { method: 'GET', route: '/guilds/:guildId/roles' },
 	fetchChannels: { method: 'GET', route: '/guilds/:guildId/channels' },

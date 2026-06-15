@@ -403,17 +403,28 @@ export function userCommandInteraction(options: UserCommandInteractionOptions): 
 export interface MessageCommandInteractionOptions extends BaseInteractionOptions {
 	name: string;
 	target?: ApiMessage;
+	/** The target message author's guild member, populated into resolved.members. */
+	targetMember?: Omit<ApiMember, 'user'> | ApiMember;
 }
 
 export function messageCommandInteraction(options: MessageCommandInteractionOptions): ApiInteractionPayload {
 	const payload = baseInteraction(options, 2);
-	const target = options.target ?? apiMessage({ channelId: payload.channel_id });
+	const target =
+		options.target ??
+		apiMessage({
+			channelId: payload.channel_id,
+			...(payload.guild_id === undefined ? {} : { guildId: payload.guild_id }),
+		});
+	const targetMember = options.targetMember ? resolvedMember(options.targetMember) : undefined;
 	payload.data = {
 		id: mockId(),
 		name: options.name,
 		type: 3,
 		target_id: target.id,
-		resolved: { messages: { [target.id]: target } },
+		resolved: {
+			messages: { [target.id]: target },
+			...(targetMember ? { members: { [target.author.id]: targetMember } } : {}),
+		},
 	};
 	return payload;
 }

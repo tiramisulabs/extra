@@ -6,6 +6,7 @@ import {
 	type ApiRole,
 	type ApiUser,
 	apiChannel,
+	apiMember,
 	apiMessage,
 	apiRole,
 	apiUser,
@@ -310,6 +311,25 @@ export class WorldState {
 		for (const [token, id] of this.messageIdByToken) {
 			if (id === messageId) this.messageIdByToken.delete(token);
 		}
+	}
+
+	/** @internal Mock internals normally call this when Discord adds a member. Idempotent (replace-or-push). */
+	addMember(guildId: string, raw: Record<string, unknown>): void {
+		const rawUser = asRecord(raw.user);
+		const userId = stringValue(rawUser.id);
+		if (!userId) return;
+		const disabledUntil = stringValue(raw.communication_disabled_until);
+		const member = apiMember({
+			user: { ...apiUser({ id: userId }), ...rawUser } as ApiUser,
+			roles: arrayValue(raw.roles).map(String),
+			nick: stringValue(raw.nick) ?? null,
+			...(disabledUntil === undefined ? {} : { communicationDisabledUntil: disabledUntil }),
+		});
+		const existing = this.world.members.find(
+			entry => entry.guildId === guildId && entry.member.user.id === userId,
+		);
+		if (existing) existing.member = member;
+		else this.world.members.push({ guildId, member });
 	}
 
 	/** @internal Mock internals normally call this when Discord removes a member. */

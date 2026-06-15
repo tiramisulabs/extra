@@ -48,6 +48,7 @@ import {
 	type ApiChannel,
 	type ApiMember,
 	type ApiMemberOptions,
+	type ApiMessage,
 	type ApiUser,
 	apiMember,
 	apiMessage,
@@ -180,6 +181,24 @@ export interface DispatchResult {
 	content?: string;
 	/** Command leaf that handled the dispatch (chat input & context menus); undefined for components/modals. */
 	command?: { name: string; group?: string; subcommand?: string };
+	/** Resolved context-menu target; undefined for non-menu dispatches. */
+	target?: {
+		id: string;
+		kind: 'user' | 'message';
+		user?: ApiUser;
+		member?: ApiMember;
+		message?: ApiMessage;
+	};
+}
+
+/** userMenu/menu(UserCommand) result: `target` is always present, so no optional chaining is needed. */
+export interface UserMenuResult extends DispatchResult {
+	target: { id: string; kind: 'user'; user: ApiUser; member?: ApiMember };
+}
+
+/** messageMenu/menu(MessageCommand) result: `target` is always present, so no optional chaining is needed. */
+export interface MessageMenuResult extends DispatchResult {
+	target: { id: string; kind: 'message'; message: ApiMessage; member?: ApiMember };
 }
 
 /**
@@ -204,6 +223,22 @@ export interface SayResult {
 	content?: string;
 }
 
+/** Result of emitEvent: REST the event handler produced, derived from channel-message writes. */
+export interface EventDispatchResult {
+	/** REST actions scoped to this event emit. */
+	actions: RecordedAction[];
+	/** Channel-message REST bodies the event handler wrote. */
+	messages: OutgoingMessage[];
+	/** Embeds flattened from `messages`, in order. */
+	embeds: unknown[];
+	/** First embed, for one-embed assertions. */
+	embed?: unknown;
+	/** Files flattened from `messages`. */
+	files: unknown[];
+	/** Last message content the event produced. */
+	content?: string;
+}
+
 /** Identity and location bound to an Actor for repeated multi-step flows. */
 export interface ActorOptions {
 	user?: ApiUser;
@@ -220,8 +255,9 @@ export interface ActorOptions {
 export interface Actor {
 	slash(options: ChatInputInteractionOptions): Dispatch<DispatchResult>;
 	autocomplete(options: AutocompleteInteractionOptions): Dispatch<AutocompleteResult>;
-	userMenu(options: UserCommandInteractionOptions): Dispatch<DispatchResult>;
-	messageMenu(options: MessageCommandInteractionOptions): Dispatch<DispatchResult>;
+	userMenu(options: UserCommandInteractionOptions): Dispatch<UserMenuResult>;
+	messageMenu(options: MessageCommandInteractionOptions): Dispatch<MessageMenuResult>;
+	menu<C extends MenuCommandClass>(command: C, options?: MenuOptions<C>): Dispatch<MenuResultFor<C>>;
 	entryPoint(options?: EntryPointInteractionOptions): Dispatch<DispatchResult>;
 	fillModal(
 		customId: string,
@@ -235,6 +271,12 @@ export interface Actor {
 		options?: Parameters<MockBot['selectMenu']>[2],
 	): Dispatch<DispatchResult>;
 	say(content: string, options?: DispatchMessageOptions): Dispatch<SayResult>;
+	emitEvent<TName extends GatewayDispatchPayload['t']>(
+		name: TName,
+		payload?: Partial<Extract<GatewayDispatchPayload, { t: TName }>['d']>,
+		options?: { updateCache?: boolean },
+	): Dispatch<EventDispatchResult>;
+	emitEvent(name: string, payload?: object, options?: { updateCache?: boolean }): Dispatch<EventDispatchResult>;
 }
 
 /** Autocomplete dispatch result with the responded choices lifted out semantically. */
@@ -329,6 +371,29 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 }
 
 export type MockCommandClass = new () => Command | ContextMenuCommand | EntryPointCommand;
+
+export type MenuCommandClass = new () => ContextMenuCommand;
+
+/** Resolves a menu command class to its target type: User menus take an ApiUser, Message menus an ApiMessage. */
+export type TargetFor<C extends MenuCommandClass> = InstanceType<C> extends { type: infer T }
+	? [T] extends [ApplicationCommandType.User]
+		? ApiUser
+		: [T] extends [ApplicationCommandType.Message]
+			? ApiMessage
+			: ApiUser | ApiMessage
+	: ApiUser | ApiMessage;
+
+export type MenuOptions<C extends MenuCommandClass> = Omit<
+	UserCommandInteractionOptions & MessageCommandInteractionOptions,
+	'name' | 'target'
+> & { target?: TargetFor<C> };
+
+/** Resolves a menu command class to its dispatch result, so `result.target` is correctly typed and non-optional. */
+export type MenuResultFor<C extends MenuCommandClass> = TargetFor<C> extends ApiUser
+	? UserMenuResult
+	: TargetFor<C> extends ApiMessage
+		? MessageMenuResult
+		: DispatchResult;
 export type MockEvent = Omit<ClientEvent, 'data'> & {
 	data: Omit<ClientEvent['data'], 'once'> & { once?: boolean };
 };
@@ -833,6 +898,11 @@ export class MockBot {
 		return this.state.guild(guildId);
 	}
 
+	/** The current world member for a guild/user, or undefined when absent (e.g. after a kick). */
+	cachedMember(guildId: string, userId: string): ApiMember | undefined {
+		return this.world?.members.find(entry => entry.guildId === guildId && entry.member.user.id === userId)?.member;
+	}
+
 	dm(userId: string): ChannelView | undefined {
 		return this.state.dm(userId);
 	}
@@ -843,23 +913,20 @@ export class MockBot {
 		return this.track(new Dispatch(this.rest, this.client, userId, () => this.runInteraction(payload)));
 	}
 
-	private materializeInteractionResponse(
-		payload: ApiInteractionPayload,
-		body: APIInteractionResponse,
-	): Record<string, unknown> | undefined {
-		const data = 'data' in body ? ((body.data ?? {}) as Record<string, unknown>) : {};
+	private materializeInteractionResponse(payload: ApiInteractionPayload, body: APIInteractionResponse): void {
 		if (body.type === 4) {
-			const message = this.state.addOriginalResponse(payload.token, payload.channel_id, data, this.client.botId);
-			const id = typeof message.id === 'string' ? message.id : undefined;
+			// The callback interceptor already materialized the original; point lastInteractionMessage at it
+			// so a collector created on the immediate reply (with no explicit source) resolves to the same id.
+			const original = this.state.messageForToken(payload.token);
+			const id = typeof original?.id === 'string' ? original.id : undefined;
 			if (id) this.lastInteractionMessage = { id, channel_id: payload.channel_id };
-			return message;
+			return;
 		}
 		if (body.type === 7 && payload.message) {
+			const data = 'data' in body ? ((body.data ?? {}) as Record<string, unknown>) : {};
 			this.state.editMessage(payload.message.channel_id, payload.message.id, data);
 			this.lastInteractionMessage = { id: payload.message.id, channel_id: payload.message.channel_id };
-			return this.state.rawMessage(payload.message.channel_id, payload.message.id);
 		}
-		return undefined;
 	}
 
 	private commandLeaf(payload: ApiInteractionPayload): DispatchResult['command'] {
@@ -884,6 +951,26 @@ export class MockBot {
 			subcommand = first.name;
 		}
 		return { name: data.name, ...(group ? { group } : {}), ...(subcommand ? { subcommand } : {}) };
+	}
+
+	private commandTarget(payload: ApiInteractionPayload): DispatchResult['target'] {
+		const data = payload.data;
+		const targetId = data.target_id;
+		if (!targetId) return undefined;
+		const resolved = data.resolved;
+		if (data.type === 2) {
+			const user = resolved?.users?.[targetId] as ApiUser | undefined;
+			const member = resolved?.members?.[targetId] as ApiMember | undefined;
+			return { id: targetId, kind: 'user', ...(user ? { user } : {}), ...(member ? { member } : {}) };
+		}
+		if (data.type === 3) {
+			const message = resolved?.messages?.[targetId] as ApiMessage | undefined;
+			const member = message
+				? (resolved?.members?.[message.author.id] as ApiMember | undefined)
+				: undefined;
+			return { id: targetId, kind: 'message', ...(message ? { message } : {}), ...(member ? { member } : {}) };
+		}
+		return undefined;
 	}
 
 	private async runInteraction(payload: ApiInteractionPayload): Promise<DispatchResult> {
@@ -982,14 +1069,10 @@ export class MockBot {
 		// The builders preserve Discord's payload shape while exposing a wider test input type.
 		try {
 			await Promise.race([
-				this.client.handleCommand.interaction(payload as unknown as APIInteraction, -1, async reply => {
-					replies.push(reply);
-					const message = this.materializeInteractionResponse(payload, reply.body);
-					// Honor seyfert's with_response contract: an immediate editOrReply(body, true) resolves to the
-					// materialized original message, mirroring the gateway callback response (a real gateway bot
-					// gets resource.message back). Without this the immediate reply returns undefined.
-					return reply.withResponse && message ? { resource: { type: reply.body.type, message } } : undefined;
-				}),
+				// No __reply callback: seyfert takes its gateway reply branch and posts the interaction callback
+				// through the mock REST (intercepted in defaults), so it returns a real message for with_response
+				// exactly like a gateway bot. Replies are captured from that recorded callback action below.
+				this.client.handleCommand.interaction(payload as unknown as APIInteraction, -1),
 				denialSettled,
 			]);
 		} finally {
@@ -1062,6 +1145,7 @@ export class MockBot {
 		const embeds = messages.flatMap(message => message.embeds ?? []);
 		const files = messages.flatMap(message => message.files ?? []);
 		const command = this.commandLeaf(payload);
+		const target = this.commandTarget(payload);
 
 		return {
 			replies,
@@ -1072,6 +1156,7 @@ export class MockBot {
 			files,
 			actions,
 			command,
+			target,
 			get reply() {
 				return replies[0];
 			},
@@ -1143,20 +1228,38 @@ export class MockBot {
 		);
 	}
 
-	userMenu(options: UserCommandInteractionOptions): Dispatch<DispatchResult> {
+	userMenu(options: UserCommandInteractionOptions): Dispatch<UserMenuResult> {
 		this.assertOpen('userMenu');
 		this.assertCommandRegistered(options.name, ApplicationCommandType.User, 'userMenu');
 		const prepared = this.applyWorldPermissions({ user: this.defaultUser, ...options });
 		const targetMember = options.targetMember ?? this.worldMemberFor(prepared.guildId, prepared.target);
-		return this.dispatchInteraction(userCommandInteraction({ ...prepared, ...(targetMember ? { targetMember } : {}) }));
+		return this.dispatchInteraction(
+			userCommandInteraction({ ...prepared, ...(targetMember ? { targetMember } : {}) }),
+		) as Dispatch<UserMenuResult>;
 	}
 
-	messageMenu(options: MessageCommandInteractionOptions): Dispatch<DispatchResult> {
+	messageMenu(options: MessageCommandInteractionOptions): Dispatch<MessageMenuResult> {
 		this.assertOpen('messageMenu');
 		this.assertCommandRegistered(options.name, ApplicationCommandType.Message, 'messageMenu');
+		const prepared = this.applyWorldPermissions({ user: this.defaultUser, ...options });
+		const targetMember = options.targetMember ?? this.worldMemberFor(prepared.guildId, prepared.target?.author);
 		return this.dispatchInteraction(
-			messageCommandInteraction(this.applyWorldPermissions({ user: this.defaultUser, ...options })),
-		);
+			messageCommandInteraction({ ...prepared, ...(targetMember ? { targetMember } : {}) }),
+		) as Dispatch<MessageMenuResult>;
+	}
+
+	menu<C extends MenuCommandClass>(command: C, options: MenuOptions<C> = {}): Dispatch<MenuResultFor<C>> {
+		const instance = new command();
+		if (instance.type === ApplicationCommandType.User) {
+			return this.userMenu({
+				...options,
+				name: instance.name,
+			} as UserCommandInteractionOptions) as Dispatch<MenuResultFor<C>>;
+		}
+		return this.messageMenu({
+			...(options as MessageCommandInteractionOptions),
+			name: instance.name,
+		}) as Dispatch<MenuResultFor<C>>;
 	}
 
 	entryPoint(options: EntryPointInteractionOptions = {}): Dispatch<DispatchResult> {
@@ -1262,29 +1365,101 @@ export class MockBot {
 			autocomplete: options => this.autocomplete({ ...base, ...options }),
 			userMenu: options => this.userMenu({ ...base, ...options }),
 			messageMenu: options => this.messageMenu({ ...base, ...options }),
+			menu: (command, options) => this.menu(command, { ...base, ...options } as MenuOptions<typeof command>),
 			entryPoint: options => this.entryPoint({ ...base, ...options }),
 			fillModal: (customId, fields, options = {}) => this.fillModal(customId, fields, { ...base, ...options }),
 			clickButton: (customId, options = {}) => this.clickButton(customId, { ...base, ...options }),
 			selectMenu: (customId, values, options = {}) => this.selectMenu(customId, values, { ...base, ...options }),
 			say: (content, options = {}) => this.say(content, { ...base, ...options }),
+			emitEvent: (name: string, payload: Record<string, unknown> = {}, options?: { updateCache?: boolean }) => {
+				const merged: Record<string, unknown> = {
+					...(guildId ? { guild_id: guildId } : {}),
+					...(user ? { user } : {}),
+					...payload,
+				};
+				return this.emitEvent(name as GatewayDispatchPayload['t'], merged, options);
+			},
 		};
 	}
 
-	async emitEvent<TName extends GatewayDispatchPayload['t']>(
+	emitEvent<TName extends GatewayDispatchPayload['t']>(
 		name: TName,
-		payload: Partial<Extract<GatewayDispatchPayload, { t: TName }>['d']> & Record<string, unknown>,
+		payload: Partial<Extract<GatewayDispatchPayload, { t: TName }>['d']>,
 		options?: { updateCache?: boolean },
-	): Promise<void>;
-	async emitEvent(name: string, payload: Record<string, unknown>, options?: { updateCache?: boolean }): Promise<void>;
-	async emitEvent(name: string, payload: Record<string, unknown>, { updateCache = true } = {}): Promise<void> {
+	): Dispatch<EventDispatchResult>;
+	emitEvent(name: string, payload: object, options?: { updateCache?: boolean }): Dispatch<EventDispatchResult>;
+	emitEvent(
+		name: string,
+		payload: object,
+		{ updateCache = true }: { updateCache?: boolean } = {},
+	): Dispatch<EventDispatchResult> {
 		this.assertOpen('emitEvent');
-		await this.client.events.runEvent(
-			name as Parameters<Client['events']['runEvent']>[0],
-			this.client,
-			payload,
-			-1,
-			updateCache,
+		const d = payload as Record<string, unknown>;
+		return this.track(
+			new Dispatch<EventDispatchResult>(this.rest, this.client, undefined, async () => {
+				if (updateCache) this.applyWorldEvent(name, d);
+				const startSeq = this.rest.actions.length;
+				await this.client.events.runEvent(
+					name as Parameters<Client['events']['runEvent']>[0],
+					this.client,
+					d,
+					-1,
+					updateCache,
+				);
+				const actions = this.rest.actions.slice(startSeq);
+				const messages = actions
+					.filter(action => action.method === 'POST' && /\/channels\/[^/]+\/messages$/.test(action.route))
+					.map(action => (action.body ?? {}) as OutgoingMessage);
+				const embeds = messages.flatMap(message => message.embeds ?? []);
+				const files = messages.flatMap(message => message.files ?? []);
+				return {
+					actions,
+					messages,
+					embeds,
+					files,
+					content: messages.at(-1)?.content,
+					get embed() {
+						return embeds[0];
+					},
+				};
+			}),
 		);
+	}
+
+	private applyWorldEvent(name: string, d: Record<string, unknown>): void {
+		const guildId = typeof d.guild_id === 'string' ? d.guild_id : undefined;
+		const user = d.user as { id?: string } | undefined;
+		switch (name) {
+			case 'GUILD_MEMBER_ADD':
+				if (guildId) this.state.addMember(guildId, d);
+				return;
+			case 'GUILD_MEMBER_REMOVE':
+				if (guildId && user?.id) this.state.removeMember(guildId, user.id, false);
+				return;
+			case 'GUILD_MEMBER_UPDATE':
+				if (guildId && user?.id) {
+					this.state.patchMember(guildId, user.id, {
+						...('nick' in d ? { nick: d.nick as string | null } : {}),
+						...(Array.isArray(d.roles) ? { roles: d.roles.map(String) } : {}),
+						...('communication_disabled_until' in d
+							? { communication_disabled_until: d.communication_disabled_until as string | null }
+							: {}),
+					});
+				}
+				return;
+			case 'CHANNEL_CREATE':
+				this.state.addChannel(guildId, d);
+				return;
+			case 'CHANNEL_DELETE':
+				if (typeof d.id === 'string') this.state.removeChannel(d.id);
+				return;
+			case 'MESSAGE_CREATE':
+				if (typeof d.channel_id === 'string') this.state.addMessage(d.channel_id, d);
+				return;
+			case 'MESSAGE_DELETE':
+				if (typeof d.channel_id === 'string' && typeof d.id === 'string') this.state.deleteMessage(d.channel_id, d.id);
+				return;
+		}
 	}
 
 	reset(): void {

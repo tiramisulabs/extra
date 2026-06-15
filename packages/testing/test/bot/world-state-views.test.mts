@@ -2,7 +2,7 @@ import { Command, type CommandContext, Declare } from 'seyfert';
 import { ChannelType } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
-import { apiUser } from '../../src/bot/payloads';
+import { apiMember, apiUser } from '../../src/bot/payloads';
 import { mockWorld } from '../../src/bot/world';
 
 const englishLang = { greeting: 'Hello!' };
@@ -138,6 +138,95 @@ describe('world state views', () => {
 				?.channel(channel.id)
 				?.messages.map(message => message.content),
 		).toEqual(['original edited']);
+		await bot.close();
+	});
+});
+
+describe('emitEvent bridges into world views', () => {
+	test('member add, update, and remove flow through guild views', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'bridge-guild' });
+		const bot = await createMockBot({ world });
+
+		await bot.emitEvent('GUILD_MEMBER_ADD', {
+			guild_id: guild.id,
+			...apiMember({ user: apiUser({ id: 'joiner' }), roles: ['r1'] }),
+		});
+		expect(bot.guild(guild.id)?.member('joiner')?.roles).toEqual(['r1']);
+
+		await bot.emitEvent('GUILD_MEMBER_UPDATE', {
+			guild_id: guild.id,
+			user: apiUser({ id: 'joiner' }),
+			roles: ['r1', 'r2'],
+			nick: 'Joey',
+		});
+		expect(bot.guild(guild.id)?.member('joiner')?.roles).toEqual(['r1', 'r2']);
+		expect(bot.guild(guild.id)?.member('joiner')?.nick).toBe('Joey');
+
+		await bot.emitEvent('GUILD_MEMBER_REMOVE', { guild_id: guild.id, user: apiUser({ id: 'joiner' }) });
+		expect(bot.guild(guild.id)?.member('joiner')).toBeUndefined();
+		expect(bot.guild(guild.id)?.bans).toEqual([]);
+		expect(bot.cachedMember(guild.id, 'joiner')).toBeUndefined();
+		await bot.close();
+	});
+
+	test('channel and message events flow through views', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'cm-guild' });
+		const bot = await createMockBot({ world });
+
+		await bot.emitEvent('CHANNEL_CREATE', { id: 'c1', guild_id: guild.id, name: 'new-chan', type: 0 });
+		expect(bot.guild(guild.id)?.channel('new-chan')?.id).toBe('c1');
+
+		await bot.emitEvent('MESSAGE_CREATE', { id: 'm1', channel_id: 'c1', author: apiUser({ id: 'u1' }), content: 'hi' });
+		expect(bot.guild(guild.id)?.channel('c1')?.lastMessage?.content).toBe('hi');
+
+		await bot.emitEvent('MESSAGE_DELETE', { id: 'm1', channel_id: 'c1' });
+		expect(bot.guild(guild.id)?.channel('c1')?.messages).toEqual([]);
+
+		await bot.emitEvent('CHANNEL_DELETE', { id: 'c1', guild_id: guild.id });
+		expect(bot.guild(guild.id)?.channel('new-chan')).toBeUndefined();
+		await bot.close();
+	});
+
+	test('updateCache:false skips the world bridge', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'nocache-guild' });
+		const bot = await createMockBot({ world });
+
+		await bot.emitEvent(
+			'GUILD_MEMBER_ADD',
+			{ guild_id: guild.id, ...apiMember({ user: apiUser({ id: 'ghost' }) }) },
+			{ updateCache: false },
+		);
+
+		expect(bot.guild(guild.id)?.member('ghost')).toBeUndefined();
+		await bot.close();
+	});
+
+	test('cachedMember reflects role mutations applied through REST', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'cached-guild' });
+		const role = world.registerRole(guild.id, { id: 'cached-role' });
+		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'cached-actor' }) });
+		world.registerMember(guild.id, { user: apiUser({ id: 'cached-target' }), roles: [] });
+		const channel = world.registerChannel(guild.id);
+
+		@Declare({ name: 'grant', description: 'grants a role' })
+		class Grant extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.client.members.addRole(ctx.guildId ?? '', 'cached-target', role.id);
+				await ctx.write({ content: 'granted' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [Grant], world });
+		expect(bot.cachedMember(guild.id, 'cached-target')?.roles).toEqual([]);
+
+		await bot.slash({ name: 'grant', guildId: guild.id, channel, user: actor.user });
+
+		expect(bot.cachedMember(guild.id, 'cached-target')?.roles).toContain('cached-role');
+		expect(bot.cachedMember(guild.id, 'absent')).toBeUndefined();
 		await bot.close();
 	});
 });

@@ -10,7 +10,7 @@ import {
 import { ApplicationCommandType, InteractionResponseType } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
-import { apiUser } from '../../src/bot/payloads';
+import { apiMember, apiMessage, apiUser } from '../../src/bot/payloads';
 import { mockWorld } from '../../src/bot/world';
 import { ReportMessage, ReportUser, SearchCommand } from './_setup';
 
@@ -101,6 +101,84 @@ describe('autocomplete and context menus', () => {
 		expect(() => bot.userMenu({ name: 'Report Message' })).toThrow(/userMenu: command "Report Message"/);
 		expect(() => bot.messageMenu({ name: 'Report User' })).toThrow(/messageMenu: command "Report User"/);
 
+		await bot.close();
+	});
+});
+
+describe('context-menu result target and class-typed dispatch', () => {
+	test('result.target exposes the resolved user without optional chaining', async () => {
+		const bot = await createMockBot({ commands: [ReportUser] });
+		const result = await bot.userMenu({ name: 'Report User', target: apiUser({ id: '42', username: 'spammer' }) });
+		expect(result.target.kind).toBe('user');
+		expect(result.target.id).toBe('42');
+		expect(result.target.user.username).toBe('spammer');
+		await bot.close();
+	});
+
+	test('default messageMenu target carries guild_id in a guild', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'mt-guild' });
+		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'mt-actor' }) });
+		const channel = world.registerChannel(guild.id);
+		const bot = await createMockBot({ commands: [ReportMessage], world });
+
+		const result = await bot.messageMenu({ name: 'Report Message', guildId: guild.id, channel, user: actor.user });
+
+		expect(result.target.kind).toBe('message');
+		expect(result.target.message.guild_id).toBe(guild.id);
+		await bot.close();
+	});
+
+	test('messageMenu resolves the target author member from the world', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'author-guild' });
+		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'author-actor' }) });
+		const author = world.registerMember(guild.id, { user: apiUser({ id: 'author-1' }), roles: ['mod-role'] });
+		const channel = world.registerChannel(guild.id);
+		const message = world.registerMessage(channel.id, { id: 'm-1', author: author.user });
+		const bot = await createMockBot({ commands: [ReportMessage], world });
+
+		const result = await bot.messageMenu({
+			name: 'Report Message',
+			guildId: guild.id,
+			channel,
+			user: actor.user,
+			target: message,
+		});
+
+		expect(result.target.message.id).toBe('m-1');
+		expect(result.target.member?.roles).toContain('mod-role');
+		await bot.close();
+	});
+
+	test('explicit targetMember populates result.target.member without a world', async () => {
+		const bot = await createMockBot({ commands: [ReportMessage] });
+		const result = await bot.messageMenu({
+			name: 'Report Message',
+			target: apiMessage({ id: 'm-9' }),
+			targetMember: apiMember({ roles: ['vip'], permissions: '8' }),
+		});
+		expect(result.target.member?.permissions).toBe('8');
+		expect(result.target.member?.roles).toContain('vip');
+		await bot.close();
+	});
+
+	test('menu(class) infers the target kind from the command type', async () => {
+		const bot = await createMockBot({ commands: [ReportUser, ReportMessage] });
+
+		const fromUser = await bot.menu(ReportUser, { target: apiUser({ username: 'spammer' }) });
+		expect(fromUser.content).toBe('Reported spammer');
+
+		const fromMessage = await bot.menu(ReportMessage, { target: apiMessage({ id: 'msg-7' }) });
+		expect(fromMessage.content).toBe('Reported message msg-7');
+
+		const wrongKind = () => {
+			// @ts-expect-error User menu rejects an ApiMessage target
+			bot.menu(ReportUser, { target: apiMessage({ id: 'x' }) });
+			// @ts-expect-error Message menu rejects an ApiUser target
+			bot.menu(ReportMessage, { target: apiUser() });
+		};
+		void wrongKind;
 		await bot.close();
 	});
 });

@@ -84,6 +84,17 @@ export function registerWorldDefaults(
 		Routes.fetchWebhookMessage,
 		(_pending, params) => hooks.state.webhookMessage(params.interactionToken, params.messageId) ?? apiMessage(),
 	);
+	// Gateway reply transport: seyfert posts the interaction callback here. Materialize the original
+	// message synchronously (so an in-run fetchResponse sees it) and, when the caller asked for
+	// with_response, return the resource so editOrReply(body, true) resolves to a real message.
+	rest.intercept(Routes.interactionCallback, (pending, params) => {
+		const body = bodyRecord(pending.body) as { type?: number; data?: Record<string, unknown> };
+		if (body.type !== 4) return {};
+		const channelId = hooks.state.channelForToken(params.token);
+		if (!channelId) return {};
+		const message = hooks.state.addOriginalResponse(params.token, channelId, body.data ?? {}, hooks.botId);
+		return pending.query?.with_response ? { resource: { type: body.type, message } } : {};
+	});
 
 	rest.intercept(Routes.createDm, pending => {
 		const recipientId = String(bodyRecord(pending.body).recipient_id ?? '');

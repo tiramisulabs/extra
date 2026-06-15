@@ -172,6 +172,46 @@ export function apiMember(options: ApiMemberOptions = {}): ApiMember {
 	};
 }
 
+export interface MemberEventOptions {
+	guildId: string;
+}
+
+function resolveMember(member: ApiMember | ApiMemberOptions): ApiMember {
+	return 'user' in member && member.user ? (member as ApiMember) : apiMember(member as ApiMemberOptions);
+}
+
+/** Raw `d` for GUILD_MEMBER_ADD: a full member plus guild_id. */
+export function memberAddEvent(
+	member: ApiMember | ApiMemberOptions,
+	options: MemberEventOptions,
+): ApiMember & { guild_id: string } {
+	return { ...resolveMember(member), guild_id: options.guildId };
+}
+
+export interface MemberUpdateEventOptions extends MemberEventOptions {
+	roles?: string[];
+	nick?: string | null;
+}
+
+/** Raw `d` for GUILD_MEMBER_UPDATE: member fields (no deaf/mute) plus guild_id. */
+export function memberUpdateEvent(
+	member: ApiMember | ApiMemberOptions,
+	options: MemberUpdateEventOptions,
+): Omit<ApiMember, 'deaf' | 'mute'> & { guild_id: string } {
+	const { deaf: _deaf, mute: _mute, ...rest } = resolveMember(member);
+	return {
+		...rest,
+		...(options.roles ? { roles: options.roles } : {}),
+		...(options.nick !== undefined ? { nick: options.nick } : {}),
+		guild_id: options.guildId,
+	};
+}
+
+/** Raw `d` for GUILD_MEMBER_REMOVE: the removed user plus guild_id. */
+export function memberRemoveEvent(user: ApiUser, options: MemberEventOptions): { user: ApiUser; guild_id: string } {
+	return { user, guild_id: options.guildId };
+}
+
 export interface ApiMessageOptions {
 	id?: string;
 	channelId?: string;
