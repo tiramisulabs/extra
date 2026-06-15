@@ -325,9 +325,7 @@ export class WorldState {
 			nick: stringValue(raw.nick) ?? null,
 			...(disabledUntil === undefined ? {} : { communicationDisabledUntil: disabledUntil }),
 		});
-		const existing = this.world.members.find(
-			entry => entry.guildId === guildId && entry.member.user.id === userId,
-		);
+		const existing = this.world.members.find(entry => entry.guildId === guildId && entry.member.user.id === userId);
 		if (existing) existing.member = member;
 		else this.world.members.push({ guildId, member });
 	}

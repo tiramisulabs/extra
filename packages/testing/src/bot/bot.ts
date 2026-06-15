@@ -375,13 +375,14 @@ export type MockCommandClass = new () => Command | ContextMenuCommand | EntryPoi
 export type MenuCommandClass = new () => ContextMenuCommand;
 
 /** Resolves a menu command class to its target type: User menus take an ApiUser, Message menus an ApiMessage. */
-export type TargetFor<C extends MenuCommandClass> = InstanceType<C> extends { type: infer T }
-	? [T] extends [ApplicationCommandType.User]
-		? ApiUser
-		: [T] extends [ApplicationCommandType.Message]
-			? ApiMessage
-			: ApiUser | ApiMessage
-	: ApiUser | ApiMessage;
+export type TargetFor<C extends MenuCommandClass> =
+	InstanceType<C> extends { type: infer T }
+		? [T] extends [ApplicationCommandType.User]
+			? ApiUser
+			: [T] extends [ApplicationCommandType.Message]
+				? ApiMessage
+				: ApiUser | ApiMessage
+		: ApiUser | ApiMessage;
 
 export type MenuOptions<C extends MenuCommandClass> = Omit<
 	UserCommandInteractionOptions & MessageCommandInteractionOptions,
@@ -389,11 +390,8 @@ export type MenuOptions<C extends MenuCommandClass> = Omit<
 > & { target?: TargetFor<C> };
 
 /** Resolves a menu command class to its dispatch result, so `result.target` is correctly typed and non-optional. */
-export type MenuResultFor<C extends MenuCommandClass> = TargetFor<C> extends ApiUser
-	? UserMenuResult
-	: TargetFor<C> extends ApiMessage
-		? MessageMenuResult
-		: DispatchResult;
+export type MenuResultFor<C extends MenuCommandClass> =
+	TargetFor<C> extends ApiUser ? UserMenuResult : TargetFor<C> extends ApiMessage ? MessageMenuResult : DispatchResult;
 export type MockEvent = Omit<ClientEvent, 'data'> & {
 	data: Omit<ClientEvent['data'], 'once'> & { once?: boolean };
 };
@@ -965,9 +963,7 @@ export class MockBot {
 		}
 		if (data.type === 3) {
 			const message = resolved?.messages?.[targetId] as ApiMessage | undefined;
-			const member = message
-				? (resolved?.members?.[message.author.id] as ApiMember | undefined)
-				: undefined;
+			const member = message ? (resolved?.members?.[message.author.id] as ApiMember | undefined) : undefined;
 			return { id: targetId, kind: 'message', ...(message ? { message } : {}), ...(member ? { member } : {}) };
 		}
 		return undefined;
