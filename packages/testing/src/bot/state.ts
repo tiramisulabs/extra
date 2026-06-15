@@ -125,6 +125,12 @@ function normalizeEmbed(value: unknown): EmbedView {
 	};
 }
 
+interface DerivedMentions {
+	mention_everyone: boolean;
+	mentions: ApiUser[];
+	mention_roles: string[];
+}
+
 function collectButtons(value: unknown, out: ButtonView[]): void {
 	if (Array.isArray(value)) {
 		for (const entry of value) collectButtons(entry, out);
@@ -216,6 +222,11 @@ export class WorldState {
 		return entry ? { ...entry.message } : undefined;
 	}
 
+	rawMessageById(messageId: string): Record<string, unknown> | undefined {
+		const entry = this.world.messages.find(message => message.message.id === messageId);
+		return entry ? { ...entry.message } : undefined;
+	}
+
 	private rawMessageOr(channelId: string, messageId: string): Record<string, unknown> {
 		return this.rawMessage(channelId, messageId) ?? (apiMessage() as unknown as Record<string, unknown>);
 	}
@@ -270,6 +281,54 @@ export class WorldState {
 		return channel;
 	}
 
+	private resolveUser(id: string): ApiUser {
+		const user = this.world.users.find(entry => entry.id === id);
+		if (user) return user;
+		const member = this.world.members.find(entry => entry.member.user.id === id);
+		return member ? member.member.user : apiUser({ id });
+	}
+
+	private deriveMentions(content: string, allowedMentions: unknown): DerivedMentions {
+		const allowed = asRecord(allowedMentions);
+		const hasAllowed = allowedMentions !== undefined && allowedMentions !== null;
+		const parse = Array.isArray(allowed.parse) ? (allowed.parse as unknown[]).map(String) : undefined;
+		const userAllowlist = Array.isArray(allowed.users) ? (allowed.users as unknown[]).map(String) : undefined;
+		const roleAllowlist = Array.isArray(allowed.roles) ? (allowed.roles as unknown[]).map(String) : undefined;
+
+		const allowCategory = (category: string, allowlist: string[] | undefined): boolean => {
+			if (allowlist) return true;
+			if (parse) return parse.includes(category);
+			return true;
+		};
+
+		const result: DerivedMentions = { mention_everyone: false, mentions: [], mention_roles: [] };
+		if (!hasAllowed && content === '') return result;
+
+		if (allowCategory('users', userAllowlist)) {
+			const ids = new Set<string>();
+			for (const match of content.matchAll(/<@!?(\d+)>/g)) ids.add(match[1]);
+			for (const id of ids) {
+				if (userAllowlist && !userAllowlist.includes(id)) continue;
+				result.mentions.push(this.resolveUser(id));
+			}
+		}
+
+		if (allowCategory('roles', roleAllowlist)) {
+			const ids = new Set<string>();
+			for (const match of content.matchAll(/<@&(\d+)>/g)) ids.add(match[1]);
+			for (const id of ids) {
+				if (roleAllowlist && !roleAllowlist.includes(id)) continue;
+				result.mention_roles.push(id);
+			}
+		}
+
+		if (allowCategory('everyone', undefined) && /@everyone|@here/.test(content)) {
+			result.mention_everyone = true;
+		}
+
+		return result;
+	}
+
 	/** @internal Mock internals normally call this when Discord creates a message. */
 	addMessage(channelId: string, raw: Record<string, unknown>): MessageView {
 		const channel = this.world.channels.find(entry => entry.id === channelId);
@@ -281,16 +340,21 @@ export class WorldState {
 						...rawAuthor,
 					} as ApiUser)
 				: apiUser({ id: stringValue(raw.author_id) ?? TEST_BOT_ID, bot: true });
+		const content = stringValue(raw.content) ?? '';
 		const message = apiMessage({
 			id: stringValue(raw.id),
 			channelId,
 			...(channel?.guild_id === undefined ? {} : { guildId: channel.guild_id }),
 			author,
-			content: stringValue(raw.content) ?? '',
+			content,
 			embeds: arrayValue(raw.embeds),
 			components: arrayValue(raw.components),
 			flags: numberValue(raw.flags),
 		});
+		const derived = this.deriveMentions(content, raw.allowed_mentions);
+		message.mention_everyone = derived.mention_everyone;
+		message.mentions = derived.mentions;
+		message.mention_roles = derived.mention_roles;
 		this.world.messages.push({ channelId, message });
 		return this.messageView(message);
 	}

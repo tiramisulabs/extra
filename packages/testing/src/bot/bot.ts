@@ -21,6 +21,7 @@ import {
 import { resetMockIds } from '../id';
 import { TEST_APPLICATION_ID, TEST_BOT_ID, TEST_CHANNEL_ID, TEST_GUILD_ID, TEST_USER_ID } from './constants';
 import { registerWorldDefaults } from './defaults';
+import { Dispatch } from './dispatch';
 import { MockGateway } from './gateway';
 import {
 	type ApiInteractionPayload,
@@ -69,7 +70,6 @@ import {
 } from './rest';
 import { FOLLOWUP_ROUTE, WEBHOOK_MESSAGE_ROUTE } from './routes';
 import { type ChannelView, type GuildView, WorldState } from './state';
-import { Dispatch } from './dispatch';
 import { type MockWorld, seedWorld, type WorldBuilder } from './world';
 
 export { Dispatch } from './dispatch';
@@ -164,6 +164,10 @@ export interface DispatchResult {
 	reply?: CapturedReply;
 	/** True when the interaction deferred before sending final content. */
 	deferred: boolean;
+	/** True only when the interaction deferred a reply (type 5, DeferredChannelMessageWithSource). */
+	deferredReply: boolean;
+	/** True only when the interaction deferred a message update (type 6, DeferredMessageUpdate). */
+	deferredUpdate: boolean;
 	/** True when the immediate response carried Discord's ephemeral flag. */
 	ephemeral: boolean;
 	/** Modal metadata when the interaction opened a modal. */
@@ -719,6 +723,14 @@ export class MockBot {
 		return this.lastSentMessage() ?? this.lastInteractionMessage;
 	}
 
+	private hydrateSourceMessage(source: { id: string; channel_id?: string }): ApiMessage {
+		const stored = source.channel_id
+			? this.state.rawMessage(source.channel_id, source.id)
+			: this.state.rawMessageById(source.id);
+		if (stored) return stored as unknown as ApiMessage;
+		return apiMessage({ id: source.id, channelId: source.channel_id });
+	}
+
 	private worldMemberFor(guildId: string | null | undefined, user: ApiUser | undefined): ApiMember | undefined {
 		if (!this.world || !guildId || !user) return undefined;
 		return this.world.members.find(entry => entry.guildId === guildId && entry.member.user.id === user.id)?.member;
@@ -1142,6 +1154,12 @@ export class MockBot {
 			get deferred() {
 				return replies[0]?.body.type === 5 || replies[0]?.body.type === 6;
 			},
+			get deferredReply() {
+				return replies[0]?.body.type === 5;
+			},
+			get deferredUpdate() {
+				return replies[0]?.body.type === 6;
+			},
 			get ephemeral() {
 				const replyEphemeral = replies.some(reply => {
 					const data = 'data' in reply.body ? (reply.body.data as { flags?: number } | undefined) : undefined;
@@ -1260,7 +1278,7 @@ export class MockBot {
 			this.assertComponentHandleable('clickButton', customId, message);
 			return buttonInteraction({
 				...prepared,
-				...(message?.id ? { message: apiMessage({ id: message.id, channelId: message.channel_id }) } : {}),
+				...(message?.id ? { message: this.hydrateSourceMessage(message) } : {}),
 			});
 		});
 	}
@@ -1281,7 +1299,7 @@ export class MockBot {
 			return selectMenuInteraction({
 				...prepared,
 				...(resolved ? { resolved } : {}),
-				...(message?.id ? { message: apiMessage({ id: message.id, channelId: message.channel_id }) } : {}),
+				...(message?.id ? { message: this.hydrateSourceMessage(message) } : {}),
 			});
 		});
 	}
@@ -1320,9 +1338,7 @@ export class MockBot {
 				const startSeq = this.rest.actions.length;
 				await this.client.handleCommand.message(raw as Parameters<HandleCommand['message']>[0], -1);
 				const actions = this.rest.actions.slice(startSeq);
-				const messages = actions
-					.filter(isOutgoingMessagePost)
-					.map(action => (action.body ?? {}) as OutgoingMessage);
+				const messages = actions.filter(isOutgoingMessagePost).map(action => (action.body ?? {}) as OutgoingMessage);
 				return messageParts(actions, messages);
 			}),
 		);
@@ -1386,9 +1402,7 @@ export class MockBot {
 					updateCache,
 				);
 				const actions = this.rest.actions.slice(startSeq);
-				const messages = actions
-					.filter(isOutgoingMessagePost)
-					.map(action => (action.body ?? {}) as OutgoingMessage);
+				const messages = actions.filter(isOutgoingMessagePost).map(action => (action.body ?? {}) as OutgoingMessage);
 				return messageParts(actions, messages);
 			}),
 		);
