@@ -181,6 +181,7 @@ export class MockApiHandler extends ApiHandler {
 	readonly actions: RecordedAction[] = [];
 	private listeners: ActionListener[] = [];
 	private interceptors: Interceptor[] = [];
+	private defaultInterceptors: Interceptor[] = [];
 	private gates: RequestGate[] = [];
 	private seq = 0;
 	private readonly unhandled: 'warn' | 'error' | 'silent';
@@ -204,13 +205,13 @@ export class MockApiHandler extends ApiHandler {
 		console.warn(message);
 	}
 
-	intercept(matcher: RouteMatcher, responder: RouteResponder): this;
-	intercept(method: HttpMethods, route: string | RegExp, responder: RouteResponder): this;
+	intercept(matcher: RouteMatcher, responder: RouteResponder): () => void;
+	intercept(method: HttpMethods, route: string | RegExp, responder: RouteResponder): () => void;
 	intercept(
 		methodOrMatcher: HttpMethods | RouteMatcher,
 		routeOrResponder: string | RegExp | RouteResponder,
 		maybeResponder?: RouteResponder,
-	): this {
+	): () => void {
 		if (typeof methodOrMatcher === 'object') {
 			return this.intercept(methodOrMatcher.method, methodOrMatcher.route, routeOrResponder as RouteResponder);
 		}
@@ -221,8 +222,25 @@ export class MockApiHandler extends ApiHandler {
 		}
 		const compiled =
 			typeof routeOrResponder === 'string' ? compileRoute(routeOrResponder) : { pattern: routeOrResponder, names: [] };
-		this.interceptors.unshift({ method: methodOrMatcher, ...compiled, responder });
-		return this;
+		const interceptor: Interceptor = { method: methodOrMatcher, ...compiled, responder };
+		this.interceptors.unshift(interceptor);
+		return () => {
+			const index = this.interceptors.indexOf(interceptor);
+			if (index !== -1) this.interceptors.splice(index, 1);
+		};
+	}
+
+	/**
+	 * Snapshot the current interceptor set as the construction-time baseline. Called once in
+	 * createMockBot after registerWorldDefaults so resetInterceptors() can restore world defaults.
+	 */
+	markDefaultsBaseline(): void {
+		this.defaultInterceptors = [...this.interceptors];
+	}
+
+	/** Drop user-added interceptors, restoring exactly the construction-time world defaults. */
+	resetInterceptors(): void {
+		this.interceptors = [...this.defaultInterceptors];
 	}
 
 	clearActions(): void {

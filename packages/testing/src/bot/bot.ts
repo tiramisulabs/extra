@@ -1402,6 +1402,7 @@ export class MockBot {
 		this.assertOpen('reset');
 		this.rest.clearActions();
 		this.rest.releasePending();
+		this.rest.resetInterceptors();
 		this.dispatches.length = 0;
 	}
 
@@ -1515,6 +1516,7 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 		state,
 		botId: client.botId,
 	});
+	rest.markDefaultsBaseline();
 
 	return new MockBot(client, rest, gateway, world, state, options.validateOptions ?? false);
 }

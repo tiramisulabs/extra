@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { createMockBot } from '../../src/bot/bot';
 import { MockApiHandler } from '../../src/bot/rest';
 import { Routes } from '../../src/bot/routes';
 
@@ -93,5 +94,30 @@ describe('MockApiHandler', () => {
 			rest.findCalls({ method: 'GET', route: '/explode', error: (error: unknown) => error instanceof Error }),
 		).toHaveLength(1);
 		expect(rest.findCalls({ method: 'GET', route: '/explode', error: 'stub failed' })).toHaveLength(1);
+	});
+
+	test('reset drops user interceptors but keeps world defaults answering', async () => {
+		await using bot = await createMockBot();
+		bot.rest.intercept(Routes.fetchGuild, () => ({ id: 'stub', name: 'User Stub' }));
+		const stubbed = await bot.rest.request<{ name: string }>('GET', '/guilds/42');
+		expect(stubbed.name).toBe('User Stub');
+
+		bot.reset();
+
+		const afterReset = await bot.rest.request<{ id: string; name: string }>('GET', '/guilds/42');
+		expect(afterReset.name).not.toBe('User Stub');
+		expect(afterReset.id).toBe('42');
+	});
+
+	test('intercept returns a disposer that removes only that interceptor', async () => {
+		const rest = new MockApiHandler({ onUnhandledRest: 'silent' });
+		const off = rest.intercept('GET', '/guilds/:guildId', (_action, params) => ({ id: params.guildId, name: 'Stubbed' }));
+		const stubbed = await rest.request<{ name: string }>('GET', '/guilds/999');
+		expect(stubbed.name).toBe('Stubbed');
+
+		off();
+
+		const fallback = await rest.request<{ name?: string }>('GET', '/guilds/999');
+		expect(fallback.name).toBeUndefined();
 	});
 });
