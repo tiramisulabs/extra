@@ -1,4 +1,4 @@
-import { Command, type CommandContext, createStringOption, Declare, Options, type ParseLocales } from 'seyfert';
+import { Command, type CommandContext, createStringOption, Declare, Options } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { TEST_BOT_ID } from '../../src/bot/constants';
@@ -7,7 +7,9 @@ import { Routes } from '../../src/bot/routes';
 const englishLang = { greeting: 'Hello!' };
 
 declare module 'seyfert' {
-	interface DefaultLocale extends ParseLocales<typeof englishLang> {}
+	interface SeyfertRegistry {
+		langs: typeof englishLang;
+	}
 }
 
 describe('message (prefix) commands', () => {

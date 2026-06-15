@@ -1,12 +1,14 @@
 import { join } from 'node:path';
-import { Command, type CommandContext, createPlugin, Declare, type ParseLocales } from 'seyfert';
+import { Command, type CommandContext, createPlugin, Declare } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 
 const englishLang = { greeting: 'Hello!' };
 
 declare module 'seyfert' {
-	interface DefaultLocale extends ParseLocales<typeof englishLang> {}
+	interface SeyfertRegistry {
+		langs: typeof englishLang;
+	}
 }
 
 describe('real bot loading', () => {

@@ -10,7 +10,6 @@ import {
 	Modal,
 	ModalCommand,
 	type ModalContext,
-	type ParseLocales,
 	StringSelectMenu,
 	type StringSelectMenuInteraction,
 	StringSelectOption,
@@ -26,7 +25,9 @@ import { ConfirmButton } from './_setup';
 const englishLang = { greeting: 'Hello!' };
 
 declare module 'seyfert' {
-	interface DefaultLocale extends ParseLocales<typeof englishLang> {}
+	interface SeyfertRegistry {
+		langs: typeof englishLang;
+	}
 }
 
 describe('component flows', () => {

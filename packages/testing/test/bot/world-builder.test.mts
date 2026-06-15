@@ -1,11 +1,12 @@
-import { type ParseLocales } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { mockWorld } from '../../src/bot/world';
 
 const englishLang = { greeting: 'Hello!' };
 
 declare module 'seyfert' {
-	interface DefaultLocale extends ParseLocales<typeof englishLang> {}
+	interface SeyfertRegistry {
+		langs: typeof englishLang;
+	}
 }
 
 describe('mockWorld', () => {

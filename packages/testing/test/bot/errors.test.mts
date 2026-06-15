@@ -1,4 +1,4 @@
-import { Command, type CommandContext, Declare, Middlewares, type ParseLocales } from 'seyfert';
+import { Command, type CommandContext, Declare, Middlewares } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { GreetCommand, globalCalls, testMiddlewares } from './_setup';
@@ -6,7 +6,9 @@ import { GreetCommand, globalCalls, testMiddlewares } from './_setup';
 const englishLang = { greeting: 'Hello!' };
 
 declare module 'seyfert' {
-	interface DefaultLocale extends ParseLocales<typeof englishLang> {}
+	interface SeyfertRegistry {
+		langs: typeof englishLang;
+	}
 }
 
 describe('middlewares and error hooks', () => {

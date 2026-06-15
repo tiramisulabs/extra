@@ -1,4 +1,3 @@
-import { type ParseLocales } from 'seyfert';
 import { ApplicationCommandOptionType, ComponentType, InteractionType } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
 import {
@@ -12,7 +11,9 @@ import { apiChannel, apiGuild, apiMember, apiMessage, apiUser } from '../../src/
 const englishLang = { greeting: 'Hello!' };
 
 declare module 'seyfert' {
-	interface DefaultLocale extends ParseLocales<typeof englishLang> {}
+	interface SeyfertRegistry {
+		langs: typeof englishLang;
+	}
 }
 
 describe('api payload factories', () => {

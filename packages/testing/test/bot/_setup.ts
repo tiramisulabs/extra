@@ -16,7 +16,6 @@ import {
 	ModalCommand,
 	type ModalContext,
 	Options,
-	type ParseMiddlewares,
 	SubCommand,
 	type UserCommandInteraction,
 } from 'seyfert';
@@ -110,7 +109,9 @@ export const denier = createMiddleware<void>(middle => {
 export const testMiddlewares = { blocker, denier, globalCounter, guard };
 
 declare module 'seyfert' {
-	interface RegisteredMiddlewares extends ParseMiddlewares<typeof testMiddlewares> {}
+	interface SeyfertRegistry {
+		middlewares: typeof testMiddlewares;
+	}
 }
 
 @Declare({ name: 'guarded', description: 'Guarded command' })

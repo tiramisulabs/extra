@@ -5,7 +5,6 @@ import {
 	Declare,
 	type MenuCommandContext,
 	Options,
-	type ParseLocales,
 	type UserCommandInteraction,
 } from 'seyfert';
 import { ApplicationCommandType, InteractionResponseType } from 'seyfert/lib/types';
@@ -18,7 +17,9 @@ import { ReportMessage, ReportUser, SearchCommand } from './_setup';
 const englishLang = { greeting: 'Hello!' };
 
 declare module 'seyfert' {
-	interface DefaultLocale extends ParseLocales<typeof englishLang> {}
+	interface SeyfertRegistry {
+		langs: typeof englishLang;
+	}
 }
 
 describe('autocomplete and context menus', () => {

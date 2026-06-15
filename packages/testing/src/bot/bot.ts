@@ -396,6 +396,8 @@ export class MockBot {
 	private readonly unregisteredMemberWarnings = new Set<string>();
 	private readonly dispatches: Dispatch<unknown>[] = [];
 	private closed = false;
+	/** The most recent interaction-original message, used to resolve a collector source for an immediate reply. */
+	private lastInteractionMessage?: { id: string; channel_id?: string };
 
 	constructor(
 		readonly client: Client,
@@ -672,7 +674,9 @@ export class MockBot {
 				};
 			}
 		}
-		return this.lastSentMessage();
+		// Fall back to the most recent interaction-original message so a collector attached to an immediate
+		// reply (which produces no channel-message REST action) still has a resolvable source.
+		return this.lastSentMessage() ?? this.lastInteractionMessage;
 	}
 
 	private worldMemberFor(guildId: string | null | undefined, user: ApiUser | undefined): ApiMember | undefined {
@@ -839,14 +843,23 @@ export class MockBot {
 		return this.track(new Dispatch(this.rest, this.client, userId, () => this.runInteraction(payload)));
 	}
 
-	private materializeInteractionResponse(payload: ApiInteractionPayload, body: APIInteractionResponse): void {
+	private materializeInteractionResponse(
+		payload: ApiInteractionPayload,
+		body: APIInteractionResponse,
+	): Record<string, unknown> | undefined {
 		const data = 'data' in body ? ((body.data ?? {}) as Record<string, unknown>) : {};
 		if (body.type === 4) {
-			this.state.addOriginalResponse(payload.token, payload.channel_id, data, this.client.botId);
+			const message = this.state.addOriginalResponse(payload.token, payload.channel_id, data, this.client.botId);
+			const id = typeof message.id === 'string' ? message.id : undefined;
+			if (id) this.lastInteractionMessage = { id, channel_id: payload.channel_id };
+			return message;
 		}
 		if (body.type === 7 && payload.message) {
 			this.state.editMessage(payload.message.channel_id, payload.message.id, data);
+			this.lastInteractionMessage = { id: payload.message.id, channel_id: payload.message.channel_id };
+			return this.state.rawMessage(payload.message.channel_id, payload.message.id);
 		}
+		return undefined;
 	}
 
 	private commandLeaf(payload: ApiInteractionPayload): DispatchResult['command'] {
@@ -971,7 +984,11 @@ export class MockBot {
 			await Promise.race([
 				this.client.handleCommand.interaction(payload as unknown as APIInteraction, -1, async reply => {
 					replies.push(reply);
-					this.materializeInteractionResponse(payload, reply.body);
+					const message = this.materializeInteractionResponse(payload, reply.body);
+					// Honor seyfert's with_response contract: an immediate editOrReply(body, true) resolves to the
+					// materialized original message, mirroring the gateway callback response (a real gateway bot
+					// gets resource.message back). Without this the immediate reply returns undefined.
+					return reply.withResponse && message ? { resource: { type: reply.body.type, message } } : undefined;
 				}),
 				denialSettled,
 			]);

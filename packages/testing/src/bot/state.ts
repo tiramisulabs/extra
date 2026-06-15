@@ -367,7 +367,7 @@ export class WorldState {
 		this.registerInteractionToken(token, channelId);
 		const view = this.addMessage(channelId, { ...raw, author_id: authorId });
 		this.messageIdByToken.set(token, view.id);
-		return this.rawMessage(channelId, view.id) ?? {};
+		return this.rawMessage(channelId, view.id) ?? (apiMessage() as unknown as Record<string, unknown>);
 	}
 
 	/** @internal Mock internals normally call this for webhook edits of @original. */
@@ -377,7 +377,7 @@ export class WorldState {
 		const messageId = this.messageIdByToken.get(token);
 		if (!messageId) return this.addOriginalResponse(token, channelId, raw, authorId);
 		this.editMessage(channelId, messageId, raw);
-		return this.rawMessage(channelId, messageId) ?? {};
+		return this.rawMessage(channelId, messageId) ?? (apiMessage() as unknown as Record<string, unknown>);
 	}
 
 	/** @internal Mock internals normally call this for webhook edits of any interaction message. */
@@ -391,7 +391,7 @@ export class WorldState {
 		const channelId = this.channelIdByToken.get(token);
 		if (!channelId) return {};
 		this.editMessage(channelId, messageId, raw);
-		return this.rawMessage(channelId, messageId) ?? {};
+		return this.rawMessage(channelId, messageId) ?? (apiMessage() as unknown as Record<string, unknown>);
 	}
 
 	/** @internal Mock internals normally call this for webhook followups. */
@@ -399,7 +399,7 @@ export class WorldState {
 		const channelId = this.channelIdByToken.get(token);
 		if (!channelId) return {};
 		const view = this.addMessage(channelId, { ...raw, author_id: authorId });
-		return this.rawMessage(channelId, view.id) ?? {};
+		return this.rawMessage(channelId, view.id) ?? (apiMessage() as unknown as Record<string, unknown>);
 	}
 
 	/** @internal Mock internals normally call this for webhook deletes of @original. */

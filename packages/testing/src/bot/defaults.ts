@@ -78,11 +78,11 @@ export function registerWorldDefaults(
 	rest.intercept(Routes.fetchMessages, (_pending, params) => hooks.state.channelMessages(params.channelId));
 	rest.intercept(
 		Routes.fetchOriginalResponse,
-		(_pending, params) => hooks.state.messageForToken(params.interactionToken) ?? {},
+		(_pending, params) => hooks.state.messageForToken(params.interactionToken) ?? apiMessage(),
 	);
 	rest.intercept(
 		Routes.fetchWebhookMessage,
-		(_pending, params) => hooks.state.webhookMessage(params.interactionToken, params.messageId) ?? {},
+		(_pending, params) => hooks.state.webhookMessage(params.interactionToken, params.messageId) ?? apiMessage(),
 	);
 
 	rest.intercept(Routes.createDm, pending => {

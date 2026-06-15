@@ -10,7 +10,6 @@ import {
 	Label,
 	Modal,
 	Options,
-	type ParseLocales,
 	TextInput,
 } from 'seyfert';
 import { EntryPointCommandHandlerType, TextInputStyle } from 'seyfert/lib/types';
@@ -25,7 +24,9 @@ import { mockWorld } from '../../src/bot/world';
 const englishLang = { greeting: 'Hello!' };
 
 declare module 'seyfert' {
-	interface DefaultLocale extends ParseLocales<typeof englishLang> {}
+	interface SeyfertRegistry {
+		langs: typeof englishLang;
+	}
 }
 
 describe('additional command surfaces', () => {
