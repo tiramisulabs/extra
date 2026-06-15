@@ -269,6 +269,49 @@ describe('permission emulation', () => {
 		await bot.close();
 	});
 
+	test('invoking member defaults to a non-admin permission set', async () => {
+		let ran = false;
+
+		@Declare({
+			name: 'needs-ban-default',
+			description: 'Requires BanMembers',
+			defaultMemberPermissions: ['BanMembers'],
+		})
+		class NeedsBanDefault extends Command {
+			async onPermissionsFail(ctx: CommandContext) {
+				await ctx.editOrReply({ content: 'denied' });
+			}
+			async run(ctx: CommandContext) {
+				ran = true;
+				await ctx.write({ content: 'ran' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [NeedsBanDefault] });
+
+		await expect(bot.slash({ name: 'needs-ban-default' })).resolves.toMatchObject({ content: 'denied' });
+		expect(ran).toBe(false);
+
+		await expect(
+			bot.slash({ name: 'needs-ban-default', memberPermissions: ALL_PERMISSIONS }),
+		).resolves.toMatchObject({ content: 'ran' });
+		expect(ran).toBe(true);
+
+		ran = false;
+		await expect(bot.slash({ name: 'needs-ban-default', memberPermissions: 'all' })).resolves.toMatchObject({
+			content: 'ran',
+		});
+		expect(ran).toBe(true);
+
+		ran = false;
+		await expect(
+			bot.slash({ name: 'needs-ban-default', memberPermissions: ['BanMembers'] }),
+		).resolves.toMatchObject({ content: 'ran' });
+		expect(ran).toBe(true);
+
+		await bot.close();
+	});
+
 	test('role positions are available through the real cache for hierarchy checks', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'hierarchy-guild' });

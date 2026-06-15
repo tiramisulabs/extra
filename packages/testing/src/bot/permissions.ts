@@ -30,6 +30,21 @@ export const ALL_PERMISSIONS = (() => {
 	return bits;
 })();
 
+/**
+ * A realistic non-admin permission set for the invoking member: enough to read a
+ * channel and reply, but no moderation/management bits. Used as the default so
+ * member-permission guards can actually fail without explicit opt-out.
+ */
+export const DEFAULT_MEMBER_PERMISSIONS =
+	PermissionFlagsBits.ViewChannel |
+	PermissionFlagsBits.SendMessages |
+	PermissionFlagsBits.SendMessagesInThreads |
+	PermissionFlagsBits.ReadMessageHistory |
+	PermissionFlagsBits.EmbedLinks |
+	PermissionFlagsBits.AttachFiles |
+	PermissionFlagsBits.AddReactions |
+	PermissionFlagsBits.UseExternalEmojis;
+
 export interface ChannelOverwriteLike {
 	id: string;
 	type: number;

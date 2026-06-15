@@ -15,7 +15,13 @@ import {
 	apiRole,
 	apiUser,
 } from './payloads';
-import { ALL_PERMISSIONS, combineRolePermissions, type PermissionInput, permissionBits } from './permissions';
+import {
+	ALL_PERMISSIONS,
+	combineRolePermissions,
+	DEFAULT_MEMBER_PERMISSIONS,
+	type PermissionInput,
+	permissionBits,
+} from './permissions';
 
 /** Discord ApplicationCommandOptionType values used by the encoder. */
 const OptionType = {
@@ -33,10 +39,14 @@ const OptionType = {
 } as const;
 
 /**
- * String payload default for app_permissions / member.permissions: every
- * permission bit the installed seyfert knows, ORed together.
+ * String payload default for app_permissions / resolved entities: every
+ * permission bit the installed seyfert knows, ORed together. Note: the invoking
+ * member's permissions default to DEFAULT_MEMBER_PERMISSIONS, not this.
  */
 export const DEFAULT_PERMISSIONS = ALL_PERMISSIONS.toString();
+
+/** String payload default for the invoking member's permissions: a non-admin set. */
+export const DEFAULT_MEMBER_PERMISSIONS_STRING = DEFAULT_MEMBER_PERMISSIONS.toString();
 
 export interface EncodedOption {
 	__slipherOption: true;
@@ -212,8 +222,8 @@ export interface BaseInteractionOptions {
 	applicationId?: string;
 	/** Bot/app permissions in the channel (app_permissions). Defaults to all. */
 	permissions?: PermissionInput;
-	/** Invoking member's permissions. Defaults to `permissions` (and ultimately all). */
-	memberPermissions?: PermissionInput;
+	/** Invoking member's permissions. Defaults to a non-admin set; pass 'all' for ALL_PERMISSIONS. */
+	memberPermissions?: PermissionInput | 'all';
 	/** Convenience: roles whose permissions are OR-combined into memberPermissions. */
 	memberRoles?: ApiRole[];
 	/** Discord interaction context: 0 = guild, 1 = bot DM, 2 = private channel. Defaults from guildId. */
@@ -275,12 +285,14 @@ function baseInteraction(options: BaseInteractionOptions, type: number): ApiInte
 	const permissions = permissionBits(options.permissions ?? DEFAULT_PERMISSIONS);
 	const memberPermissions =
 		options.memberPermissions !== undefined
-			? permissionBits(options.memberPermissions)
+			? options.memberPermissions === 'all'
+				? ALL_PERMISSIONS.toString()
+				: permissionBits(options.memberPermissions)
 			: options.member?.permissions !== undefined
 				? permissionBits(options.member.permissions)
 				: options.memberRoles !== undefined
 					? combineRolePermissions(options.memberRoles)
-					: permissions;
+					: DEFAULT_MEMBER_PERMISSIONS_STRING;
 	const memberRoleIds = options.memberRoles?.map(role => role.id) ?? [];
 	const memberRoles = [...new Set([...(options.member?.roles ?? []), ...memberRoleIds])];
 	const member = dm
