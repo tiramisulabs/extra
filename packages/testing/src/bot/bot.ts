@@ -59,6 +59,7 @@ import {
 	type ActionFilter,
 	type ActionMatcher,
 	type ActionPredicate,
+	isOutgoingMessagePost,
 	type MatchedAction,
 	MockApiHandler,
 	type RecordedAction,
@@ -1344,7 +1345,7 @@ export class MockBot {
 				await this.client.handleCommand.message(raw as Parameters<HandleCommand['message']>[0], -1);
 				const actions = this.rest.actions.slice(startSeq);
 				const messages = actions
-					.filter(action => action.method === 'POST' && /\/channels\/[^/]+\/messages$/.test(action.route))
+					.filter(isOutgoingMessagePost)
 					.map(action => (action.body ?? {}) as OutgoingMessage);
 				return { actions, messages, content: messages.at(-1)?.content };
 			}),
@@ -1410,11 +1411,7 @@ export class MockBot {
 				);
 				const actions = this.rest.actions.slice(startSeq);
 				const messages = actions
-					.filter(
-						action =>
-							action.method === 'POST' &&
-							(/\/channels\/[^/]+\/messages$/.test(action.route) || /\/webhooks\/wh-[^/]+\/[^/]+$/.test(action.route)),
-					)
+					.filter(isOutgoingMessagePost)
 					.map(action => (action.body ?? {}) as OutgoingMessage);
 				const embeds = messages.flatMap(message => message.embeds ?? []);
 				const files = messages.flatMap(message => message.files ?? []);

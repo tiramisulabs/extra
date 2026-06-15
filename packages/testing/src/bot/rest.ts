@@ -1,6 +1,7 @@
 import { ApiHandler } from 'seyfert';
 import type { ApiRequestOptions, HttpMethods } from 'seyfert/lib/api/shared';
 import { apiMessage } from './payloads';
+import { CHANNEL_MESSAGE_POST, WEBHOOK_EXECUTE_POST } from './routes';
 
 export interface RecordedAction {
 	seq: number;
@@ -15,6 +16,10 @@ export interface RecordedAction {
 	response: unknown;
 	/** The responder error; set before the original error is rethrown. */
 	error?: unknown;
+}
+
+export function isOutgoingMessagePost(action: RecordedAction): boolean {
+	return action.method === 'POST' && (CHANNEL_MESSAGE_POST.test(action.route) || WEBHOOK_EXECUTE_POST.test(action.route));
 }
 
 export class MockApiError extends Error {

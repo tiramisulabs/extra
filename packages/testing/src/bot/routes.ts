@@ -48,3 +48,5 @@ export const Routes = {
 export const ORIGINAL_RESPONSE_ROUTE = /\/webhooks\/[^/]+\/[^/]+\/messages\/@original$/;
 export const WEBHOOK_MESSAGE_ROUTE = /\/webhooks\/[^/]+\/[^/]+\/messages\/[^/]+$/;
 export const FOLLOWUP_ROUTE = /\/webhooks\/[^/]+\/[^/]+$/;
+export const CHANNEL_MESSAGE_POST = /\/channels\/[^/]+\/messages$/;
+export const WEBHOOK_EXECUTE_POST = /\/webhooks\/wh-[^/]+\/[^/]+$/;
