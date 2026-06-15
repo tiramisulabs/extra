@@ -1410,7 +1410,11 @@ export class MockBot {
 				);
 				const actions = this.rest.actions.slice(startSeq);
 				const messages = actions
-					.filter(action => action.method === 'POST' && /\/channels\/[^/]+\/messages$/.test(action.route))
+					.filter(
+						action =>
+							action.method === 'POST' &&
+							(/\/channels\/[^/]+\/messages$/.test(action.route) || /\/webhooks\/wh-[^/]+\/[^/]+$/.test(action.route)),
+					)
 					.map(action => (action.body ?? {}) as OutgoingMessage);
 				const embeds = messages.flatMap(message => message.embeds ?? []);
 				const files = messages.flatMap(message => message.files ?? []);
