@@ -41,7 +41,14 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		this.releasePending = gated.release;
 		this.start();
 		previous?.();
-		return gated.hit;
+		const failure = this.execution!.then(
+			() => undefined,
+			err => {
+				throw err;
+			},
+		);
+		this.execution!.catch(() => {});
+		return Promise.race([gated.hit, failure.then(() => gated.hit)]);
 	}
 
 	async untilModal(timeoutMs = 2000): Promise<void> {

@@ -1,4 +1,4 @@
-import { Command, type CommandContext, Declare } from 'seyfert';
+import { Command, type CommandContext, ComponentCommand, type ComponentContext, Declare } from 'seyfert';
 import { describe, expect, test, vi } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { TEST_USER_ID } from '../../src/bot/constants';
@@ -38,6 +38,42 @@ describe('actors and dispatch tempo', () => {
 			await ctx.followup({ content: 'logged' });
 		}
 	}
+
+	class OnlyFooButton extends ComponentCommand {
+		componentType = 'Button' as const;
+		filter(ctx: ComponentContext) {
+			return ctx.customId === 'foo';
+		}
+		async run(ctx: ComponentContext) {
+			await ctx.write({ content: 'foo' });
+		}
+	}
+
+	@Declare({ name: 'route-write', description: 'Writes a channel message via REST' })
+	class RouteWriteCommand extends Command {
+		async run(ctx: CommandContext) {
+			await ctx.client.messages.write('route-channel', { content: 'side' });
+		}
+	}
+
+	test('until() surfaces a rejecting dispatch error instead of a misleading timeout', async () => {
+		const bot = await createMockBot({ components: [OnlyFooButton] });
+
+		// The dispatch executor rejects (no component handler matches "nomatch"); without surfacing that
+		// rejection, until() would wait the full waitForAction timeout and report a generic "timed out" error.
+		await expect(bot.clickButton('nomatch').until(Routes.createMessage)).rejects.toThrow(/no component handler/);
+		await bot.close();
+	});
+
+	test('waitForAction with a plain route matcher resolves after the response is populated', async () => {
+		const bot = await createMockBot({ commands: [RouteWriteCommand] });
+		const pending = bot.waitForAction(Routes.createMessage);
+		await bot.slash({ name: 'route-write' });
+
+		const write = await pending;
+		expect((write.response as { id?: string }).id).toBeDefined();
+		await bot.close();
+	});
 
 	test('actor binds a seeded member identity across dispatchers', async () => {
 		const world = mockWorld();

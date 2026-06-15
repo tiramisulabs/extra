@@ -82,8 +82,10 @@ interface Interceptor {
 	responder: RouteResponder;
 }
 
+type NotifyPhase = 'pending' | 'settled';
+
 interface ActionListener {
-	onAction(action: RecordedAction): void;
+	onAction(action: RecordedAction, phase: NotifyPhase): void;
 	timer: ReturnType<typeof setTimeout>;
 	reject(error: Error): void;
 }
@@ -334,6 +336,14 @@ export class MockApiHandler extends ApiHandler {
 		matcherOrPredicate: RouteMatcher | ActionFilter | ActionPredicate,
 		timeoutMs = 2000,
 	): Promise<MatchedAction> {
+		return this.listenForAction(matcherOrPredicate, timeoutMs, 'settled');
+	}
+
+	private listenForAction(
+		matcherOrPredicate: RouteMatcher | ActionFilter | ActionPredicate,
+		timeoutMs: number,
+		resolveOn: NotifyPhase,
+	): Promise<MatchedAction> {
 		const enrich = (action: RecordedAction): MatchedAction => {
 			if (typeof matcherOrPredicate === 'function') return { ...action, params: {} };
 			if (isRouteMatcherOnly(matcherOrPredicate)) {
@@ -360,7 +370,8 @@ export class MockApiHandler extends ApiHandler {
 					reject(new Error(`waitForAction timed out after ${timeoutMs}ms. Actions seen:\n  ${seen}`));
 				}, timeoutMs),
 				reject,
-				onAction: (action: RecordedAction) => {
+				onAction: (action: RecordedAction, phase: NotifyPhase) => {
+					if (phase !== resolveOn) return;
 					if (!predicate(action)) return;
 					clearTimeout(listener.timer);
 					this.listeners = this.listeners.filter(entry => entry !== listener);
@@ -387,15 +398,15 @@ export class MockApiHandler extends ApiHandler {
 						: this.filterMatches(action, matcher, {})));
 		const entry = { test, hold: () => g.open, release: g.release };
 		this.gates.push(entry);
-		const hit = this.waitForAction(test).finally(() => {
+		const hit = this.listenForAction(test, 2000, 'pending').finally(() => {
 			this.gates = this.gates.filter(other => other !== entry);
 			g.release();
 		});
 		return { hit, release: g.release };
 	}
 
-	private notifyListeners(action: RecordedAction): void {
-		for (const listener of [...this.listeners]) listener.onAction(action);
+	private notifyListeners(action: RecordedAction, phase: NotifyPhase): void {
+		for (const listener of [...this.listeners]) listener.onAction(action, phase);
 	}
 
 	async request<T = unknown>(
@@ -413,7 +424,7 @@ export class MockApiHandler extends ApiHandler {
 		};
 		const action: RecordedAction = { seq: this.seq++, ...pending, response: undefined };
 		this.actions.push(action);
-		this.notifyListeners(action);
+		this.notifyListeners(action, 'pending');
 
 		for (const entry of [...this.gates]) {
 			if (entry.test(action)) {
@@ -425,11 +436,11 @@ export class MockApiHandler extends ApiHandler {
 		try {
 			const response = await this.resolveResponse(pending);
 			action.response = response;
-			this.notifyListeners(action);
+			this.notifyListeners(action, 'settled');
 			return response as T;
 		} catch (error) {
 			action.error = error;
-			this.notifyListeners(action);
+			this.notifyListeners(action, 'settled');
 			throw error;
 		}
 	}
