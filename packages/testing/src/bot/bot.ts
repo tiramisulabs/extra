@@ -1246,11 +1246,19 @@ export class MockBot {
 		}
 	}
 
+	private dispatchVia<O extends BaseInteractionOptions, R = DispatchResult>(
+		verb: string,
+		options: O,
+		build: (prepared: O) => ApiInteractionPayload,
+	): Dispatch<R> {
+		this.assertOpen(verb);
+		const prepared = this.applyWorldPermissions({ user: this.defaultUser, ...options });
+		return this.dispatchInteraction(build(prepared)) as Dispatch<R>;
+	}
+
 	slash(options: ChatInputInteractionOptions): Dispatch<DispatchResult> {
-		this.assertOpen('slash');
 		this.assertCommandRegistered(options.name, ApplicationCommandType.ChatInput, 'slash');
-		const prepared = this.applyWorldPermissions({ user: this.defaultUser, ...this.prepareChatInputOptions(options) });
-		return this.dispatchInteraction(chatInputInteraction(prepared));
+		return this.dispatchVia('slash', this.prepareChatInputOptions(options), chatInputInteraction);
 	}
 
 	autocomplete(options: AutocompleteInteractionOptions): Dispatch<AutocompleteResult> {
@@ -1275,23 +1283,19 @@ export class MockBot {
 	}
 
 	userMenu(options: UserCommandInteractionOptions): Dispatch<UserMenuResult> {
-		this.assertOpen('userMenu');
 		this.assertCommandRegistered(options.name, ApplicationCommandType.User, 'userMenu');
-		const prepared = this.applyWorldPermissions({ user: this.defaultUser, ...options });
-		const targetMember = options.targetMember ?? this.worldMemberFor(prepared.guildId, prepared.target);
-		return this.dispatchInteraction(
-			userCommandInteraction({ ...prepared, ...(targetMember ? { targetMember } : {}) }),
-		) as Dispatch<UserMenuResult>;
+		return this.dispatchVia<UserCommandInteractionOptions, UserMenuResult>('userMenu', options, prepared => {
+			const targetMember = options.targetMember ?? this.worldMemberFor(prepared.guildId, prepared.target);
+			return userCommandInteraction({ ...prepared, ...(targetMember ? { targetMember } : {}) });
+		});
 	}
 
 	messageMenu(options: MessageCommandInteractionOptions): Dispatch<MessageMenuResult> {
-		this.assertOpen('messageMenu');
 		this.assertCommandRegistered(options.name, ApplicationCommandType.Message, 'messageMenu');
-		const prepared = this.applyWorldPermissions({ user: this.defaultUser, ...options });
-		const targetMember = options.targetMember ?? this.worldMemberFor(prepared.guildId, prepared.target?.author);
-		return this.dispatchInteraction(
-			messageCommandInteraction({ ...prepared, ...(targetMember ? { targetMember } : {}) }),
-		) as Dispatch<MessageMenuResult>;
+		return this.dispatchVia<MessageCommandInteractionOptions, MessageMenuResult>('messageMenu', options, prepared => {
+			const targetMember = options.targetMember ?? this.worldMemberFor(prepared.guildId, prepared.target?.author);
+			return messageCommandInteraction({ ...prepared, ...(targetMember ? { targetMember } : {}) });
+		});
 	}
 
 	menu<C extends MenuCommandClass>(command: C, options: MenuOptions<C> = {}): Dispatch<MenuResultFor<C>> {
@@ -1309,27 +1313,23 @@ export class MockBot {
 	}
 
 	entryPoint(options: EntryPointInteractionOptions = {}): Dispatch<DispatchResult> {
-		this.assertOpen('entryPoint');
-		return this.dispatchInteraction(
-			entryPointInteraction(this.applyWorldPermissions({ user: this.defaultUser, ...options })),
-		);
+		return this.dispatchVia('entryPoint', options, entryPointInteraction);
 	}
 
 	clickButton(
 		customId: string,
 		options: Omit<ButtonInteractionOptions, 'customId' | 'message'> & { source?: string | RecordedAction } = {},
 	): Dispatch<DispatchResult> {
-		this.assertOpen('clickButton');
 		const { source, ...rest } = options;
-		const message = this.resolveMessageSource(source);
-		this.assertComponentHandleable('clickButton', customId, message);
-		const prepared = this.applyWorldPermissions({ user: this.defaultUser, ...rest, customId });
-		return this.dispatchInteraction(
-			buttonInteraction({
+		const opts: ButtonInteractionOptions = { ...rest, customId };
+		return this.dispatchVia('clickButton', opts, prepared => {
+			const message = this.resolveMessageSource(source);
+			this.assertComponentHandleable('clickButton', customId, message);
+			return buttonInteraction({
 				...prepared,
 				...(message?.id ? { message: apiMessage({ id: message.id, channelId: message.channel_id }) } : {}),
-			}),
-		);
+			});
+		});
 	}
 
 	selectMenu(
@@ -1339,19 +1339,18 @@ export class MockBot {
 			source?: string | RecordedAction;
 		} = {},
 	): Dispatch<DispatchResult> {
-		this.assertOpen('selectMenu');
 		const { source, ...rest } = options;
-		const message = this.resolveMessageSource(source);
-		this.assertComponentHandleable('selectMenu', customId, message);
-		const base = { user: this.defaultUser, ...rest, customId, values };
-		const resolved = this.resolveSelectResolved(customId, values, base);
-		const prepared = this.applyWorldPermissions({ ...base, ...(resolved ? { resolved } : {}) });
-		return this.dispatchInteraction(
-			selectMenuInteraction({
+		const opts: SelectMenuInteractionOptions = { ...rest, customId, values };
+		return this.dispatchVia('selectMenu', opts, prepared => {
+			const message = this.resolveMessageSource(source);
+			this.assertComponentHandleable('selectMenu', customId, message);
+			const resolved = this.resolveSelectResolved(customId, values, prepared);
+			return selectMenuInteraction({
 				...prepared,
+				...(resolved ? { resolved } : {}),
 				...(message?.id ? { message: apiMessage({ id: message.id, channelId: message.channel_id }) } : {}),
-			}),
-		);
+			});
+		});
 	}
 
 	fillModal(
@@ -1359,10 +1358,11 @@ export class MockBot {
 		fields: Record<string, string> = {},
 		extra: Omit<ModalSubmitInteractionOptions, 'customId' | 'fields'> = {},
 	): Dispatch<DispatchResult> {
-		this.assertOpen('fillModal');
-		const prepared = this.applyWorldPermissions({ user: this.defaultUser, ...extra, customId, fields });
-		this.assertModalHandleable(customId, prepared.user?.id ?? this.defaultUser.id);
-		return this.dispatchInteraction(modalSubmitInteraction(prepared));
+		const opts: ModalSubmitInteractionOptions = { ...extra, customId, fields };
+		return this.dispatchVia('fillModal', opts, prepared => {
+			this.assertModalHandleable(customId, prepared.user?.id ?? this.defaultUser.id);
+			return modalSubmitInteraction(prepared);
+		});
 	}
 
 	say(content: string, options: DispatchMessageOptions = {}): Dispatch<SayResult> {
