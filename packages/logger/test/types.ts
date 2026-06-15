@@ -1,6 +1,6 @@
 import type { LoggerLike } from '@slipher/types';
-import type { Client, PluginContextMapOf, RegisterPlugins, Logger as SeyfertLogger } from 'seyfert';
-import { Command, type CommandContext, createMiddleware, Declare, definePlugins, type Register } from 'seyfert';
+import type { Client, PluginContextMapOf, RegisteredPlugins, Logger as SeyfertLogger } from 'seyfert';
+import { Command, type CommandContext, createMiddleware, Declare, definePlugins } from 'seyfert';
 import { createEvlogAdapter, type LoggerAdapter, logger, useLogger, type WideEventLogger } from '../src';
 
 declare function expectType<T>(value: T): void;
@@ -9,11 +9,19 @@ declare const client: Client;
 const loggerPlugin = logger();
 const plugins = definePlugins(loggerPlugin);
 
+const auditMiddleware = createMiddleware<{ requestId: string }, CommandContext>(async ({ context, next }) => {
+	context.logger.add({ requestId: 'request-1' });
+	return next({ requestId: 'request-1' });
+});
+
 declare module 'seyfert' {
-	interface Register extends RegisterPlugins<typeof plugins> {}
+	interface SeyfertRegistry {
+		plugins: typeof plugins;
+		middlewares: { audit: typeof auditMiddleware };
+	}
 }
 
-expectType<Register>({ plugins });
+expectType<RegisteredPlugins>(plugins);
 expectType<WideEventLogger>(context.logger);
 expectType<WideEventLogger>({} as PluginContextMapOf<typeof plugins>['logger']);
 expectType<SeyfertLogger>(client.logger);
@@ -25,17 +33,6 @@ expectType<LoggerAdapter>(createEvlogAdapter());
 // @ts-expect-error evlog drain/redact/enrich configuration belongs in initLogger()
 createEvlogAdapter({ drain() {} });
 expectType<WideEventLogger>(useLogger());
-
-const auditMiddleware = createMiddleware<{ requestId: string }, CommandContext>(async ({ context, next }) => {
-	context.logger.add({ requestId: 'request-1' });
-	return next({ requestId: 'request-1' });
-});
-
-declare module 'seyfert' {
-	interface RegisteredMiddlewares {
-		audit: typeof auditMiddleware;
-	}
-}
 
 @Declare({
 	name: 'deploy',

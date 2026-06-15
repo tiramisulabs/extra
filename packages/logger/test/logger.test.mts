@@ -10,8 +10,6 @@ import {
 	extractSeyfertLogContext,
 	type LogEntry,
 	type LoggerAdapter,
-	type LoggerPlugin,
-	type LoggerPluginOptionsFragment,
 	logger,
 	type RootLogger,
 	runInLoggerScope,
@@ -19,6 +17,8 @@ import {
 	type WideEventLogger,
 	withLoggerScope,
 } from '../src';
+
+type LoggerPlugin = ReturnType<typeof logger>;
 
 class RecordingAdapter implements LoggerAdapter {
 	readonly entries: LogEntry[] = [];
@@ -70,10 +70,22 @@ function commandContext(loggerInstance: WideEventLogger) {
 	};
 }
 
-function getLoggerPluginOptions(plugin: LoggerPlugin): LoggerPluginOptionsFragment {
-	const fragment = plugin.options?.({} as never) as LoggerPluginOptionsFragment | undefined;
-	if (!fragment) throw new Error('Logger plugin did not register options.');
-	return fragment;
+// The plugin contributes lifecycle defaults through register(api), not options().
+// Collect them into the options-shaped object the tests assert against.
+function getLoggerPluginOptions(plugin: LoggerPlugin) {
+	const fragment = (plugin.options?.({} as never) ?? {}) as Record<string, unknown>;
+	const defaults = { commands: {}, components: {}, modals: {} };
+	plugin.register?.({
+		commands: { defaults: (h: object) => Object.assign(defaults.commands, h) },
+		components: { defaults: (h: object) => Object.assign(defaults.components, h) },
+		modals: { defaults: (h: object) => Object.assign(defaults.modals, h) },
+	} as never);
+	return {
+		...fragment,
+		commands: { defaults: defaults.commands },
+		components: { defaults: defaults.components },
+		modals: { defaults: defaults.modals },
+	} as never;
 }
 
 function getLoggerContext(plugin: LoggerPlugin, source: unknown): { logger: WideEventLogger } {

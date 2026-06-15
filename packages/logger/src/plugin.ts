@@ -1,5 +1,12 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { createPlugin, Logger as SeyfertLogger, type SeyfertPlugin } from 'seyfert';
+import {
+	createPlugin,
+	Logger as SeyfertLogger,
+	type SeyfertCommandDefaults,
+	type SeyfertComponentDefaults,
+	type SeyfertModalDefaults,
+	type SeyfertPluginOptions,
+} from 'seyfert';
 import { LogLevels as SeyfertLogLevels } from 'seyfert/lib/common';
 
 import {
@@ -15,42 +22,6 @@ import { asRecord, getNumber, getString, getStringField, stripUndefined } from '
 
 export interface LoggerPluginOptions extends LoggerOptions {
 	context?: AutoContextConfig;
-}
-
-export interface LoggerPlugin extends SeyfertPlugin<{}, { logger: WideEventLogger }> {
-	name: '@slipher/logger';
-	setup?(client: SeyfertClientLike): Awaitable<void>;
-	teardown?(client: SeyfertClientLike): Awaitable<void>;
-}
-
-export interface LoggerPluginOptionsFragment {
-	contextScopes?: readonly LoggerContextScope[];
-	context?(source: unknown): Record<string, unknown>;
-	commands?: { defaults?: CommandLoggerDefaults };
-	components?: { defaults?: ComponentLoggerDefaults };
-	modals?: { defaults?: ComponentLoggerDefaults };
-}
-
-export type LoggerContextScope = <T>(context: unknown, run: () => Awaitable<T>) => Awaitable<T>;
-
-export interface CommandLoggerDefaults {
-	onBeforeMiddlewares(context: unknown): Awaitable<void>;
-	onBeforeOptions(context: unknown): Awaitable<void>;
-	onRunError(context: unknown, error: unknown): Awaitable<void>;
-	onMiddlewaresError(context: unknown, error: unknown): Awaitable<void>;
-	onOptionsError(context: unknown, metadata: unknown): Awaitable<void>;
-	onPermissionsFail(context: unknown, permissions: unknown): Awaitable<void>;
-	onBotPermissionsFail(context: unknown, permissions: unknown): Awaitable<void>;
-	onInternalError(client: unknown, command: unknown, error?: unknown): Awaitable<void>;
-	onAfterRun(context: unknown, error: unknown | undefined): Awaitable<void>;
-}
-
-export interface ComponentLoggerDefaults {
-	onBeforeMiddlewares(context: unknown): Awaitable<void>;
-	onRunError(context: unknown, error: unknown): Awaitable<void>;
-	onMiddlewaresError(context: unknown, error: unknown): Awaitable<void>;
-	onInternalError(client: unknown, error?: unknown): Awaitable<void>;
-	onAfterRun(context: unknown, error: unknown | undefined): Awaitable<void>;
 }
 
 export interface SeyfertClientLike {
@@ -149,7 +120,7 @@ export async function withLoggerScope<T>(data: LogData, run: () => Awaitable<T>)
 	});
 }
 
-export function logger(options: LoggerPluginOptions = {}): LoggerPlugin {
+export function logger(options: LoggerPluginOptions = {}) {
 	const root = createLogger(options);
 	const contextConfig = resolveContextConfig(options.context);
 	let installation: LoggerInstallation | undefined;
@@ -161,6 +132,15 @@ export function logger(options: LoggerPluginOptions = {}): LoggerPlugin {
 		},
 		options() {
 			return createLoggerPluginOptions(root, contextConfig);
+		},
+		register: api => {
+			// suppressDefault: own error reporting so seyfert's built-in FATAL fallback yields (no double log).
+			// Floorless keys (onBefore*/onAfterRun) are no-ops under the flag.
+			api.commands.defaults(createCommandDefaults(root, contextConfig), { suppressDefault: true });
+			api.components.defaults(createComponentDefaults(root, 'component', contextConfig), { suppressDefault: true });
+			api.modals.defaults(createComponentDefaults(root, 'modal', contextConfig) as Partial<SeyfertModalDefaults>, {
+				suppressDefault: true,
+			});
 		},
 		setup: client => {
 			installation?.restoreInternalLogger();
@@ -182,12 +162,9 @@ export function logger(options: LoggerPluginOptions = {}): LoggerPlugin {
 function createLoggerPluginOptions(
 	root: RootLogger,
 	contextConfig: Record<AutoContextField, boolean>,
-): LoggerPluginOptionsFragment {
+): SeyfertPluginOptions {
 	return {
 		contextScopes: [(context, run) => loggerScope.run(getScopedLogger(root, context, contextConfig), run)],
-		commands: { defaults: createCommandDefaults(root, contextConfig) },
-		components: { defaults: createComponentDefaults(root, 'component', contextConfig) },
-		modals: { defaults: createComponentDefaults(root, 'modal', contextConfig) },
 	};
 }
 
@@ -264,7 +241,7 @@ export function extractSeyfertLogContext(context: unknown, config: AutoContextCo
 function createCommandDefaults(
 	root: RootLogger,
 	contextConfig: Record<AutoContextField, boolean>,
-): CommandLoggerDefaults {
+): Partial<SeyfertCommandDefaults> {
 	return {
 		onBeforeMiddlewares: context => {
 			getContextLogger(root, context, 'command', contextConfig).debug('command received');
@@ -314,7 +291,7 @@ function createComponentDefaults(
 	root: RootLogger,
 	kind: 'component' | 'modal',
 	contextConfig: Record<AutoContextField, boolean>,
-): ComponentLoggerDefaults {
+): Partial<SeyfertComponentDefaults> {
 	return {
 		onBeforeMiddlewares: context => {
 			getContextLogger(root, context, kind, contextConfig).debug(`${kind} received`);
@@ -439,16 +416,10 @@ function setLoggerProperty(
 
 function noop(): void {}
 
-type SeyfertCustomizeLoggerCallback = (
-	self: SeyfertLogger,
-	level: SeyfertLogLevels,
-	args: unknown[],
-) => unknown[] | undefined;
-
 function installSeyfertInternalLogger(root: RootLogger): () => void {
-	const previous = (SeyfertLogger as unknown as { __callback?: SeyfertCustomizeLoggerCallback }).__callback;
+	const previous = SeyfertLogger.getCustomizer();
 
-	const callback: SeyfertCustomizeLoggerCallback = (self, level, args) => {
+	return SeyfertLogger.customize((self, level, args) => {
 		const mappedLevel = mapSeyfertLogLevel(level);
 		void root.writeEntry({
 			level: mappedLevel,
@@ -458,16 +429,9 @@ function installSeyfertInternalLogger(root: RootLogger): () => void {
 			message: formatSeyfertLogMessage(args),
 		});
 
-		previous?.(self, level, args);
+		previous(self, level, args);
 		return undefined;
-	};
-
-	SeyfertLogger.customize(callback);
-
-	return () => {
-		const loggerConstructor = SeyfertLogger as unknown as { __callback?: SeyfertCustomizeLoggerCallback };
-		if (loggerConstructor.__callback === callback) loggerConstructor.__callback = previous;
-	};
+	});
 }
 
 function buildSeyfertInternalLogData(self: SeyfertLogger, args: readonly unknown[]): LogData {
