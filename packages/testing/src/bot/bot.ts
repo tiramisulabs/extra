@@ -883,8 +883,14 @@ export class MockBot {
 	findCall(matcher: RouteMatcher | ActionPredicate, params?: Record<string, string>): MatchedAction | undefined;
 	findCall(matcher: RouteMatcher, filter: RouteActionFilter): MatchedAction | undefined;
 	findCall(matcher: ActionFilter | ActionPredicate): MatchedAction | undefined;
-	findCall(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction | undefined;
-	findCall(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction | undefined {
+	findCall(
+		matcher: ActionMatcher,
+		paramsOrFilter?: Record<string, string> | RouteActionFilter,
+	): MatchedAction | undefined;
+	findCall(
+		matcher: ActionMatcher,
+		paramsOrFilter?: Record<string, string> | RouteActionFilter,
+	): MatchedAction | undefined {
 		return this.rest.findCall(matcher, paramsOrFilter);
 	}
 
