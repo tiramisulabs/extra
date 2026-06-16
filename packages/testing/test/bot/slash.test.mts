@@ -2,7 +2,7 @@ import { Command, type CommandContext, createEvent, Declare } from 'seyfert';
 import { InteractionResponseType } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
-import { TEST_USER_ID } from '../../src/bot/constants';
+import { TEST_CHANNEL_ID, TEST_GUILD_ID, TEST_USER_ID } from '../../src/bot/constants';
 import { apiMember, apiUser } from '../../src/bot/payloads';
 import { mockWorld } from '../../src/bot/world';
 import {
@@ -76,8 +76,8 @@ describe('createMockBot', () => {
 		await bot.slash({ name: 'location' });
 
 		expect(seen).toEqual([
-			{ guildId: 'slipher-test-guild', channelId: 'slipher-test-channel' },
-			{ guildId: 'slipher-test-guild', channelId: 'slipher-test-channel' },
+			{ guildId: TEST_GUILD_ID, channelId: TEST_CHANNEL_ID },
+			{ guildId: TEST_GUILD_ID, channelId: TEST_CHANNEL_ID },
 		]);
 		await bot.close();
 	});
