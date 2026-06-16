@@ -66,6 +66,63 @@ describe('virtual clock', () => {
 			await bot.close();
 		});
 
+		test('dispatch.fillModal(...) runs the whole opener→submit→settle flow in one call', async () => {
+			const submitted: string[] = [];
+
+			class FeedbackButton extends ComponentCommand {
+				componentType = 'Button' as const;
+				filter(ctx: ComponentContext<'Button'>) {
+					return ctx.customId === 'open-feedback';
+				}
+				async run(ctx: ComponentContext<'Button'>) {
+					const modal = new Modal()
+						.setCustomId('feedback-modal')
+						.setTitle('Feedback')
+						.setComponents([
+							new Label()
+								.setLabel('Rating')
+								.setComponent(new TextInput({ custom_id: 'rating', style: TextInputStyle.Short })),
+						]);
+					const submit = await ctx.interaction.modal(modal, { waitFor: 30_000 });
+					if (submit) {
+						submitted.push(submit.user.id);
+						await submit.write({ content: 'thanks' });
+					}
+				}
+			}
+
+			const bot = await createMockBot({ components: [FeedbackButton] });
+			const user = apiUser({ id: '888' });
+
+			const modal = await bot.clickButton('open-feedback', { user }).fillModal('feedback-modal', { rating: '5' });
+
+			expect(submitted).toEqual(['888']);
+			expect(modal.reply?.body).toMatchObject({ data: { content: 'thanks' } });
+			await bot.close();
+		});
+
+		test('fillModal before the opener ran names the opener, not the user', async () => {
+			class FeedbackButton extends ComponentCommand {
+				componentType = 'Button' as const;
+				filter(ctx: ComponentContext<'Button'>) {
+					return ctx.customId === 'open-feedback';
+				}
+				async run(ctx: ComponentContext<'Button'>) {
+					await ctx.interaction.modal(
+						new Modal().setCustomId('feedback-modal').setTitle('Feedback').setComponents([]),
+						{ waitFor: 30_000 },
+					);
+				}
+			}
+
+			const bot = await createMockBot({ components: [FeedbackButton] });
+			const user = apiUser({ id: '999' });
+			bot.clickButton('open-feedback', { user }); // created but never stepped/awaited
+
+			expect(() => bot.fillModal('feedback-modal', { rating: '5' }, { user })).toThrow(/opener dispatch/);
+			await bot.close();
+		});
+
 		test('rejects fast when the command never opens a modal (no wall-clock timeout)', async () => {
 			@Declare({ name: 'noop', description: 'Replies without opening a modal' })
 			class NoopCommand extends Command {

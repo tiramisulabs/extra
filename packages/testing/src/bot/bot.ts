@@ -755,9 +755,16 @@ export class MockBot {
 
 	private assertModalHandleable(customId: string, userId: string): void {
 		if (this.client.components.modals.has(userId) || this.hasModalCommand()) return;
+		const otherUsers = [...this.client.components.modals.keys()].filter(id => id !== userId);
+		const pendingOpener = this.dispatches.some(dispatch => !dispatch.started && !dispatch.isSettled);
+		const hint =
+			otherUsers.length > 0
+				? `A modal IS waiting, but for a different user (${otherUsers.join(', ')}). Pass that same 'user' to fillModal.`
+				: pendingOpener
+					? "The opener dispatch hasn't run yet — step it with `await dispatch.untilModal()` (or use the one-call `dispatch.fillModal(...)`) before filling."
+					: 'Dispatch the button/command that opens the modal first, stepping with untilModal().';
 		throw new TypeError(
-			`fillModal: no modal "${customId}" is waiting for user "${userId}" and no ModalCommand is registered. ` +
-				`Did you pass the same 'user' as the dispatch that opened the modal?`,
+			`fillModal: no modal "${customId}" is waiting for user "${userId}" and no ModalCommand is registered. ${hint}`,
 		);
 	}
 
@@ -1099,7 +1106,8 @@ export class MockBot {
 
 	dispatchInteraction(payload: ApiInteractionPayload): Dispatch<DispatchResult> {
 		this.assertOpen('dispatchInteraction');
-		const userId = payload.member?.user.id ?? payload.user?.id;
+		const user = payload.member?.user ?? payload.user;
+		const userId = user?.id;
 		const dispatchId = nextDispatchId();
 		return this.track(
 			new Dispatch(
@@ -1109,6 +1117,7 @@ export class MockBot {
 				() => this.runInteraction(payload, dispatchId),
 				id => this.onModalRegistered(id),
 				dispatchId,
+				user ? (customId, fields) => this.fillModal(customId, fields, { user }) : undefined,
 			),
 		);
 	}

@@ -20,6 +20,11 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		 * Optional: a gate created without an id stays unscoped (matches any dispatch's actions).
 		 */
 		readonly dispatchId?: number,
+		/** Submits a modal as this dispatch's user; supplied by MockBot so {@link fillModal} needs no bot handle. */
+		private readonly modalFiller?: (
+			customId: string,
+			fields: Record<string, string>,
+		) => Dispatch<DispatchResult>,
 	) {}
 
 	private start(): Promise<T> {
@@ -90,6 +95,22 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 				}
 			}),
 		]);
+	}
+
+	/**
+	 * One-call modal flow: start this opener, wait for it to register a modal, submit `customId`/`fields` as the
+	 * SAME user, then settle the opener so its post-`modal()` continuation (e.g. `submit.write(...)`) runs.
+	 * Returns the modal-submit result. Replaces the manual
+	 * `await d.untilModal(); await bot.fillModal(...); await d;` dance — the user is threaded for you.
+	 */
+	async fillModal(customId: string, fields: Record<string, string> = {}): Promise<DispatchResult> {
+		if (!this.modalFiller) {
+			throw new TypeError('Dispatch.fillModal: this dispatch type cannot open modals.');
+		}
+		await this.untilModal();
+		const submit = await this.modalFiller(customId, fields);
+		await this;
+		return submit;
 	}
 
 	then<TResult1 = T, TResult2 = never>(

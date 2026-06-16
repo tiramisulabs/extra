@@ -426,15 +426,21 @@ Use explicit `resolved` when testing a raw Discord payload. For a
 with `selectMenuInteraction()` and pass it to `dispatchInteraction()`.
 
 Awaited modal flows must keep the opener dispatch alive, because
-`interaction.modal(..., { waitFor })` resumes inside the opener after the submit:
+`interaction.modal(..., { waitFor })` resumes inside the opener after the submit.
+`dispatch.fillModal(...)` runs the whole flow in one call, threading the same user:
+
+```ts
+const modal = await bot.clickButton('open-feedback', { user }).fillModal('feedback-modal', { rating: '5' });
+expect(modal.content).toBe('thanks');
+```
+
+The explicit form is equivalent — step the opener, submit, then settle it:
 
 ```ts
 const dispatch = bot.clickButton('open-feedback', { user });
 await dispatch.untilModal();
 const modal = await bot.fillModal('feedback-modal', { rating: '5' }, { user });
 await dispatch;
-
-expect(modal.content).toBe('thanks');
 ```
 
 Use the same `user` for the opener and `fillModal()`. Collector `idle`/`timeout`
