@@ -20,7 +20,7 @@ import { PermissionFlagsBits } from 'seyfert/lib/types';
 import { computeChannelPermissions } from './permissions';
 import { apiError, type MockApiHandler, type RouteMatcher, type RouteResponder } from './rest';
 import { Routes } from './routes';
-import type { MessageQuery, WorldState } from './state';
+import { assertAttachmentRefs, type MessageQuery, type WorldState } from './state';
 import type { MockWorld } from './world';
 import type { WorldEmitEvent } from './world-events';
 
@@ -356,6 +356,7 @@ export function registerWorldDefaults(
 			return {};
 		}
 		if (body.type !== 4) return {};
+		assertAttachmentRefs(body.data ?? {}, pending.files);
 		const channelId = hooks.state.channelForToken(params.token);
 		if (!channelId) return {};
 		const message = hooks.state.addOriginalResponse(params.token, channelId, body.data ?? {}, hooks.botId);
@@ -391,6 +392,7 @@ export function registerWorldDefaults(
 
 	rest.intercept(Routes.createMessage, (pending, params) => {
 		requireChannel(params.channelId);
+		assertAttachmentRefs(bodyRecord(pending.body), pending.files);
 		const channel = world?.channels.find(entry => entry.id === params.channelId);
 		if (channel?.type === 4) apiError(400, 50024, 'Cannot execute action on this channel type');
 		if (channel?.thread_metadata?.archived) apiError(400, 50083, 'Thread is archived');
@@ -499,6 +501,7 @@ export function registerWorldDefaults(
 	rest.intercept(Routes.followup, (pending, params) => {
 		// Same route shape as a webhook execute. A registered webhook id (or the `wh-` sendLog encoding)
 		// resolves to a channel; otherwise it is an interaction followup.
+		assertAttachmentRefs(bodyRecord(pending.body), pending.files);
 		const webhookChannel = resolveWebhookChannel(params.applicationId, params.interactionToken);
 		if (webhookChannel) {
 			const view = hooks.state.addMessage(webhookChannel, bodyRecord(pending.body));

@@ -248,6 +248,47 @@ function assertNameBounds(value: unknown, min: number, max: number, label: strin
 	}
 }
 
+const ATTACHMENT_SCHEME = 'attachment://';
+
+function collectAttachmentRefs(value: unknown, out: Set<string>): void {
+	if (typeof value === 'string') {
+		if (value.startsWith(ATTACHMENT_SCHEME)) out.add(value.slice(ATTACHMENT_SCHEME.length));
+		return;
+	}
+	if (Array.isArray(value)) {
+		for (const entry of value) collectAttachmentRefs(entry, out);
+		return;
+	}
+	if (value && typeof value === 'object') {
+		for (const entry of Object.values(value)) collectAttachmentRefs(entry, out);
+	}
+}
+
+/**
+ * F23: every `attachment://<filename>` reference in a message body (embed images, component-v2 media, etc.)
+ * must be backed by a file uploaded in the SAME request — otherwise Discord drops the media silently. Reject
+ * a reference with no matching uploaded filename so the missing-file mistake fails loud instead of passing green.
+ */
+export function assertAttachmentRefs(body: unknown, files: unknown): void {
+	const refs = new Set<string>();
+	collectAttachmentRefs(body, refs);
+	if (refs.size === 0) return;
+	const uploaded = new Set<string>();
+	for (const file of arrayValue(files)) {
+		const name = stringValue(asRecord(file).filename) ?? stringValue(asRecord(file).name);
+		if (name !== undefined) uploaded.add(name);
+	}
+	for (const ref of refs) {
+		if (!uploaded.has(ref)) {
+			apiError(
+				400,
+				50035,
+				`Invalid Form Body: references attachment://${ref} but no file named "${ref}" was uploaded in this request`,
+			);
+		}
+	}
+}
+
 export interface MessageQuery {
 	limit?: number;
 	before?: string;

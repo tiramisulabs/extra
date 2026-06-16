@@ -161,9 +161,12 @@ describe('outgoing message payload limits (fail loud)', () => {
 		await close();
 	});
 
-	test('embed attachment:// image url is accepted', async () => {
+	test('embed attachment:// image url is accepted when the file is uploaded', async () => {
 		const { dispatch, close } = await botWith((ctx, channelId) =>
-			ctx.client.messages.write(channelId, { embeds: [{ title: 't', image: { url: 'attachment://logo.png' } }] }),
+			ctx.client.messages.write(channelId, {
+				embeds: [{ title: 't', image: { url: 'attachment://logo.png' } }],
+				files: [{ filename: 'logo.png', data: Buffer.from('png') }],
+			}),
 		)();
 		await expect(dispatch).resolves.toBeDefined();
 		await close();
