@@ -304,7 +304,12 @@ export function registerWorldDefaults(
 			hooks.state.editMessage(channelId, params.messageId, bodyRecord(pending.body));
 			return hooks.state.rawMessage(channelId, params.messageId) ?? apiMessage({ id: params.messageId, channelId });
 		}
-		return hooks.state.editWebhookMessage(params.interactionToken, params.messageId, bodyRecord(pending.body), hooks.botId);
+		return hooks.state.editWebhookMessage(
+			params.interactionToken,
+			params.messageId,
+			bodyRecord(pending.body),
+			hooks.botId,
+		);
 	});
 	rest.intercept(Routes.deleteWebhookMessage, (_pending, params) => {
 		const channelId = resolveWebhookChannel(params.applicationId, params.interactionToken);
@@ -335,7 +340,9 @@ export function registerWorldDefaults(
 		hooks.state.removeRole(params.guildId, params.roleId);
 		return {};
 	});
-	rest.intercept(Routes.createEmoji, (pending, params) => hooks.state.addEmoji(params.guildId, bodyRecord(pending.body)));
+	rest.intercept(Routes.createEmoji, (pending, params) =>
+		hooks.state.addEmoji(params.guildId, bodyRecord(pending.body)),
+	);
 	rest.intercept(Routes.fetchEmojis, (_pending, params) => hooks.state.emojis(params.guildId));
 	interceptFetchOne(
 		rest,

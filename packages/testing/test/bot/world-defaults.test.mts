@@ -239,9 +239,9 @@ describe('stateful world defaults', () => {
 		}
 
 		const bot = await createMockBot({ commands: [Crosspost], world, onUnhandledRest: 'error' });
-		await expect(
-			bot.slash({ name: 'crosspost', guildId: guild.id, channel, user: actor.user }),
-		).resolves.toMatchObject({ content: 'rejected' });
+		await expect(bot.slash({ name: 'crosspost', guildId: guild.id, channel, user: actor.user })).resolves.toMatchObject(
+			{ content: 'rejected' },
+		);
 		await bot.close();
 	});
 
