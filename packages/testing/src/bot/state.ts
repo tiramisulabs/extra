@@ -68,10 +68,17 @@ export interface ChannelView {
 	name?: string;
 	type: number;
 	parentId?: string;
+	topic?: string | null;
+	nsfw: boolean;
+	rateLimitPerUser?: number;
+	position: number;
+	archived?: boolean;
+	locked?: boolean;
 	threadMetadata?: ThreadMetadata;
 	overwrites: { id: string; type: number; allow: string; deny: string }[];
 	messages: MessageView[];
 	lastMessage?: MessageView;
+	pins: MessageView[];
 }
 
 export interface GuildMemberView {
@@ -195,6 +202,8 @@ export interface WorldStateReader {
 	reactionUsers(channelId: string, messageId: string, emoji: string): string[];
 	bans(guildId: string): string[];
 	isBanned(guildId: string, userId: string): boolean;
+	pins(channelId: string): Record<string, unknown>[];
+	archivedThreads(channelId: string, type: 'public' | 'private'): Record<string, unknown>[];
 }
 
 const EMPTY_WORLD = (): MockWorld => ({ guilds: [], channels: [], users: [], members: [], roles: [], messages: [] });
@@ -330,6 +339,7 @@ export class WorldState implements WorldStateReader {
 	private readonly messageIdByToken = new Map<string, string>();
 	private readonly channelIdByToken = new Map<string, string>();
 	private readonly reactionsByMessage = new Map<string, Map<string, Set<string>>>();
+	private readonly pinnedByChannel = new Map<string, string[]>();
 
 	constructor(seed?: MockWorld) {
 		this.world = seed ?? EMPTY_WORLD();
@@ -547,6 +557,7 @@ export class WorldState implements WorldStateReader {
 				this.reactionsByMessage.delete(this.reactionKey(channelId, message.message.id));
 		}
 		this.world.messages = this.world.messages.filter(message => message.channelId !== channelId);
+		this.pinnedByChannel.delete(channelId);
 		for (const [userId, dmChannelId] of this.dmChannelByUser) {
 			if (dmChannelId === channelId) this.dmChannelByUser.delete(userId);
 		}
@@ -690,6 +701,12 @@ export class WorldState implements WorldStateReader {
 			message => message.channelId !== channelId || message.message.id !== messageId,
 		);
 		this.reactionsByMessage.delete(this.reactionKey(channelId, messageId));
+		const pinned = this.pinnedByChannel.get(channelId);
+		if (pinned) {
+			const next = pinned.filter(id => id !== messageId);
+			if (next.length === 0) this.pinnedByChannel.delete(channelId);
+			else this.pinnedByChannel.set(channelId, next);
+		}
 		for (const [token, id] of this.messageIdByToken) {
 			if (id === messageId) this.messageIdByToken.delete(token);
 		}
@@ -806,7 +823,65 @@ export class WorldState implements WorldStateReader {
 		if ('parent_id' in patch) channel.parent_id = stringValue(patch.parent_id);
 		if ('permission_overwrites' in patch)
 			channel.permission_overwrites = normalizeOverwrites(patch.permission_overwrites);
+		if ('topic' in patch) channel.topic = stringValue(patch.topic) ?? null;
+		if ('nsfw' in patch && typeof patch.nsfw === 'boolean') channel.nsfw = patch.nsfw;
+		if ('rate_limit_per_user' in patch && numberValue(patch.rate_limit_per_user) !== undefined)
+			channel.rate_limit_per_user = numberValue(patch.rate_limit_per_user)!;
+		if ('position' in patch && numberValue(patch.position) !== undefined) channel.position = numberValue(patch.position)!;
+		if ('bitrate' in patch && numberValue(patch.bitrate) !== undefined) channel.bitrate = numberValue(patch.bitrate)!;
+		if ('user_limit' in patch && numberValue(patch.user_limit) !== undefined)
+			channel.user_limit = numberValue(patch.user_limit)!;
+		if (channel.thread_metadata) {
+			if ('archived' in patch && typeof patch.archived === 'boolean') channel.thread_metadata.archived = patch.archived;
+			if ('locked' in patch && typeof patch.locked === 'boolean') channel.thread_metadata.locked = patch.locked;
+			if ('auto_archive_duration' in patch && numberValue(patch.auto_archive_duration) !== undefined)
+				channel.thread_metadata.auto_archive_duration = numberValue(patch.auto_archive_duration)!;
+		}
 		return { ...channel };
+	}
+
+	/** @internal Mock internals normally call this when Discord pins a message. Idempotent. */
+	pinMessage(channelId: string, messageId: string): void {
+		const entry = this.world.messages.find(
+			message => message.channelId === channelId && message.message.id === messageId,
+		);
+		if (!entry) return;
+		entry.message.pinned = true;
+		const ids = this.pinnedByChannel.get(channelId) ?? [];
+		if (!ids.includes(messageId)) ids.unshift(messageId);
+		this.pinnedByChannel.set(channelId, ids);
+	}
+
+	/** @internal Mock internals normally call this when Discord unpins a message. */
+	unpinMessage(channelId: string, messageId: string): void {
+		const entry = this.world.messages.find(
+			message => message.channelId === channelId && message.message.id === messageId,
+		);
+		if (entry) entry.message.pinned = false;
+		const ids = this.pinnedByChannel.get(channelId);
+		if (!ids) return;
+		const next = ids.filter(id => id !== messageId);
+		if (next.length === 0) this.pinnedByChannel.delete(channelId);
+		else this.pinnedByChannel.set(channelId, next);
+	}
+
+	/** The pinned messages of a channel, newest pin first. */
+	pins(channelId: string): Record<string, unknown>[] {
+		const ids = this.pinnedByChannel.get(channelId) ?? [];
+		return ids.map(id => this.rawMessage(channelId, id)).filter((message): message is Record<string, unknown> => !!message);
+	}
+
+	/** The archived threads under a channel of the given type (public = 11, private = 12). */
+	archivedThreads(channelId: string, type: 'public' | 'private'): Record<string, unknown>[] {
+		const threadType = type === 'private' ? 12 : 11;
+		return this.world.channels
+			.filter(
+				channel =>
+					channel.parent_id === channelId &&
+					channel.type === threadType &&
+					channel.thread_metadata?.archived === true,
+			)
+			.map(channel => ({ ...channel }));
 	}
 
 	/** @internal Mock internals normally call this when Discord rewrites member roles. */
@@ -959,18 +1034,33 @@ export class WorldState implements WorldStateReader {
 	}
 
 	private channelView(channel: ApiChannel): ChannelView {
-		const messages = this.world.messages
-			.filter(message => message.channelId === channel.id)
-			.map(message => this.messageView(message.message));
+		const channelMessages = this.world.messages.filter(message => message.channelId === channel.id);
+		const messages = channelMessages.map(message => this.messageView(message.message));
+		const pinnedIds = this.pinnedByChannel.get(channel.id) ?? [];
+		const pins = pinnedIds
+			.map(id => channelMessages.find(message => message.message.id === id))
+			.filter((entry): entry is (typeof channelMessages)[number] => !!entry)
+			.map(entry => this.messageView(entry.message));
 		return {
 			id: channel.id,
 			name: channel.name,
 			type: channel.type,
 			parentId: channel.parent_id,
-			...(channel.thread_metadata === undefined ? {} : { threadMetadata: channel.thread_metadata }),
+			...(channel.topic === undefined ? {} : { topic: channel.topic }),
+			nsfw: channel.nsfw,
+			...(channel.rate_limit_per_user === undefined ? {} : { rateLimitPerUser: channel.rate_limit_per_user }),
+			position: channel.position,
+			...(channel.thread_metadata === undefined
+				? {}
+				: {
+						archived: channel.thread_metadata.archived,
+						locked: channel.thread_metadata.locked,
+						threadMetadata: channel.thread_metadata,
+					}),
 			overwrites: channel.permission_overwrites.map(overwrite => ({ ...overwrite })),
 			messages,
 			lastMessage: messages.at(-1),
+			pins,
 		};
 	}
 

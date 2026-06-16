@@ -127,6 +127,10 @@ export interface ApiChannel {
 	position: number;
 	permission_overwrites: ChannelOverwriteLike[];
 	nsfw: boolean;
+	topic?: string | null;
+	rate_limit_per_user?: number;
+	bitrate?: number;
+	user_limit?: number;
 	thread_metadata?: ThreadMetadata;
 }
 

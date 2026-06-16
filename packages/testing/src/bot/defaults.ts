@@ -209,6 +209,23 @@ export function registerWorldDefaults(
 		}
 		return {};
 	});
+	rest.intercept(Routes.fetchPins, (_pending, params) => ({
+		has_more: false,
+		items: hooks.state.pins(params.channelId).map(message => ({ pinned_at: message.timestamp, message })),
+	}));
+	rest.intercept(Routes.pinMessage, (_pending, params) => {
+		hooks.state.pinMessage(params.channelId, params.messageId);
+		return {};
+	});
+	rest.intercept(Routes.unpinMessage, (_pending, params) => {
+		hooks.state.unpinMessage(params.channelId, params.messageId);
+		return {};
+	});
+	rest.intercept(Routes.fetchArchivedThreads, (_pending, params) => ({
+		threads: hooks.state.archivedThreads(params.channelId, params.type === 'private' ? 'private' : 'public'),
+		members: [],
+		has_more: false,
+	}));
 
 	rest.intercept(Routes.editOriginalResponse, (pending, params) =>
 		hooks.state.upsertOriginalResponse(params.interactionToken, bodyRecord(pending.body), hooks.botId),
