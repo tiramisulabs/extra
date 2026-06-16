@@ -95,7 +95,7 @@ describe('world state views', () => {
 		class FetchHistory extends Command {
 			async run(ctx: CommandContext) {
 				const messages = await ctx.client.channels.fetchMessages(first.id);
-				await ctx.client.messages.delete('missing-message', first.id);
+				await ctx.client.messages.delete('old-message', first.id);
 				await ctx.client.members.kick(ctx.guildId ?? '', actor.user.id);
 				await ctx.write({ content: messages.map(message => message.id).join(',') });
 			}

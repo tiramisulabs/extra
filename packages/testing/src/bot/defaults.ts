@@ -156,6 +156,25 @@ export function registerWorldDefaults(
 	const resolveUser = (id: string) => world?.users.find(user => user.id === id) ?? apiUser({ id });
 	const guildOfChannel = (channelId: string) => world?.channels.find(channel => channel.id === channelId)?.guild_id;
 
+	// F15: when a world is seeded, a guild-scoped op against an unknown (or stringified undefined/null) guild id
+	// is a 404 Unknown Guild — Discord never performs it. Worldless mode stays lenient (synthesize), so unit
+	// tests that don't model a world are unaffected.
+	const requireGuild = (guildId: string) => {
+		if (!world) return;
+		if (guildId === 'undefined' || guildId === 'null' || !world.guilds.some(guild => guild.id === guildId)) {
+			apiError(404, 10004, 'Unknown Guild');
+		}
+	};
+
+	// F14: a channel-scoped write against an unknown channel id is a 404 Unknown Channel when a world is seeded.
+	// Created channels/threads and DMs are pushed into world.channels, so they pass. Worldless mode stays lenient.
+	const requireChannel = (channelId: string) => {
+		if (!world) return;
+		if (channelId === 'undefined' || channelId === 'null' || !world.channels.some(channel => channel.id === channelId)) {
+			apiError(404, 10003, 'Unknown Channel');
+		}
+	};
+
 	// Permission/hierarchy enforcement is OPT-IN: it only activates once a bot member is seeded
 	// (world.registerBotMember). Without one, botGuildPerms returns undefined and every guard early-returns,
 	// so bare moderation dispatches stay permissive (the default a test mock wants).
@@ -371,6 +390,7 @@ export function registerWorldDefaults(
 	});
 
 	rest.intercept(Routes.createMessage, (pending, params) => {
+		requireChannel(params.channelId);
 		const channel = world?.channels.find(entry => entry.id === params.channelId);
 		if (channel?.type === 4) apiError(400, 50024, 'Cannot execute action on this channel type');
 		if (channel?.thread_metadata?.archived) apiError(400, 50083, 'Thread is archived');
@@ -380,6 +400,15 @@ export function registerWorldDefaults(
 		);
 	});
 	rest.intercept(Routes.editMessage, (pending, params) => {
+		// F13: editing a non-existent message is a 404, and a message the bot did not author can never be edited
+		// (Discord forbids editing others' messages outright) — a 403. Worldless mode stays lenient (synthesize).
+		if (world) {
+			const existing = hooks.state.rawMessage(params.channelId, params.messageId);
+			if (!existing) apiError(404, 10008, 'Unknown Message');
+			if (existing.author.id !== hooks.botId) {
+				apiError(403, 50005, 'Cannot edit a message authored by another user');
+			}
+		}
 		hooks.state.editMessage(params.channelId, params.messageId, bodyRecord(pending.body));
 		return (
 			hooks.state.rawMessage(params.channelId, params.messageId) ??
@@ -387,6 +416,10 @@ export function registerWorldDefaults(
 		);
 	});
 	rest.intercept(Routes.deleteMessage, (_pending, params) => {
+		// F13: deleting a non-existent message is a 404 (deleting another user's message IS allowed with perms).
+		if (world && !hooks.state.rawMessage(params.channelId, params.messageId)) {
+			apiError(404, 10008, 'Unknown Message');
+		}
 		hooks.state.deleteMessage(params.channelId, params.messageId);
 		return {};
 	});
@@ -404,6 +437,7 @@ export function registerWorldDefaults(
 		items: hooks.state.pins(params.channelId).map(message => ({ pinned_at: message.timestamp, message })),
 	}));
 	rest.intercept(Routes.pinMessage, (_pending, params) => {
+		requireChannel(params.channelId);
 		const pins = hooks.state.pins(params.channelId);
 		if (pins.length >= 50 && !pins.some(message => message.id === params.messageId)) {
 			apiError(400, 30003, 'Maximum number of pinned messages reached (50)');
@@ -412,6 +446,7 @@ export function registerWorldDefaults(
 		return {};
 	});
 	rest.intercept(Routes.unpinMessage, (_pending, params) => {
+		requireChannel(params.channelId);
 		hooks.state.unpinMessage(params.channelId, params.messageId);
 		return {};
 	});
@@ -472,12 +507,17 @@ export function registerWorldDefaults(
 		return hooks.state.addFollowup(params.interactionToken, bodyRecord(pending.body), hooks.botId);
 	});
 
-	rest.intercept(Routes.createRole, (pending, params) => hooks.state.addRole(params.guildId, bodyRecord(pending.body)));
+	rest.intercept(Routes.createRole, (pending, params) => {
+		requireGuild(params.guildId);
+		return hooks.state.addRole(params.guildId, bodyRecord(pending.body));
+	});
 	rest.intercept(Routes.editRole, (pending, params) => {
+		requireGuild(params.guildId);
 		const updated = hooks.state.editRole(params.guildId, params.roleId, bodyRecord(pending.body));
 		return updated ?? apiRole({ id: params.roleId, ...bodyRecord(pending.body) });
 	});
 	rest.intercept(Routes.deleteRole, (_pending, params) => {
+		requireGuild(params.guildId);
 		hooks.state.removeRole(params.guildId, params.roleId);
 		return {};
 	});
@@ -495,9 +535,10 @@ export function registerWorldDefaults(
 		drop: (guildId, id) => hooks.state.removeEmoji(guildId, id),
 		fallback: (guildId, id) => apiEmoji({ id, guildId }),
 	});
-	rest.intercept(Routes.createInvite, (pending, params) =>
-		hooks.state.addInvite(params.channelId, guildOfChannel(params.channelId), bodyRecord(pending.body)),
-	);
+	rest.intercept(Routes.createInvite, (pending, params) => {
+		requireChannel(params.channelId);
+		return hooks.state.addInvite(params.channelId, guildOfChannel(params.channelId), bodyRecord(pending.body));
+	});
 	rest.intercept(Routes.listChannelInvites, (_pending, params) => hooks.state.channelInvites(params.channelId));
 	rest.intercept(Routes.listGuildInvites, (_pending, params) => hooks.state.guildInvites(params.guildId));
 	rest.intercept(
@@ -509,6 +550,7 @@ export function registerWorldDefaults(
 		(_pending, params) => hooks.state.removeInvite(params.code) ?? apiInvite({ code: params.code }),
 	);
 	rest.intercept(Routes.bulkBan, async (pending, params) => {
+		requireGuild(params.guildId);
 		requirePerm(params.guildId, PermissionFlagsBits.BanMembers);
 		const rawIds = bodyRecord(pending.body).user_ids;
 		const userIds = (Array.isArray(rawIds) ? rawIds : []).map(String);
@@ -609,6 +651,7 @@ export function registerWorldDefaults(
 		webhooks: [],
 	}));
 	rest.intercept(Routes.editGuild, (pending, params) => {
+		requireGuild(params.guildId);
 		const updated = hooks.state.editGuild(params.guildId, bodyRecord(pending.body));
 		return updated ?? { ...apiGuild({ id: params.guildId }), ...bodyRecord(pending.body) };
 	});
@@ -619,18 +662,21 @@ export function registerWorldDefaults(
 		return { user: resolveUser(params.userId) };
 	});
 	rest.intercept(Routes.ban, async (_pending, params) => {
+		requireGuild(params.guildId);
 		requirePerm(params.guildId, PermissionFlagsBits.BanMembers);
 		requireHierarchy(params.guildId, params.userId);
 		await removeMember(params.guildId, params.userId, true);
 		return {};
 	});
 	rest.intercept(Routes.kick, async (_pending, params) => {
+		requireGuild(params.guildId);
 		requirePerm(params.guildId, PermissionFlagsBits.KickMembers);
 		requireHierarchy(params.guildId, params.userId);
 		await removeMember(params.guildId, params.userId, false);
 		return {};
 	});
 	rest.intercept(Routes.unban, (_pending, params) => {
+		requireGuild(params.guildId);
 		hooks.state.unban(params.guildId, params.userId);
 		return {};
 	});
@@ -651,7 +697,10 @@ export function registerWorldDefaults(
 		hooks.state.removeChannelOverwrite(params.channelId, params.overwriteId);
 		return {};
 	});
-	rest.intercept(Routes.triggerTyping, () => ({}));
+	rest.intercept(Routes.triggerTyping, (_pending, params) => {
+		requireChannel(params.channelId);
+		return {};
+	});
 
 	const decodeEmoji = (emoji: string): string => {
 		if (!emoji.includes('%')) return emoji;
@@ -733,6 +782,7 @@ export function registerWorldDefaults(
 		mutate: (member: ApiMember, roleId: string) => string[] | undefined,
 	) =>
 		rest.intercept(route, async (_pending, params) => {
+			requireGuild(params.guildId);
 			requirePerm(params.guildId, PermissionFlagsBits.ManageRoles);
 			requireManageableRole(params.guildId, params.roleId);
 			const entry = findMember(params.guildId, params.userId);
@@ -749,6 +799,7 @@ export function registerWorldDefaults(
 	);
 	interceptRoleMutation(Routes.removeRole, (member, roleId) => member.roles.filter(role => role !== roleId));
 	rest.intercept(Routes.editMember, async (pending, params) => {
+		requireGuild(params.guildId);
 		const entry = findMember(params.guildId, params.userId);
 		if (!entry) return apiMember({ user: apiUser({ id: params.userId }) });
 		const body = bodyRecord(pending.body) as {

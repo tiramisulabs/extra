@@ -67,7 +67,12 @@ const STATUS_TEXT: Record<number, string> = {
 export const DiscordErrors = {
 	MissingPermissions: { status: 403, code: 50013, message: 'Missing Permissions' },
 	MissingAccess: { status: 403, code: 50001, message: 'Missing Access' },
+	UnknownGuild: { status: 404, code: 10004, message: 'Unknown Guild' },
+	UnknownChannel: { status: 404, code: 10003, message: 'Unknown Channel' },
+	UnknownMessage: { status: 404, code: 10008, message: 'Unknown Message' },
 	UnknownMember: { status: 404, code: 10007, message: 'Unknown Member' },
+	UnknownBan: { status: 404, code: 10026, message: 'Unknown Ban' },
+	CannotEditAnotherUsersMessage: { status: 403, code: 50005, message: 'Cannot edit a message authored by another user' },
 	RateLimited: { status: 429, code: 0, message: 'You are being rate limited.' },
 } as const satisfies Record<string, DiscordErrorInit>;
 
