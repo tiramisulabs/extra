@@ -151,6 +151,9 @@ export function registerWorldDefaults(
 		}
 	};
 
+	const resolveUser = (id: string) => world?.users.find(user => user.id === id) ?? apiUser({ id });
+	const guildOfChannel = (channelId: string) => world?.channels.find(channel => channel.id === channelId)?.guild_id;
+
 	interceptFetchOne(
 		rest,
 		Routes.fetchGuild,
@@ -216,7 +219,7 @@ export function registerWorldDefaults(
 	rest.intercept(Routes.listChannelWebhooks, () => []);
 	rest.intercept(Routes.createWebhook, (pending, params) => {
 		const raw = bodyRecord(pending.body);
-		const guildId = world?.channels.find(channel => channel.id === params.channelId)?.guild_id;
+		const guildId = guildOfChannel(params.channelId);
 		return hooks.state.registerWebhook({
 			id: `${WEBHOOK_ID_PREFIX}${params.channelId}`,
 			channelId: params.channelId,
@@ -283,7 +286,7 @@ export function registerWorldDefaults(
 		hooks.state.addChannel(undefined, {
 			...bodyRecord(pending.body),
 			parent_id: params.channelId,
-			guild_id: world?.channels.find(channel => channel.id === params.channelId)?.guild_id,
+			guild_id: guildOfChannel(params.channelId),
 			type: bodyRecord(pending.body).type ?? 11,
 		});
 	rest.intercept(Routes.createThread, threadResponder);
@@ -344,7 +347,7 @@ export function registerWorldDefaults(
 	rest.intercept(Routes.getPollAnswerVoters, (_pending, params) => ({
 		users: hooks.state
 			.pollVoters(params.channelId, params.messageId, Number(params.answerId))
-			.map(userId => world?.users.find(user => user.id === userId) ?? apiUser({ id: userId })),
+			.map(userId => resolveUser(userId)),
 	}));
 
 	rest.intercept(Routes.editOriginalResponse, (pending, params) =>
@@ -413,7 +416,7 @@ export function registerWorldDefaults(
 	rest.intercept(Routes.createInvite, (pending, params) =>
 		hooks.state.addInvite(
 			params.channelId,
-			world?.channels.find(channel => channel.id === params.channelId)?.guild_id,
+			guildOfChannel(params.channelId),
 			bodyRecord(pending.body),
 		),
 	);
@@ -533,7 +536,7 @@ export function registerWorldDefaults(
 		if (!hooks.state.isBanned(params.guildId, params.userId)) {
 			return apiError(404, 10026, 'Unknown Ban');
 		}
-		return { user: world?.users.find(user => user.id === params.userId) ?? apiUser({ id: params.userId }) };
+		return { user: resolveUser(params.userId) };
 	});
 	rest.intercept(Routes.ban, async (_pending, params) => {
 		await removeMember(params.guildId, params.userId, true);
@@ -549,7 +552,7 @@ export function registerWorldDefaults(
 	});
 	rest.intercept(Routes.fetchBans, (_pending, params) =>
 		hooks.state.bans(params.guildId).map(userId => ({
-			user: world?.users.find(user => user.id === userId) ?? apiUser({ id: userId }),
+			user: resolveUser(userId),
 		})),
 	);
 	rest.intercept(Routes.editChannel, (pending, params) => {
@@ -640,7 +643,7 @@ export function registerWorldDefaults(
 	rest.intercept(Routes.listReactions, (_pending, params) =>
 		hooks.state
 			.reactionUsers(params.channelId, params.messageId, params.emoji)
-			.map(userId => world?.users.find(user => user.id === userId) ?? apiUser({ id: userId })),
+			.map(userId => resolveUser(userId)),
 	);
 	const interceptRoleMutation = (
 		route: RouteMatcher,

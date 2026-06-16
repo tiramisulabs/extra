@@ -109,15 +109,12 @@ describe('message references (replies and forwards)', () => {
 
 		const bot = await createMockBot({ commands: [Forward], world });
 		const res = await bot.slash({ name: 'forward', guildId: guild.id, channel, user: actor.user });
-		const snapshot = bot.state.rawMessage(channel.id, res.content ?? '') as
-			| { reference?: unknown; message_snapshots?: { message: { content?: string } }[] }
-			| undefined;
 		const view = bot
 			.cachedGuild(guild.id)
 			?.channel('fwd-chan')
 			?.messages.find(message => message.id === res.content);
 		expect(view?.reference?.type).toBe(1);
-		expect(snapshot?.message_snapshots?.[0]?.message.content).toBe('forward me');
+		expect(view?.snapshots[0]?.content).toBe('forward me');
 		await bot.close();
 	});
 });

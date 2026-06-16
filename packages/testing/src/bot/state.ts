@@ -106,6 +106,7 @@ export interface MessageView {
 	reaction(emoji: string): ReactionView | undefined;
 	reference?: MessageReferenceView;
 	referencedMessage?: { id: string; channelId: string; authorId?: string; content?: string };
+	snapshots: { content?: string; embeds: EmbedView[] }[];
 	poll?: { question?: string; answers: { answerId: number; text?: string }[]; isFinalized: boolean };
 }
 
@@ -1657,6 +1658,13 @@ export class WorldState implements WorldStateReader {
 				size: attachment.size,
 				url: attachment.url,
 			})),
+			snapshots: (message.message_snapshots ?? []).map(snapshot => {
+				const snapMessage = asRecord(snapshot.message);
+				return {
+					...(typeof snapMessage.content === 'string' ? { content: snapMessage.content } : {}),
+					embeds: arrayValue(snapMessage.embeds).map(normalizeEmbed),
+				};
+			}),
 			buttons,
 			button: labelOrCustomId =>
 				buttons.find(button => button.label === labelOrCustomId || button.customId === labelOrCustomId),
