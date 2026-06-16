@@ -21,10 +21,7 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		 */
 		readonly dispatchId?: number,
 		/** Submits a modal as this dispatch's user; supplied by MockBot so {@link fillModal} needs no bot handle. */
-		private readonly modalFiller?: (
-			customId: string,
-			fields: Record<string, string>,
-		) => Dispatch<DispatchResult>,
+		private readonly modalFiller?: (customId: string, fields: Record<string, string>) => Dispatch<DispatchResult>,
 	) {}
 
 	private start(): Promise<T> {

@@ -21,12 +21,16 @@ describe('fidelity fixes', () => {
 		const mentioned = world.registerUser({ id: '123', username: 'mentioned' });
 		const bot = await createMockBot({ world });
 
-		await bot.emitEvent('MESSAGE_CREATE', {
-			id: 'mention-msg',
-			channel_id: channel.id,
-			author: apiUser({ id: 'author' }),
-			content: '<@123> and <@&456> and @everyone',
-		}, { allowNoHandler: true });
+		await bot.emitEvent(
+			'MESSAGE_CREATE',
+			{
+				id: 'mention-msg',
+				channel_id: channel.id,
+				author: apiUser({ id: 'author' }),
+				content: '<@123> and <@&456> and @everyone',
+			},
+			{ allowNoHandler: true },
+		);
 
 		const raw = bot.state.rawMessage(channel.id, 'mention-msg');
 		expect(raw).toBeDefined();
@@ -37,13 +41,17 @@ describe('fidelity fixes', () => {
 		expect(raw?.mention_everyone).toBe(true);
 
 		// allowed_mentions.parse suppresses categories absent from the allowlist.
-		await bot.emitEvent('MESSAGE_CREATE', {
-			id: 'limited-msg',
-			channel_id: channel.id,
-			author: apiUser({ id: 'author' }),
-			content: '<@123> and <@&456> and @everyone',
-			allowed_mentions: { parse: ['users'] },
-		}, { allowNoHandler: true });
+		await bot.emitEvent(
+			'MESSAGE_CREATE',
+			{
+				id: 'limited-msg',
+				channel_id: channel.id,
+				author: apiUser({ id: 'author' }),
+				content: '<@123> and <@&456> and @everyone',
+				allowed_mentions: { parse: ['users'] },
+			},
+			{ allowNoHandler: true },
+		);
 		const limited = bot.state.rawMessage(channel.id, 'limited-msg');
 		expect((limited?.mentions as { id: string }[]).map(user => user.id)).toEqual(['123']);
 		expect(limited?.mention_roles).toEqual([]);

@@ -48,13 +48,14 @@ describe('emitEvent result and factories', () => {
 		expect(bot.registeredEvents()).toContain('GUILD_MEMBER_ADD');
 
 		// Mis-cased gateway name: seyfert finds no handler and silently no-ops — now it throws.
-		await expect(
-			bot.emitEvent('guildMemberAdd' as 'GUILD_MEMBER_ADD', { guild_id: '1' }),
-		).rejects.toThrow(/no handler ran/);
+		await expect(bot.emitEvent('guildMemberAdd' as 'GUILD_MEMBER_ADD', { guild_id: '1' })).rejects.toThrow(
+			/no handler ran/,
+		);
 
 		// A correct name with a registered handler runs fine.
-		await expect(bot.emitEvent('GUILD_MEMBER_ADD', { guild_id: '1', ...apiMember({ user: apiUser() }) })).resolves
-			.toBeDefined();
+		await expect(
+			bot.emitEvent('GUILD_MEMBER_ADD', { guild_id: '1', ...apiMember({ user: apiUser() }) }),
+		).resolves.toBeDefined();
 
 		// An unregistered event used purely to seed world state opts out explicitly.
 		await expect(
