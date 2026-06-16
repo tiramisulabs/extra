@@ -55,7 +55,7 @@ describe('message list pagination', () => {
 			async run(ctx: CommandContext) {
 				const messages = await ctx.client.channels.fetchMessages(channel.id, query);
 				ids = messages.map(message => message.id);
-				await ctx.write({ content: ids.join(',') });
+				await ctx.write({ content: ids.join(',') || 'none' });
 			}
 		}
 

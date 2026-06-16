@@ -298,6 +298,9 @@ export function registerWorldDefaults(
 	});
 
 	rest.intercept(Routes.createMessage, (pending, params) => {
+		const channel = world?.channels.find(entry => entry.id === params.channelId);
+		if (channel?.type === 4) apiError(400, 50024, 'Cannot execute action on this channel type');
+		if (channel?.thread_metadata?.archived) apiError(400, 50083, 'Thread is archived');
 		const view = hooks.state.addMessage(params.channelId, bodyRecord(pending.body));
 		return (
 			hooks.state.rawMessage(params.channelId, view.id) ?? apiMessage({ id: view.id, channelId: params.channelId })
@@ -316,9 +319,11 @@ export function registerWorldDefaults(
 	});
 	rest.intercept(Routes.bulkDeleteMessages, (pending, params) => {
 		const messages = bodyRecord(pending.body).messages;
-		if (Array.isArray(messages)) {
-			for (const messageId of messages) hooks.state.deleteMessage(params.channelId, String(messageId));
+		const ids = Array.isArray(messages) ? messages : [];
+		if (ids.length < 2 || ids.length > 100) {
+			apiError(400, 50035, 'Invalid Form Body: messages must contain between 2 and 100 items');
 		}
+		for (const messageId of ids) hooks.state.deleteMessage(params.channelId, String(messageId));
 		return {};
 	});
 	rest.intercept(Routes.fetchPins, (_pending, params) => ({
@@ -326,6 +331,10 @@ export function registerWorldDefaults(
 		items: hooks.state.pins(params.channelId).map(message => ({ pinned_at: message.timestamp, message })),
 	}));
 	rest.intercept(Routes.pinMessage, (_pending, params) => {
+		const pins = hooks.state.pins(params.channelId);
+		if (pins.length >= 50 && !pins.some(message => message.id === params.messageId)) {
+			apiError(400, 30003, 'Maximum number of pinned messages reached (50)');
+		}
 		hooks.state.pinMessage(params.channelId, params.messageId);
 		return {};
 	});
@@ -603,6 +612,7 @@ export function registerWorldDefaults(
 	};
 
 	rest.intercept(Routes.addReaction, async (_pending, params) => {
+		if (!hooks.state.rawMessage(params.channelId, params.messageId)) apiError(404, 10008, 'Unknown Message');
 		hooks.state.addReaction(params.channelId, params.messageId, params.emoji, hooks.botId);
 		await emitReaction('MESSAGE_REACTION_ADD', params.channelId, params.messageId, params.emoji, hooks.botId);
 		return {};

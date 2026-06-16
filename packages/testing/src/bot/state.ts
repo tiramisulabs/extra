@@ -40,7 +40,47 @@ import {
 	type ThreadMetadata,
 } from './payloads';
 import type { ChannelOverwriteLike } from './permissions';
+import { apiError } from './rest';
 import type { MockWorld } from './world';
+
+const MAX_MESSAGE_CONTENT = 2000;
+
+/**
+ * Validate an outgoing message body against Discord's documented limits, throwing a MockApiError (which the
+ * REST layer surfaces like a real 400) so an over-limit send fails loud instead of passing a happy-path test.
+ * `create` additionally rejects a fully empty body (real code 50006).
+ */
+function assertSendableMessage(raw: Record<string, unknown>, mode: 'create' | 'edit'): void {
+	const content = typeof raw.content === 'string' ? raw.content : undefined;
+	if (content !== undefined && [...content].length > MAX_MESSAGE_CONTENT) {
+		apiError(400, 50035, `Invalid Form Body: content must be ${MAX_MESSAGE_CONTENT} or fewer in length`);
+	}
+	const embeds = Array.isArray(raw.embeds) ? raw.embeds : [];
+	if (embeds.length > 10) apiError(400, 50035, 'Invalid Form Body: a message can have at most 10 embeds');
+	for (const entry of embeds) {
+		const embed = typeof entry === 'object' && entry !== null ? (entry as Record<string, unknown>) : {};
+		if (typeof embed.title === 'string' && [...embed.title].length > 256) {
+			apiError(400, 50035, 'Invalid Form Body: embed title must be 256 or fewer in length');
+		}
+		if (typeof embed.description === 'string' && [...embed.description].length > 4096) {
+			apiError(400, 50035, 'Invalid Form Body: embed description must be 4096 or fewer in length');
+		}
+		if (Array.isArray(embed.fields) && embed.fields.length > 25) {
+			apiError(400, 50035, 'Invalid Form Body: an embed can have at most 25 fields');
+		}
+	}
+	if (mode === 'create') {
+		const empty =
+			(content === undefined || content === '') &&
+			embeds.length === 0 &&
+			(!Array.isArray(raw.components) || raw.components.length === 0) &&
+			raw.poll === undefined &&
+			raw.message_reference === undefined &&
+			(!Array.isArray(raw.sticker_ids) || raw.sticker_ids.length === 0) &&
+			(!Array.isArray(raw.attachments) || raw.attachments.length === 0);
+		if (empty) apiError(400, 50006, 'Cannot send an empty message');
+	}
+}
 
 export interface MessageQuery {
 	limit?: number;
@@ -805,6 +845,7 @@ export class WorldState implements WorldStateReader {
 
 	/** @internal When Discord creates a message. */
 	addMessage(channelId: string, raw: Record<string, unknown>): MessageView {
+		assertSendableMessage(raw, 'create');
 		const channel = this.world.channels.find(entry => entry.id === channelId);
 		const rawAuthor = asRecord(raw.author);
 		const author: ApiUser =
@@ -869,6 +910,7 @@ export class WorldState implements WorldStateReader {
 
 	/** @internal When Discord edits a message. */
 	editMessage(channelId: string, messageId: string, raw: Record<string, unknown>): void {
+		assertSendableMessage(raw, 'edit');
 		const entry = this.world.messages.find(
 			message => message.channelId === channelId && message.message.id === messageId,
 		);
