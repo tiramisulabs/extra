@@ -68,7 +68,40 @@ describe('component flows', () => {
 	test('component dispatch throws when no collector or component command handles the customId', async () => {
 		const bot = await createMockBot({ components: [ConfirmButton] });
 
-		await expect(bot.clickButton('missing-confirm')).rejects.toThrow(/no component handler resolved/i);
+		await expect(bot.clickButton('missing-confirm')).rejects.toThrow(
+			/no handler matched customId "missing-confirm".+ConfirmButton \(filter rejected "missing-confirm"\)/s,
+		);
+		await bot.close();
+	});
+
+	test('component dispatch diagnoses when no component handlers are registered at all', async () => {
+		const bot = await createMockBot({ components: [] });
+
+		await expect(bot.clickButton('poll_yes', { source: 'source-message-id' })).rejects.toThrow(
+			/no component handlers are registered/,
+		);
+		await bot.close();
+	});
+
+	test('component dispatch names the registered handler and reports its customId rejected the dispatch', async () => {
+		class PollButton extends ComponentCommand {
+			componentType = 'Button' as const;
+			customId = 'poll/yes';
+			async run(ctx: ComponentContext<'Button'>) {
+				await ctx.write({ content: 'voted' });
+			}
+		}
+
+		const bot = await createMockBot({ components: [PollButton] });
+
+		const error = await bot.clickButton('poll_yes').then(
+			() => undefined,
+			(reason: unknown) => reason as Error,
+		);
+		expect(error).toBeInstanceOf(TypeError);
+		expect(error?.message).toContain('no handler matched customId "poll_yes"');
+		expect(error?.message).toContain('PollButton');
+		expect(error?.message).toContain('customId "poll/yes" rejected "poll_yes"');
 		await bot.close();
 	});
 
@@ -202,7 +235,9 @@ describe('component flows', () => {
 
 		const bot = await createMockBot({ components: [ProfileModal] });
 
-		await expect(bot.fillModal('missing-profile', { username: 'neo' })).rejects.toThrow(/no modal handler resolved/i);
+		await expect(bot.fillModal('missing-profile', { username: 'neo' })).rejects.toThrow(
+			/no handler matched customId "missing-profile".+ProfileModal \(filter rejected "missing-profile"\)/s,
+		);
 		await bot.close();
 	});
 

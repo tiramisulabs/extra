@@ -682,6 +682,51 @@ export class MockBot {
 		return this.componentCommands().some(command => command instanceof ModalCommand);
 	}
 
+	/**
+	 * Build a diagnostic for an unmatched component/modal dispatch that distinguishes the two failure modes:
+	 * (a) no handler of the right kind is registered at all, vs (b) one IS registered but its customId/filter
+	 * rejected this customId (e.g. a typo). Mirrors seyfert's `_filter`: the customId predicate is computed
+	 * here without side effects; `filter(context)` is only noted, never invoked, since it needs a live context.
+	 */
+	private describeUnmatchedComponent(kind: 'component' | 'modal', customId: string): string {
+		const handlers = this.componentCommands().filter(command =>
+			kind === 'modal' ? command instanceof ModalCommand : !(command instanceof ModalCommand),
+		) as {
+			constructor: { name: string };
+			customId?: string | RegExp;
+			filter?: unknown;
+		}[];
+
+		if (handlers.length === 0) {
+			const kindName = kind === 'modal' ? 'modal' : 'component';
+			const CommandName = kind === 'modal' ? 'ModalCommand' : 'ComponentCommand';
+			return (
+				`no ${kindName} handlers are registered; pass components:[...] to createMockBot ` +
+				`(or register a ${CommandName}).`
+			);
+		}
+
+		const describe = (handler: (typeof handlers)[number]): string => {
+			const name = handler.constructor?.name || '(anonymous)';
+			if (typeof handler.customId === 'string') {
+				if (handler.customId !== customId) return `${name} (customId "${handler.customId}" rejected "${customId}")`;
+				return `${name} (customId matched; filter rejected)`;
+			}
+			if (handler.customId instanceof RegExp) {
+				if (!handler.customId.test(customId)) {
+					return `${name} (customId ${String(handler.customId)} rejected "${customId}")`;
+				}
+				return `${name} (customId matched; filter rejected)`;
+			}
+			if (typeof handler.filter === 'function') return `${name} (filter rejected "${customId}")`;
+			return `${name} (no customId/filter; did not match)`;
+		};
+
+		const listed = handlers.map(handler => `[${describe(handler)}]`).join(', ');
+		const kindName = kind === 'modal' ? 'modal' : 'component';
+		return `no handler matched customId "${customId}". Registered ${kindName} handlers: ${listed}. Check the customId/filter.`;
+	}
+
 	private assertComponentHandleable(verb: string, customId: string, message?: { id: string }): void {
 		if (message || this.hasComponentCommand()) return;
 		throw new TypeError(
@@ -1115,9 +1160,8 @@ export class MockBot {
 			!collectorMatched &&
 			!componentCommandExecuted
 		) {
-			throw new TypeError(
-				`clickButton/selectMenu: no component handler resolved for "${payload.data.custom_id ?? '(unknown)'}".`,
-			);
+			const customId = payload.data.custom_id ?? '(unknown)';
+			throw new TypeError(`clickButton/selectMenu: ${this.describeUnmatchedComponent('component', customId)}`);
 		}
 		if (
 			isModalPayload &&
@@ -1126,7 +1170,8 @@ export class MockBot {
 			!modalMatched &&
 			!componentCommandExecuted
 		) {
-			throw new TypeError(`fillModal: no modal handler resolved for "${payload.data.custom_id ?? '(unknown)'}".`);
+			const customId = payload.data.custom_id ?? '(unknown)';
+			throw new TypeError(`fillModal: ${this.describeUnmatchedComponent('modal', customId)}`);
 		}
 		// This dispatch owns the actions it stamped, plus any interaction-token-routed action (callback, followups,
 		// original-response edits) for THIS interaction's token. The latter may be emitted from a different async

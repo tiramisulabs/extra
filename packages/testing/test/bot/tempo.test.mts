@@ -61,7 +61,9 @@ describe('actors and dispatch tempo', () => {
 
 		// The dispatch executor rejects (no component handler matches "nomatch"); without surfacing that
 		// rejection, until() would wait the full waitForAction timeout and report a generic "timed out" error.
-		await expect(bot.clickButton('nomatch').until(Routes.createMessage)).rejects.toThrow(/no component handler/);
+		await expect(bot.clickButton('nomatch').until(Routes.createMessage)).rejects.toThrow(
+			/no handler matched customId "nomatch"/,
+		);
 		await bot.close();
 	});
 
