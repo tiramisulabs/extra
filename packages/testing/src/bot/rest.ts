@@ -164,6 +164,19 @@ function matchesModeledRoute(method: HttpMethods, route: string): boolean {
 	return MODELED_ROUTES.some(entry => entry.method === method && entry.pattern.test(route));
 }
 
+/**
+ * Declarative shapes for synthetic GET fallbacks (an unhandled GET that matches no interceptor). First
+ * matching row wins; routes with no row default to `{}`. `webhookExempt` rows do NOT report-unhandled for
+ * `/webhooks/` routes (interaction-response reads legitimately fall through to a synthetic) — the default
+ * (no row) is also webhook-exempt. Collection reads warn unconditionally.
+ */
+const SYNTHETIC_GET_SHAPES: { pattern: RegExp; shape: () => unknown; webhookExempt?: boolean }[] = [
+	{ pattern: /\/(messages|bans|roles|channels|pins|invites|emojis|stickers|members)(\?|$)/, shape: () => [] },
+	{ pattern: /\/reactions\//, shape: () => [] },
+	{ pattern: /\/threads\/(archived|active)/, shape: () => ({ threads: [], members: [] }) },
+	{ pattern: /\/messages\/[^/]+$/, shape: () => apiMessage(), webhookExempt: true },
+];
+
 function definedBody(body: Record<string, unknown> | undefined): Record<string, unknown> {
 	if (!body) return {};
 	return Object.fromEntries(Object.entries(body).filter(([, value]) => value !== undefined));
@@ -635,24 +648,10 @@ export class MockApiHandler extends ApiHandler {
 
 	private syntheticResponse(pending: PendingAction): unknown {
 		if (pending.method === 'GET') {
-			if (/\/(messages|bans|roles|channels|pins|invites|emojis|stickers|members)(\?|$)/.test(pending.route)) {
-				this.reportUnhandled(pending);
-				return [];
-			}
-			if (/\/reactions\//.test(pending.route)) {
-				this.reportUnhandled(pending);
-				return [];
-			}
-			if (/\/threads\/(archived|active)/.test(pending.route)) {
-				this.reportUnhandled(pending);
-				return { threads: [], members: [] };
-			}
-			if (/\/messages\/[^/]+$/.test(pending.route)) {
-				if (!/\/webhooks\//.test(pending.route)) this.reportUnhandled(pending);
-				return apiMessage();
-			}
-			if (!/\/webhooks\//.test(pending.route)) this.reportUnhandled(pending);
-			return {};
+			const entry = SYNTHETIC_GET_SHAPES.find(row => row.pattern.test(pending.route));
+			const webhookExempt = entry?.webhookExempt ?? true;
+			if (!webhookExempt || !/\/webhooks\//.test(pending.route)) this.reportUnhandled(pending);
+			return entry ? entry.shape() : {};
 		}
 
 		if (pending.method === 'POST' || pending.method === 'PATCH') {
