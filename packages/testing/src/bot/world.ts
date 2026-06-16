@@ -14,12 +14,15 @@ import {
 	type ApiRoleOptions,
 	type ApiUser,
 	type ApiUserOptions,
+	type ApiVoiceState,
+	type ApiVoiceStateOptions,
 	apiChannel,
 	apiGuild,
 	apiMember,
 	apiMessage,
 	apiRole,
 	apiUser,
+	apiVoiceState,
 } from './payloads';
 import type { PermissionInput } from './permissions';
 import { permissionBits } from './permissions';
@@ -31,6 +34,7 @@ export interface MockWorld {
 	members: { guildId: string; member: ApiMember }[];
 	roles: { guildId: string; role: ApiRole }[];
 	messages: { channelId: string; message: ApiMessage }[];
+	voiceStates?: { guildId: string; voiceState: ApiVoiceState }[];
 }
 
 export type ChannelOverwriteInput = {
@@ -53,7 +57,15 @@ export type WorldGuildOptions = ApiGuildOptions & {
 };
 
 export class WorldBuilder {
-	private readonly world: MockWorld = { guilds: [], channels: [], users: [], members: [], roles: [], messages: [] };
+	private readonly world: MockWorld = {
+		guilds: [],
+		channels: [],
+		users: [],
+		members: [],
+		roles: [],
+		messages: [],
+		voiceStates: [],
+	};
 
 	private requireGuild(guildId: string): void {
 		if (this.world.guilds.some(guild => guild.id === guildId)) return;
@@ -121,6 +133,13 @@ export class WorldBuilder {
 		return member;
 	}
 
+	registerVoiceState(guildId: string, options: ApiVoiceStateOptions = {}): ApiVoiceState {
+		this.requireGuild(guildId);
+		const voiceState = apiVoiceState(options);
+		(this.world.voiceStates ??= []).push({ guildId, voiceState });
+		return voiceState;
+	}
+
 	registerBotMember(guildId: string, options: { roles?: string[]; botId?: string } = {}): ApiMember {
 		return this.registerMember(guildId, {
 			user: apiUser({ id: options.botId ?? TEST_BOT_ID, bot: true, username: TEST_BOT_ID }),
@@ -167,5 +186,8 @@ export async function seedWorld(client: UsingClient, world: MockWorld): Promise<
 	}
 	for (const entry of world.members) {
 		await client.cache.members?.set(CacheFrom.Test, entry.member.user.id, entry.guildId, entry.member);
+	}
+	for (const entry of world.voiceStates ?? []) {
+		await client.cache.voiceStates?.set(CacheFrom.Test, entry.voiceState.user_id, entry.guildId, entry.voiceState);
 	}
 }

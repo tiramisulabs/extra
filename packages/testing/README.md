@@ -482,6 +482,20 @@ Entities are written into the real client cache (`CacheFrom.Test`), so
 `ctx.guild()`, `ctx.channel()`, and related cache reads resolve like production
 cache hits.
 
+Seed **voice states** the same way for commands and middlewares that read
+`member.voice()` (music, moderation, temp-voice bots):
+
+```ts
+const world = mockWorld();
+const guild = world.registerGuild();
+const channel = world.registerChannel(guild.id, { name: 'General' });
+const member = world.registerMember(guild.id);
+world.registerVoiceState(guild.id, { userId: member.user.id, channelId: channel.id });
+```
+
+`member.voice()` then resolves from the cache like a production hit. The mock
+models voice **state** only — actual voice connections and audio are out of scope.
+
 ### Permissions
 
 Bare dispatches stay permissive: `DEFAULT_PERMISSIONS` includes every bit,
@@ -611,6 +625,36 @@ const bot = await createMockBot({
 
 await bot.close();
 ```
+
+Bots with a **custom `Client`** (extra services like a Lavalink manager or a
+database) attach fakes for anything the package doesn't model:
+
+```ts
+const bot = await createMockBot({ commands: [PlayCommand] });
+Object.assign(bot.client, {
+	manager: { getPlayer: () => ({ get: () => true, set: () => {} }), useable: true },
+	database: { getPrefix: async () => '!' },
+});
+```
+
+Commands read these via `ctx.client` by duck typing; the fakes only need the
+methods the path under test touches. Audio/Lavalink playback itself is out of
+scope — stub the manager, don't emulate it.
+
+Simulate Discord **REST failures** to exercise your error handling. `fail`
+throws a faithful `SeyfertError` (same `code`/`metadata` a production `catch`
+sees), not a bespoke mock error:
+
+```ts
+import { DiscordErrors, Routes } from '@slipher/testing';
+
+bot.rest.fail(Routes.ban, DiscordErrors.MissingPermissions); // 403 / 50013
+bot.rest.fail(Routes.createMessage, { status: 429, retryAfter: 5 }); // raw shape
+bot.rest.fail(Routes.ban, DiscordErrors.MissingAccess, { times: 1 }); // fail once, then normal
+```
+
+For sequential or request-conditional failures, use `bot.rest.intercept(...)`
+with a closure.
 
 ### MockGateway
 

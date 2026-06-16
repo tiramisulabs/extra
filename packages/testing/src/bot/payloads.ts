@@ -172,6 +172,49 @@ export function apiMember(options: ApiMemberOptions = {}): ApiMember {
 	};
 }
 
+export interface ApiVoiceStateOptions {
+	userId?: string;
+	channelId?: string | null;
+	sessionId?: string;
+	deaf?: boolean;
+	mute?: boolean;
+	selfDeaf?: boolean;
+	selfMute?: boolean;
+	selfVideo?: boolean;
+	suppress?: boolean;
+}
+
+export interface ApiVoiceState {
+	guild_id?: string;
+	channel_id: string | null;
+	user_id: string;
+	session_id: string;
+	deaf: boolean;
+	mute: boolean;
+	self_deaf: boolean;
+	self_mute: boolean;
+	self_video: boolean;
+	self_stream: boolean;
+	suppress: boolean;
+	request_to_speak_timestamp: string | null;
+}
+
+export function apiVoiceState(options: ApiVoiceStateOptions = {}): ApiVoiceState {
+	return {
+		user_id: options.userId ?? mockId(),
+		channel_id: options.channelId ?? null,
+		session_id: options.sessionId ?? mockId(),
+		deaf: options.deaf ?? false,
+		mute: options.mute ?? false,
+		self_deaf: options.selfDeaf ?? false,
+		self_mute: options.selfMute ?? false,
+		self_video: options.selfVideo ?? false,
+		self_stream: false,
+		suppress: options.suppress ?? false,
+		request_to_speak_timestamp: null,
+	};
+}
+
 export interface MemberEventOptions {
 	guildId: string;
 }
