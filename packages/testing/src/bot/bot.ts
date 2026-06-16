@@ -1300,7 +1300,7 @@ export class MockBot {
 		const denialSettled = new Promise<void>(resolve => {
 			ctx.resolveDenial = resolve;
 		});
-		this._state.registerInteractionToken(payload.token, payload.channel_id);
+		this._state.registerInteractionToken(payload.token, payload.channel_id, payload.type);
 		if (payload.message) {
 			this._state.registerComponentSource(payload.token, payload.message.channel_id, payload.message.id);
 		}

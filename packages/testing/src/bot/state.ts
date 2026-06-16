@@ -740,6 +740,7 @@ export class WorldState implements WorldStateReader {
 	private readonly dmChannelByUser = new Map<string, string>();
 	private readonly messageIdByToken = new Map<string, string>();
 	private readonly channelIdByToken = new Map<string, string>();
+	private readonly originTypeByToken = new Map<string, number>();
 	private readonly acknowledgedTokens = new Set<string>();
 	private readonly componentSourceByToken = new Map<string, { channelId: string; messageId: string }>();
 	private readonly invitesByCode = new Map<string, ApiInvite>();
@@ -1037,8 +1038,14 @@ export class WorldState implements WorldStateReader {
 		return this.channelIdByToken.get(token);
 	}
 
-	registerInteractionToken(token: string, channelId: string): void {
+	registerInteractionToken(token: string, channelId: string, originType?: number): void {
 		this.channelIdByToken.set(token, channelId);
+		if (originType !== undefined) this.originTypeByToken.set(token, originType);
+	}
+
+	/** The originating interaction type (2 command, 3 component, 5 modal submit) for a token, if known. */
+	interactionOrigin(token: string): number | undefined {
+		return this.originTypeByToken.get(token);
 	}
 
 	/** @internal Mark an interaction acknowledged (any callback: reply/defer/update/modal). */

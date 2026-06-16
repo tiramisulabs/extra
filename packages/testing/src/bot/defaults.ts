@@ -316,6 +316,18 @@ export function registerWorldDefaults(
 	// with_response, return the resource so editOrReply(body, true) resolves to a real message.
 	rest.intercept(Routes.interactionCallback, (pending, params) => {
 		const body = bodyRecord(pending.body) as { type?: number; data?: Record<string, unknown> };
+		// F18: reject callback types Discord forbids for the originating interaction. Update callbacks (6/7) are
+		// only legal for component (3) and modal-submit (5) interactions, never an application command (2); a
+		// modal callback (9) cannot answer a modal submit (5). Skipped when the origin type is unknown (lenient).
+		const origin = hooks.state.interactionOrigin(params.token);
+		if (origin !== undefined) {
+			if ((body.type === 6 || body.type === 7) && origin !== 3 && origin !== 5) {
+				apiError(400, 50035, 'Invalid Form Body: message update callbacks are only valid for component or modal interactions');
+			}
+			if (body.type === 9 && origin === 5) {
+				apiError(400, 50035, 'Invalid Form Body: cannot respond to a modal submit with another modal');
+			}
+		}
 		hooks.state.acknowledgeToken(params.token);
 		if (body.type === 6) {
 			// DeferredMessageUpdate: point @original at the component's source message NOW (synchronously), so a
