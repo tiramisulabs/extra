@@ -3,14 +3,7 @@ import { apiError, type MockApiHandler, type RouteMatcher, type RouteResponder }
 import { Routes } from './routes';
 import type { MessageQuery, WorldState } from './state';
 import type { MockWorld } from './world';
-
-type WorldEmitEvent =
-	| 'GUILD_MEMBER_REMOVE'
-	| 'GUILD_MEMBER_UPDATE'
-	| 'MESSAGE_REACTION_ADD'
-	| 'MESSAGE_REACTION_REMOVE'
-	| 'MESSAGE_REACTION_REMOVE_ALL'
-	| 'MESSAGE_REACTION_REMOVE_EMOJI';
+import type { WorldEmitEvent } from './world-events';
 
 interface WorldDefaultHooks {
 	emit: (name: WorldEmitEvent, payload: Record<string, unknown>) => Promise<void>;

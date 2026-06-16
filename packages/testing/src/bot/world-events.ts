@@ -1,5 +1,27 @@
 import type { WorldState } from './state';
 
+/**
+ * Canonical set of gateway events the mock auto-applies to world state. Source of truth for both
+ * directions: typing `WORLD_EVENT_MUTATORS` as `Record<WorldEmitEvent, …>` makes a union member with
+ * no mutator (and a mutator with no union member) a compile error, and typing the REST→gateway `emit`
+ * bridge to it makes emitting an unhandled/typo'd event name a compile error.
+ */
+export type WorldEmitEvent =
+	| 'GUILD_MEMBER_ADD'
+	| 'GUILD_MEMBER_REMOVE'
+	| 'GUILD_MEMBER_UPDATE'
+	| 'CHANNEL_CREATE'
+	| 'CHANNEL_DELETE'
+	| 'MESSAGE_CREATE'
+	| 'MESSAGE_DELETE'
+	| 'MESSAGE_REACTION_ADD'
+	| 'MESSAGE_REACTION_REMOVE'
+	| 'MESSAGE_REACTION_REMOVE_ALL'
+	| 'MESSAGE_REACTION_REMOVE_EMOJI'
+	| 'VOICE_STATE_UPDATE'
+	| 'THREAD_CREATE'
+	| 'THREAD_DELETE';
+
 type WorldEventMutator = (state: WorldState, d: Record<string, unknown>) => void;
 
 /**
@@ -15,7 +37,7 @@ function reactionEmojiKey(emoji: unknown): string | undefined {
 	return typeof id === 'string' && id.length > 0 ? `${name}:${id}` : name;
 }
 
-const WORLD_EVENT_MUTATORS: Record<string, WorldEventMutator> = {
+const WORLD_EVENT_MUTATORS: Record<WorldEmitEvent, WorldEventMutator> = {
 	GUILD_MEMBER_ADD: (state, d) => {
 		const guildId = typeof d.guild_id === 'string' ? d.guild_id : undefined;
 		if (guildId) state.addMember(guildId, d);
@@ -77,5 +99,5 @@ const WORLD_EVENT_MUTATORS: Record<string, WorldEventMutator> = {
 export const WORLD_EVENT_NAMES = Object.keys(WORLD_EVENT_MUTATORS) as readonly string[];
 
 export function applyWorldEvent(state: WorldState, name: string, d: Record<string, unknown>): void {
-	WORLD_EVENT_MUTATORS[name]?.(state, d);
+	WORLD_EVENT_MUTATORS[name as WorldEmitEvent]?.(state, d);
 }

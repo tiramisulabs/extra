@@ -57,6 +57,69 @@ export const Routes = {
 	triggerTyping: { method: 'POST', route: '/channels/:channelId/typing' },
 } as const satisfies Record<string, RouteMatcher>;
 
+/**
+ * Coverage checklist for every {@link Routes} entry. `handled` = registerWorldDefaults installs a
+ * stateful interceptor; `synthetic` = intentionally left to the fail-loud synthetic fallback. The
+ * `satisfies Record<keyof typeof Routes, …>` makes adding a route without classifying it a compile
+ * error — closing the "added a route, forgot the handler" gap the maintenance map tracked by hand.
+ */
+export const ROUTE_COVERAGE = {
+	ban: 'handled',
+	unban: 'handled',
+	kick: 'handled',
+	editMember: 'handled',
+	addRole: 'handled',
+	removeRole: 'handled',
+	createMessage: 'handled',
+	editMessage: 'handled',
+	deleteMessage: 'handled',
+	bulkDeleteMessages: 'handled',
+	createDm: 'handled',
+	createRole: 'handled',
+	editRole: 'handled',
+	deleteRole: 'handled',
+	editGuild: 'handled',
+	fetchBan: 'handled',
+	editChannelPermissions: 'handled',
+	deleteChannelPermission: 'handled',
+	createChannel: 'handled',
+	deleteChannel: 'handled',
+	createThread: 'handled',
+	addReaction: 'handled',
+	removeOwnReaction: 'handled',
+	removeUserReaction: 'handled',
+	removeAllReactions: 'handled',
+	removeEmojiReactions: 'handled',
+	listReactions: 'handled',
+	fetchChannel: 'handled',
+	fetchMember: 'handled',
+	fetchGuild: 'handled',
+	fetchUser: 'handled',
+	fetchOriginalResponse: 'handled',
+	editOriginalResponse: 'handled',
+	deleteOriginalResponse: 'handled',
+	fetchWebhookMessage: 'handled',
+	editWebhookMessage: 'handled',
+	deleteWebhookMessage: 'handled',
+	followup: 'handled',
+	interactionCallback: 'handled',
+	listChannelWebhooks: 'handled',
+	createWebhook: 'handled',
+	fetchMessages: 'handled',
+	fetchMessage: 'handled',
+	fetchRoles: 'handled',
+	fetchChannels: 'handled',
+	fetchBans: 'handled',
+	fetchPins: 'synthetic',
+	editChannel: 'handled',
+	createInvite: 'synthetic',
+	pinMessage: 'synthetic',
+	unpinMessage: 'synthetic',
+	startThreadFromMessage: 'handled',
+	crosspostMessage: 'synthetic',
+	triggerTyping: 'handled',
+} as const satisfies Record<keyof typeof Routes, 'handled' | 'synthetic'>;
+
 export const ORIGINAL_RESPONSE_ROUTE = /\/webhooks\/[^/]+\/[^/]+\/messages\/@original$/;
 export const WEBHOOK_MESSAGE_ROUTE = /\/webhooks\/[^/]+\/[^/]+\/messages\/[^/]+$/;
 export const FOLLOWUP_ROUTE = /\/webhooks\/[^/]+\/[^/]+$/;
