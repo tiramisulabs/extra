@@ -249,7 +249,8 @@ export interface ApiInteractionPayload {
 
 function baseInteraction(options: BaseInteractionOptions, type: number): ApiInteractionPayload {
 	const id = mockId();
-	const user = options.user ?? apiUser();
+	// Clone so two dispatches built from the same `user` object never share a reference (mutation leak).
+	const user = { ...(options.user ?? apiUser()) };
 	const dm = options.guildId === null;
 	const guildId = dm ? undefined : (options.guildId ?? options.channel?.guild_id ?? TEST_GUILD_ID);
 	const channel = options.channel ?? apiChannel({ id: TEST_CHANNEL_ID, guildId: guildId ?? null });

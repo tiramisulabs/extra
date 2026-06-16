@@ -1364,8 +1364,12 @@ export class MockBot {
 			.map(command => command.name);
 		if (!registered.includes(name)) {
 			const typeName = ApplicationCommandType[type] ?? String(type);
+			const otherType = this.client.commands.values.find(command => command.name === name && command.type !== type);
+			const hint = otherType
+				? ` (it IS registered as ${ApplicationCommandType[otherType.type] ?? otherType.type} — use the matching verb)`
+				: '';
 			throw new TypeError(
-				`${verb}: command "${name}" is not registered as ${typeName}. ` +
+				`${verb}: command "${name}" is not registered as ${typeName}${hint}. ` +
 					`Registered ${typeName} commands: ${registered.join(', ') || '(none)'}`,
 			);
 		}

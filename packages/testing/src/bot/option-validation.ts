@@ -100,6 +100,12 @@ export function optionTypesFor(definitions: CommandOptionDefinition[]): Record<s
 
 function validateChatInputOptions(options: ChatInputInteractionOptions, definitions: CommandOptionDefinition[]): void {
 	const entries = new Map(optionEntries(options.options));
+	const declared = new Set(definitions.map(definition => definition.name));
+	for (const name of entries.keys()) {
+		if (!declared.has(name)) {
+			throw new TypeError(`slash: option "${name}" is not declared on command "${options.name}".`);
+		}
+	}
 	for (const definition of definitions) {
 		const input = entries.get(definition.name);
 		if (input === undefined) {

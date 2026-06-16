@@ -498,9 +498,13 @@ models voice **state** only — actual voice connections and audio are out of sc
 
 ### Permissions
 
-Bare dispatches stay permissive: `DEFAULT_PERMISSIONS` includes every bit,
-including `Administrator`, so Seyfert skips missing-permission paths. Restrict a
-test explicitly when you want `onPermissionsFail` or `onBotPermissionsFail`:
+Bare dispatches stay permissive: the **bot's** `app_permissions` default to every
+bit (`DEFAULT_PERMISSIONS`), so `botPermissions` guards pass. The **invoking
+member** defaults to a non-admin set (`DEFAULT_MEMBER_PERMISSIONS`); pass
+`memberPermissions: 'all'` for an admin invoker. Note: the mock does NOT itself
+enforce permissions on REST routes (ban/kick/etc. always succeed) — gating
+happens only through Seyfert's command guards. Restrict a test explicitly to
+trigger `onPermissionsFail` (member) or `onBotPermissionsFail` (bot):
 
 ```ts
 await bot.slash({ name: 'ban', memberPermissions: [] });
@@ -718,14 +722,18 @@ in tests.
 ### Stability
 
 Stable across minor versions: the single default user (`TEST_USER_ID`),
-`onUnhandledRest` defaulting to `'warn'`, empty collection GET fallbacks,
-newest-first message lists, route-id echoing for message fallbacks, and command
-errors flowing through Seyfert hooks instead of rejecting `Dispatch`.
+`onUnhandledRest` defaulting to `'warn'`, empty collection GET fallbacks, and
+newest-first message lists. An unhandled error inside a command/component/modal/
+event handler **rejects the `Dispatch` by default** (`onCommandError: 'throw'`);
+pass `onCommandError: 'capture'` to surface it on `result.error` instead. The
+read-only `bot.state` (`WorldStateReader`) is the supported way to assert on the
+~20 entity types the views don't surface (pins, reactions, bans, webhooks,
+emojis, invites, automod rules, scheduled events, poll voters, …).
 
 Options bags only gain optional fields. Build tests through `createMockBot()` and
 `mockWorld()` rather than subclassing exported classes. Unspecified and subject
-to change during 0.x: `mockId()` format, warning text, `RecordedAction.seq`,
-`MockGateway`, and raw `bot.state` internals.
+to change during 0.x: `mockId()` format, warning text, `RecordedAction.seq`, and
+`MockGateway`.
 
 ### Scope
 
