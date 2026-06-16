@@ -16,6 +16,8 @@ import {
 	apiUser,
 	apiWebhook,
 } from './payloads';
+import { PermissionFlagsBits } from 'seyfert/lib/types';
+import { computeChannelPermissions } from './permissions';
 import { apiError, type MockApiHandler, type RouteMatcher, type RouteResponder } from './rest';
 import { Routes } from './routes';
 import type { MessageQuery, WorldState } from './state';
@@ -153,6 +155,56 @@ export function registerWorldDefaults(
 
 	const resolveUser = (id: string) => world?.users.find(user => user.id === id) ?? apiUser({ id });
 	const guildOfChannel = (channelId: string) => world?.channels.find(channel => channel.id === channelId)?.guild_id;
+
+	// Permission/hierarchy enforcement is OPT-IN: it only activates once a bot member is seeded
+	// (world.registerBotMember). Without one, botGuildPerms returns undefined and every guard early-returns,
+	// so bare moderation dispatches stay permissive (the default a test mock wants).
+	const guildRolesOf = (guildId: string) => world?.roles.filter(entry => entry.guildId === guildId).map(e => e.role) ?? [];
+	const botMemberOf = (guildId: string) =>
+		world?.members.find(entry => entry.guildId === guildId && entry.member.user.id === hooks.botId);
+	const botGuildPerms = (guildId: string): bigint | undefined => {
+		const bot = botMemberOf(guildId);
+		const guild = world?.guilds.find(entry => entry.id === guildId);
+		if (!world || !bot || !guild) return undefined;
+		return BigInt(
+			computeChannelPermissions({
+				guild: { id: guild.id, owner_id: guild.owner_id },
+				roles: guildRolesOf(guildId).map(role => ({ id: role.id, permissions: role.permissions })),
+				member: { userId: hooks.botId, roles: bot.member.roles },
+			}),
+		);
+	};
+	const requirePerm = (guildId: string, bit: bigint) => {
+		const perms = botGuildPerms(guildId);
+		if (perms === undefined) return; // enforcement off (no seeded bot member)
+		if (perms & PermissionFlagsBits.Administrator) return;
+		if (!(perms & bit)) apiError(403, 50013, 'Missing Permissions');
+	};
+	const topRole = (roleIds: string[], roles: { id: string; position: number }[]) =>
+		Math.max(0, ...roleIds.map(id => roles.find(role => role.id === id)?.position ?? 0));
+	const requireHierarchy = (guildId: string, targetUserId: string) => {
+		const bot = botMemberOf(guildId);
+		const guild = world?.guilds.find(entry => entry.id === guildId);
+		if (!world || !bot || !guild) return; // enforcement off
+		if (guild.owner_id === hooks.botId) return; // the bot owns the guild
+		if (guild.owner_id === targetUserId) apiError(403, 50013, 'Missing Permissions');
+		const target = findMember(guildId, targetUserId);
+		if (!target) return;
+		const roles = guildRolesOf(guildId);
+		if (topRole(target.member.roles, roles) >= topRole(bot.member.roles, roles)) {
+			apiError(403, 50013, 'Missing Permissions');
+		}
+	};
+	const requireManageableRole = (guildId: string, roleId: string) => {
+		const bot = botMemberOf(guildId);
+		const guild = world?.guilds.find(entry => entry.id === guildId);
+		if (!world || !bot || !guild) return; // enforcement off
+		if (guild.owner_id === hooks.botId) return;
+		const roles = guildRolesOf(guildId);
+		if ((roles.find(role => role.id === roleId)?.position ?? 0) >= topRole(bot.member.roles, roles)) {
+			apiError(403, 50013, 'Missing Permissions');
+		}
+	};
 
 	interceptFetchOne(
 		rest,
@@ -444,8 +496,10 @@ export function registerWorldDefaults(
 		(_pending, params) => hooks.state.removeInvite(params.code) ?? apiInvite({ code: params.code }),
 	);
 	rest.intercept(Routes.bulkBan, async (pending, params) => {
+		requirePerm(params.guildId, PermissionFlagsBits.BanMembers);
 		const rawIds = bodyRecord(pending.body).user_ids;
 		const userIds = (Array.isArray(rawIds) ? rawIds : []).map(String);
+		for (const userId of userIds) requireHierarchy(params.guildId, userId);
 		for (const userId of userIds) await removeMember(params.guildId, userId, true);
 		return { banned_users: userIds, failed_users: [] };
 	});
@@ -552,10 +606,14 @@ export function registerWorldDefaults(
 		return { user: resolveUser(params.userId) };
 	});
 	rest.intercept(Routes.ban, async (_pending, params) => {
+		requirePerm(params.guildId, PermissionFlagsBits.BanMembers);
+		requireHierarchy(params.guildId, params.userId);
 		await removeMember(params.guildId, params.userId, true);
 		return {};
 	});
 	rest.intercept(Routes.kick, async (_pending, params) => {
+		requirePerm(params.guildId, PermissionFlagsBits.KickMembers);
+		requireHierarchy(params.guildId, params.userId);
 		await removeMember(params.guildId, params.userId, false);
 		return {};
 	});
@@ -662,6 +720,8 @@ export function registerWorldDefaults(
 		mutate: (member: ApiMember, roleId: string) => string[] | undefined,
 	) =>
 		rest.intercept(route, async (_pending, params) => {
+			requirePerm(params.guildId, PermissionFlagsBits.ManageRoles);
+			requireManageableRole(params.guildId, params.roleId);
 			const entry = findMember(params.guildId, params.userId);
 			const roles = entry && mutate(entry.member, params.roleId);
 			if (entry && roles) {
@@ -683,6 +743,10 @@ export function registerWorldDefaults(
 			roles?: string[];
 			communication_disabled_until?: string | null;
 		};
+		if ('nick' in body) requirePerm(params.guildId, PermissionFlagsBits.ManageNicknames);
+		if (body.roles) requirePerm(params.guildId, PermissionFlagsBits.ManageRoles);
+		if ('communication_disabled_until' in body) requirePerm(params.guildId, PermissionFlagsBits.ModerateMembers);
+		requireHierarchy(params.guildId, params.userId);
 		hooks.state.patchMember(params.guildId, params.userId, body);
 		if ('nick' in body) entry.member.nick = body.nick ?? null;
 		if (body.roles) entry.member.roles = [...body.roles];
