@@ -5,11 +5,13 @@ import {
 	type ApiMessage,
 	type ApiRole,
 	type ApiUser,
+	type ApiVoiceState,
 	apiChannel,
 	apiMember,
 	apiMessage,
 	apiRole,
 	apiUser,
+	apiVoiceState,
 	type ThreadMetadata,
 } from './payloads';
 import type { ChannelOverwriteLike } from './permissions';
@@ -526,6 +528,41 @@ export class WorldState {
 		for (const [userId, dmChannelId] of this.dmChannelByUser) {
 			if (dmChannelId === channelId) this.dmChannelByUser.delete(userId);
 		}
+	}
+
+	/**
+	 * @internal Mock internals normally call this on VOICE_STATE_UPDATE. Upserts the voice state for
+	 * `{guild_id, user_id}`; a null `channel_id` is a disconnect and removes the entry.
+	 */
+	setVoiceState(raw: Record<string, unknown>): void {
+		const guildId = stringValue(raw.guild_id);
+		const userId = stringValue(raw.user_id);
+		if (!guildId || !userId) return;
+		const states = (this.world.voiceStates ??= []);
+		const channelId = 'channel_id' in raw ? (stringValue(raw.channel_id) ?? null) : null;
+		if (channelId === null) {
+			this.world.voiceStates = states.filter(
+				entry => !(entry.guildId === guildId && entry.voiceState.user_id === userId),
+			);
+			return;
+		}
+		const voiceState: ApiVoiceState = {
+			...apiVoiceState({
+				userId,
+				channelId,
+				...(stringValue(raw.session_id) === undefined ? {} : { sessionId: stringValue(raw.session_id) }),
+				...(typeof raw.deaf === 'boolean' ? { deaf: raw.deaf } : {}),
+				...(typeof raw.mute === 'boolean' ? { mute: raw.mute } : {}),
+				...(typeof raw.self_deaf === 'boolean' ? { selfDeaf: raw.self_deaf } : {}),
+				...(typeof raw.self_mute === 'boolean' ? { selfMute: raw.self_mute } : {}),
+				...(typeof raw.self_video === 'boolean' ? { selfVideo: raw.self_video } : {}),
+				...(typeof raw.suppress === 'boolean' ? { suppress: raw.suppress } : {}),
+			}),
+			guild_id: guildId,
+		};
+		const existing = states.find(entry => entry.guildId === guildId && entry.voiceState.user_id === userId);
+		if (existing) existing.voiceState = voiceState;
+		else states.push({ guildId, voiceState });
 	}
 
 	/** @internal Mock internals normally call this when Discord opens a DM. */

@@ -2,6 +2,7 @@ import { Command, type CommandContext, Declare } from 'seyfert';
 import { ChannelType } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
 import { createMockBot, WORLD_EVENT_NAMES } from '../../src/bot/bot';
+import { TEST_BOT_ID } from '../../src/bot/constants';
 import { apiMember, apiUser } from '../../src/bot/payloads';
 import { mockWorld } from '../../src/bot/world';
 
@@ -240,7 +241,120 @@ describe('emitEvent bridges into world views', () => {
 				'GUILD_MEMBER_UPDATE',
 				'MESSAGE_CREATE',
 				'MESSAGE_DELETE',
+				'MESSAGE_REACTION_ADD',
+				'MESSAGE_REACTION_REMOVE',
+				'MESSAGE_REACTION_REMOVE_ALL',
+				'MESSAGE_REACTION_REMOVE_EMOJI',
+				'VOICE_STATE_UPDATE',
+				'THREAD_CREATE',
+				'THREAD_DELETE',
 			].sort(),
 		);
+	});
+
+	test('emitEvent MESSAGE_REACTION_ADD updates reaction state through the event path', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'event-react-guild' });
+		const channel = world.registerChannel(guild.id, { id: 'event-react-channel' });
+		const message = world.registerMessage(channel.id, { id: 'event-react-message' });
+
+		const bot = await createMockBot({ world });
+		await bot.emitEvent(
+			'MESSAGE_REACTION_ADD',
+			{
+				channel_id: channel.id,
+				message_id: message.id,
+				user_id: 'reactor',
+				emoji: { name: '👍', id: null },
+				guild_id: guild.id,
+			},
+			{ updateCache: true },
+		);
+
+		expect(bot.state.reactionUsers(channel.id, message.id, '👍')).toEqual(['reactor']);
+		const view = bot
+			.cachedGuild(guild.id)
+			?.channel(channel.id)
+			?.messages.find(entry => entry.id === message.id)
+			?.reaction('👍');
+		expect(view).toMatchObject({ emoji: '👍', count: 1 });
+		await bot.close();
+	});
+
+	test('emitEvent MESSAGE_REACTION_ADD agrees with the REST path on the emoji key', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'agree-react-guild' });
+		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'agree-react-actor' }) });
+		const channel = world.registerChannel(guild.id, { id: 'agree-react-channel' });
+		const message = world.registerMessage(channel.id, { id: 'agree-react-message' });
+
+		@Declare({ name: 'react', description: 'Reacts via REST' })
+		class React extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.client.reactions.add(message.id, channel.id, '🔥');
+				await ctx.write({ content: 'reacted' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [React], world });
+		await bot.slash({ name: 'react', guildId: guild.id, channel, user: actor.user });
+		await bot.emitEvent(
+			'MESSAGE_REACTION_ADD',
+			{
+				channel_id: channel.id,
+				message_id: message.id,
+				user_id: 'event-reactor',
+				emoji: { name: '🔥', id: null },
+				guild_id: guild.id,
+			},
+			{ updateCache: true },
+		);
+
+		expect(bot.state.reactionUsers(channel.id, message.id, '🔥')).toEqual([TEST_BOT_ID, 'event-reactor']);
+		await bot.close();
+	});
+
+	test('emitEvent VOICE_STATE_UPDATE upserts then disconnect removes the voice state', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'voice-guild' });
+		const channel = world.registerChannel(guild.id, { id: 'voice-channel' });
+
+		const bot = await createMockBot({ world });
+		await bot.emitEvent(
+			'VOICE_STATE_UPDATE',
+			{ guild_id: guild.id, user_id: 'speaker', channel_id: channel.id },
+			{ updateCache: true },
+		);
+		expect(bot.voiceState(guild.id, 'speaker')?.channel_id).toBe(channel.id);
+
+		await bot.emitEvent(
+			'VOICE_STATE_UPDATE',
+			{ guild_id: guild.id, user_id: 'speaker', channel_id: null },
+			{ updateCache: true },
+		);
+		expect(bot.voiceState(guild.id, 'speaker')).toBeUndefined();
+		await bot.close();
+	});
+
+	test('emitEvent THREAD_CREATE materializes a thread and THREAD_DELETE removes it', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'thread-event-guild' });
+		const parent = world.registerChannel(guild.id, { id: 'thread-event-parent' });
+
+		const bot = await createMockBot({ world });
+		await bot.emitEvent('THREAD_CREATE', {
+			id: 'event-thread',
+			guild_id: guild.id,
+			parent_id: parent.id,
+			type: 11,
+			thread_metadata: { archived: false, locked: false, auto_archive_duration: 1440 },
+		});
+		const thread = bot.cachedGuild(guild.id)?.thread('event-thread');
+		expect(thread?.id).toBe('event-thread');
+		expect(thread?.parentId).toBe(parent.id);
+
+		await bot.emitEvent('THREAD_DELETE', { id: 'event-thread', guild_id: guild.id });
+		expect(bot.cachedGuild(guild.id)?.thread('event-thread')).toBeUndefined();
+		await bot.close();
 	});
 });
