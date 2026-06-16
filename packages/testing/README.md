@@ -501,9 +501,7 @@ models voice **state** only — actual voice connections and audio are out of sc
 Bare dispatches stay permissive: the **bot's** `app_permissions` default to every
 bit (`DEFAULT_PERMISSIONS`), so `botPermissions` guards pass. The **invoking
 member** defaults to a non-admin set (`DEFAULT_MEMBER_PERMISSIONS`); pass
-`memberPermissions: 'all'` for an admin invoker. Note: the mock does NOT itself
-enforce permissions on REST routes (ban/kick/etc. always succeed) — gating
-happens only through Seyfert's command guards. Restrict a test explicitly to
+`memberPermissions: 'all'` for an admin invoker. Restrict a test explicitly to
 trigger `onPermissionsFail` (member) or `onBotPermissionsFail` (bot):
 
 ```ts
@@ -547,6 +545,12 @@ read `client.cache.roles.values(guildId)` just like production. If a dispatch
 targets a seeded guild with an unregistered user, the mock warns once; register
 that user with `world.registerMember(...)` or pass explicit `memberPermissions`.
 
+Once a bot member is seeded with `world.registerBotMember(...)`, moderation REST
+routes (ban/kick/bulk-ban/edit-member/add-role/remove-role) enforce the bot's
+computed guild permissions and role hierarchy, returning Discord's `403 50013`
+just like production. Without a seeded bot member the routes stay permissive, so
+existing tests are unaffected — opt in by seeding the bot.
+
 Use `apiError()` to drive REST error branches:
 
 ```ts
@@ -579,6 +583,14 @@ role changes, timeouts, and channel overwrites. DMs are queryable by user:
 expect(bot.cachedDm(user.id)?.lastMessage?.content).toBe('Check your inbox');
 ```
 
+Channels and roles also resolve by id alone — no guild id needed — mirroring how
+Discord keys them. The role view carries `permissions` and `color`, not just identity:
+
+```ts
+expect(bot.cachedChannel(channel.id)?.name).toBe('general');
+expect(bot.cachedRole(role.id)?.permissions).toBe('4'); // BanMembers
+```
+
 Seed message history with `registerMessage`; `bot.client.channels.fetchMessages()`
 then returns newest-first without an interceptor:
 
@@ -595,6 +607,20 @@ expect(await bot.client.channels.fetchMessages(channel.id)).toMatchObject([
 Use `ChannelView.overwrites` for permission-matrix assertions. Direct replies
 also remain available as `result.reply?.body.data` when the channel view is not
 the clearest assertion surface.
+
+### Assertion helpers
+
+Naive checks pass green when nothing happened — `expect(result.content).toContain('ok')`
+is satisfied by `content` being `undefined`. These runner-agnostic helpers throw a
+`MockAssertionError` instead, so a handler that silently returned fails loud:
+
+```ts
+import { expectReply, expectDenied, expectError } from '@slipher/testing';
+
+expectReply(result); // throws if no reply/edit/followup was sent
+expectDenied(result, { kind: 'permissions', missing: 'BanMembers' }); // assert a structured denial
+const error = expectError(result, /timeout/); // needs onCommandError: 'capture'
+```
 
 ### Real-world recipes
 

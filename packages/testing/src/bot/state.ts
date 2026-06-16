@@ -175,6 +175,15 @@ export interface GuildMemberView {
 	communicationDisabledUntil?: string | null;
 }
 
+/** Role projection returned by guild/role readers; carries the stored permissions and color, not just identity. */
+export interface RoleView {
+	id: string;
+	name: string;
+	position: number;
+	permissions: string;
+	color: number;
+}
+
 export interface GuildView {
 	id: string;
 	name?: string;
@@ -184,7 +193,7 @@ export interface GuildView {
 	thread(nameOrId: string): ChannelView | undefined;
 	members: GuildMemberView[];
 	member(userId: string): GuildMemberView | undefined;
-	role(nameOrId: string): { id: string; name: string; position: number } | undefined;
+	role(nameOrId: string): RoleView | undefined;
 	bans: string[];
 	emojis: { id: string; name: string }[];
 	emoji(nameOrId: string): { id: string; name: string } | undefined;
@@ -287,6 +296,12 @@ export interface WorldStateReader {
 	snapshot(): WorldSnapshot;
 	diff(before: WorldSnapshot): WorldDiff;
 	guild(guildId: string): GuildView | undefined;
+	/** A channel view by id alone (Discord keys channels globally) — the symmetric partner of cachedGuild(g).channel(id). */
+	channelById(channelId: string): ChannelView | undefined;
+	/** A role view by id alone, carrying permissions/color — the symmetric partner of cachedGuild(g).role(id). */
+	roleById(roleId: string): RoleView | undefined;
+	/** The stored voice state for a member, or undefined. */
+	voiceState(guildId: string, userId: string): ApiVoiceState | undefined;
 	dm(userId: string): ChannelView | undefined;
 	channelMessages(channelId: string, options?: MessageQuery): RawMessage[];
 	messageView(channelId: string, messageId: string): MessageView | undefined;
@@ -427,6 +442,10 @@ function normalizeAttachments(value: unknown): ApiAttachment[] {
 			...(stringValue(raw.url) === undefined ? {} : { url: stringValue(raw.url) }),
 		});
 	});
+}
+
+function roleView(role: { id: string; name: string; position: number; permissions: string; color: number }): RoleView {
+	return { id: role.id, name: role.name, position: role.position, permissions: role.permissions, color: role.color };
 }
 
 function normalizeEmbed(value: unknown): EmbedView {
@@ -613,7 +632,7 @@ export class WorldState implements WorldStateReader {
 			member: userId => members.find(entry => entry.userId === userId),
 			role: nameOrId => {
 				const role = roles.find(entry => entry.id === nameOrId || entry.name === nameOrId);
-				return role ? { id: role.id, name: role.name, position: role.position } : undefined;
+				return role ? roleView(role) : undefined;
 			},
 			bans,
 			emojis: guildEmojis.map(emoji => ({ id: emoji.id, name: emoji.name })),
@@ -631,6 +650,21 @@ export class WorldState implements WorldStateReader {
 			},
 			scheduledEvents: guildScheduledEvents,
 		};
+	}
+
+	channelById(channelId: string): ChannelView | undefined {
+		const channel = this.world.channels.find(entry => entry.id === channelId);
+		return channel ? this.channelView(channel) : undefined;
+	}
+
+	roleById(roleId: string): RoleView | undefined {
+		const role = this.world.roles.find(entry => entry.role.id === roleId)?.role;
+		return role ? roleView(role) : undefined;
+	}
+
+	voiceState(guildId: string, userId: string): ApiVoiceState | undefined {
+		return this.world.voiceStates?.find(entry => entry.guildId === guildId && entry.voiceState.user_id === userId)
+			?.voiceState;
 	}
 
 	dm(userId: string): ChannelView | undefined {

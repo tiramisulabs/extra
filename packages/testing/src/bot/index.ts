@@ -194,6 +194,14 @@ export {
 	type TypedMatchedAction,
 	type ValuePredicate,
 } from './rest';
+export {
+	type ErrorMatcher,
+	type ExpectedDenial,
+	expectDenied,
+	expectError,
+	expectReply,
+	MockAssertionError,
+} from './assertions';
 export { Routes } from './routes';
 export {
 	type BanSnapshot,
@@ -211,6 +219,7 @@ export {
 	type MessageView,
 	type ReactionView,
 	type RoleSnapshot,
+	type RoleView,
 	type WorldDiff,
 	type WorldSnapshot,
 	type WorldStateReader,

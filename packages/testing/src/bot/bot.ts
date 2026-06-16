@@ -88,6 +88,7 @@ import {
 	type GuildMemberView,
 	type GuildView,
 	type MessageView,
+	type RoleView,
 	type WorldDiff,
 	type WorldSnapshot,
 	WorldState,
@@ -980,6 +981,16 @@ export class MockBot {
 		return this._state.dm(userId);
 	}
 
+	/** A channel view by id alone — the symmetric partner of `cachedGuild(guildId)?.channel(id)`, no guildId needed. */
+	cachedChannel(channelId: string): ChannelView | undefined {
+		return this._state.channelById(channelId);
+	}
+
+	/** A role view by id alone (carries permissions/color) — the partner of `cachedGuild(guildId)?.role(id)`. */
+	cachedRole(roleId: string): RoleView | undefined {
+		return this._state.roleById(roleId);
+	}
+
 	/** The view of a stored message by channel + id — collapses the cachedGuild→channel→find chain. */
 	cachedMessage(channelId: string, messageId: string): MessageView | undefined {
 		return this._state.messageView(channelId, messageId);
@@ -992,8 +1003,7 @@ export class MockBot {
 
 	/** The seeded voice state for a guild/user, or undefined when the user is not in voice. */
 	cachedVoiceState(guildId: string, userId: string): ApiVoiceState | undefined {
-		return this.world?.voiceStates?.find(entry => entry.guildId === guildId && entry.voiceState.user_id === userId)
-			?.voiceState;
+		return this._state.voiceState(guildId, userId);
 	}
 
 	/**
