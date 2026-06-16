@@ -1,6 +1,8 @@
-import { Command, type CommandContext, Declare } from 'seyfert';
+import { Command, type CommandContext, createEvent, Declare } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
+import { apiMember, apiUser } from '../../src/bot/payloads';
+import { mockWorld } from '../../src/bot/world';
 import { seedGuildFixture } from './_setup';
 
 @Declare({ name: 'twice', description: 'writes twice (a bug — should be editOrReply/followup)' })
@@ -28,6 +30,22 @@ describe('unhandled command errors', () => {
 		expect(res.error).toBeInstanceOf(Error);
 		expect((res.error as Error).message).toMatch(/already replied/i);
 		expect(res.content).toBe('first');
+		await bot.close();
+	});
+
+	test('a throwing event handler fails the dispatch loud by default', async () => {
+		const onJoin = createEvent({
+			data: { name: 'guildMemberAdd' },
+			run() {
+				throw new Error('event boom');
+			},
+		});
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'ev-guild' });
+		const bot = await createMockBot({ events: [onJoin], world });
+		await expect(
+			bot.emitEvent('GUILD_MEMBER_ADD', { guild_id: guild.id, ...apiMember({ user: apiUser() }) }),
+		).rejects.toThrow(/event boom/);
 		await bot.close();
 	});
 });

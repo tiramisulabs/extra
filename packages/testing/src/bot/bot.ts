@@ -226,7 +226,13 @@ export interface MessageResultBase {
 export interface SayResult extends MessageResultBase {}
 
 /** Result of emitEvent: REST the event handler produced, derived from channel-message writes. */
-export interface EventDispatchResult extends MessageResultBase {}
+export interface EventDispatchResult extends MessageResultBase {
+	/**
+	 * An unhandled error thrown inside an emitted event's handler. Present only under
+	 * `onCommandError: 'capture'`; with the default `'throw'` the dispatch rejects with it instead.
+	 */
+	error?: unknown;
+}
 
 /** Read-only descriptor of a registered application command, surfaced by {@link MockBot.registeredCommands}. */
 export interface RegisteredCommand {
@@ -1640,20 +1646,26 @@ export class MockBot {
 				undefined,
 				async () => {
 					if (updateCache) this.applyWorldEvent(name, d);
-					await dispatchStore.run(
-						{ dispatchId, componentCommandExecuted: false, collectorMatched: false, modalMatched: false },
-						() =>
-							this.client.events.runEvent(
-								name as Parameters<Client['events']['runEvent']>[0],
-								this.client,
-								d,
-								-1,
-								updateCache,
-							),
+					const ctx: DispatchContext = {
+						dispatchId,
+						componentCommandExecuted: false,
+						collectorMatched: false,
+						modalMatched: false,
+					};
+					await dispatchStore.run(ctx, () =>
+						this.client.events.runEvent(
+							name as Parameters<Client['events']['runEvent']>[0],
+							this.client,
+							d,
+							-1,
+							updateCache,
+						),
 					);
+					if (ctx.error !== undefined && this.onCommandError === 'throw') throw ctx.error;
 					const actions = this.rest.actions.filter(action => action.dispatchId === dispatchId);
 					const messages = actions.filter(isOutgoingMessagePost).map(action => (action.body ?? {}) as OutgoingMessage);
-					return messageParts(actions, messages);
+					const result = messageParts(actions, messages);
+					return ctx.error === undefined ? result : { ...result, error: ctx.error };
 				},
 				undefined,
 				dispatchId,
@@ -1754,6 +1766,16 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	installRunErrorCapture('commands');
 	installRunErrorCapture('components');
 	installRunErrorCapture('modals');
+	// Events use a different seam (reportEventFailure, not an options hook). Wrap it to capture a thrown event
+	// handler error into the active dispatch context so emitEvent fails loud too, instead of seyfert swallowing it.
+	const eventsHandler = client.events as unknown as { reportEventFailure?: (name: string, error: unknown) => unknown };
+	if (typeof eventsHandler.reportEventFailure === 'function') {
+		eventsHandler.reportEventFailure = (_name: string, error: unknown) => {
+			const ctx = dispatchStore.getStore();
+			if (ctx && ctx.error === undefined) ctx.error = error;
+			return undefined;
+		};
+	}
 	const gateway = new MockGateway(options.shards ?? 1, options.shardLatency ?? 0);
 	// Client#setServices wraps the custom gateway's existing send hook; seed it from clientOptions first.
 	if (options.clientOptions?.handleSendPayload)
