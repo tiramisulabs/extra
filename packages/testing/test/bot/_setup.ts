@@ -111,6 +111,11 @@ export const blocker = createMiddleware<void>(middle => {
 	middle.stop('blocked');
 });
 
+// Feature-gate pattern: pass() short-circuits the chain so the command's run is skipped (no error, no reply).
+export const passer = createMiddleware<void>(middle => {
+	middle.pass();
+});
+
 // Production guard pattern: deny by replying and returning, WITHOUT next()/stop()/pass().
 export const denierCalls: string[] = [];
 export const denier = createMiddleware<void>(middle => {
@@ -135,7 +140,7 @@ export const slowDenier = createMiddleware<void>(middle => {
 	void ctx.client.channels.fetch(SLOW_DENIER_CHANNEL_ID).then(() => ctx.editOrReply({ content: 'denied' }));
 });
 
-export const testMiddlewares = { blocker, denier, globalCounter, guard, slowDenier };
+export const testMiddlewares = { blocker, denier, globalCounter, guard, passer, slowDenier };
 
 declare module 'seyfert' {
 	interface SeyfertRegistry {

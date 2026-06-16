@@ -107,6 +107,26 @@ describe('structured denial info on dispatch results', () => {
 		await bot.close();
 	});
 
+	@Declare({ name: 'passed-command', description: 'Skipped by a pass() gate' })
+	@Middlewares(['passer'])
+	class PassedCommand extends Command {
+		async run(ctx: CommandContext) {
+			bodyRan.push('passed-command');
+			await ctx.write({ content: 'should not run' });
+		}
+	}
+
+	test('middleware pass() surfaces a structured pass denial and skips run', async () => {
+		const bot = await createMockBot({ commands: [PassedCommand], middlewares: testMiddlewares });
+		const result = await bot.slash({ name: 'passed-command' });
+
+		expect(result.denied).toBe(true);
+		expect(result.denial?.kind).toBe('pass');
+		expect(result.denial?.middleware).toBe('passer');
+		expect(bodyRan).toEqual([]);
+		await bot.close();
+	});
+
 	test('a command that runs successfully is not denied', async () => {
 		const bot = await createMockBot({ commands: [GreetCommand] });
 		const result = await bot.slash({ name: 'greet', options: { name: 'world' } });

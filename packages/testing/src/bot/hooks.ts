@@ -121,11 +121,19 @@ export function installDispatchHooks(client: Client, deps: DispatchHookDeps): Di
 					progressed = true;
 					return controls.stop(...args);
 				};
+				// pass() short-circuits the chain so command.run is skipped — a distinct outcome from a normal
+				// success. Record it as a structured 'pass' denial (denied=true) so a test can assert the gate
+				// skipped the command, instead of it collapsing into the success shape.
+				const pass: MiddlewareControl = (...args) => {
+					if (ctx) ctx.denial = { kind: 'pass', middleware: key };
+					progressed = true;
+					return controls.pass(...args);
+				};
 				const result = real({
 					...controls,
 					next: mark(controls.next),
 					stop,
-					pass: mark(controls.pass),
+					pass,
 				});
 				Promise.resolve(result).then(
 					() => {
