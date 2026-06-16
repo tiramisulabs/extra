@@ -757,6 +757,58 @@ export class WorldState {
 		return role;
 	}
 
+	/** @internal Mock internals normally call this when Discord edits a role. */
+	editRole(guildId: string, roleId: string, patch: Record<string, unknown>): ApiRole | undefined {
+		const entry = this.world.roles.find(role => role.guildId === guildId && role.role.id === roleId);
+		if (!entry) return undefined;
+		if ('name' in patch) entry.role.name = stringValue(patch.name) ?? entry.role.name;
+		if ('permissions' in patch) entry.role.permissions = stringValue(patch.permissions) ?? entry.role.permissions;
+		if ('position' in patch && numberValue(patch.position) !== undefined) entry.role.position = numberValue(patch.position)!;
+		if ('color' in patch && numberValue(patch.color) !== undefined) entry.role.color = numberValue(patch.color)!;
+		return { ...entry.role };
+	}
+
+	/** @internal Mock internals normally call this when Discord deletes a role. */
+	removeRole(guildId: string, roleId: string): void {
+		this.world.roles = this.world.roles.filter(entry => entry.guildId !== guildId || entry.role.id !== roleId);
+	}
+
+	/** @internal Mock internals normally call this when Discord edits a guild. */
+	editGuild(guildId: string, patch: Record<string, unknown>): Record<string, unknown> | undefined {
+		const guild = this.world.guilds.find(entry => entry.id === guildId);
+		if (!guild) return undefined;
+		if ('name' in patch) guild.name = stringValue(patch.name) ?? guild.name;
+		return { ...guild };
+	}
+
+	/** Whether a user is currently banned in a guild. */
+	isBanned(guildId: string, userId: string): boolean {
+		return this.bansByGuild.get(guildId)?.has(userId) ?? false;
+	}
+
+	/** @internal Mock internals normally call this when Discord sets a channel permission overwrite. */
+	setChannelOverwrite(channelId: string, overwriteId: string, overwrite: Record<string, unknown>): void {
+		const channel = this.world.channels.find(entry => entry.id === channelId);
+		if (!channel) return;
+		const next: ChannelOverwriteLike = {
+			id: overwriteId,
+			type: numberValue(overwrite.type) ?? 0,
+			allow: stringValue(overwrite.allow) ?? '0',
+			deny: stringValue(overwrite.deny) ?? '0',
+		};
+		channel.permission_overwrites = [
+			...channel.permission_overwrites.filter(current => current.id !== overwriteId),
+			next,
+		];
+	}
+
+	/** @internal Mock internals normally call this when Discord removes a channel permission overwrite. */
+	removeChannelOverwrite(channelId: string, overwriteId: string): void {
+		const channel = this.world.channels.find(entry => entry.id === channelId);
+		if (!channel) return;
+		channel.permission_overwrites = channel.permission_overwrites.filter(current => current.id !== overwriteId);
+	}
+
 	/** @internal Mock internals normally call this for an interaction's first visible reply. */
 	addOriginalResponse(
 		token: string,

@@ -1,4 +1,4 @@
-import { type ApiMember, apiChannel, apiGuild, apiMember, apiMessage, apiUser } from './payloads';
+import { type ApiMember, apiChannel, apiGuild, apiMember, apiMessage, apiRole, apiUser } from './payloads';
 import { apiError, type MockApiHandler, type RouteMatcher, type RouteResponder } from './rest';
 import { Routes } from './routes';
 import type { MessageQuery, WorldState } from './state';
@@ -243,6 +243,24 @@ export function registerWorldDefaults(
 	});
 
 	rest.intercept(Routes.createRole, (pending, params) => hooks.state.addRole(params.guildId, bodyRecord(pending.body)));
+	rest.intercept(Routes.editRole, (pending, params) => {
+		const updated = hooks.state.editRole(params.guildId, params.roleId, bodyRecord(pending.body));
+		return updated ?? apiRole({ id: params.roleId, ...bodyRecord(pending.body) });
+	});
+	rest.intercept(Routes.deleteRole, (_pending, params) => {
+		hooks.state.removeRole(params.guildId, params.roleId);
+		return {};
+	});
+	rest.intercept(Routes.editGuild, (pending, params) => {
+		const updated = hooks.state.editGuild(params.guildId, bodyRecord(pending.body));
+		return updated ?? { ...apiGuild({ id: params.guildId }), ...bodyRecord(pending.body) };
+	});
+	rest.intercept(Routes.fetchBan, (_pending, params) => {
+		if (!hooks.state.isBanned(params.guildId, params.userId)) {
+			return apiError(404, 10026, 'Unknown Ban');
+		}
+		return { user: world?.users.find(user => user.id === params.userId) ?? apiUser({ id: params.userId }) };
+	});
 	rest.intercept(Routes.ban, async (_pending, params) => {
 		await removeMember(params.guildId, params.userId, true);
 		return {};
@@ -263,6 +281,14 @@ export function registerWorldDefaults(
 	rest.intercept(Routes.editChannel, (pending, params) => {
 		const updated = hooks.state.editChannel(params.channelId, bodyRecord(pending.body));
 		return updated ?? { ...apiChannel({ id: params.channelId }), ...bodyRecord(pending.body) };
+	});
+	rest.intercept(Routes.editChannelPermissions, (pending, params) => {
+		hooks.state.setChannelOverwrite(params.channelId, params.overwriteId, bodyRecord(pending.body));
+		return {};
+	});
+	rest.intercept(Routes.deleteChannelPermission, (_pending, params) => {
+		hooks.state.removeChannelOverwrite(params.channelId, params.overwriteId);
+		return {};
 	});
 	rest.intercept(Routes.triggerTyping, () => ({}));
 
