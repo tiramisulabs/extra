@@ -15,6 +15,11 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		private readonly executor: () => Promise<T>,
 		/** Resolves when seyfert registers a modal for the given userId; supplied by MockBot. */
 		private readonly modalWaiter?: (userId: string) => Promise<void>,
+		/**
+		 * This dispatch's id, so {@link until} can scope its gate to only this dispatch's recorded actions.
+		 * Optional: a gate created without an id stays unscoped (matches any dispatch's actions).
+		 */
+		readonly dispatchId?: number,
 	) {}
 
 	private start(): Promise<T> {
@@ -42,7 +47,7 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 				'Dispatch.until(): this dispatch already ran to completion - step with until() before awaiting it.',
 			);
 		}
-		const gated = this.rest.gateNext(matcher);
+		const gated = this.rest.gateNext(matcher, this.dispatchId);
 		const previous = this.releasePending;
 		this.releasePending = gated.release;
 		this.start();

@@ -2,6 +2,7 @@ import { Command, type CommandContext, ComponentCommand, type ComponentContext, 
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { chatInputInteraction } from '../../src/bot/interactions';
+import { Routes } from '../../src/bot/routes';
 
 describe('concurrent dispatch isolation', () => {
 	test('a slash and a button racing through one dedup gate are attributed to themselves', async () => {
@@ -105,6 +106,62 @@ describe('concurrent dispatch isolation', () => {
 		const seqSets = results.map(result => result.actions.map(action => action.seq));
 		const flat = seqSets.flat();
 		expect(new Set(flat).size).toBe(flat.length);
+
+		await bot.close();
+	});
+
+	test('until() gate resolves with the owning dispatch action, never a concurrent dispatch matching the same route', async () => {
+		// A barrier the test releases AFTER dispatch B has recorded its own matching ban, so a GLOBAL gate
+		// (seq >= startSeq && route matches) created by A would see B's ban first and resolve A.until() with it.
+		// Dispatch-scoped gates must instead resolve A.until() with A's OWN ban.
+		let releaseA!: () => void;
+		const aMayBan = new Promise<void>(resolve => {
+			releaseA = resolve;
+		});
+
+		@Declare({ name: 'ban-a', description: 'Bans user 111 after the barrier opens' })
+		class BanA extends Command {
+			async run(ctx: CommandContext) {
+				await aMayBan;
+				await ctx.client.members.ban('guild-a', '111');
+				await ctx.write({ content: 'a-done' });
+			}
+		}
+
+		@Declare({ name: 'ban-b', description: 'Bans user 222 immediately' })
+		class BanB extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.client.members.ban('guild-b', '222');
+				await ctx.write({ content: 'b-done' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [BanA, BanB], onUnhandledRest: 'silent' });
+
+		const dispatchA = bot.slash({ name: 'ban-a' });
+		// Arm A's gate BEFORE B runs: startSeq is captured now, while A is parked on the barrier.
+		const aGate = dispatchA.until(Routes.ban);
+
+		// Run B to completion: its ban (userId 222) records with seq >= A's startSeq. A global gate would grab it.
+		const resultB = await bot.slash({ name: 'ban-b' });
+		expect(resultB.content).toBe('b-done');
+		const bBan = bot.findCall(Routes.ban, { userId: '222' });
+		expect(bBan).toBeDefined();
+		// A's gate is still parked: B's ban did NOT resolve it (A hasn't banned yet).
+		expect(bBan?.dispatchId).not.toBe(dispatchA.dispatchId);
+
+		// Now let A ban. Its gate must resolve with A's OWN ban (userId 111), not B's already-recorded 222.
+		releaseA();
+		const hit = await aGate;
+
+		// The gate resolved with A's dispatch and A's own ban action (userId 111), not B's (222).
+		expect(hit.dispatchId).toBe(dispatchA.dispatchId);
+		const aBan = bot.findCall(Routes.ban, { userId: '111' });
+		expect(aBan).toBeDefined();
+		expect(hit.seq).toBe(aBan?.seq);
+
+		const resultA = await dispatchA;
+		expect(resultA.content).toBe('a-done');
 
 		await bot.close();
 	});

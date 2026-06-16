@@ -743,6 +743,18 @@ export class MockBot {
 		return undefined;
 	}
 
+	/**
+	 * Resolve which message a component dispatch (clickButton/selectMenu) acts on. With an explicit `source`
+	 * (message id or a {@link RecordedAction}) that wins; otherwise resolution is intentionally GLOBAL — it
+	 * falls back to the most recent sent / interaction-original message across ALL dispatches. That is the
+	 * normal sequential collector flow: a button-click dispatch resolves the message a PRIOR dispatch wrote,
+	 * so making it per-dispatch would break stepping a single user through a multi-dispatch flow.
+	 *
+	 * Under CONCURRENCY this source-less fallback is inherently ambiguous: with several dispatches in flight,
+	 * "the most recent message" is a race. When dispatching concurrently, pass an explicit `source` to
+	 * clickButton/selectMenu to disambiguate which message the component is on. (Gate scoping via
+	 * {@link Dispatch.until} is per-dispatch; this message resolution is deliberately not.)
+	 */
 	private resolveMessageSource(source?: string | RecordedAction): { id: string; channel_id?: string } | undefined {
 		if (typeof source === 'string') return { id: source };
 		if (source) {
@@ -1044,6 +1056,7 @@ export class MockBot {
 				userId,
 				() => this.runInteraction(payload, dispatchId),
 				id => this.onModalRegistered(id),
+				dispatchId,
 			),
 		);
 	}
@@ -1376,6 +1389,7 @@ export class MockBot {
 					return { ...result, choices: body?.type === 8 ? body.data?.choices : undefined };
 				},
 				id => this.onModalRegistered(id),
+				dispatchId,
 			),
 		);
 	}
@@ -1432,6 +1446,11 @@ export class MockBot {
 		return this.dispatchVia('entryPoint', options, entryPointInteraction);
 	}
 
+	/**
+	 * Without an explicit `source`, the target message is resolved globally from the most recent sent /
+	 * interaction-original message (the sequential collector flow). When dispatching CONCURRENTLY, pass an
+	 * explicit `source` to disambiguate which message the button is on — see {@link resolveMessageSource}.
+	 */
 	clickButton(
 		customId: string,
 		options: Omit<ButtonInteractionOptions, 'customId' | 'message'> & { source?: string | RecordedAction } = {},
@@ -1448,6 +1467,11 @@ export class MockBot {
 		});
 	}
 
+	/**
+	 * Without an explicit `source`, the target message is resolved globally from the most recent sent /
+	 * interaction-original message (the sequential collector flow). When dispatching CONCURRENTLY, pass an
+	 * explicit `source` to disambiguate which message the select menu is on — see {@link resolveMessageSource}.
+	 */
 	selectMenu(
 		customId: string,
 		values: string[],
@@ -1514,6 +1538,7 @@ export class MockBot {
 					return messageParts(actions, messages);
 				},
 				id => this.onModalRegistered(id),
+				dispatchId,
 			),
 		);
 	}
@@ -1572,23 +1597,30 @@ export class MockBot {
 		const d = payload as Record<string, unknown>;
 		const dispatchId = nextDispatchId();
 		return this.track(
-			new Dispatch<EventDispatchResult>(this.rest, this.client, undefined, async () => {
-				if (updateCache) this.applyWorldEvent(name, d);
-				await dispatchStore.run(
-					{ dispatchId, componentCommandExecuted: false, collectorMatched: false, modalMatched: false },
-					() =>
-						this.client.events.runEvent(
-							name as Parameters<Client['events']['runEvent']>[0],
-							this.client,
-							d,
-							-1,
-							updateCache,
-						),
-				);
-				const actions = this.rest.actions.filter(action => action.dispatchId === dispatchId);
-				const messages = actions.filter(isOutgoingMessagePost).map(action => (action.body ?? {}) as OutgoingMessage);
-				return messageParts(actions, messages);
-			}),
+			new Dispatch<EventDispatchResult>(
+				this.rest,
+				this.client,
+				undefined,
+				async () => {
+					if (updateCache) this.applyWorldEvent(name, d);
+					await dispatchStore.run(
+						{ dispatchId, componentCommandExecuted: false, collectorMatched: false, modalMatched: false },
+						() =>
+							this.client.events.runEvent(
+								name as Parameters<Client['events']['runEvent']>[0],
+								this.client,
+								d,
+								-1,
+								updateCache,
+							),
+					);
+					const actions = this.rest.actions.filter(action => action.dispatchId === dispatchId);
+					const messages = actions.filter(isOutgoingMessagePost).map(action => (action.body ?? {}) as OutgoingMessage);
+					return messageParts(actions, messages);
+				},
+				undefined,
+				dispatchId,
+			),
 		);
 	}
 

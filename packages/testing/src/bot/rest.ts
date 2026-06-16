@@ -509,7 +509,10 @@ export class MockApiHandler extends ApiHandler {
 		});
 	}
 
-	gateNext(matcher?: RouteMatcher | ActionFilter | ActionPredicate): {
+	gateNext(
+		matcher?: RouteMatcher | ActionFilter | ActionPredicate,
+		dispatchId?: number,
+	): {
 		hit: Promise<RecordedAction>;
 		release: () => void;
 	} {
@@ -517,6 +520,7 @@ export class MockApiHandler extends ApiHandler {
 		const startSeq = this.seq;
 		const test = (action: RecordedAction) =>
 			action.seq >= startSeq &&
+			(dispatchId === undefined || action.dispatchId === dispatchId) &&
 			(!matcher ||
 				(typeof matcher === 'function'
 					? matcher(action)
