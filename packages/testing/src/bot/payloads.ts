@@ -265,6 +265,188 @@ export function apiWebhook(options: ApiWebhookOptions = {}): ApiWebhook {
 	};
 }
 
+export interface ApiStickerOptions {
+	id?: string;
+	name?: string;
+	guildId?: string;
+	description?: string | null;
+	tags?: string;
+	formatType?: number;
+}
+
+export interface ApiSticker {
+	id: string;
+	name: string;
+	description: string | null;
+	tags: string;
+	type: number;
+	format_type: number;
+	guild_id?: string;
+	available: boolean;
+}
+
+export function apiSticker(options: ApiStickerOptions = {}): ApiSticker {
+	return {
+		id: options.id ?? mockId(),
+		name: options.name ?? 'slipher-test-sticker',
+		description: options.description ?? null,
+		tags: options.tags ?? 'slipher',
+		type: 2,
+		format_type: options.formatType ?? 1,
+		...(options.guildId === undefined ? {} : { guild_id: options.guildId }),
+		available: true,
+	};
+}
+
+export interface ApiScheduledEventOptions {
+	id?: string;
+	guildId?: string;
+	channelId?: string | null;
+	name?: string;
+	scheduledStartTime?: string;
+	status?: number;
+	entityType?: number;
+}
+
+export interface ApiScheduledEvent {
+	id: string;
+	guild_id: string;
+	channel_id: string | null;
+	name: string;
+	scheduled_start_time: string;
+	scheduled_end_time: string | null;
+	status: number;
+	entity_type: number;
+	creator_id: string;
+}
+
+export function apiScheduledEvent(options: ApiScheduledEventOptions = {}): ApiScheduledEvent {
+	return {
+		id: options.id ?? mockId(),
+		guild_id: options.guildId ?? mockId(),
+		channel_id: options.channelId ?? null,
+		name: options.name ?? 'slipher-test-event',
+		scheduled_start_time: options.scheduledStartTime ?? mockTimestamp(),
+		scheduled_end_time: null,
+		status: options.status ?? 1,
+		entity_type: options.entityType ?? 2,
+		creator_id: mockId(),
+	};
+}
+
+export interface ApiGuildTemplateOptions {
+	code?: string;
+	name?: string;
+	sourceGuildId?: string;
+	description?: string | null;
+}
+
+export interface ApiGuildTemplate {
+	code: string;
+	name: string;
+	description: string | null;
+	usage_count: number;
+	creator_id: string;
+	source_guild_id: string;
+	is_dirty: boolean | null;
+}
+
+export function apiGuildTemplate(options: ApiGuildTemplateOptions = {}): ApiGuildTemplate {
+	return {
+		code: options.code ?? mockId(),
+		name: options.name ?? 'slipher-test-template',
+		description: options.description ?? null,
+		usage_count: 0,
+		creator_id: mockId(),
+		source_guild_id: options.sourceGuildId ?? mockId(),
+		is_dirty: null,
+	};
+}
+
+export interface ApiSoundboardSoundOptions {
+	soundId?: string;
+	name?: string;
+	guildId?: string;
+	volume?: number;
+	emojiName?: string | null;
+}
+
+export interface ApiSoundboardSound {
+	sound_id: string;
+	name: string;
+	volume: number;
+	emoji_id: string | null;
+	emoji_name: string | null;
+	guild_id?: string;
+	available: boolean;
+}
+
+export function apiSoundboardSound(options: ApiSoundboardSoundOptions = {}): ApiSoundboardSound {
+	return {
+		sound_id: options.soundId ?? mockId(),
+		name: options.name ?? 'slipher-test-sound',
+		volume: options.volume ?? 1,
+		emoji_id: null,
+		emoji_name: options.emojiName ?? null,
+		...(options.guildId === undefined ? {} : { guild_id: options.guildId }),
+		available: true,
+	};
+}
+
+export interface ApiStageInstanceOptions {
+	id?: string;
+	guildId?: string;
+	channelId?: string;
+	topic?: string;
+	privacyLevel?: number;
+}
+
+export interface ApiStageInstance {
+	id: string;
+	guild_id: string;
+	channel_id: string;
+	topic: string;
+	privacy_level: number;
+}
+
+export function apiStageInstance(options: ApiStageInstanceOptions = {}): ApiStageInstance {
+	return {
+		id: options.id ?? mockId(),
+		guild_id: options.guildId ?? mockId(),
+		channel_id: options.channelId ?? mockId(),
+		topic: options.topic ?? 'slipher-test-stage',
+		privacy_level: options.privacyLevel ?? 1,
+	};
+}
+
+export interface ApiAuditLogEntryOptions {
+	id?: string;
+	actionType?: number;
+	userId?: string | null;
+	targetId?: string | null;
+	reason?: string;
+}
+
+export interface ApiAuditLogEntry {
+	id: string;
+	action_type: number;
+	user_id: string | null;
+	target_id: string | null;
+	changes: unknown[];
+	reason?: string;
+}
+
+export function apiAuditLogEntry(options: ApiAuditLogEntryOptions = {}): ApiAuditLogEntry {
+	return {
+		id: options.id ?? mockId(),
+		action_type: options.actionType ?? 1,
+		user_id: options.userId ?? null,
+		target_id: options.targetId ?? null,
+		changes: [],
+		...(options.reason === undefined ? {} : { reason: options.reason }),
+	};
+}
+
 export interface ThreadMetadata {
 	archived: boolean;
 	auto_archive_duration: number;

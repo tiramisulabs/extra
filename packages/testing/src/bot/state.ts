@@ -1,14 +1,20 @@
 import { mockId, mockTimestamp } from '../id';
 import { TEST_BOT_ID } from './constants';
 import {
+	type ApiAuditLogEntry,
 	type ApiAttachment,
 	type ApiAutoModRule,
 	type ApiChannel,
 	type ApiEmoji,
+	type ApiGuildTemplate,
 	type ApiInvite,
 	type ApiMessage,
 	type ApiPoll,
 	type ApiRole,
+	type ApiScheduledEvent,
+	type ApiSoundboardSound,
+	type ApiStageInstance,
+	type ApiSticker,
 	type ApiUser,
 	type ApiVoiceState,
 	type ApiWebhook,
@@ -16,11 +22,15 @@ import {
 	apiAutoModRule,
 	apiChannel,
 	apiEmoji,
+	apiGuildTemplate,
 	apiInvite,
 	apiMember,
 	apiMessage,
 	apiPoll,
 	apiRole,
+	apiScheduledEvent,
+	apiStageInstance,
+	apiSticker,
 	apiUser,
 	apiVoiceState,
 	apiWebhook,
@@ -137,6 +147,9 @@ export interface GuildView {
 	invites: { code: string; channelId: string; uses: number }[];
 	autoModRules: ApiAutoModRule[];
 	autoModRule(id: string): ApiAutoModRule | undefined;
+	stickers: { id: string; name: string }[];
+	sticker(nameOrId: string): { id: string; name: string } | undefined;
+	scheduledEvents: ApiScheduledEvent[];
 }
 
 /** One member captured in a {@link WorldSnapshot}, identified by `guildId` + `userId`. */
@@ -256,6 +269,14 @@ export interface WorldStateReader {
 	webhookById(id: string): ApiWebhook | undefined;
 	webhooksForGuild(guildId: string): ApiWebhook[];
 	webhooksForChannel(channelId: string): ApiWebhook[];
+	stickers(guildId: string): ApiSticker[];
+	sticker(guildId: string, stickerId: string): ApiSticker | undefined;
+	scheduledEvents(guildId: string): ApiScheduledEvent[];
+	scheduledEvent(guildId: string, eventId: string): ApiScheduledEvent | undefined;
+	guildTemplates(guildId: string): ApiGuildTemplate[];
+	soundboardSounds(guildId: string): ApiSoundboardSound[];
+	stageInstance(channelId: string): ApiStageInstance | undefined;
+	auditLogEntries(guildId: string): ApiAuditLogEntry[];
 }
 
 const EMPTY_WORLD = (): MockWorld => ({ guilds: [], channels: [], users: [], members: [], roles: [], messages: [] });
@@ -527,6 +548,12 @@ export class WorldState implements WorldStateReader {
 		const guildAutoModRules = (this.world.autoModRules ?? [])
 			.filter(entry => entry.guildId === guild.id)
 			.map(entry => entry.rule);
+		const guildStickers = (this.world.guildStickers ?? [])
+			.filter(entry => entry.guildId === guild.id)
+			.map(entry => entry.sticker);
+		const guildScheduledEvents = (this.world.scheduledEvents ?? [])
+			.filter(entry => entry.guildId === guild.id)
+			.map(entry => entry.event);
 
 		return {
 			id: guild.id,
@@ -563,6 +590,12 @@ export class WorldState implements WorldStateReader {
 			invites: guildInvites.map(invite => ({ code: invite.code, channelId: invite.channel_id, uses: invite.uses })),
 			autoModRules: guildAutoModRules,
 			autoModRule: id => guildAutoModRules.find(rule => rule.id === id),
+			stickers: guildStickers.map(sticker => ({ id: sticker.id, name: sticker.name })),
+			sticker: nameOrId => {
+				const sticker = guildStickers.find(entry => entry.id === nameOrId || entry.name === nameOrId);
+				return sticker ? { id: sticker.id, name: sticker.name } : undefined;
+			},
+			scheduledEvents: guildScheduledEvents,
 		};
 	}
 
@@ -1319,6 +1352,138 @@ export class WorldState implements WorldStateReader {
 	/** The webhooks of a channel. */
 	webhooksForChannel(channelId: string): ApiWebhook[] {
 		return [...this.webhooksById.values()].filter(webhook => webhook.channel_id === channelId);
+	}
+
+	/** @internal Mock internals normally call this when Discord creates a sticker. */
+	addSticker(guildId: string, raw: Record<string, unknown>): ApiSticker {
+		const sticker = apiSticker({
+			id: stringValue(raw.id),
+			guildId,
+			name: stringValue(raw.name),
+			...(stringValue(raw.tags) === undefined ? {} : { tags: stringValue(raw.tags) }),
+			...(stringValue(raw.description) === undefined ? {} : { description: stringValue(raw.description) }),
+		});
+		(this.world.guildStickers ??= []).push({ guildId, sticker });
+		return sticker;
+	}
+
+	/** @internal Mock internals normally call this when Discord edits a sticker. */
+	editSticker(guildId: string, stickerId: string, patch: Record<string, unknown>): ApiSticker | undefined {
+		const entry = (this.world.guildStickers ?? []).find(s => s.guildId === guildId && s.sticker.id === stickerId);
+		if (!entry) return undefined;
+		if ('name' in patch) entry.sticker.name = stringValue(patch.name) ?? entry.sticker.name;
+		if ('tags' in patch) entry.sticker.tags = stringValue(patch.tags) ?? entry.sticker.tags;
+		if ('description' in patch) entry.sticker.description = stringValue(patch.description) ?? null;
+		return { ...entry.sticker };
+	}
+
+	/** @internal Mock internals normally call this when Discord deletes a sticker. */
+	removeSticker(guildId: string, stickerId: string): void {
+		this.world.guildStickers = (this.world.guildStickers ?? []).filter(
+			s => s.guildId !== guildId || s.sticker.id !== stickerId,
+		);
+	}
+
+	/** The custom stickers of a guild. */
+	stickers(guildId: string): ApiSticker[] {
+		return (this.world.guildStickers ?? []).filter(s => s.guildId === guildId).map(s => s.sticker);
+	}
+
+	/** A single guild sticker by id. */
+	sticker(guildId: string, stickerId: string): ApiSticker | undefined {
+		return (this.world.guildStickers ?? []).find(s => s.guildId === guildId && s.sticker.id === stickerId)?.sticker;
+	}
+
+	/** @internal Mock internals normally call this when Discord creates a scheduled event. */
+	addScheduledEvent(guildId: string, raw: Record<string, unknown>): ApiScheduledEvent {
+		const event = apiScheduledEvent({
+			id: stringValue(raw.id),
+			guildId,
+			name: stringValue(raw.name),
+			...(stringValue(raw.channel_id) === undefined ? {} : { channelId: stringValue(raw.channel_id) }),
+			...(stringValue(raw.scheduled_start_time) === undefined
+				? {}
+				: { scheduledStartTime: stringValue(raw.scheduled_start_time) }),
+			...(numberValue(raw.entity_type) === undefined ? {} : { entityType: numberValue(raw.entity_type) }),
+		});
+		(this.world.scheduledEvents ??= []).push({ guildId, event });
+		return event;
+	}
+
+	/** @internal Mock internals normally call this when Discord deletes a scheduled event. */
+	removeScheduledEvent(guildId: string, eventId: string): void {
+		this.world.scheduledEvents = (this.world.scheduledEvents ?? []).filter(
+			e => e.guildId !== guildId || e.event.id !== eventId,
+		);
+	}
+
+	/** The scheduled events of a guild. */
+	scheduledEvents(guildId: string): ApiScheduledEvent[] {
+		return (this.world.scheduledEvents ?? []).filter(e => e.guildId === guildId).map(e => e.event);
+	}
+
+	/** A single scheduled event by id. */
+	scheduledEvent(guildId: string, eventId: string): ApiScheduledEvent | undefined {
+		return (this.world.scheduledEvents ?? []).find(e => e.guildId === guildId && e.event.id === eventId)?.event;
+	}
+
+	/** @internal Mock internals normally call this when Discord creates a guild template. */
+	addGuildTemplate(guildId: string, raw: Record<string, unknown>): ApiGuildTemplate {
+		const template = apiGuildTemplate({
+			code: stringValue(raw.code),
+			name: stringValue(raw.name),
+			sourceGuildId: guildId,
+			...(stringValue(raw.description) === undefined ? {} : { description: stringValue(raw.description) }),
+		});
+		(this.world.guildTemplates ??= []).push({ guildId, template });
+		return template;
+	}
+
+	/** The templates of a guild. */
+	guildTemplates(guildId: string): ApiGuildTemplate[] {
+		return (this.world.guildTemplates ?? []).filter(t => t.guildId === guildId).map(t => t.template);
+	}
+
+	/** A guild template by code. */
+	guildTemplate(code: string): ApiGuildTemplate | undefined {
+		return (this.world.guildTemplates ?? []).find(t => t.template.code === code)?.template;
+	}
+
+	/** The soundboard sounds of a guild. */
+	soundboardSounds(guildId: string): ApiSoundboardSound[] {
+		return (this.world.soundboardSounds ?? []).filter(s => s.guildId === guildId).map(s => s.sound);
+	}
+
+	/** @internal Mock internals normally call this when Discord creates a stage instance. */
+	addStageInstance(raw: Record<string, unknown>): ApiStageInstance {
+		const channelId = stringValue(raw.channel_id) ?? mockId();
+		const guildId = this.world.channels.find(channel => channel.id === channelId)?.guild_id;
+		const stage = apiStageInstance({
+			channelId,
+			...(guildId === undefined ? {} : { guildId }),
+			...(stringValue(raw.topic) === undefined ? {} : { topic: stringValue(raw.topic) }),
+			...(numberValue(raw.privacy_level) === undefined ? {} : { privacyLevel: numberValue(raw.privacy_level) }),
+		});
+		this.world.stageInstances = [
+			...(this.world.stageInstances ?? []).filter(entry => entry.channel_id !== channelId),
+			stage,
+		];
+		return stage;
+	}
+
+	/** @internal Mock internals normally call this when Discord deletes a stage instance. */
+	removeStageInstance(channelId: string): void {
+		this.world.stageInstances = (this.world.stageInstances ?? []).filter(entry => entry.channel_id !== channelId);
+	}
+
+	/** The live stage instance of a stage channel, if any. */
+	stageInstance(channelId: string): ApiStageInstance | undefined {
+		return (this.world.stageInstances ?? []).find(entry => entry.channel_id === channelId);
+	}
+
+	/** The audit log entries of a guild. */
+	auditLogEntries(guildId: string): ApiAuditLogEntry[] {
+		return (this.world.auditLogEntries ?? []).filter(e => e.guildId === guildId).map(e => e.entry);
 	}
 
 	/** @internal Mock internals normally call this when Discord edits a guild. */

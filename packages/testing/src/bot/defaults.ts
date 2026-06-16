@@ -4,10 +4,14 @@ import {
 	apiChannel,
 	apiEmoji,
 	apiGuild,
+	apiGuildTemplate,
 	apiInvite,
 	apiMember,
 	apiMessage,
 	apiRole,
+	apiScheduledEvent,
+	apiStageInstance,
+	apiSticker,
 	apiThreadMember,
 	apiUser,
 	apiWebhook,
@@ -418,6 +422,68 @@ export function registerWorldDefaults(
 		threads: hooks.state.activeThreads(params.guildId),
 		members: [],
 		has_more: false,
+	}));
+	rest.intercept(Routes.createSticker, (pending, params) => hooks.state.addSticker(params.guildId, bodyRecord(pending.body)));
+	rest.intercept(Routes.fetchStickers, (_pending, params) => hooks.state.stickers(params.guildId));
+	interceptFetchOne(
+		rest,
+		Routes.fetchSticker,
+		params => hooks.state.sticker(params.guildId, params.stickerId),
+		params => apiSticker({ id: params.stickerId, guildId: params.guildId }),
+	);
+	rest.intercept(Routes.editSticker, (pending, params) => {
+		const updated = hooks.state.editSticker(params.guildId, params.stickerId, bodyRecord(pending.body));
+		return updated ?? apiSticker({ id: params.stickerId, guildId: params.guildId });
+	});
+	rest.intercept(Routes.deleteSticker, (_pending, params) => {
+		hooks.state.removeSticker(params.guildId, params.stickerId);
+		return {};
+	});
+	rest.intercept(Routes.fetchScheduledEvents, (_pending, params) => hooks.state.scheduledEvents(params.guildId));
+	rest.intercept(Routes.createScheduledEvent, (pending, params) =>
+		hooks.state.addScheduledEvent(params.guildId, bodyRecord(pending.body)),
+	);
+	interceptFetchOne(
+		rest,
+		Routes.fetchScheduledEvent,
+		params => hooks.state.scheduledEvent(params.guildId, params.eventId),
+		params => apiScheduledEvent({ id: params.eventId, guildId: params.guildId }),
+	);
+	rest.intercept(Routes.deleteScheduledEvent, (_pending, params) => {
+		hooks.state.removeScheduledEvent(params.guildId, params.eventId);
+		return {};
+	});
+	rest.intercept(Routes.listGuildTemplates, (_pending, params) => hooks.state.guildTemplates(params.guildId));
+	rest.intercept(Routes.createGuildTemplate, (pending, params) =>
+		hooks.state.addGuildTemplate(params.guildId, bodyRecord(pending.body)),
+	);
+	rest.intercept(
+		Routes.fetchGuildTemplate,
+		(_pending, params) => hooks.state.guildTemplate(params.code) ?? apiGuildTemplate({ code: params.code }),
+	);
+	rest.intercept(Routes.listGuildSoundboardSounds, (_pending, params) => ({
+		items: hooks.state.soundboardSounds(params.guildId),
+	}));
+	rest.intercept(Routes.listDefaultSoundboardSounds, () => []);
+	rest.intercept(Routes.createStageInstance, pending => hooks.state.addStageInstance(bodyRecord(pending.body)));
+	interceptFetchOne(
+		rest,
+		Routes.fetchStageInstance,
+		params => hooks.state.stageInstance(params.channelId),
+		params => apiStageInstance({ channelId: params.channelId }),
+	);
+	rest.intercept(Routes.deleteStageInstance, (_pending, params) => {
+		hooks.state.removeStageInstance(params.channelId);
+		return {};
+	});
+	rest.intercept(Routes.fetchAuditLogs, (_pending, params) => ({
+		audit_log_entries: hooks.state.auditLogEntries(params.guildId),
+		users: [],
+		auto_moderation_rules: [],
+		guild_scheduled_events: [],
+		integrations: [],
+		threads: [],
+		webhooks: [],
 	}));
 	rest.intercept(Routes.editGuild, (pending, params) => {
 		const updated = hooks.state.editGuild(params.guildId, bodyRecord(pending.body));

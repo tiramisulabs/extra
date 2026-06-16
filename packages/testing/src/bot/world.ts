@@ -2,6 +2,8 @@ import type { UsingClient } from 'seyfert';
 import { CacheFrom } from 'seyfert/lib/cache';
 import { TEST_BOT_ID } from './constants';
 import {
+	type ApiAuditLogEntry,
+	type ApiAuditLogEntryOptions,
 	type ApiAutoModRule,
 	type ApiAutoModRuleOptions,
 	type ApiChannel,
@@ -10,8 +12,18 @@ import {
 	type ApiEmojiOptions,
 	type ApiGuild,
 	type ApiGuildOptions,
+	type ApiGuildTemplate,
+	type ApiGuildTemplateOptions,
 	type ApiInvite,
 	type ApiInviteOptions,
+	type ApiScheduledEvent,
+	type ApiScheduledEventOptions,
+	type ApiSoundboardSound,
+	type ApiSoundboardSoundOptions,
+	type ApiStageInstance,
+	type ApiStageInstanceOptions,
+	type ApiSticker,
+	type ApiStickerOptions,
 	type ApiMember,
 	type ApiMemberOptions,
 	type ApiMessage,
@@ -25,11 +37,17 @@ import {
 	type ApiVoiceStateOptions,
 	type ApiWebhook,
 	type ApiWebhookOptions,
+	apiAuditLogEntry,
 	apiAutoModRule,
 	apiChannel,
 	apiEmoji,
 	apiGuild,
+	apiGuildTemplate,
 	apiInvite,
+	apiScheduledEvent,
+	apiSoundboardSound,
+	apiStageInstance,
+	apiSticker,
 	apiWebhook,
 	apiMember,
 	apiMessage,
@@ -53,6 +71,12 @@ export interface MockWorld {
 	invites?: ApiInvite[];
 	autoModRules?: { guildId: string; rule: ApiAutoModRule }[];
 	webhooks?: ApiWebhook[];
+	guildStickers?: { guildId: string; sticker: ApiSticker }[];
+	scheduledEvents?: { guildId: string; event: ApiScheduledEvent }[];
+	guildTemplates?: { guildId: string; template: ApiGuildTemplate }[];
+	soundboardSounds?: { guildId: string; sound: ApiSoundboardSound }[];
+	stageInstances?: ApiStageInstance[];
+	auditLogEntries?: { guildId: string; entry: ApiAuditLogEntry }[];
 	/**
 	 * App-specific key/value store, untouched by the mock. A domain layer seeds its own state here (and a test
 	 * reads it back via {@link MockBot.worldData}); the mock never interprets or mutates it. Pure passthrough.
@@ -200,6 +224,49 @@ export class WorldBuilder {
 		});
 		(this.world.webhooks ??= []).push(webhook);
 		return webhook;
+	}
+
+	registerSticker(guildId: string, options: Omit<ApiStickerOptions, 'guildId'> = {}): ApiSticker {
+		this.requireGuild(guildId);
+		const sticker = apiSticker({ ...options, guildId });
+		(this.world.guildStickers ??= []).push({ guildId, sticker });
+		return sticker;
+	}
+
+	registerScheduledEvent(guildId: string, options: Omit<ApiScheduledEventOptions, 'guildId'> = {}): ApiScheduledEvent {
+		this.requireGuild(guildId);
+		const event = apiScheduledEvent({ ...options, guildId });
+		(this.world.scheduledEvents ??= []).push({ guildId, event });
+		return event;
+	}
+
+	registerGuildTemplate(guildId: string, options: Omit<ApiGuildTemplateOptions, 'sourceGuildId'> = {}): ApiGuildTemplate {
+		this.requireGuild(guildId);
+		const template = apiGuildTemplate({ ...options, sourceGuildId: guildId });
+		(this.world.guildTemplates ??= []).push({ guildId, template });
+		return template;
+	}
+
+	registerSoundboardSound(guildId: string, options: Omit<ApiSoundboardSoundOptions, 'guildId'> = {}): ApiSoundboardSound {
+		this.requireGuild(guildId);
+		const sound = apiSoundboardSound({ ...options, guildId });
+		(this.world.soundboardSounds ??= []).push({ guildId, sound });
+		return sound;
+	}
+
+	registerStageInstance(channelId: string, options: Omit<ApiStageInstanceOptions, 'channelId'> = {}): ApiStageInstance {
+		this.requireChannel(channelId);
+		const channel = this.world.channels.find(entry => entry.id === channelId);
+		const stage = apiStageInstance({ ...options, channelId, guildId: channel?.guild_id });
+		(this.world.stageInstances ??= []).push(stage);
+		return stage;
+	}
+
+	registerAuditLogEntry(guildId: string, options: ApiAuditLogEntryOptions = {}): ApiAuditLogEntry {
+		this.requireGuild(guildId);
+		const entry = apiAuditLogEntry(options);
+		(this.world.auditLogEntries ??= []).push({ guildId, entry });
+		return entry;
 	}
 
 	registerUser(options: ApiUserOptions = {}): ApiUser {
