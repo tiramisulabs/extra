@@ -92,11 +92,53 @@ describe('world snapshot and diff', () => {
 		await bot.slash({ name: 'noop', guildId: guild.id, channel, user: actor.user });
 		const diff = bot.worldDiff(before);
 
-		for (const entity of [diff.members, diff.channels, diff.messages, diff.roles, diff.bans]) {
+		for (const entity of [
+			diff.members,
+			diff.channels,
+			diff.messages,
+			diff.roles,
+			diff.bans,
+			diff.emojis,
+			diff.invites,
+			diff.autoModRules,
+			diff.stickers,
+			diff.scheduledEvents,
+			diff.webhooks,
+			diff.pins,
+		]) {
 			expect(entity.added).toEqual([]);
 			expect(entity.removed).toEqual([]);
 			expect(entity.changed).toEqual([]);
 		}
+		await bot.close();
+	});
+
+	test('diff tracks emoji, invite, and pin mutations (not just the original five buckets)', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'extra-diff-guild' });
+		const channel = world.registerChannel(guild.id, { id: 'extra-diff-channel' });
+		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'extra-diff-actor' }) });
+		const invite = world.registerInvite(channel.id, { code: 'revoke-me' });
+		const message = world.registerMessage(channel.id, { id: 'pin-me', content: 'pin target' });
+
+		@Declare({ name: 'extra-mutate', description: 'Creates an emoji, revokes an invite, pins a message' })
+		class ExtraMutate extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.client.proxy.guilds(ctx.guildId ?? '').emojis.post({ body: { name: 'sparkle', image: '' } });
+				await ctx.client.proxy.invites(invite.code).delete();
+				await ctx.client.proxy.channels(channel.id).messages.pins(message.id).put();
+				await ctx.write({ content: 'done' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [ExtraMutate], world });
+		const before = bot.worldSnapshot();
+		await bot.slash({ name: 'extra-mutate', guildId: guild.id, channel, user: actor.user });
+		const diff = bot.worldDiff(before);
+
+		expect(diff.emojis.added.map(entry => entry.name)).toContain('sparkle');
+		expect(diff.invites.removed.map(entry => entry.code)).toContain('revoke-me');
+		expect(diff.pins.added).toContainEqual({ channelId: channel.id, messageId: message.id });
 		await bot.close();
 	});
 });

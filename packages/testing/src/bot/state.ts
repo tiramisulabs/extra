@@ -247,6 +247,58 @@ export interface BanSnapshot {
 	userId: string;
 }
 
+/** One emoji captured in a {@link WorldSnapshot}, identified by `guildId` + `id`. */
+export interface EmojiSnapshot {
+	guildId: string;
+	id: string;
+	name: string | null;
+}
+
+/** One invite captured in a {@link WorldSnapshot}, identified by `code`. */
+export interface InviteSnapshot {
+	code: string;
+	channelId: string;
+	uses: number;
+}
+
+/** One automod rule captured in a {@link WorldSnapshot}, identified by `guildId` + `id`. */
+export interface AutoModRuleSnapshot {
+	guildId: string;
+	id: string;
+	name: string;
+	enabled: boolean;
+}
+
+/** One sticker captured in a {@link WorldSnapshot}, identified by `guildId` + `id`. */
+export interface StickerSnapshot {
+	guildId: string;
+	id: string;
+	name: string;
+}
+
+/** One scheduled event captured in a {@link WorldSnapshot}, identified by `guildId` + `id`. */
+export interface ScheduledEventSnapshot {
+	guildId: string;
+	id: string;
+	name: string;
+	status: number;
+	startTime: string;
+	channelId: string | null;
+}
+
+/** One webhook captured in a {@link WorldSnapshot}, identified by `id`. */
+export interface WebhookSnapshot {
+	id: string;
+	channelId: string;
+	name: string | null;
+}
+
+/** One pinned message captured in a {@link WorldSnapshot}, identified by `channelId` + `messageId`. */
+export interface PinSnapshot {
+	channelId: string;
+	messageId: string;
+}
+
 /**
  * Immutable, plain-data capture of the world at a point in time. Produced by {@link WorldState.snapshot}
  * and consumed by {@link WorldState.diff}. Deeply frozen so later world mutations never alter it.
@@ -257,6 +309,13 @@ export interface WorldSnapshot {
 	messages: MessageSnapshot[];
 	roles: RoleSnapshot[];
 	bans: BanSnapshot[];
+	emojis: EmojiSnapshot[];
+	invites: InviteSnapshot[];
+	autoModRules: AutoModRuleSnapshot[];
+	stickers: StickerSnapshot[];
+	scheduledEvents: ScheduledEventSnapshot[];
+	webhooks: WebhookSnapshot[];
+	pins: PinSnapshot[];
 }
 
 /** A single entity that changed between two snapshots, with the names of the differing fields. */
@@ -284,6 +343,13 @@ export interface WorldDiff {
 	messages: EntityDiff<MessageSnapshot>;
 	roles: EntityDiff<RoleSnapshot>;
 	bans: EntityDiff<BanSnapshot>;
+	emojis: EntityDiff<EmojiSnapshot>;
+	invites: EntityDiff<InviteSnapshot>;
+	autoModRules: EntityDiff<AutoModRuleSnapshot>;
+	stickers: EntityDiff<StickerSnapshot>;
+	scheduledEvents: EntityDiff<ScheduledEventSnapshot>;
+	webhooks: EntityDiff<WebhookSnapshot>;
+	pins: EntityDiff<PinSnapshot>;
 }
 
 /**
@@ -575,7 +641,57 @@ export class WorldState implements WorldStateReader {
 		const bans: BanSnapshot[] = [...this.bansByGuild].flatMap(([guildId, userIds]) =>
 			[...userIds].map(userId => ({ guildId, userId })),
 		);
-		return deepFreeze({ members, channels, messages, roles, bans });
+		const emojis: EmojiSnapshot[] = (this.world.guildEmojis ?? []).map(entry => ({
+			guildId: entry.guildId,
+			id: entry.emoji.id,
+			name: entry.emoji.name,
+		}));
+		const invites: InviteSnapshot[] = [...this.invitesByCode.values()].map(invite => ({
+			code: invite.code,
+			channelId: invite.channel_id,
+			uses: invite.uses,
+		}));
+		const autoModRules: AutoModRuleSnapshot[] = (this.world.autoModRules ?? []).map(entry => ({
+			guildId: entry.guildId,
+			id: entry.rule.id,
+			name: entry.rule.name,
+			enabled: entry.rule.enabled,
+		}));
+		const stickers: StickerSnapshot[] = (this.world.guildStickers ?? []).map(entry => ({
+			guildId: entry.guildId,
+			id: entry.sticker.id,
+			name: entry.sticker.name,
+		}));
+		const scheduledEvents: ScheduledEventSnapshot[] = (this.world.scheduledEvents ?? []).map(entry => ({
+			guildId: entry.guildId,
+			id: entry.event.id,
+			name: entry.event.name,
+			status: entry.event.status,
+			startTime: entry.event.scheduled_start_time,
+			channelId: entry.event.channel_id,
+		}));
+		const webhooks: WebhookSnapshot[] = [...this.webhooksById.values()].map(webhook => ({
+			id: webhook.id,
+			channelId: webhook.channel_id,
+			name: webhook.name,
+		}));
+		const pins: PinSnapshot[] = [...this.pinnedByChannel].flatMap(([channelId, messageIds]) =>
+			messageIds.map(messageId => ({ channelId, messageId })),
+		);
+		return deepFreeze({
+			members,
+			channels,
+			messages,
+			roles,
+			bans,
+			emojis,
+			invites,
+			autoModRules,
+			stickers,
+			scheduledEvents,
+			webhooks,
+			pins,
+		});
 	}
 
 	/**
@@ -591,6 +707,17 @@ export class WorldState implements WorldStateReader {
 			messages: diffEntities(before.messages, after.messages, entity => entity.id),
 			roles: diffEntities(before.roles, after.roles, entity => entity.id),
 			bans: diffEntities(before.bans, after.bans, entity => `${entity.guildId}:${entity.userId}`),
+			emojis: diffEntities(before.emojis, after.emojis, entity => `${entity.guildId}:${entity.id}`),
+			invites: diffEntities(before.invites, after.invites, entity => entity.code),
+			autoModRules: diffEntities(before.autoModRules, after.autoModRules, entity => `${entity.guildId}:${entity.id}`),
+			stickers: diffEntities(before.stickers, after.stickers, entity => `${entity.guildId}:${entity.id}`),
+			scheduledEvents: diffEntities(
+				before.scheduledEvents,
+				after.scheduledEvents,
+				entity => `${entity.guildId}:${entity.id}`,
+			),
+			webhooks: diffEntities(before.webhooks, after.webhooks, entity => entity.id),
+			pins: diffEntities(before.pins, after.pins, entity => `${entity.channelId}:${entity.messageId}`),
 		};
 	}
 

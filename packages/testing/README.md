@@ -438,7 +438,26 @@ expect(modal.content).toBe('thanks');
 ```
 
 Use the same `user` for the opener and `fillModal()`. Collector `idle`/`timeout`
-and modal `waitFor` options use real timers, so keep them short in tests.
+and modal `waitFor` options use real timers unless you drive a fake clock — see below.
+
+### Testing timed behavior
+
+Collector `idle`/`timeout` and modal `waitFor` use seyfert's bare global
+`setTimeout`, which the mock can't own. To advance them instantly, bridge your
+runner's fake clock with `withFakeTimers(vi)` — it fakes the right subset
+(`setTimeout`/`clearTimeout` only; faking `setImmediate` would deadlock the drain)
+and returns the `timers` bag in one call. Then `bot.advanceTime(ms)` fires them:
+
+```ts
+import { afterEach, vi } from 'vitest';
+import { createMockBot, withFakeTimers } from '@slipher/testing';
+
+afterEach(() => vi.useRealTimers());
+
+const bot = await createMockBot({ commands: [Cmd], timers: withFakeTimers(vi) });
+await bot.slash({ name: 'opens-a-60s-collector' });
+await bot.advanceTime(60_000); // collector onStop('idle') runs now, no real wait
+```
 
 ### Recorded actions
 

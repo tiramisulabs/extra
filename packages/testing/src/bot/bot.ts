@@ -511,8 +511,10 @@ export interface MockBotOptions {
 	 * Bridge to the test runner's fake-timer clock, used by {@link MockBot.advanceTime}. The mock cannot own
 	 * seyfert's collector/modal timers (they use bare global setTimeout with no injection seam), so advancing
 	 * them is delegated to the runner's fake timers via this user-supplied callback — keeping the package source
-	 * runner-agnostic (no vitest/jest import). Example:
-	 * `timers: { advance: ms => vi.advanceTimersByTime(ms) }`.
+	 * runner-agnostic (no vitest/jest import). The runner's clock MUST fake only `setTimeout`/`clearTimeout`
+	 * (faking `setImmediate` deadlocks the mock's drain). Prefer the `withFakeTimers(vi)` adapter, which installs
+	 * that subset and returns this bag in one call; or wire it by hand:
+	 * `vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }); timers: { advance: ms => vi.advanceTimersByTime(ms) }`.
 	 */
 	timers?: { advance(ms: number): void | Promise<void> };
 }
@@ -1024,9 +1026,10 @@ export class MockBot {
 	}
 
 	/**
-	 * Capture the current world (members, channels, messages, roles, bans) as an immutable, plain-data
-	 * snapshot. Pair with {@link worldDiff} to assert state mutations declaratively. The snapshot is deeply
-	 * frozen, so later dispatches never alter it.
+	 * Capture the current world as an immutable, plain-data snapshot: members, channels, messages, roles,
+	 * bans, emojis, invites, automod rules, stickers, scheduled events, webhooks, and pins. Pair with
+	 * {@link worldDiff} to assert state mutations declaratively. The snapshot is deeply frozen, so later
+	 * dispatches never alter it.
 	 */
 	worldSnapshot(): WorldSnapshot {
 		return this._state.snapshot();
