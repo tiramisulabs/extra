@@ -4,8 +4,16 @@ import { Routes } from './routes';
 import type { WorldState } from './state';
 import type { MockWorld } from './world';
 
+type WorldEmitEvent =
+	| 'GUILD_MEMBER_REMOVE'
+	| 'GUILD_MEMBER_UPDATE'
+	| 'MESSAGE_REACTION_ADD'
+	| 'MESSAGE_REACTION_REMOVE'
+	| 'MESSAGE_REACTION_REMOVE_ALL'
+	| 'MESSAGE_REACTION_REMOVE_EMOJI';
+
 interface WorldDefaultHooks {
-	emit: (name: 'GUILD_MEMBER_REMOVE' | 'GUILD_MEMBER_UPDATE', payload: Record<string, unknown>) => Promise<void>;
+	emit: (name: WorldEmitEvent, payload: Record<string, unknown>) => Promise<void>;
 	removeCachedMember: (guildId: string, userId: string) => Promise<void>;
 	setCachedMember: (guildId: string, userId: string, member: ApiMember) => Promise<void>;
 	simulateGateway: boolean;
@@ -232,6 +240,83 @@ export function registerWorldDefaults(
 		return updated ?? { ...apiChannel({ id: params.channelId }), ...bodyRecord(pending.body) };
 	});
 	rest.intercept(Routes.triggerTyping, () => ({}));
+
+	const decodeEmoji = (emoji: string): string => {
+		if (!emoji.includes('%')) return emoji;
+		try {
+			return decodeURIComponent(emoji);
+		} catch {
+			return emoji;
+		}
+	};
+	// Reaction routes carry the emoji as `name` (unicode) or `name:id` (custom), per seyfert's encodeEmoji.
+	const emojiPayload = (emoji: string): { name: string; id: string | null } => {
+		const decoded = decodeEmoji(emoji);
+		const colon = decoded.indexOf(':');
+		return colon === -1 ? { name: decoded, id: null } : { name: decoded.slice(0, colon), id: decoded.slice(colon + 1) };
+	};
+	const reactionEventBase = (channelId: string, messageId: string) => {
+		const guildId = world?.channels.find(channel => channel.id === channelId)?.guild_id;
+		return {
+			channel_id: channelId,
+			message_id: messageId,
+			...(guildId === undefined ? {} : { guild_id: guildId }),
+		};
+	};
+	const emitReaction = async (
+		name: 'MESSAGE_REACTION_ADD' | 'MESSAGE_REACTION_REMOVE',
+		channelId: string,
+		messageId: string,
+		emoji: string,
+		userId: string,
+	) => {
+		if (!hooks.simulateGateway) return;
+		await hooks.emit(name, {
+			...reactionEventBase(channelId, messageId),
+			user_id: userId,
+			emoji: emojiPayload(emoji),
+		});
+	};
+
+	rest.intercept(Routes.addReaction, async (_pending, params) => {
+		hooks.state.addReaction(params.channelId, params.messageId, params.emoji, hooks.botId);
+		await emitReaction('MESSAGE_REACTION_ADD', params.channelId, params.messageId, params.emoji, hooks.botId);
+		return {};
+	});
+	rest.intercept(Routes.removeOwnReaction, async (_pending, params) => {
+		hooks.state.removeReaction(params.channelId, params.messageId, params.emoji, hooks.botId);
+		await emitReaction('MESSAGE_REACTION_REMOVE', params.channelId, params.messageId, params.emoji, hooks.botId);
+		return {};
+	});
+	rest.intercept(Routes.removeUserReaction, async (_pending, params) => {
+		// `@me` collides with the own-reaction route shape; route it to the bot user for parity.
+		const userId = params.userId === '@me' ? hooks.botId : params.userId;
+		hooks.state.removeReaction(params.channelId, params.messageId, params.emoji, userId);
+		await emitReaction('MESSAGE_REACTION_REMOVE', params.channelId, params.messageId, params.emoji, userId);
+		return {};
+	});
+	rest.intercept(Routes.removeEmojiReactions, async (_pending, params) => {
+		hooks.state.removeEmojiReactions(params.channelId, params.messageId, params.emoji);
+		if (hooks.simulateGateway) {
+			await hooks.emit('MESSAGE_REACTION_REMOVE_EMOJI', {
+				...reactionEventBase(params.channelId, params.messageId),
+				emoji: emojiPayload(params.emoji),
+			});
+		}
+		return {};
+	});
+	rest.intercept(Routes.removeAllReactions, async (_pending, params) => {
+		hooks.state.removeAllReactions(params.channelId, params.messageId);
+		if (hooks.simulateGateway) {
+			await hooks.emit('MESSAGE_REACTION_REMOVE_ALL', reactionEventBase(params.channelId, params.messageId));
+		}
+		return {};
+	});
+	rest.intercept(Routes.listReactions, (_pending, params) =>
+		hooks.state
+			.reactionUsers(params.channelId, params.messageId, params.emoji)
+			.map(userId => world?.users.find(user => user.id === userId) ?? apiUser({ id: userId })),
+	);
 	const interceptRoleMutation = (
 		route: RouteMatcher,
 		mutate: (member: ApiMember, roleId: string) => string[] | undefined,

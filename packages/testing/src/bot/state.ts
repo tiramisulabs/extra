@@ -33,6 +33,13 @@ export interface ButtonView {
 	disabled?: boolean;
 }
 
+export interface ReactionView {
+	emoji: string;
+	count: number;
+	me: boolean;
+	users: string[];
+}
+
 export interface MessageView {
 	id: string;
 	channelId: string;
@@ -42,6 +49,8 @@ export interface MessageView {
 	components: unknown[];
 	buttons: ButtonView[];
 	button(labelOrCustomId: string): ButtonView | undefined;
+	reactions: ReactionView[];
+	reaction(emoji: string): ReactionView | undefined;
 }
 
 export interface ChannelView {
@@ -155,6 +164,7 @@ export class WorldState {
 	private readonly dmChannelByUser = new Map<string, string>();
 	private readonly messageIdByToken = new Map<string, string>();
 	private readonly channelIdByToken = new Map<string, string>();
+	private readonly reactionsByMessage = new Map<string, Map<string, Set<string>>>();
 
 	constructor(seed?: MockWorld) {
 		this.world = seed ?? EMPTY_WORLD();
@@ -219,12 +229,24 @@ export class WorldState {
 		const entry = this.world.messages.find(
 			message => message.channelId === channelId && message.message.id === messageId,
 		);
-		return entry ? { ...entry.message } : undefined;
+		return entry ? this.withReactions(entry.channelId, entry.message) : undefined;
 	}
 
 	rawMessageById(messageId: string): Record<string, unknown> | undefined {
 		const entry = this.world.messages.find(message => message.message.id === messageId);
-		return entry ? { ...entry.message } : undefined;
+		return entry ? this.withReactions(entry.channelId, entry.message) : undefined;
+	}
+
+	/** Discord reflects reactions on the message object as `{ emoji, count, me }`. */
+	private withReactions(channelId: string, message: ApiMessage): Record<string, unknown> {
+		const byEmoji = this.reactionsByMessage.get(this.reactionKey(channelId, message.id));
+		if (!byEmoji || byEmoji.size === 0) return { ...message };
+		const reactions = [...byEmoji].map(([emoji, users]) => ({
+			emoji: emoji.includes(':') ? { name: emoji.split(':')[0], id: emoji.split(':')[1] } : { name: emoji, id: null },
+			count: users.size,
+			me: users.has(TEST_BOT_ID),
+		}));
+		return { ...message, reactions };
 	}
 
 	private rawMessageOr(channelId: string, messageId: string): Record<string, unknown> {
@@ -268,6 +290,9 @@ export class WorldState {
 	/** @internal Mock internals normally call this when Discord deletes a channel. */
 	removeChannel(channelId: string): void {
 		this.world.channels = this.world.channels.filter(channel => channel.id !== channelId);
+		for (const message of this.world.messages) {
+			if (message.channelId === channelId) this.reactionsByMessage.delete(this.reactionKey(channelId, message.message.id));
+		}
 		this.world.messages = this.world.messages.filter(message => message.channelId !== channelId);
 		for (const [userId, dmChannelId] of this.dmChannelByUser) {
 			if (dmChannelId === channelId) this.dmChannelByUser.delete(userId);
@@ -376,9 +401,73 @@ export class WorldState {
 		this.world.messages = this.world.messages.filter(
 			message => message.channelId !== channelId || message.message.id !== messageId,
 		);
+		this.reactionsByMessage.delete(this.reactionKey(channelId, messageId));
 		for (const [token, id] of this.messageIdByToken) {
 			if (id === messageId) this.messageIdByToken.delete(token);
 		}
+	}
+
+	private reactionKey(channelId: string, messageId: string): string {
+		return `${channelId}:${messageId}`;
+	}
+
+	/** Reaction emojis arrive URL-encoded on the route (`%`-escaped); decode for stable state keys. */
+	private decodeEmoji(emoji: string): string {
+		if (!emoji.includes('%')) return emoji;
+		try {
+			return decodeURIComponent(emoji);
+		} catch {
+			return emoji;
+		}
+	}
+
+	/** @internal Mock internals normally call this when a user reacts to a message. */
+	addReaction(channelId: string, messageId: string, emoji: string, userId: string): void {
+		const key = this.reactionKey(channelId, messageId);
+		const decoded = this.decodeEmoji(emoji);
+		const byEmoji = this.reactionsByMessage.get(key) ?? new Map<string, Set<string>>();
+		const users = byEmoji.get(decoded) ?? new Set<string>();
+		users.add(userId);
+		byEmoji.set(decoded, users);
+		this.reactionsByMessage.set(key, byEmoji);
+	}
+
+	/** @internal Mock internals normally call this when a user removes their reaction. */
+	removeReaction(channelId: string, messageId: string, emoji: string, userId: string): void {
+		const byEmoji = this.reactionsByMessage.get(this.reactionKey(channelId, messageId));
+		if (!byEmoji) return;
+		const decoded = this.decodeEmoji(emoji);
+		const users = byEmoji.get(decoded);
+		if (!users) return;
+		users.delete(userId);
+		if (users.size === 0) byEmoji.delete(decoded);
+	}
+
+	/** @internal Mock internals normally call this when all reactions are purged from a message. */
+	removeAllReactions(channelId: string, messageId: string): void {
+		this.reactionsByMessage.delete(this.reactionKey(channelId, messageId));
+	}
+
+	/** @internal Mock internals normally call this when one emoji's reactions are purged. */
+	removeEmojiReactions(channelId: string, messageId: string, emoji: string): void {
+		this.reactionsByMessage.get(this.reactionKey(channelId, messageId))?.delete(this.decodeEmoji(emoji));
+	}
+
+	/** The user ids who reacted to a message with a given emoji. */
+	reactionUsers(channelId: string, messageId: string, emoji: string): string[] {
+		const users = this.reactionsByMessage.get(this.reactionKey(channelId, messageId))?.get(this.decodeEmoji(emoji));
+		return users ? [...users] : [];
+	}
+
+	private reactionViews(channelId: string, messageId: string): ReactionView[] {
+		const byEmoji = this.reactionsByMessage.get(this.reactionKey(channelId, messageId));
+		if (!byEmoji) return [];
+		return [...byEmoji].map(([emoji, users]) => ({
+			emoji,
+			count: users.size,
+			me: users.has(TEST_BOT_ID),
+			users: [...users],
+		}));
 	}
 
 	/** @internal Mock internals normally call this when Discord adds a member. Idempotent (replace-or-push). */
@@ -560,6 +649,7 @@ export class WorldState {
 	private messageView(message: ApiMessage): MessageView {
 		const buttons: ButtonView[] = [];
 		collectButtons(message.components, buttons);
+		const reactions = this.reactionViews(message.channel_id, message.id);
 		return {
 			id: message.id,
 			channelId: message.channel_id,
@@ -570,6 +660,8 @@ export class WorldState {
 			buttons,
 			button: labelOrCustomId =>
 				buttons.find(button => button.label === labelOrCustomId || button.customId === labelOrCustomId),
+			reactions,
+			reaction: emoji => reactions.find(entry => entry.emoji === this.decodeEmoji(emoji)),
 		};
 	}
 }
