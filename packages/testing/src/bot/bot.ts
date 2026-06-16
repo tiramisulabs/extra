@@ -961,6 +961,11 @@ export class MockBot {
 		return this._state.dm(userId);
 	}
 
+	/** Seed a vote on a poll answer (poll voters are not part of the message body), then read it via getAnswerVoters. */
+	castPollVote(channelId: string, messageId: string, answerId: number, userId: string): void {
+		this._state.addPollVoter(channelId, messageId, answerId, userId);
+	}
+
 	/** The seeded voice state for a guild/user, or undefined when the user is not in voice. */
 	cachedVoiceState(guildId: string, userId: string): ApiVoiceState | undefined {
 		return this.world?.voiceStates?.find(entry => entry.guildId === guildId && entry.voiceState.user_id === userId)

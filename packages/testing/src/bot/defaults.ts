@@ -226,6 +226,17 @@ export function registerWorldDefaults(
 		members: [],
 		has_more: false,
 	}));
+	rest.intercept(
+		Routes.endPoll,
+		(_pending, params) =>
+			hooks.state.finalizePoll(params.channelId, params.messageId) ??
+			apiMessage({ id: params.messageId, channelId: params.channelId }),
+	);
+	rest.intercept(Routes.getPollAnswerVoters, (_pending, params) => ({
+		users: hooks.state
+			.pollVoters(params.channelId, params.messageId, Number(params.answerId))
+			.map(userId => world?.users.find(user => user.id === userId) ?? apiUser({ id: userId })),
+	}));
 
 	rest.intercept(Routes.editOriginalResponse, (pending, params) =>
 		hooks.state.upsertOriginalResponse(params.interactionToken, bodyRecord(pending.body), hooks.botId),

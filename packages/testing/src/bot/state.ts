@@ -4,6 +4,7 @@ import {
 	type ApiAttachment,
 	type ApiChannel,
 	type ApiMessage,
+	type ApiPoll,
 	type ApiRole,
 	type ApiUser,
 	type ApiVoiceState,
@@ -11,6 +12,7 @@ import {
 	apiChannel,
 	apiMember,
 	apiMessage,
+	apiPoll,
 	apiRole,
 	apiUser,
 	apiVoiceState,
@@ -80,6 +82,7 @@ export interface MessageView {
 	reaction(emoji: string): ReactionView | undefined;
 	reference?: MessageReferenceView;
 	referencedMessage?: { id: string; channelId: string; authorId?: string; content?: string };
+	poll?: { question?: string; answers: { answerId: number; text?: string }[]; isFinalized: boolean };
 }
 
 export interface ChannelView {
@@ -223,6 +226,7 @@ export interface WorldStateReader {
 	isBanned(guildId: string, userId: string): boolean;
 	pins(channelId: string): Record<string, unknown>[];
 	archivedThreads(channelId: string, type: 'public' | 'private'): Record<string, unknown>[];
+	pollVoters(channelId: string, messageId: string, answerId: number): string[];
 }
 
 const EMPTY_WORLD = (): MockWorld => ({ guilds: [], channels: [], users: [], members: [], roles: [], messages: [] });
@@ -304,6 +308,19 @@ function normalizeThreadMetadata(value: unknown): ThreadMetadata {
 	};
 }
 
+function normalizePoll(raw: Record<string, unknown>): ApiPoll {
+	const question = asRecord(raw.question);
+	return apiPoll({
+		question: stringValue(question.text) === undefined ? {} : { text: stringValue(question.text) },
+		answers: arrayValue(raw.answers).map(entry => {
+			const media = asRecord(asRecord(entry).poll_media);
+			return stringValue(media.text) === undefined ? {} : { text: stringValue(media.text) };
+		}),
+		...(typeof raw.allow_multiselect === 'boolean' ? { allowMultiselect: raw.allow_multiselect } : {}),
+		...(numberValue(raw.layout_type) === undefined ? {} : { layoutType: numberValue(raw.layout_type) }),
+	});
+}
+
 function normalizeAttachments(value: unknown): ApiAttachment[] {
 	return arrayValue(value).map(entry => {
 		const raw = asRecord(entry);
@@ -372,6 +389,7 @@ export class WorldState implements WorldStateReader {
 	private readonly channelIdByToken = new Map<string, string>();
 	private readonly reactionsByMessage = new Map<string, Map<string, Set<string>>>();
 	private readonly pinnedByChannel = new Map<string, string[]>();
+	private readonly pollVotersByMessage = new Map<string, Map<number, Set<string>>>();
 
 	constructor(seed?: MockWorld) {
 		this.world = seed ?? EMPTY_WORLD();
@@ -738,6 +756,13 @@ export class WorldState implements WorldStateReader {
 				message.referenced_message = referenced;
 			}
 		}
+		if ('poll' in raw && raw.poll) {
+			const poll = normalizePoll(asRecord(raw.poll));
+			message.poll = poll;
+			const voters = new Map<number, Set<string>>();
+			for (const answer of poll.answers) voters.set(answer.answer_id, new Set());
+			this.pollVotersByMessage.set(this.reactionKey(channelId, message.id), voters);
+		}
 		this.world.messages.push({ channelId, message });
 		return this.messageView(message);
 	}
@@ -761,6 +786,7 @@ export class WorldState implements WorldStateReader {
 			message => message.channelId !== channelId || message.message.id !== messageId,
 		);
 		this.reactionsByMessage.delete(this.reactionKey(channelId, messageId));
+		this.pollVotersByMessage.delete(this.reactionKey(channelId, messageId));
 		const pinned = this.pinnedByChannel.get(channelId);
 		if (pinned) {
 			const next = pinned.filter(id => id !== messageId);
@@ -942,6 +968,47 @@ export class WorldState implements WorldStateReader {
 					channel.thread_metadata?.archived === true,
 			)
 			.map(channel => ({ ...channel }));
+	}
+
+	/** @internal Records a vote on a poll answer; the mock exposes this via `bot.castPollVote`. */
+	addPollVoter(channelId: string, messageId: string, answerId: number, userId: string): void {
+		const key = this.reactionKey(channelId, messageId);
+		const byAnswer = this.pollVotersByMessage.get(key) ?? new Map<number, Set<string>>();
+		const voters = byAnswer.get(answerId) ?? new Set<string>();
+		voters.add(userId);
+		byAnswer.set(answerId, voters);
+		this.pollVotersByMessage.set(key, byAnswer);
+		this.recountPoll(channelId, messageId);
+	}
+
+	private recountPoll(channelId: string, messageId: string): void {
+		const entry = this.world.messages.find(
+			message => message.channelId === channelId && message.message.id === messageId,
+		);
+		const poll = entry?.message.poll;
+		if (!poll) return;
+		const byAnswer = this.pollVotersByMessage.get(this.reactionKey(channelId, messageId));
+		poll.results.answer_counts = poll.answers.map(answer => {
+			const voters = byAnswer?.get(answer.answer_id);
+			return { id: answer.answer_id, count: voters?.size ?? 0, me_voted: voters?.has(TEST_BOT_ID) ?? false };
+		});
+	}
+
+	/** @internal Mock internals normally call this when Discord finalizes a poll. */
+	finalizePoll(channelId: string, messageId: string): Record<string, unknown> | undefined {
+		const entry = this.world.messages.find(
+			message => message.channelId === channelId && message.message.id === messageId,
+		);
+		if (!entry?.message.poll) return undefined;
+		this.recountPoll(channelId, messageId);
+		entry.message.poll.results.is_finalized = true;
+		return this.rawMessage(channelId, messageId);
+	}
+
+	/** The user ids who voted for a poll answer. */
+	pollVoters(channelId: string, messageId: string, answerId: number): string[] {
+		const voters = this.pollVotersByMessage.get(this.reactionKey(channelId, messageId))?.get(answerId);
+		return voters ? [...voters] : [];
 	}
 
 	/** @internal Mock internals normally call this when Discord rewrites member roles. */
@@ -1182,6 +1249,18 @@ export class WorldState implements WorldStateReader {
 							channelId: message.referenced_message.channel_id,
 							authorId: message.referenced_message.author?.id,
 							content: message.referenced_message.content,
+						},
+					}),
+			...(message.poll === undefined
+				? {}
+				: {
+						poll: {
+							...(message.poll.question.text === undefined ? {} : { question: message.poll.question.text }),
+							answers: message.poll.answers.map(answer => ({
+								answerId: answer.answer_id,
+								...(answer.poll_media.text === undefined ? {} : { text: answer.poll_media.text }),
+							})),
+							isFinalized: message.poll.results.is_finalized,
 						},
 					}),
 		};

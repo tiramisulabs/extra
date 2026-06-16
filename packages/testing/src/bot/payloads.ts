@@ -341,6 +341,7 @@ export interface ApiMessageOptions {
 	embeds?: unknown[];
 	components?: unknown[];
 	attachments?: unknown[];
+	poll?: ApiPoll;
 	flags?: number;
 }
 
@@ -362,6 +363,7 @@ export interface ApiMessage {
 	message_reference?: { message_id?: string; channel_id?: string; type?: number };
 	referenced_message?: ApiMessage;
 	message_snapshots?: { message: Record<string, unknown> }[];
+	poll?: ApiPoll;
 	pinned: boolean;
 	type: number;
 	flags: number;
@@ -383,9 +385,62 @@ export function apiMessage(options: ApiMessageOptions = {}): ApiMessage {
 		attachments: (options.attachments as ApiAttachment[]) ?? [],
 		embeds: options.embeds ?? [],
 		components: options.components ?? [],
+		...(options.poll === undefined ? {} : { poll: options.poll }),
 		pinned: false,
 		type: 0,
 		flags: options.flags ?? 0,
+	};
+}
+
+export interface ApiPollMedia {
+	text?: string;
+	emoji?: { id: string | null; name: string | null };
+}
+
+export interface ApiPollAnswer {
+	answer_id: number;
+	poll_media: ApiPollMedia;
+}
+
+export interface ApiPollResults {
+	is_finalized: boolean;
+	answer_counts: { id: number; count: number; me_voted: boolean }[];
+}
+
+export interface ApiPoll {
+	question: ApiPollMedia;
+	answers: ApiPollAnswer[];
+	expiry: string;
+	allow_multiselect: boolean;
+	layout_type: number;
+	results: ApiPollResults;
+}
+
+export interface ApiPollOptions {
+	question?: ApiPollMedia | string;
+	answers?: (ApiPollMedia | string)[];
+	expiry?: string;
+	allowMultiselect?: boolean;
+	layoutType?: number;
+}
+
+export function apiPoll(options: ApiPollOptions = {}): ApiPoll {
+	const question: ApiPollMedia =
+		typeof options.question === 'string' ? { text: options.question } : (options.question ?? { text: 'slipher-test-poll' });
+	const answers: ApiPollAnswer[] = (options.answers ?? []).map((answer, index) => ({
+		answer_id: index + 1,
+		poll_media: typeof answer === 'string' ? { text: answer } : answer,
+	}));
+	return {
+		question,
+		answers,
+		expiry: options.expiry ?? mockTimestamp(),
+		allow_multiselect: options.allowMultiselect ?? false,
+		layout_type: options.layoutType ?? 1,
+		results: {
+			is_finalized: false,
+			answer_counts: answers.map(answer => ({ id: answer.answer_id, count: 0, me_voted: false })),
+		},
 	};
 }
 

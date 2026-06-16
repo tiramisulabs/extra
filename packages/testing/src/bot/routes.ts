@@ -56,6 +56,8 @@ export const Routes = {
 	startThreadFromMessage: { method: 'POST', route: '/channels/:channelId/messages/:messageId/threads' },
 	crosspostMessage: { method: 'POST', route: '/channels/:channelId/messages/:messageId/crosspost' },
 	triggerTyping: { method: 'POST', route: '/channels/:channelId/typing' },
+	endPoll: { method: 'POST', route: '/channels/:channelId/polls/:messageId/expire' },
+	getPollAnswerVoters: { method: 'GET', route: '/channels/:channelId/polls/:messageId/answers/:answerId' },
 } as const satisfies Record<string, RouteMatcher>;
 
 /**
@@ -120,6 +122,8 @@ export const ROUTE_COVERAGE = {
 	startThreadFromMessage: 'handled',
 	crosspostMessage: 'synthetic',
 	triggerTyping: 'handled',
+	endPoll: 'handled',
+	getPollAnswerVoters: 'handled',
 } as const satisfies Record<keyof typeof Routes, 'handled' | 'synthetic'>;
 
 export const ORIGINAL_RESPONSE_ROUTE = /\/webhooks\/[^/]+\/[^/]+\/messages\/@original$/;
