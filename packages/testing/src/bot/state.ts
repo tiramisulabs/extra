@@ -44,6 +44,47 @@ import { apiError } from './rest';
 import type { MockWorld } from './world';
 
 const MAX_MESSAGE_CONTENT = 2000;
+const MESSAGE_FLAG_COMPONENTS_V2 = 1 << 15;
+
+/**
+ * Validate an outgoing message's components against Discord's documented form limits (F5): every interactive
+ * custom_id is <=100 chars and unique across the message, string selects carry 1..25 options, and select
+ * min/max_values stay in 0..25 with min<=max. Throws a 50035 MockApiError, so an impossible component tree
+ * fails loud instead of passing a happy-path test.
+ */
+function assertValidComponents(components: unknown): void {
+	const customIds = new Set<string>();
+	walkComponents(components, node => {
+		const type = numberValue(node.type);
+		const customId = stringValue(node.custom_id);
+		if (customId !== undefined) {
+			if ([...customId].length > 100) {
+				apiError(400, 50035, 'Invalid Form Body: component custom_id must be 100 or fewer in length');
+			}
+			if (customIds.has(customId)) apiError(400, 50035, `Invalid Form Body: duplicate component custom_id "${customId}"`);
+			customIds.add(customId);
+		}
+		if (type !== undefined && type >= 3 && type <= 8) {
+			if (type === 3) {
+				const options = arrayValue(node.options).length;
+				if (options < 1 || options > 25) {
+					apiError(400, 50035, 'Invalid Form Body: a string select menu must have between 1 and 25 options');
+				}
+			}
+			const min = numberValue(node.min_values);
+			const max = numberValue(node.max_values);
+			if (min !== undefined && (min < 0 || min > 25)) {
+				apiError(400, 50035, 'Invalid Form Body: select min_values must be between 0 and 25');
+			}
+			if (max !== undefined && (max < 1 || max > 25)) {
+				apiError(400, 50035, 'Invalid Form Body: select max_values must be between 1 and 25');
+			}
+			if (min !== undefined && max !== undefined && min > max) {
+				apiError(400, 50035, 'Invalid Form Body: select min_values cannot exceed max_values');
+			}
+		}
+	});
+}
 
 /**
  * Validate an outgoing message body against Discord's documented limits, throwing a MockApiError (which the
@@ -69,6 +110,41 @@ function assertSendableMessage(raw: Record<string, unknown>, mode: 'create' | 'e
 			apiError(400, 50035, 'Invalid Form Body: an embed can have at most 25 fields');
 		}
 	}
+	// F19: a Components-v2 body forbids top-level content/embeds and requires a non-empty components tree.
+	if (((numberValue(raw.flags) ?? 0) & MESSAGE_FLAG_COMPONENTS_V2) !== 0) {
+		if (content !== undefined && content !== '') {
+			apiError(400, 50035, 'Invalid Form Body: content is not allowed with the IsComponentsV2 flag');
+		}
+		if (embeds.length > 0) apiError(400, 50035, 'Invalid Form Body: embeds are not allowed with the IsComponentsV2 flag');
+		if (!Array.isArray(raw.components) || raw.components.length === 0) {
+			apiError(400, 50035, 'Invalid Form Body: the IsComponentsV2 flag requires a non-empty components array');
+		}
+	}
+	if (Array.isArray(raw.components)) assertValidComponents(raw.components);
+	// F20: at most 3 stickers per message.
+	if (Array.isArray(raw.sticker_ids) && raw.sticker_ids.length > 3) {
+		apiError(400, 50035, 'Invalid Form Body: a message can have at most 3 stickers');
+	}
+	// F21: poll create caps.
+	if (raw.poll !== undefined) {
+		const poll = asRecord(raw.poll);
+		const question = stringValue(asRecord(poll.question).text);
+		if (question !== undefined && [...question].length > 300) {
+			apiError(400, 50035, 'Invalid Form Body: poll question must be 300 or fewer in length');
+		}
+		const answers = arrayValue(poll.answers);
+		if (answers.length > 10) apiError(400, 50035, 'Invalid Form Body: a poll can have at most 10 answers');
+		for (const entry of answers) {
+			const text = stringValue(asRecord(asRecord(entry).poll_media).text);
+			if (text !== undefined && [...text].length > 55) {
+				apiError(400, 50035, 'Invalid Form Body: poll answer text must be 55 or fewer in length');
+			}
+		}
+		const duration = numberValue(poll.duration);
+		if (duration !== undefined && (duration < 1 || duration > 768)) {
+			apiError(400, 50035, 'Invalid Form Body: poll duration must be between 1 and 768 hours');
+		}
+	}
 	if (mode === 'create') {
 		const empty =
 			(content === undefined || content === '') &&
@@ -79,6 +155,21 @@ function assertSendableMessage(raw: Record<string, unknown>, mode: 'create' | 'e
 			(!Array.isArray(raw.sticker_ids) || raw.sticker_ids.length === 0) &&
 			(!Array.isArray(raw.attachments) || raw.attachments.length === 0);
 		if (empty) apiError(400, 50006, 'Cannot send an empty message');
+	}
+}
+
+/**
+ * F22: validate a name/topic field against Discord's documented bounds (and optional charset), throwing a
+ * 50035 when out of range. No-ops for absent (undefined/null) values so partial patches stay valid.
+ */
+function assertNameBounds(value: unknown, min: number, max: number, label: string, charset?: RegExp): void {
+	if (typeof value !== 'string') return;
+	const length = [...value].length;
+	if (length < min || length > max) {
+		apiError(400, 50035, `Invalid Form Body: ${label} must be between ${min} and ${max} in length`);
+	}
+	if (charset && value.length > 0 && !charset.test(value)) {
+		apiError(400, 50035, `Invalid Form Body: ${label} contains invalid characters`);
 	}
 }
 
@@ -560,8 +651,6 @@ export function collectButtons(value: unknown, out: ButtonView[]): void {
 	}
 	if (Array.isArray(raw.components)) collectButtons(raw.components, out);
 }
-
-const MESSAGE_FLAG_COMPONENTS_V2 = 1 << 15;
 
 /**
  * Walk a (possibly nested) Components v2 tree — containers (17), sections (9, plus their `accessory`),
@@ -1236,6 +1325,8 @@ export class WorldState implements WorldStateReader {
 	editChannel(channelId: string, patch: Record<string, unknown>): Record<string, unknown> | undefined {
 		const channel = this.world.channels.find(entry => entry.id === channelId);
 		if (!channel) return undefined;
+		if ('name' in patch) assertNameBounds(patch.name, 1, 100, 'channel name');
+		if ('topic' in patch) assertNameBounds(patch.topic, 0, 1024, 'channel topic');
 		if ('name' in patch) channel.name = stringValue(patch.name) ?? channel.name;
 		if ('type' in patch && numberValue(patch.type) !== undefined) channel.type = numberValue(patch.type)!;
 		if ('parent_id' in patch) channel.parent_id = stringValue(patch.parent_id);
@@ -1356,6 +1447,7 @@ export class WorldState implements WorldStateReader {
 	): void {
 		const entry = this.world.members.find(member => member.guildId === guildId && member.member.user.id === userId);
 		if (!entry) return;
+		if ('nick' in patch) assertNameBounds(patch.nick, 0, 32, 'nickname');
 		if ('nick' in patch) entry.member.nick = patch.nick ?? null;
 		if (patch.roles) entry.member.roles = [...patch.roles];
 		if ('communication_disabled_until' in patch) {
@@ -1394,6 +1486,7 @@ export class WorldState implements WorldStateReader {
 
 	/** @internal When Discord creates an emoji. */
 	addEmoji(guildId: string, raw: Record<string, unknown>): ApiEmoji {
+		assertNameBounds(raw.name, 2, 32, 'emoji name', /^[A-Za-z0-9_]+$/);
 		const emoji = apiEmoji({
 			id: stringValue(raw.id),
 			name: stringValue(raw.name),
@@ -1409,6 +1502,7 @@ export class WorldState implements WorldStateReader {
 	editEmoji(guildId: string, emojiId: string, patch: Record<string, unknown>): ApiEmoji | undefined {
 		const entry = (this.world.guildEmojis ?? []).find(e => e.guildId === guildId && e.emoji.id === emojiId);
 		if (!entry) return undefined;
+		if ('name' in patch) assertNameBounds(patch.name, 2, 32, 'emoji name', /^[A-Za-z0-9_]+$/);
 		if ('name' in patch) entry.emoji.name = stringValue(patch.name) ?? entry.emoji.name;
 		if ('roles' in patch) entry.emoji.roles = arrayValue(patch.roles).map(String);
 		return { ...entry.emoji };
@@ -1588,6 +1682,7 @@ export class WorldState implements WorldStateReader {
 
 	/** @internal When Discord creates a sticker. */
 	addSticker(guildId: string, raw: Record<string, unknown>): ApiSticker {
+		assertNameBounds(raw.name, 2, 30, 'sticker name');
 		const sticker = apiSticker({
 			id: stringValue(raw.id),
 			guildId,
@@ -1603,6 +1698,7 @@ export class WorldState implements WorldStateReader {
 	editSticker(guildId: string, stickerId: string, patch: Record<string, unknown>): ApiSticker | undefined {
 		const entry = (this.world.guildStickers ?? []).find(s => s.guildId === guildId && s.sticker.id === stickerId);
 		if (!entry) return undefined;
+		if ('name' in patch) assertNameBounds(patch.name, 2, 30, 'sticker name');
 		if ('name' in patch) entry.sticker.name = stringValue(patch.name) ?? entry.sticker.name;
 		if ('tags' in patch) entry.sticker.tags = stringValue(patch.tags) ?? entry.sticker.tags;
 		if ('description' in patch) entry.sticker.description = stringValue(patch.description) ?? null;
@@ -1722,6 +1818,7 @@ export class WorldState implements WorldStateReader {
 	editGuild(guildId: string, patch: Record<string, unknown>): Record<string, unknown> | undefined {
 		const guild = this.world.guilds.find(entry => entry.id === guildId);
 		if (!guild) return undefined;
+		if ('name' in patch) assertNameBounds(patch.name, 2, 100, 'guild name');
 		if ('name' in patch) guild.name = stringValue(patch.name) ?? guild.name;
 		return { ...guild };
 	}
