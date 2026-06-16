@@ -22,6 +22,7 @@ import { resetMockIds } from '../id';
 import { TEST_APPLICATION_ID, TEST_BOT_ID, TEST_CHANNEL_ID, TEST_GUILD_ID, TEST_USER_ID } from './constants';
 import { registerWorldDefaults } from './defaults';
 import { Dispatch } from './dispatch';
+import { type DispatchContext, dispatchStore, nextDispatchId, resetDispatchIds } from './dispatch-context';
 import { MockGateway } from './gateway';
 import {
 	type ApiInteractionPayload,
@@ -442,6 +443,10 @@ export class MockBot {
 	private closed = false;
 	/** The most recent interaction-original message, used to resolve a collector source for an immediate reply. */
 	private lastInteractionMessage?: { id: string; channel_id?: string };
+	/** Component/modal detection capabilities, fixed at install time from the client's component surface. */
+	private canDetectComponentCommand = false;
+	private canDetectCollector = false;
+	private canDetectModalCollector = false;
 
 	constructor(
 		readonly client: Client,
@@ -903,7 +908,8 @@ export class MockBot {
 	dispatchInteraction(payload: ApiInteractionPayload): Dispatch<DispatchResult> {
 		this.assertOpen('dispatchInteraction');
 		const userId = payload.member?.user.id ?? payload.user?.id;
-		return this.track(new Dispatch(this.rest, this.client, userId, () => this.runInteraction(payload)));
+		const dispatchId = nextDispatchId();
+		return this.track(new Dispatch(this.rest, this.client, userId, () => this.runInteraction(payload, dispatchId)));
 	}
 
 	private materializeInteractionResponse(payload: ApiInteractionPayload, body: APIInteractionResponse): void {
@@ -970,12 +976,16 @@ export class MockBot {
 	 * reply needs multiple async hops (or whose REST responder awaits) still records before the dispatch settles.
 	 * Bounded by `timeoutMs` so a guard that genuinely never replies cannot hang the dispatch.
 	 */
-	private async drainUntilQuiescent(aborted: () => boolean, timeoutMs = 2000): Promise<void> {
+	private async drainUntilQuiescent(
+		dispatchId: number | undefined,
+		aborted: () => boolean,
+		timeoutMs = 2000,
+	): Promise<void> {
 		const deadline = Date.now() + timeoutMs;
 		let lastCount = -1;
 		while (!aborted()) {
-			const count = this.rest.actions.length;
-			const quiet = count === lastCount && !this.rest.hasPendingRequests();
+			const count = this.rest.actions.filter(action => action.dispatchId === dispatchId).length;
+			const quiet = count === lastCount && !this.rest.hasPendingRequests(dispatchId);
 			if (quiet) return;
 			lastCount = count;
 			if (Date.now() > deadline) return;
@@ -983,68 +993,61 @@ export class MockBot {
 		}
 	}
 
-	private async runInteraction(payload: ApiInteractionPayload): Promise<DispatchResult> {
-		const startSeq = this.rest.actions.length;
-		const replies: CapturedReply[] = [];
+	/**
+	 * Install the component/middleware wrappers ONCE on the shared client singletons. Each wrapper reads the
+	 * active dispatch via AsyncLocalStorage (dispatchStore.getStore()) instead of closing over per-dispatch
+	 * call-local flags, so concurrent dispatches never clobber each other's resolution state.
+	 *
+	 * @internal Called once by createMockBot after setup; not part of the public surface.
+	 */
+	installDispatchHooks(): void {
 		const componentHooks = this.client.components as unknown as {
 			execute?: (...args: unknown[]) => Promise<unknown>;
 			onComponent?: (id: string, interaction: { customId: string }) => Promise<unknown>;
 			hasComponent?: (id: string, customId: string) => boolean | undefined;
 			onModalSubmit?: (interaction: { user: { id: string } }) => unknown;
 		};
-		const isComponentPayload = payload.type === InteractionType.MessageComponent;
-		const isModalPayload = payload.type === InteractionType.ModalSubmit;
-		let componentCommandExecuted = false;
-		let collectorMatched = false;
-		let modalMatched = false;
-		const restoreHooks: (() => void)[] = [];
-		const canDetectComponentCommand = typeof componentHooks.execute === 'function';
-		const canDetectCollector =
+		this.canDetectComponentCommand = typeof componentHooks.execute === 'function';
+		this.canDetectCollector =
 			typeof componentHooks.onComponent === 'function' && typeof componentHooks.hasComponent === 'function';
-		const canDetectModalCollector = typeof componentHooks.onModalSubmit === 'function';
-		if ((isComponentPayload || isModalPayload) && canDetectComponentCommand) {
+		this.canDetectModalCollector = typeof componentHooks.onModalSubmit === 'function';
+
+		if (this.canDetectComponentCommand) {
 			const execute = componentHooks.execute?.bind(componentHooks);
 			componentHooks.execute = async (...args: unknown[]) => {
-				componentCommandExecuted = true;
+				const ctx = dispatchStore.getStore();
+				if (ctx) ctx.componentCommandExecuted = true;
 				return execute?.(...args);
 			};
-			restoreHooks.push(() => {
-				componentHooks.execute = execute;
-			});
 		}
-		if (isComponentPayload && canDetectCollector) {
+		if (this.canDetectCollector) {
 			const onComponent = componentHooks.onComponent?.bind(componentHooks);
 			componentHooks.onComponent = async (id, interaction) => {
-				collectorMatched = Boolean(componentHooks.hasComponent?.(id, interaction.customId));
+				const ctx = dispatchStore.getStore();
+				if (ctx) ctx.collectorMatched = Boolean(componentHooks.hasComponent?.(id, interaction.customId));
 				return onComponent?.(id, interaction);
 			};
-			restoreHooks.push(() => {
-				componentHooks.onComponent = onComponent;
-			});
 		}
-		if (isModalPayload && canDetectModalCollector) {
+		if (this.canDetectModalCollector) {
 			const onModalSubmit = componentHooks.onModalSubmit?.bind(componentHooks);
 			componentHooks.onModalSubmit = interaction => {
-				modalMatched = true;
+				const ctx = dispatchStore.getStore();
+				if (ctx) ctx.modalMatched = true;
 				return onModalSubmit?.(interaction);
 			};
-			restoreHooks.push(() => {
-				componentHooks.onModalSubmit = onModalSubmit;
-			});
 		}
 		// Denial detection: seyfert's __runMiddlewares only resolves on next()/stop()/pass(). A guard that
 		// replies and returns without calling any of them leaves the chain pending forever, so command.run is
 		// structurally never reached and handleCommand.interaction never settles. Wrap each middleware to notice
 		// when it terminates the chain and settle the dispatch with whatever was already captured.
-		let resolveDenial: (() => void) | undefined;
-		const denialSettled = new Promise<void>(resolve => {
-			resolveDenial = resolve;
-		});
 		const middlewares = this.client.middlewares as Record<string, WrappedMiddleware> | undefined;
 		if (middlewares) {
 			for (const key of Object.keys(middlewares)) {
 				const real = middlewares[key];
 				middlewares[key] = (controls: MiddlewareControls) => {
+					const ctx = dispatchStore.getStore();
+					// progressed is per-invocation: a middleware chain runs sequentially, so each invocation
+					// gets its own flag. It must NOT be hoisted into the shared dispatch context.
 					let progressed = false;
 					const mark =
 						(fn: MiddlewareControl): MiddlewareControl =>
@@ -1062,24 +1065,40 @@ export class MockBot {
 						() => {
 							if (progressed) return;
 							// The middleware denied (replied + returned without next/stop/pass). Its reply may still be
-							// recording through async REST hops, so don't settle after a single tick. Drain until the
-							// REST surface is quiescent: action count stable across a tick AND no in-flight requests.
-							void this.drainUntilQuiescent(() => progressed).then(() => {
-								if (!progressed) resolveDenial?.();
+							// recording through async REST hops, so don't settle after a single tick. Drain until this
+							// dispatch's REST surface is quiescent: action count stable across a tick AND none in flight.
+							void this.drainUntilQuiescent(ctx?.dispatchId, () => progressed).then(() => {
+								if (!progressed) ctx?.resolveDenial?.();
 							});
 						},
 						() => {},
 					);
 					return result;
 				};
-				restoreHooks.push(() => {
-					middlewares[key] = real;
-				});
 			}
 		}
+	}
+
+	private async runInteraction(payload: ApiInteractionPayload, dispatchId: number): Promise<DispatchResult> {
+		const replies: CapturedReply[] = [];
+		const isComponentPayload = payload.type === InteractionType.MessageComponent;
+		const isModalPayload = payload.type === InteractionType.ModalSubmit;
+		const ctx: DispatchContext = {
+			dispatchId,
+			componentCommandExecuted: false,
+			collectorMatched: false,
+			modalMatched: false,
+		};
+		// Denial detection: seyfert's __runMiddlewares only resolves on next()/stop()/pass(). A guard that
+		// replies and returns without calling any of them leaves the chain pending forever, so command.run is
+		// structurally never reached and handleCommand.interaction never settles. The installed middleware
+		// wrappers settle this promise once a denying middleware's REST surface goes quiescent.
+		const denialSettled = new Promise<void>(resolve => {
+			ctx.resolveDenial = resolve;
+		});
 		this.state.registerInteractionToken(payload.token, payload.channel_id);
 		// The builders preserve Discord's payload shape while exposing a wider test input type.
-		try {
+		await dispatchStore.run(ctx, async () => {
 			await Promise.race([
 				// No __reply callback: seyfert takes its gateway reply branch and posts the interaction callback
 				// through the mock REST (intercepted in defaults), so it returns a real message for with_response
@@ -1087,13 +1106,12 @@ export class MockBot {
 				this.client.handleCommand.interaction(payload as unknown as APIInteraction, -1),
 				denialSettled,
 			]);
-		} finally {
-			for (const restore of restoreHooks.reverse()) restore();
-		}
+		});
+		const { componentCommandExecuted, collectorMatched, modalMatched } = ctx;
 		if (
 			isComponentPayload &&
-			canDetectCollector &&
-			canDetectComponentCommand &&
+			this.canDetectCollector &&
+			this.canDetectComponentCommand &&
 			!collectorMatched &&
 			!componentCommandExecuted
 		) {
@@ -1103,14 +1121,20 @@ export class MockBot {
 		}
 		if (
 			isModalPayload &&
-			canDetectModalCollector &&
-			canDetectComponentCommand &&
+			this.canDetectModalCollector &&
+			this.canDetectComponentCommand &&
 			!modalMatched &&
 			!componentCommandExecuted
 		) {
 			throw new TypeError(`fillModal: no modal handler resolved for "${payload.data.custom_id ?? '(unknown)'}".`);
 		}
-		const actions = this.rest.actions.slice(startSeq);
+		// This dispatch owns the actions it stamped, plus any interaction-token-routed action (callback, followups,
+		// original-response edits) for THIS interaction's token. The latter may be emitted from a different async
+		// frame — e.g. a modal submit whose reply is written inside the opener command's resumed continuation — so
+		// the token, which is unique per interaction, is the reliable owner key for those responses.
+		const actions = this.rest.actions.filter(
+			action => action.dispatchId === dispatchId || action.route.includes(payload.token),
+		);
 		if (replies.length === 0) {
 			const callback = actions.find(
 				action => action.method === 'POST' && action.route === `/interactions/${payload.id}/${payload.token}/callback`,
@@ -1245,9 +1269,10 @@ export class MockBot {
 			}),
 		);
 		const userId = payload.member?.user.id ?? payload.user?.id;
+		const dispatchId = nextDispatchId();
 		return this.track(
 			new Dispatch(this.rest, this.client, userId, async () => {
-				const result = await this.runInteraction(payload);
+				const result = await this.runInteraction(payload, dispatchId);
 				const body = result.reply?.body;
 				return { ...result, choices: body?.type === 8 ? body.data?.choices : undefined };
 			}),
@@ -1354,11 +1379,14 @@ export class MockBot {
 			...(dm ? {} : { member: gatewayMember }),
 		};
 
+		const dispatchId = nextDispatchId();
 		return this.track(
 			new Dispatch(this.rest, this.client, author.id, async () => {
-				const startSeq = this.rest.actions.length;
-				await this.client.handleCommand.message(raw as Parameters<HandleCommand['message']>[0], -1);
-				const actions = this.rest.actions.slice(startSeq);
+				await dispatchStore.run(
+					{ dispatchId, componentCommandExecuted: false, collectorMatched: false, modalMatched: false },
+					() => this.client.handleCommand.message(raw as Parameters<HandleCommand['message']>[0], -1),
+				);
+				const actions = this.rest.actions.filter(action => action.dispatchId === dispatchId);
 				const messages = actions.filter(isOutgoingMessagePost).map(action => (action.body ?? {}) as OutgoingMessage);
 				return messageParts(actions, messages);
 			}),
@@ -1411,18 +1439,22 @@ export class MockBot {
 	): Dispatch<EventDispatchResult> {
 		this.assertOpen('emitEvent');
 		const d = payload as Record<string, unknown>;
+		const dispatchId = nextDispatchId();
 		return this.track(
 			new Dispatch<EventDispatchResult>(this.rest, this.client, undefined, async () => {
 				if (updateCache) this.applyWorldEvent(name, d);
-				const startSeq = this.rest.actions.length;
-				await this.client.events.runEvent(
-					name as Parameters<Client['events']['runEvent']>[0],
-					this.client,
-					d,
-					-1,
-					updateCache,
+				await dispatchStore.run(
+					{ dispatchId, componentCommandExecuted: false, collectorMatched: false, modalMatched: false },
+					() =>
+						this.client.events.runEvent(
+							name as Parameters<Client['events']['runEvent']>[0],
+							this.client,
+							d,
+							-1,
+							updateCache,
+						),
 				);
-				const actions = this.rest.actions.slice(startSeq);
+				const actions = this.rest.actions.filter(action => action.dispatchId === dispatchId);
 				const messages = actions.filter(isOutgoingMessagePost).map(action => (action.body ?? {}) as OutgoingMessage);
 				return messageParts(actions, messages);
 			}),
@@ -1459,6 +1491,7 @@ export class MockBot {
 
 export async function createMockBot(options: MockBotOptions = {}): Promise<MockBot> {
 	resetMockIds();
+	resetDispatchIds();
 	const rest = new MockApiHandler({ onUnhandledRest: options.onUnhandledRest });
 	const built =
 		options.world && typeof (options.world as WorldBuilder).build === 'function'
@@ -1553,5 +1586,7 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	});
 	rest.markDefaultsBaseline();
 
-	return new MockBot(client, rest, gateway, world, state, options.validateOptions ?? false);
+	const bot = new MockBot(client, rest, gateway, world, state, options.validateOptions ?? false);
+	bot.installDispatchHooks();
+	return bot;
 }

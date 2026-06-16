@@ -1,10 +1,13 @@
 import { ApiHandler } from 'seyfert';
 import type { ApiRequestOptions, HttpMethods } from 'seyfert/lib/api/shared';
+import { dispatchStore } from './dispatch-context';
 import { apiMessage } from './payloads';
 import { CHANNEL_MESSAGE_POST, Routes, WEBHOOK_EXECUTE_POST } from './routes';
 
 export interface RecordedAction {
 	seq: number;
+	/** Dispatch that produced this action, for per-dispatch attribution under concurrency. */
+	dispatchId?: number;
 	method: HttpMethods;
 	route: string;
 	body?: Record<string, unknown>;
@@ -19,7 +22,9 @@ export interface RecordedAction {
 }
 
 export function isOutgoingMessagePost(action: RecordedAction): boolean {
-	return action.method === 'POST' && (CHANNEL_MESSAGE_POST.test(action.route) || WEBHOOK_EXECUTE_POST.test(action.route));
+	return (
+		action.method === 'POST' && (CHANNEL_MESSAGE_POST.test(action.route) || WEBHOOK_EXECUTE_POST.test(action.route))
+	);
 }
 
 export class MockApiError extends Error {
@@ -193,7 +198,8 @@ export class MockApiHandler extends ApiHandler {
 	private defaultInterceptors: Interceptor[] = [];
 	private gates: RequestGate[] = [];
 	private seq = 0;
-	private inFlight = 0;
+	/** In-flight request counts keyed by dispatchId (0 = no active dispatch). */
+	private readonly inFlight = new Map<number, number>();
 	private readonly unhandled: 'warn' | 'error' | 'silent';
 	private readonly routeCache = new Map<string, { pattern: RegExp; names: string[] }>();
 	private readonly warnedRoutes = new Set<string>();
@@ -451,9 +457,10 @@ export class MockApiHandler extends ApiHandler {
 			files: requestOptions.files,
 			reason: requestOptions.reason,
 		};
-		const action: RecordedAction = { seq: this.seq++, ...pending, response: undefined };
+		const dispatchId = dispatchStore.getStore()?.dispatchId ?? 0;
+		const action: RecordedAction = { seq: this.seq++, dispatchId, ...pending, response: undefined };
 		this.actions.push(action);
-		this.inFlight++;
+		this.inFlight.set(dispatchId, (this.inFlight.get(dispatchId) ?? 0) + 1);
 		this.notifyListeners(action, 'pending');
 
 		try {
@@ -475,17 +482,26 @@ export class MockApiHandler extends ApiHandler {
 				throw error;
 			}
 		} finally {
-			this.inFlight--;
+			const remaining = (this.inFlight.get(dispatchId) ?? 1) - 1;
+			if (remaining > 0) this.inFlight.set(dispatchId, remaining);
+			else this.inFlight.delete(dispatchId);
 		}
 	}
 
-	/** Number of REST requests currently between request() entry and settlement (includes gated/parked requests). */
-	pendingRequestCount(): number {
-		return this.inFlight;
+	/**
+	 * Number of REST requests currently between request() entry and settlement (includes gated/parked requests).
+	 * With a dispatchId, counts only that dispatch's requests; without, the global total.
+	 */
+	pendingRequestCount(dispatchId?: number): number {
+		if (dispatchId !== undefined) return this.inFlight.get(dispatchId) ?? 0;
+		let total = 0;
+		for (const count of this.inFlight.values()) total += count;
+		return total;
 	}
 
-	hasPendingRequests(): boolean {
-		return this.inFlight > 0;
+	hasPendingRequests(dispatchId?: number): boolean {
+		if (dispatchId !== undefined) return (this.inFlight.get(dispatchId) ?? 0) > 0;
+		return this.inFlight.size > 0;
 	}
 
 	private resolveResponse(pending: PendingAction): unknown {
