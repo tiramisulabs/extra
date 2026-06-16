@@ -19,7 +19,7 @@ import {
 	apiWebhook,
 } from './payloads';
 import { computeChannelPermissions } from './permissions';
-import { apiError, type MockApiHandler, type RouteMatcher, type RouteResponder } from './rest';
+import { apiError, ErrorCode, type MockApiHandler, type RouteMatcher, type RouteResponder } from './rest';
 import { Routes } from './routes';
 import { assertAttachmentRefs, type MessageQuery, type WorldState } from './state';
 import type { MockWorld } from './world';
@@ -163,7 +163,7 @@ export function registerWorldDefaults(
 	const requireGuild = (guildId: string) => {
 		if (!world) return;
 		if (guildId === 'undefined' || guildId === 'null' || !world.guilds.some(guild => guild.id === guildId)) {
-			apiError(404, 10004, 'Unknown Guild');
+			apiError(404, ErrorCode.UnknownGuild, 'Unknown Guild');
 		}
 	};
 
@@ -176,7 +176,7 @@ export function registerWorldDefaults(
 			channelId === 'null' ||
 			!world.channels.some(channel => channel.id === channelId)
 		) {
-			apiError(404, 10003, 'Unknown Channel');
+			apiError(404, ErrorCode.UnknownChannel, 'Unknown Channel');
 		}
 	};
 
@@ -203,7 +203,7 @@ export function registerWorldDefaults(
 		const perms = botGuildPerms(guildId);
 		if (perms === undefined) return; // enforcement off (no seeded bot member)
 		if (perms & PermissionFlagsBits.Administrator) return;
-		if (!(perms & bit)) apiError(403, 50013, 'Missing Permissions');
+		if (!(perms & bit)) apiError(403, ErrorCode.MissingPermissions, 'Missing Permissions');
 	};
 	const topRole = (roleIds: string[], roles: { id: string; position: number }[]) =>
 		Math.max(0, ...roleIds.map(id => roles.find(role => role.id === id)?.position ?? 0));
@@ -212,12 +212,12 @@ export function registerWorldDefaults(
 		const guild = world?.guilds.find(entry => entry.id === guildId);
 		if (!world || !bot || !guild) return; // enforcement off
 		if (guild.owner_id === hooks.botId) return; // the bot owns the guild
-		if (guild.owner_id === targetUserId) apiError(403, 50013, 'Missing Permissions');
+		if (guild.owner_id === targetUserId) apiError(403, ErrorCode.MissingPermissions, 'Missing Permissions');
 		const target = findMember(guildId, targetUserId);
 		if (!target) return;
 		const roles = guildRolesOf(guildId);
 		if (topRole(target.member.roles, roles) >= topRole(bot.member.roles, roles)) {
-			apiError(403, 50013, 'Missing Permissions');
+			apiError(403, ErrorCode.MissingPermissions, 'Missing Permissions');
 		}
 	};
 	const requireManageableRole = (guildId: string, roleId: string) => {
@@ -227,7 +227,7 @@ export function registerWorldDefaults(
 		if (guild.owner_id === hooks.botId) return;
 		const roles = guildRolesOf(guildId);
 		if ((roles.find(role => role.id === roleId)?.position ?? 0) >= topRole(bot.member.roles, roles)) {
-			apiError(403, 50013, 'Missing Permissions');
+			apiError(403, ErrorCode.MissingPermissions, 'Missing Permissions');
 		}
 	};
 
@@ -245,7 +245,7 @@ export function registerWorldDefaults(
 	);
 	rest.intercept(Routes.fetchMember, (_pending, params) => {
 		if (removed.has(key(params.guildId, params.userId))) {
-			return apiError(404, 10007, 'Unknown Member');
+			return apiError(404, ErrorCode.UnknownMember, 'Unknown Member');
 		}
 		const entry = findMember(params.guildId, params.userId);
 		return entry?.member ?? apiMember({ user: apiUser({ id: params.userId }) });
@@ -274,7 +274,8 @@ export function registerWorldDefaults(
 		params => apiMessage({ id: params.messageId, channelId: params.channelId }),
 	);
 	rest.intercept(Routes.fetchOriginalResponse, (_pending, params) => {
-		if (!hooks.state.isAcknowledged(params.interactionToken)) apiError(404, 10008, 'Unknown Message');
+		if (!hooks.state.isAcknowledged(params.interactionToken))
+			apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
 		return hooks.state.messageForToken(params.interactionToken) ?? apiMessage();
 	});
 	// A webhook execute (POST /webhooks/:id/:token) and webhook-message ops share the route shape of
@@ -353,7 +354,11 @@ export function registerWorldDefaults(
 				);
 			}
 			if (body.type === 9 && origin === 5) {
-				apiError(400, 50035, 'Invalid Form Body: cannot respond to a modal submit with another modal');
+				apiError(
+					400,
+					ErrorCode.InvalidFormBody,
+					'Invalid Form Body: cannot respond to a modal submit with another modal',
+				);
 			}
 		}
 		hooks.state.acknowledgeToken(params.token);
@@ -403,8 +408,9 @@ export function registerWorldDefaults(
 		requireChannel(params.channelId);
 		assertAttachmentRefs(bodyRecord(pending.body), pending.files);
 		const channel = world?.channels.find(entry => entry.id === params.channelId);
-		if (channel?.type === 4) apiError(400, 50024, 'Cannot execute action on this channel type');
-		if (channel?.thread_metadata?.archived) apiError(400, 50083, 'Thread is archived');
+		if (channel?.type === 4)
+			apiError(400, ErrorCode.CannotExecuteOnChannelType, 'Cannot execute action on this channel type');
+		if (channel?.thread_metadata?.archived) apiError(400, ErrorCode.ThreadArchived, 'Thread is archived');
 		const view = hooks.state.addMessage(params.channelId, bodyRecord(pending.body));
 		return (
 			hooks.state.rawMessage(params.channelId, view.id) ?? apiMessage({ id: view.id, channelId: params.channelId })
@@ -415,9 +421,9 @@ export function registerWorldDefaults(
 		// (Discord forbids editing others' messages outright) — a 403. Worldless mode stays lenient (synthesize).
 		if (world) {
 			const existing = hooks.state.rawMessage(params.channelId, params.messageId);
-			if (!existing) apiError(404, 10008, 'Unknown Message');
+			if (!existing) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
 			if (existing.author.id !== hooks.botId) {
-				apiError(403, 50005, 'Cannot edit a message authored by another user');
+				apiError(403, ErrorCode.CannotEditAnotherUsersMessage, 'Cannot edit a message authored by another user');
 			}
 		}
 		hooks.state.editMessage(params.channelId, params.messageId, bodyRecord(pending.body));
@@ -429,7 +435,7 @@ export function registerWorldDefaults(
 	rest.intercept(Routes.deleteMessage, (_pending, params) => {
 		// F13: deleting a non-existent message is a 404 (deleting another user's message IS allowed with perms).
 		if (world && !hooks.state.rawMessage(params.channelId, params.messageId)) {
-			apiError(404, 10008, 'Unknown Message');
+			apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
 		}
 		hooks.state.deleteMessage(params.channelId, params.messageId);
 		return {};
@@ -438,7 +444,7 @@ export function registerWorldDefaults(
 		const messages = bodyRecord(pending.body).messages;
 		const ids = Array.isArray(messages) ? messages : [];
 		if (ids.length < 2 || ids.length > 100) {
-			apiError(400, 50035, 'Invalid Form Body: messages must contain between 2 and 100 items');
+			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: messages must contain between 2 and 100 items');
 		}
 		for (const messageId of ids) hooks.state.deleteMessage(params.channelId, String(messageId));
 		return {};
@@ -451,7 +457,7 @@ export function registerWorldDefaults(
 		requireChannel(params.channelId);
 		const pins = hooks.state.pins(params.channelId);
 		if (pins.length >= 50 && !pins.some(message => message.id === params.messageId)) {
-			apiError(400, 30003, 'Maximum number of pinned messages reached (50)');
+			apiError(400, ErrorCode.MaxPinnedMessages, 'Maximum number of pinned messages reached (50)');
 		}
 		hooks.state.pinMessage(params.channelId, params.messageId);
 		return {};
@@ -669,7 +675,7 @@ export function registerWorldDefaults(
 	});
 	rest.intercept(Routes.fetchBan, (_pending, params) => {
 		if (!hooks.state.isBanned(params.guildId, params.userId)) {
-			return apiError(404, 10026, 'Unknown Ban');
+			return apiError(404, ErrorCode.UnknownBan, 'Unknown Ban');
 		}
 		return { user: resolveUser(params.userId) };
 	});
@@ -738,7 +744,8 @@ export function registerWorldDefaults(
 	};
 
 	rest.intercept(Routes.addReaction, async (_pending, params) => {
-		if (!hooks.state.rawMessage(params.channelId, params.messageId)) apiError(404, 10008, 'Unknown Message');
+		if (!hooks.state.rawMessage(params.channelId, params.messageId))
+			apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
 		hooks.state.addReaction(params.channelId, params.messageId, params.emoji, hooks.botId);
 		await emitReaction('MESSAGE_REACTION_ADD', params.channelId, params.messageId, params.emoji, hooks.botId);
 		return {};

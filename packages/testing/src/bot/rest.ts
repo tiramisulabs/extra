@@ -38,6 +38,23 @@ export class MockApiError extends Error {
 	}
 }
 
+/** Named Discord JSON error codes used by the mock's fail-loud guards, so no call site spells a bare number. */
+export const ErrorCode = {
+	UnknownChannel: 10003,
+	UnknownGuild: 10004,
+	UnknownMember: 10007,
+	UnknownMessage: 10008,
+	UnknownWebhook: 10015,
+	UnknownBan: 10026,
+	MaxPinnedMessages: 30003,
+	CannotEditAnotherUsersMessage: 50005,
+	CannotSendEmptyMessage: 50006,
+	MissingPermissions: 50013,
+	CannotExecuteOnChannelType: 50024,
+	InvalidFormBody: 50035,
+	ThreadArchived: 50083,
+} as const;
+
 export function apiError(status: number, code: number, message: string): never {
 	throw new MockApiError(status, code, message);
 }
