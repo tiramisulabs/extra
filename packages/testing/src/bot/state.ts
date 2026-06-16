@@ -1517,7 +1517,11 @@ export class WorldState implements WorldStateReader {
 	}
 
 	/** @internal Mock internals normally call this for webhook edits of @original. */
-	upsertOriginalResponse(token: string, raw: Record<string, unknown>, authorId: string): RawMessage | Record<string, never> {
+	upsertOriginalResponse(
+		token: string,
+		raw: Record<string, unknown>,
+		authorId: string,
+	): RawMessage | Record<string, never> {
 		const channelId = this.channelIdByToken.get(token);
 		if (!channelId) return {};
 		const messageId = this.messageIdByToken.get(token);
