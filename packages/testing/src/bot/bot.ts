@@ -90,6 +90,7 @@ import {
 	type WorldDiff,
 	type WorldSnapshot,
 	WorldState,
+	type WorldStateReader,
 } from './state';
 import { type MockWorld, seedWorld, type WorldBuilder } from './world';
 import { applyWorldEvent } from './world-events';
@@ -556,10 +557,19 @@ export class MockBot {
 		readonly rest: MockApiHandler,
 		readonly gateway: MockGateway,
 		protected readonly world?: MockWorld,
-		readonly state: WorldState = new WorldState(world),
+		private readonly _state: WorldState = new WorldState(world),
 		private readonly validateOptions = false,
 		private readonly timers?: { advance(ms: number): void | Promise<void> },
 	) {}
+
+	/**
+	 * Read-only view of the simulated world for assertions. Exposes only query methods; the
+	 * `@internal` mutators that the mock drives in response to Discord traffic are not part of this
+	 * public type. Use the {@link MockBot} verbs (or REST routes) to change world state.
+	 */
+	get state(): WorldStateReader {
+		return this._state;
+	}
 
 	private assertOpen(verb: string): void {
 		if (this.closed) throw new Error(`${verb}: MockBot is closed.`);
@@ -773,8 +783,8 @@ export class MockBot {
 
 	private hydrateSourceMessage(source: { id: string; channel_id?: string }): ApiMessage {
 		const stored = source.channel_id
-			? this.state.rawMessage(source.channel_id, source.id)
-			: this.state.rawMessageById(source.id);
+			? this._state.rawMessage(source.channel_id, source.id)
+			: this._state.rawMessageById(source.id);
 		if (stored) return stored as unknown as ApiMessage;
 		return apiMessage({ id: source.id, channelId: source.channel_id });
 	}
@@ -934,7 +944,7 @@ export class MockBot {
 	}
 
 	cachedGuild(guildId: string): GuildView | undefined {
-		return this.state.guild(guildId);
+		return this._state.guild(guildId);
 	}
 
 	/**
@@ -944,11 +954,11 @@ export class MockBot {
 	 * field names (`communicationDisabledUntil`, not the raw `communication_disabled_until`).
 	 */
 	cachedMember(guildId: string, userId: string): GuildMemberView | undefined {
-		return this.state.guild(guildId)?.member(userId);
+		return this._state.guild(guildId)?.member(userId);
 	}
 
 	cachedDm(userId: string): ChannelView | undefined {
-		return this.state.dm(userId);
+		return this._state.dm(userId);
 	}
 
 	/** The seeded voice state for a guild/user, or undefined when the user is not in voice. */
@@ -980,7 +990,7 @@ export class MockBot {
 	 * frozen, so later dispatches never alter it.
 	 */
 	worldSnapshot(): WorldSnapshot {
-		return this.state.snapshot();
+		return this._state.snapshot();
 	}
 
 	/**
@@ -989,7 +999,7 @@ export class MockBot {
 	 * `diff.members.changed[0].fields` contains `'roles'` instead of querying field by field.
 	 */
 	worldDiff(before: WorldSnapshot): WorldDiff {
-		return this.state.diff(before);
+		return this._state.diff(before);
 	}
 
 	/**
@@ -1065,14 +1075,14 @@ export class MockBot {
 		if (body.type === 4) {
 			// The callback interceptor already materialized the original; point lastInteractionMessage at it
 			// so a collector created on the immediate reply (with no explicit source) resolves to the same id.
-			const original = this.state.messageForToken(payload.token);
+			const original = this._state.messageForToken(payload.token);
 			const id = typeof original?.id === 'string' ? original.id : undefined;
 			if (id) this.lastInteractionMessage = { id, channel_id: payload.channel_id };
 			return;
 		}
 		if (body.type === 7 && payload.message) {
 			const data = 'data' in body ? ((body.data ?? {}) as Record<string, unknown>) : {};
-			this.state.editMessage(payload.message.channel_id, payload.message.id, data);
+			this._state.editMessage(payload.message.channel_id, payload.message.id, data);
 			this.lastInteractionMessage = { id: payload.message.id, channel_id: payload.message.channel_id };
 		}
 	}
@@ -1177,7 +1187,7 @@ export class MockBot {
 		const denialSettled = new Promise<void>(resolve => {
 			ctx.resolveDenial = resolve;
 		});
-		this.state.registerInteractionToken(payload.token, payload.channel_id);
+		this._state.registerInteractionToken(payload.token, payload.channel_id);
 		// The builders preserve Discord's payload shape while exposing a wider test input type.
 		await dispatchStore.run(ctx, async () => {
 			await Promise.race([
@@ -1625,7 +1635,7 @@ export class MockBot {
 	}
 
 	private applyWorldEvent(name: string, d: Record<string, unknown>): void {
-		applyWorldEvent(this.state, name, d);
+		applyWorldEvent(this._state, name, d);
 	}
 
 	reset(): void {

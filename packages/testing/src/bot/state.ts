@@ -175,6 +175,28 @@ export interface WorldDiff {
 	bans: EntityDiff<BanSnapshot>;
 }
 
+/**
+ * The read-only view of {@link WorldState} exposed publicly as `bot.state`. Exposes only the query
+ * methods test authors call to assert on world state; the `@internal` mutators that the mock drives
+ * in response to Discord traffic are intentionally absent so an internal refactor of them is not a
+ * breaking change. The concrete {@link WorldState} class implements this and is used internally.
+ */
+export interface WorldStateReader {
+	snapshot(): WorldSnapshot;
+	diff(before: WorldSnapshot): WorldDiff;
+	guild(guildId: string): GuildView | undefined;
+	dm(userId: string): ChannelView | undefined;
+	channelMessages(channelId: string, options?: MessageQuery): Record<string, unknown>[];
+	rawMessage(channelId: string, messageId: string): Record<string, unknown> | undefined;
+	rawMessageById(messageId: string): Record<string, unknown> | undefined;
+	messageForToken(token: string): Record<string, unknown> | undefined;
+	webhookMessage(token: string, messageId: string): Record<string, unknown> | undefined;
+	channelForToken(token: string): string | undefined;
+	reactionUsers(channelId: string, messageId: string, emoji: string): string[];
+	bans(guildId: string): string[];
+	isBanned(guildId: string, userId: string): boolean;
+}
+
 const EMPTY_WORLD = (): MockWorld => ({ guilds: [], channels: [], users: [], members: [], roles: [], messages: [] });
 
 function deepFreeze<T>(value: T): T {
@@ -301,7 +323,7 @@ function collectButtons(value: unknown, out: ButtonView[]): void {
 	if (Array.isArray(raw.components)) collectButtons(raw.components, out);
 }
 
-export class WorldState {
+export class WorldState implements WorldStateReader {
 	private readonly world: MockWorld;
 	private readonly bansByGuild = new Map<string, Set<string>>();
 	private readonly dmChannelByUser = new Map<string, string>();

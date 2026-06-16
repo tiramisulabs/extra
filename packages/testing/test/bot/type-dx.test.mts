@@ -91,6 +91,25 @@ describe('type DX: S24 declared factory interfaces', () => {
 	});
 });
 
+describe('type DX: public bot.state is a read-only surface', () => {
+	test('@internal mutators are NOT part of the public bot.state type', async () => {
+		const bot = await createMockBot();
+		// Read methods are part of the public WorldStateReader and compile.
+		void bot.state.reactionUsers('c', 'm', '👍');
+		void bot.state.rawMessage('c', 'm');
+		void bot.state.snapshot();
+		// @ts-expect-error addReaction is an @internal mutator, absent from the public bot.state type.
+		bot.state.addReaction;
+		// @ts-expect-error patchMember is an @internal mutator, absent from the public bot.state type.
+		bot.state.patchMember;
+		// @ts-expect-error setChannelOverwrite is an @internal mutator, absent from the public type.
+		bot.state.setChannelOverwrite;
+		// @ts-expect-error addOriginalResponse is an @internal mutator, absent from the public type.
+		bot.state.addOriginalResponse;
+		await bot.close();
+	});
+});
+
 describe('type DX: S20 menu<C> as-const target discrimination', () => {
 	test('as-const class gives a strict, non-optional result.target.user', async () => {
 		const bot = await createMockBot({ commands: [ReportUser] });
