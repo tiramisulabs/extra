@@ -112,7 +112,10 @@ describe('MockApiHandler', () => {
 
 	test('intercept returns a disposer that removes only that interceptor', async () => {
 		const rest = new MockApiHandler({ onUnhandledRest: 'silent' });
-		const off = rest.intercept('GET', '/guilds/:guildId', (_action, params) => ({ id: params.guildId, name: 'Stubbed' }));
+		const off = rest.intercept('GET', '/guilds/:guildId', (_action, params) => ({
+			id: params.guildId,
+			name: 'Stubbed',
+		}));
 		const stubbed = await rest.request<{ name: string }>('GET', '/guilds/999');
 		expect(stubbed.name).toBe('Stubbed');
 

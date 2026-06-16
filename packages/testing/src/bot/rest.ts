@@ -296,7 +296,13 @@ export class MockApiHandler extends ApiHandler {
 		const statusText = error.statusText ?? STATUS_TEXT[error.status] ?? '';
 		const body: Record<string, unknown> = { code: error.code ?? 0, message: error.message ?? statusText };
 		if (error.retryAfter !== undefined) body.retry_after = error.retryAfter;
-		return this.parseError(method, route as `/${string}`, { status: error.status, statusText } as unknown as Response, body, undefined);
+		return this.parseError(
+			method,
+			route as `/${string}`,
+			{ status: error.status, statusText } as unknown as Response,
+			body,
+			undefined,
+		);
 	}
 
 	/**

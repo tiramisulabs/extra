@@ -427,7 +427,8 @@ export class WorldState {
 		if ('name' in patch) channel.name = stringValue(patch.name) ?? channel.name;
 		if ('type' in patch && numberValue(patch.type) !== undefined) channel.type = numberValue(patch.type)!;
 		if ('parent_id' in patch) channel.parent_id = stringValue(patch.parent_id);
-		if ('permission_overwrites' in patch) channel.permission_overwrites = normalizeOverwrites(patch.permission_overwrites);
+		if ('permission_overwrites' in patch)
+			channel.permission_overwrites = normalizeOverwrites(patch.permission_overwrites);
 		return { ...channel };
 	}
 

@@ -292,9 +292,9 @@ describe('permission emulation', () => {
 		await expect(bot.slash({ name: 'needs-ban-default' })).resolves.toMatchObject({ content: 'denied' });
 		expect(ran).toBe(false);
 
-		await expect(
-			bot.slash({ name: 'needs-ban-default', memberPermissions: ALL_PERMISSIONS }),
-		).resolves.toMatchObject({ content: 'ran' });
+		await expect(bot.slash({ name: 'needs-ban-default', memberPermissions: ALL_PERMISSIONS })).resolves.toMatchObject({
+			content: 'ran',
+		});
 		expect(ran).toBe(true);
 
 		ran = false;
@@ -304,9 +304,9 @@ describe('permission emulation', () => {
 		expect(ran).toBe(true);
 
 		ran = false;
-		await expect(
-			bot.slash({ name: 'needs-ban-default', memberPermissions: ['BanMembers'] }),
-		).resolves.toMatchObject({ content: 'ran' });
+		await expect(bot.slash({ name: 'needs-ban-default', memberPermissions: ['BanMembers'] })).resolves.toMatchObject({
+			content: 'ran',
+		});
 		expect(ran).toBe(true);
 
 		await bot.close();
