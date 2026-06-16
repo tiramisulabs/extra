@@ -87,13 +87,22 @@ export function installDispatchHooks(client: Client, deps: DispatchHookDeps): Di
 	};
 	const realSet = modals.set.bind(modals);
 	modals.set = (key: string, value: unknown) => {
-		const result = realSet(key, value);
 		const waiters = deps.modalWaiters.get(key);
 		if (waiters) {
+			const result = realSet(key, value);
 			deps.modalWaiters.delete(key);
 			for (const resolve of waiters) resolve();
+			return result;
 		}
-		return result;
+		// F27: a `waitFor` modal was opened but nothing is waiting to fill it — the opener dispatch was awaited
+		// directly instead of stepped. Awaiting it would stall on the real waitFor timer and silently take the
+		// timeout branch. Fail loud instead of hanging. (Fire-and-forget modals never reach here — only the
+		// suspending `interaction.modal(body, { waitFor })` form registers via modals.set.)
+		throw new TypeError(
+			`A modal was opened for user ${key} but the opener was awaited directly, so nothing resolved it. ` +
+				'Submit it: `await bot.clickButton(...).fillModal(customId, fields)`, ' +
+				'or take its timeout branch: `await bot.clickButton(...).timeoutModal()`.',
+		);
 	};
 	// Denial detection: seyfert's __runMiddlewares only resolves on next()/stop()/pass(). A guard that
 	// replies and returns without calling any of them leaves the chain pending forever, so command.run is

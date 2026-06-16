@@ -218,9 +218,10 @@ await using bot = await createMockBot({
 ### Execution model
 
 Every dispatcher returns a lazy `Dispatch`. Await it directly for one-shot runs, or
-call `dispatch.until(Routes.ban)` / `dispatch.untilModal()` first to step through
-the same dispatch. Awaiting always releases any active checkpoint, so it cannot
-deadlock.
+call `dispatch.until(Routes.ban)` first to step through the same dispatch. For a
+dispatch that opens a modal, drive it in one call with `.fillModal(...)` /
+`.timeoutModal()` (see below). Awaiting always releases any active checkpoint, so it
+cannot deadlock.
 
 - Immediate replies, deferrals, and modal opens are captured in `result.replies`.
 - REST work awaited by the command is classified into `result.edits`,
@@ -440,26 +441,23 @@ Use explicit `resolved` when testing a raw Discord payload. For a
 `ComponentCommand` select-menu path without a collector, build the raw payload
 with `selectMenuInteraction()` and pass it to `dispatchInteraction()`.
 
-Awaited modal flows must keep the opener dispatch alive, because
-`interaction.modal(..., { waitFor })` resumes inside the opener after the submit.
-`dispatch.fillModal(...)` runs the whole flow in one call, threading the same user:
+A dispatch that opens a modal (`interaction.modal(..., { waitFor })`) is driven in one
+call — the open → resolve → settle handshake is handled for you. Submit it with
+`.fillModal(...)`, or take its timeout branch with `.timeoutModal()`:
 
 ```ts
+// the user submitted the modal
 const modal = await bot.clickButton('open-feedback', { user }).fillModal('feedback-modal', { rating: '5' });
 expect(modal.content).toBe('thanks');
+
+// the user never submitted — the waitFor expires (instant, no fake-timer setup)
+const timedOut = await bot.clickButton('open-feedback', { user }).timeoutModal();
+expect(timedOut.content).toBe('timed out');
 ```
 
-The explicit form is equivalent — step the opener, submit, then settle it:
-
-```ts
-const dispatch = bot.clickButton('open-feedback', { user });
-await dispatch.untilModal();
-const modal = await bot.fillModal('feedback-modal', { rating: '5' }, { user });
-await dispatch;
-```
-
-Use the same `user` for the opener and `fillModal()`. Collector `idle`/`timeout`
-and modal `waitFor` options use real timers unless you drive a fake clock — see below.
+Awaiting a modal-opener directly (without `.fillModal()`/`.timeoutModal()`) fails loud,
+since in real seyfert it would stall on the `waitFor` timer and silently take the
+timeout branch.
 
 ### Testing timed behavior
 

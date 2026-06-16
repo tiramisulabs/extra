@@ -65,10 +65,10 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 	}
 
 	/**
-	 * Resolve the instant seyfert registers a modal for this dispatch's user (event-driven, no wall-clock poll),
-	 * so it works under frozen/fake timers. Fails fast and deterministically if the dispatch runs to completion
-	 * without ever opening a modal. `timeoutMs` is accepted for backward compatibility but ignored — registration
-	 * is awaited as an event, not raced against a clock.
+	 * @internal Low-level primitive: resolve the instant seyfert registers a modal for this dispatch's user. Used
+	 * by {@link fillModal} / {@link timeoutModal}, which are the supported one-call ways to drive a modal — prefer
+	 * those. Awaited as an event (no wall-clock poll), so it works under frozen/fake timers; fails fast if the
+	 * dispatch completes without opening a modal. `timeoutMs` is accepted for backward compatibility but ignored.
 	 */
 	async untilModal(_timeoutMs = 2000): Promise<void> {
 		if (!this.userId) {
@@ -95,10 +95,9 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 	}
 
 	/**
-	 * One-call modal flow: start this opener, wait for it to register a modal, submit `customId`/`fields` as the
-	 * SAME user, then settle the opener so its post-`modal()` continuation (e.g. `submit.write(...)`) runs.
-	 * Returns the modal-submit result. Replaces the manual
-	 * `await d.untilModal(); await bot.fillModal(...); await d;` dance — the user is threaded for you.
+	 * Drive a modal opened by this dispatch in ONE call: it submits `customId`/`fields` as the opener's user and
+	 * settles the opener so its post-`modal()` continuation (e.g. `submit.write(...)`) runs, returning the
+	 * modal-submit result. The whole open → submit → settle handshake is internal; the user only writes this.
 	 */
 	async fillModal(customId: string, fields: Record<string, string> = {}): Promise<DispatchResult> {
 		if (!this.modalFiller) {
@@ -108,6 +107,28 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		const submit = await this.modalFiller(customId, fields);
 		await this;
 		return submit;
+	}
+
+	/**
+	 * Drive a modal opened by this dispatch to its TIMEOUT in ONE call: it resolves the opener's
+	 * `interaction.modal({ waitFor })` with `null` — exactly as the real waitFor timer would on expiry, but
+	 * instantly and with no fake-timer setup — so the handler runs its timeout branch, then returns the opener's
+	 * result. The counterpart of {@link fillModal} for the "user never submitted" path.
+	 */
+	async timeoutModal(): Promise<T> {
+		if (!this.userId) {
+			throw new TypeError('Dispatch.timeoutModal: this dispatch has no user - pass `user` to the dispatch options.');
+		}
+		await this.untilModal();
+		const userId = this.userId;
+		const modals = this.clientRef.components.modals as unknown as {
+			get(key: string): ((interaction: unknown) => unknown) | undefined;
+			delete(key: string): unknown;
+		};
+		const exec = modals.get(userId);
+		modals.delete(userId);
+		exec?.(null); // resolves modal({ waitFor }) with null -> the handler takes its timeout branch
+		return await this;
 	}
 
 	then<TResult1 = T, TResult2 = never>(

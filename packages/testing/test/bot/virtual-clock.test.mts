@@ -100,6 +100,39 @@ describe('virtual clock', () => {
 			await bot.close();
 		});
 
+		test('timeoutModal() drives the timeout branch in one call (no fake timers, no untilModal)', async () => {
+			const outcomes: ('submitted' | 'timed-out')[] = [];
+
+			class FeedbackButton extends ComponentCommand {
+				componentType = 'Button' as const;
+				filter(ctx: ComponentContext<'Button'>) {
+					return ctx.customId === 'open-feedback';
+				}
+				async run(ctx: ComponentContext<'Button'>) {
+					const submit = await ctx.interaction.modal(
+						new Modal()
+							.setCustomId('feedback-modal')
+							.setTitle('Feedback')
+							.setComponents([
+								new Label()
+									.setLabel('Rating')
+									.setComponent(new TextInput({ custom_id: 'rating', style: TextInputStyle.Short })),
+							]),
+						{ waitFor: 30_000 },
+					);
+					outcomes.push(submit ? 'submitted' : 'timed-out');
+				}
+			}
+
+			const bot = await createMockBot({ components: [FeedbackButton] });
+			const user = apiUser({ id: 'timeout-user' });
+
+			await bot.clickButton('open-feedback', { user }).timeoutModal();
+
+			expect(outcomes).toEqual(['timed-out']);
+			await bot.close();
+		});
+
 		test('fillModal before the opener ran names the opener, not the user', async () => {
 			class FeedbackButton extends ComponentCommand {
 				componentType = 'Button' as const;
@@ -118,7 +151,30 @@ describe('virtual clock', () => {
 			const user = apiUser({ id: '999' });
 			bot.clickButton('open-feedback', { user }); // created but never stepped/awaited
 
-			expect(() => bot.fillModal('feedback-modal', { rating: '5' }, { user })).toThrow(/opener dispatch/);
+			expect(() => bot.fillModal('feedback-modal', { rating: '5' }, { user })).toThrow(/opener has not run/);
+			await bot.close();
+		});
+
+		test('awaiting a modal-opener directly fails loud instead of stalling on the waitFor timer', async () => {
+			class StallButton extends ComponentCommand {
+				componentType = 'Button' as const;
+				filter(ctx: ComponentContext<'Button'>) {
+					return ctx.customId === 'open-stall';
+				}
+				async run(ctx: ComponentContext<'Button'>) {
+					await ctx.interaction.modal(
+						new Modal().setCustomId('stall-modal').setTitle('Stall').setComponents([]),
+						{ waitFor: 30_000 },
+					);
+				}
+			}
+
+			const bot = await createMockBot({ components: [StallButton] });
+			const user = apiUser({ id: 'stall-user' });
+
+			// Directly awaiting the opener (no untilModal/fillModal) would, in real seyfert, block 30s on the
+			// real-clock waitFor and silently take the timeout branch. The mock fails loud immediately instead.
+			await expect(bot.clickButton('open-stall', { user })).rejects.toThrow(/awaited directly/);
 			await bot.close();
 		});
 

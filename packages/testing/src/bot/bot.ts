@@ -817,8 +817,8 @@ export class MockBot {
 			otherUsers.length > 0
 				? `A modal IS waiting, but for a different user (${otherUsers.join(', ')}). Pass that same 'user' to fillModal.`
 				: pendingOpener
-					? "The opener dispatch hasn't run yet — step it with `await dispatch.untilModal()` (or use the one-call `dispatch.fillModal(...)`) before filling."
-					: 'Dispatch the button/command that opens the modal first, stepping with untilModal().';
+					? 'The opener has not run yet — drive it in one call: `await bot.clickButton(...).fillModal(customId, fields)`.'
+					: 'Dispatch the button/command that opens the modal first, e.g. `await bot.clickButton(...).fillModal(customId, fields)`.';
 		throw new TypeError(
 			`fillModal: no modal "${customId}" is waiting for user "${userId}" and no ModalCommand is registered. ${hint}`,
 		);
