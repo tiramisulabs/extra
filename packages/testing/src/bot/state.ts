@@ -84,6 +84,9 @@ export interface MessageView {
 	embeds: EmbedView[];
 	components: unknown[];
 	attachments: AttachmentView[];
+	isComponentsV2: boolean;
+	componentTypes: number[];
+	textDisplays: string[];
 	buttons: ButtonView[];
 	button(labelOrCustomId: string): ButtonView | undefined;
 	reactions: ReactionView[];
@@ -405,6 +408,21 @@ function collectButtons(value: unknown, out: ButtonView[]): void {
 		});
 	}
 	if (Array.isArray(raw.components)) collectButtons(raw.components, out);
+}
+
+const MESSAGE_FLAG_COMPONENTS_V2 = 1 << 15;
+
+/**
+ * Walk a (possibly nested) Components v2 tree — containers (17), sections (9, plus their `accessory`),
+ * action rows (1), etc. — visiting every node so v2 layouts can be surfaced flat for assertions.
+ */
+function walkComponents(value: unknown, visit: (node: Record<string, unknown>) => void): void {
+	for (const entry of arrayValue(value)) {
+		const node = asRecord(entry);
+		visit(node);
+		if (node.accessory !== undefined) visit(asRecord(node.accessory));
+		if (Array.isArray(node.components)) walkComponents(node.components, visit);
+	}
 }
 
 export class WorldState implements WorldStateReader {
@@ -1450,6 +1468,13 @@ export class WorldState implements WorldStateReader {
 	private messageView(message: ApiMessage): MessageView {
 		const buttons: ButtonView[] = [];
 		collectButtons(message.components, buttons);
+		const componentTypes: number[] = [];
+		const textDisplays: string[] = [];
+		walkComponents(message.components, node => {
+			const type = numberValue(node.type);
+			if (type !== undefined) componentTypes.push(type);
+			if (type === 10 && typeof node.content === 'string') textDisplays.push(node.content);
+		});
 		const reactions = this.reactionViews(message.channel_id, message.id);
 		return {
 			id: message.id,
@@ -1458,6 +1483,9 @@ export class WorldState implements WorldStateReader {
 			content: message.content,
 			embeds: message.embeds.map(normalizeEmbed),
 			components: [...message.components],
+			isComponentsV2: (message.flags & MESSAGE_FLAG_COMPONENTS_V2) !== 0,
+			componentTypes,
+			textDisplays,
 			attachments: message.attachments.map(attachment => ({
 				id: attachment.id,
 				filename: attachment.filename,
