@@ -61,6 +61,58 @@ function interceptFetchOne<T>(
 	rest.intercept(route, (_pending, params) => find(params) ?? fallback(params));
 }
 
+/**
+ * The uniform create/list/fetch/edit/delete interceptor shape shared by the guild-scoped entities
+ * (emoji, automod rule, sticker, scheduled event). Each entity supplies its WorldState mutators/readers
+ * plus a synthetic `fallback`; routes are wired only when present, so read-only entities can omit `edit`/`remove`.
+ */
+interface GuildCrudConfig {
+	idParam: string;
+	create?: RouteMatcher;
+	list?: RouteMatcher;
+	fetch?: RouteMatcher;
+	edit?: RouteMatcher;
+	remove?: RouteMatcher;
+	add: (guildId: string, body: Record<string, unknown>) => unknown;
+	all: (guildId: string) => unknown;
+	one: (guildId: string, id: string) => unknown;
+	patch?: (guildId: string, id: string, body: Record<string, unknown>) => unknown;
+	drop?: (guildId: string, id: string) => void;
+	fallback: (guildId: string, id: string) => unknown;
+}
+
+function registerGuildCrud(rest: MockApiHandler, config: GuildCrudConfig): void {
+	const { idParam } = config;
+	if (config.create) {
+		rest.intercept(config.create, (pending, params) => config.add(params.guildId, bodyRecord(pending.body)));
+	}
+	if (config.list) rest.intercept(config.list, (_pending, params) => config.all(params.guildId));
+	if (config.fetch) {
+		interceptFetchOne(
+			rest,
+			config.fetch,
+			params => config.one(params.guildId, params[idParam]),
+			params => config.fallback(params.guildId, params[idParam]),
+		);
+	}
+	if (config.edit && config.patch) {
+		const patch = config.patch;
+		rest.intercept(
+			config.edit,
+			(pending, params) =>
+				patch(params.guildId, params[idParam], bodyRecord(pending.body)) ??
+				config.fallback(params.guildId, params[idParam]),
+		);
+	}
+	if (config.remove && config.drop) {
+		const drop = config.drop;
+		rest.intercept(config.remove, (_pending, params) => {
+			drop(params.guildId, params[idParam]);
+			return {};
+		});
+	}
+}
+
 // Synthesized channel webhooks encode their channel into the id, so an execute
 // (POST /webhooks/:id/:token — the same route shape as an interaction followup)
 // can recover its target channel without a registry.
@@ -344,23 +396,19 @@ export function registerWorldDefaults(
 		hooks.state.removeRole(params.guildId, params.roleId);
 		return {};
 	});
-	rest.intercept(Routes.createEmoji, (pending, params) =>
-		hooks.state.addEmoji(params.guildId, bodyRecord(pending.body)),
-	);
-	rest.intercept(Routes.fetchEmojis, (_pending, params) => hooks.state.emojis(params.guildId));
-	interceptFetchOne(
-		rest,
-		Routes.fetchEmoji,
-		params => hooks.state.emoji(params.guildId, params.emojiId),
-		params => apiEmoji({ id: params.emojiId, guildId: params.guildId }),
-	);
-	rest.intercept(Routes.editEmoji, (pending, params) => {
-		const updated = hooks.state.editEmoji(params.guildId, params.emojiId, bodyRecord(pending.body));
-		return updated ?? apiEmoji({ id: params.emojiId, guildId: params.guildId });
-	});
-	rest.intercept(Routes.deleteEmoji, (_pending, params) => {
-		hooks.state.removeEmoji(params.guildId, params.emojiId);
-		return {};
+	registerGuildCrud(rest, {
+		idParam: 'emojiId',
+		create: Routes.createEmoji,
+		list: Routes.fetchEmojis,
+		fetch: Routes.fetchEmoji,
+		edit: Routes.editEmoji,
+		remove: Routes.deleteEmoji,
+		add: (guildId, body) => hooks.state.addEmoji(guildId, body),
+		all: guildId => hooks.state.emojis(guildId),
+		one: (guildId, id) => hooks.state.emoji(guildId, id),
+		patch: (guildId, id, body) => hooks.state.editEmoji(guildId, id, body),
+		drop: (guildId, id) => hooks.state.removeEmoji(guildId, id),
+		fallback: (guildId, id) => apiEmoji({ id, guildId }),
 	});
 	rest.intercept(Routes.createInvite, (pending, params) =>
 		hooks.state.addInvite(
@@ -385,23 +433,19 @@ export function registerWorldDefaults(
 		for (const userId of userIds) await removeMember(params.guildId, userId, true);
 		return { banned_users: userIds, failed_users: [] };
 	});
-	rest.intercept(Routes.createAutoModRule, (pending, params) =>
-		hooks.state.addAutoModRule(params.guildId, bodyRecord(pending.body)),
-	);
-	rest.intercept(Routes.fetchAutoModRules, (_pending, params) => hooks.state.autoModRules(params.guildId));
-	interceptFetchOne(
-		rest,
-		Routes.fetchAutoModRule,
-		params => hooks.state.autoModRule(params.guildId, params.ruleId),
-		params => apiAutoModRule({ id: params.ruleId, guildId: params.guildId }),
-	);
-	rest.intercept(Routes.editAutoModRule, (pending, params) => {
-		const updated = hooks.state.editAutoModRule(params.guildId, params.ruleId, bodyRecord(pending.body));
-		return updated ?? apiAutoModRule({ id: params.ruleId, guildId: params.guildId });
-	});
-	rest.intercept(Routes.deleteAutoModRule, (_pending, params) => {
-		hooks.state.removeAutoModRule(params.guildId, params.ruleId);
-		return {};
+	registerGuildCrud(rest, {
+		idParam: 'ruleId',
+		create: Routes.createAutoModRule,
+		list: Routes.fetchAutoModRules,
+		fetch: Routes.fetchAutoModRule,
+		edit: Routes.editAutoModRule,
+		remove: Routes.deleteAutoModRule,
+		add: (guildId, body) => hooks.state.addAutoModRule(guildId, body),
+		all: guildId => hooks.state.autoModRules(guildId),
+		one: (guildId, id) => hooks.state.autoModRule(guildId, id),
+		patch: (guildId, id, body) => hooks.state.editAutoModRule(guildId, id, body),
+		drop: (guildId, id) => hooks.state.removeAutoModRule(guildId, id),
+		fallback: (guildId, id) => apiAutoModRule({ id, guildId }),
 	});
 	const resolveThreadUser = (userId: string) => (userId === '@me' ? hooks.botId : userId);
 	rest.intercept(Routes.addThreadMember, (_pending, params) => {
@@ -423,37 +467,31 @@ export function registerWorldDefaults(
 		members: [],
 		has_more: false,
 	}));
-	rest.intercept(Routes.createSticker, (pending, params) =>
-		hooks.state.addSticker(params.guildId, bodyRecord(pending.body)),
-	);
-	rest.intercept(Routes.fetchStickers, (_pending, params) => hooks.state.stickers(params.guildId));
-	interceptFetchOne(
-		rest,
-		Routes.fetchSticker,
-		params => hooks.state.sticker(params.guildId, params.stickerId),
-		params => apiSticker({ id: params.stickerId, guildId: params.guildId }),
-	);
-	rest.intercept(Routes.editSticker, (pending, params) => {
-		const updated = hooks.state.editSticker(params.guildId, params.stickerId, bodyRecord(pending.body));
-		return updated ?? apiSticker({ id: params.stickerId, guildId: params.guildId });
+	registerGuildCrud(rest, {
+		idParam: 'stickerId',
+		create: Routes.createSticker,
+		list: Routes.fetchStickers,
+		fetch: Routes.fetchSticker,
+		edit: Routes.editSticker,
+		remove: Routes.deleteSticker,
+		add: (guildId, body) => hooks.state.addSticker(guildId, body),
+		all: guildId => hooks.state.stickers(guildId),
+		one: (guildId, id) => hooks.state.sticker(guildId, id),
+		patch: (guildId, id, body) => hooks.state.editSticker(guildId, id, body),
+		drop: (guildId, id) => hooks.state.removeSticker(guildId, id),
+		fallback: (guildId, id) => apiSticker({ id, guildId }),
 	});
-	rest.intercept(Routes.deleteSticker, (_pending, params) => {
-		hooks.state.removeSticker(params.guildId, params.stickerId);
-		return {};
-	});
-	rest.intercept(Routes.fetchScheduledEvents, (_pending, params) => hooks.state.scheduledEvents(params.guildId));
-	rest.intercept(Routes.createScheduledEvent, (pending, params) =>
-		hooks.state.addScheduledEvent(params.guildId, bodyRecord(pending.body)),
-	);
-	interceptFetchOne(
-		rest,
-		Routes.fetchScheduledEvent,
-		params => hooks.state.scheduledEvent(params.guildId, params.eventId),
-		params => apiScheduledEvent({ id: params.eventId, guildId: params.guildId }),
-	);
-	rest.intercept(Routes.deleteScheduledEvent, (_pending, params) => {
-		hooks.state.removeScheduledEvent(params.guildId, params.eventId);
-		return {};
+	registerGuildCrud(rest, {
+		idParam: 'eventId',
+		create: Routes.createScheduledEvent,
+		list: Routes.fetchScheduledEvents,
+		fetch: Routes.fetchScheduledEvent,
+		remove: Routes.deleteScheduledEvent,
+		add: (guildId, body) => hooks.state.addScheduledEvent(guildId, body),
+		all: guildId => hooks.state.scheduledEvents(guildId),
+		one: (guildId, id) => hooks.state.scheduledEvent(guildId, id),
+		drop: (guildId, id) => hooks.state.removeScheduledEvent(guildId, id),
+		fallback: (guildId, id) => apiScheduledEvent({ id, guildId }),
 	});
 	rest.intercept(Routes.listGuildTemplates, (_pending, params) => hooks.state.guildTemplates(params.guildId));
 	rest.intercept(Routes.createGuildTemplate, (pending, params) =>
