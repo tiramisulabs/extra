@@ -45,6 +45,12 @@ import type { MockWorld } from './world';
 
 const MAX_MESSAGE_CONTENT = 2000;
 const MESSAGE_FLAG_COMPONENTS_V2 = 1 << 15;
+const MESSAGE_FLAG_EPHEMERAL = 1 << 6;
+
+// F17: ephemeral interaction messages are not part of the channel — absent from GET /channels/{id}/messages and
+// from channel views. They remain reachable by interaction token (@original / followup webhook routes).
+const isEphemeral = (message: { flags?: number }): boolean =>
+	((message.flags ?? 0) & MESSAGE_FLAG_EPHEMERAL) !== 0;
 
 const cp = (value: string): number => [...value].length;
 
@@ -961,7 +967,7 @@ export class WorldState implements WorldStateReader {
 
 	channelMessages(channelId: string, options?: MessageQuery): RawMessage[] {
 		const chronological = this.world.messages
-			.filter(entry => entry.channelId === channelId)
+			.filter(entry => entry.channelId === channelId && !isEphemeral(entry.message))
 			.map(entry => entry.message);
 		const newestFirst = [...chronological].reverse();
 		const limit = Math.min(Math.max(options?.limit ?? 50, 0), 100);
@@ -1993,7 +1999,9 @@ export class WorldState implements WorldStateReader {
 	}
 
 	private channelView(channel: ApiChannel): ChannelView {
-		const channelMessages = this.world.messages.filter(message => message.channelId === channel.id);
+		const channelMessages = this.world.messages.filter(
+			message => message.channelId === channel.id && !isEphemeral(message.message),
+		);
 		const messages = channelMessages.map(message => this.buildMessageView(message.message));
 		const pinnedIds = this.pinnedByChannel.get(channel.id) ?? [];
 		const pins = pinnedIds
