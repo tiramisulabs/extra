@@ -21,6 +21,17 @@ import {
 	type UserCommandInteraction,
 } from 'seyfert';
 import { ApplicationCommandType, EntryPointCommandHandlerType } from 'seyfert/lib/types';
+import { apiUser } from '../../src/bot/payloads';
+import { mockWorld } from '../../src/bot/world';
+
+/** The common test opener: `const { world, guild, actor, channel } = seedGuildFixture('tag')`. */
+export function seedGuildFixture(tag: string) {
+	const world = mockWorld();
+	const guild = world.registerGuild({ id: `${tag}-guild` });
+	const actor = world.registerMember(guild.id, { user: apiUser({ id: `${tag}-actor` }) });
+	const channel = world.registerChannel(guild.id, { id: `${tag}-chan` });
+	return { world, guild, actor, channel };
+}
 
 export const greetOptions = {
 	name: createStringOption({ description: 'Who to greet', required: true }),

@@ -740,16 +740,21 @@ export class MockBot {
 		);
 	}
 
+	/** Read a `{ id, channel_id? }` message source out of a recorded REST response, or undefined if it has no id. */
+	private messageSourceFrom(response: unknown): { id: string; channel_id?: string } | undefined {
+		const record = response as { id?: unknown; channel_id?: unknown } | undefined;
+		if (!record || typeof record.id !== 'string') return undefined;
+		return {
+			id: record.id,
+			...(typeof record.channel_id === 'string' ? { channel_id: record.channel_id } : {}),
+		};
+	}
+
 	lastSentMessage(): { id: string; channel_id?: string } | undefined {
 		for (let i = this.rest.actions.length - 1; i >= 0; i--) {
 			const action = this.rest.actions[i];
-			const response = action.response as { id?: unknown; channel_id?: unknown } | undefined;
-			if (response && typeof response.id === 'string' && /\/messages(\/|$)|\/webhooks\//.test(action.route)) {
-				return {
-					id: response.id,
-					...(typeof response.channel_id === 'string' ? { channel_id: response.channel_id } : {}),
-				};
-			}
+			const source = this.messageSourceFrom(action.response);
+			if (source && /\/messages(\/|$)|\/webhooks\//.test(action.route)) return source;
 		}
 		return undefined;
 	}
@@ -769,13 +774,8 @@ export class MockBot {
 	private resolveMessageSource(source?: string | RecordedAction): { id: string; channel_id?: string } | undefined {
 		if (typeof source === 'string') return { id: source };
 		if (source) {
-			const response = source.response as { id?: unknown; channel_id?: unknown } | undefined;
-			if (response && typeof response.id === 'string') {
-				return {
-					id: response.id,
-					...(typeof response.channel_id === 'string' ? { channel_id: response.channel_id } : {}),
-				};
-			}
+			const resolved = this.messageSourceFrom(source.response);
+			if (resolved) return resolved;
 		}
 		// Fall back to the most recent interaction-original message so a collector attached to an immediate
 		// reply (which produces no channel-message REST action) still has a resolvable source.
