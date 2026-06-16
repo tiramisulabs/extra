@@ -68,6 +68,7 @@ import {
 	type RecordedAction,
 	type RouteActionFilter,
 	type RouteMatcher,
+	type TypedMatchedAction,
 } from './rest';
 import { FOLLOWUP_ROUTE, WEBHOOK_MESSAGE_ROUTE } from './routes';
 import { type ChannelView, type GuildView, WorldState } from './state';
@@ -237,6 +238,26 @@ export interface SayResult extends MessageResultBase {}
 
 /** Result of emitEvent: REST the event handler produced, derived from channel-message writes. */
 export interface EventDispatchResult extends MessageResultBase {}
+
+/** Read-only descriptor of a registered application command, surfaced by {@link MockBot.registeredCommands}. */
+export interface RegisteredCommand {
+	name: string;
+	type: 'chatInput' | 'user' | 'message' | 'entryPoint';
+}
+
+/** Read-only descriptor of a registered component/modal handler, surfaced by {@link MockBot.registeredComponents}. */
+export interface RegisteredComponent {
+	name: string;
+	kind: 'component' | 'modal';
+}
+
+/** Plain-data snapshot for debugging a hung dispatch, surfaced by {@link MockBot.diagnostics}. */
+export interface BotDiagnostics {
+	/** Dispatches created but not yet settled. */
+	pending: { id?: string; started: boolean; settled: boolean }[];
+	/** The most recent recorded REST actions, oldest-first. */
+	recentActions: RecordedAction[];
+}
 
 function messageParts(actions: RecordedAction[], messages: OutgoingMessage[]): MessageResultBase {
 	const embeds = messages.flatMap(message => message.embeds ?? []);
@@ -903,29 +924,94 @@ export class MockBot {
 		return this.rest.actions;
 	}
 
-	waitForAction(
-		matcherOrPredicate: RouteMatcher | ActionFilter | ActionPredicate,
-		timeoutMs?: number,
-	): Promise<RecordedAction> {
-		if (typeof matcherOrPredicate === 'function') return this.rest.waitForAction(matcherOrPredicate, timeoutMs);
-		return this.rest.waitForAction(matcherOrPredicate, timeoutMs);
+	/**
+	 * Read-only list of the application commands registered on the client. Pure read of
+	 * `client.commands.values`; no mutation or side effects.
+	 */
+	registeredCommands(): readonly RegisteredCommand[] {
+		const typeName = (type: ApplicationCommandType): RegisteredCommand['type'] => {
+			switch (type) {
+				case ApplicationCommandType.User:
+					return 'user';
+				case ApplicationCommandType.Message:
+					return 'message';
+				case ApplicationCommandType.PrimaryEntryPoint:
+					return 'entryPoint';
+				default:
+					return 'chatInput';
+			}
+		};
+		return this.client.commands.values.map(command => ({
+			name: command.name,
+			type: typeName(command.type as ApplicationCommandType),
+		}));
 	}
 
-	findCalls(matcher: RouteMatcher | ActionPredicate, params?: Record<string, string>): MatchedAction[];
-	findCalls(matcher: RouteMatcher, filter: RouteActionFilter): MatchedAction[];
-	findCalls(matcher: ActionFilter | ActionPredicate): MatchedAction[];
-	findCalls(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction[];
+	/**
+	 * Read-only list of the registered component/modal handlers. Reuses the same enumeration as
+	 * {@link describeUnmatchedComponent}; pure read of `client.components.commands`.
+	 */
+	registeredComponents(): readonly RegisteredComponent[] {
+		return this.componentCommands().map(command => ({
+			name: (command as { constructor: { name: string } }).constructor?.name ?? '(anonymous)',
+			kind: command instanceof ModalCommand ? 'modal' : 'component',
+		}));
+	}
+
+	/**
+	 * Plain-data snapshot for debugging a hung dispatch: dispatches that were created but never settled,
+	 * plus the most recent recorded REST actions. Pure read; no mutation or side effects.
+	 */
+	diagnostics(recentLimit = 20): BotDiagnostics {
+		const pending = this.dispatches
+			.filter(dispatch => !dispatch.isSettled)
+			.map(dispatch => ({ id: dispatch.userId, started: dispatch.started, settled: dispatch.isSettled }));
+		const actions = this.rest.actions;
+		const recentActions = recentLimit >= 0 ? actions.slice(Math.max(0, actions.length - recentLimit)) : [...actions];
+		return { pending, recentActions };
+	}
+
+	waitForAction<TBody = Record<string, unknown>, TResponse = unknown>(
+		matcherOrPredicate: RouteMatcher | ActionFilter | ActionPredicate,
+		timeoutMs?: number,
+	): Promise<TypedMatchedAction<TBody, TResponse>> {
+		return this.rest.waitForAction<TBody, TResponse>(matcherOrPredicate as RouteMatcher, timeoutMs);
+	}
+
+	findCalls<TBody = Record<string, unknown>, TResponse = unknown>(
+		matcher: RouteMatcher | ActionPredicate,
+		params?: Record<string, string>,
+	): TypedMatchedAction<TBody, TResponse>[];
+	findCalls<TBody = Record<string, unknown>, TResponse = unknown>(
+		matcher: RouteMatcher,
+		filter: RouteActionFilter,
+	): TypedMatchedAction<TBody, TResponse>[];
+	findCalls<TBody = Record<string, unknown>, TResponse = unknown>(
+		matcher: ActionFilter | ActionPredicate,
+	): TypedMatchedAction<TBody, TResponse>[];
+	findCalls<TBody = Record<string, unknown>, TResponse = unknown>(
+		matcher: ActionMatcher,
+		paramsOrFilter?: Record<string, string> | RouteActionFilter,
+	): TypedMatchedAction<TBody, TResponse>[];
 	findCalls(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction[] {
 		return this.rest.findCalls(matcher, paramsOrFilter);
 	}
 
-	findCall(matcher: RouteMatcher | ActionPredicate, params?: Record<string, string>): MatchedAction | undefined;
-	findCall(matcher: RouteMatcher, filter: RouteActionFilter): MatchedAction | undefined;
-	findCall(matcher: ActionFilter | ActionPredicate): MatchedAction | undefined;
-	findCall(
+	findCall<TBody = Record<string, unknown>, TResponse = unknown>(
+		matcher: RouteMatcher | ActionPredicate,
+		params?: Record<string, string>,
+	): TypedMatchedAction<TBody, TResponse> | undefined;
+	findCall<TBody = Record<string, unknown>, TResponse = unknown>(
+		matcher: RouteMatcher,
+		filter: RouteActionFilter,
+	): TypedMatchedAction<TBody, TResponse> | undefined;
+	findCall<TBody = Record<string, unknown>, TResponse = unknown>(
+		matcher: ActionFilter | ActionPredicate,
+	): TypedMatchedAction<TBody, TResponse> | undefined;
+	findCall<TBody = Record<string, unknown>, TResponse = unknown>(
 		matcher: ActionMatcher,
 		paramsOrFilter?: Record<string, string> | RouteActionFilter,
-	): MatchedAction | undefined;
+	): TypedMatchedAction<TBody, TResponse> | undefined;
 	findCall(
 		matcher: ActionMatcher,
 		paramsOrFilter?: Record<string, string> | RouteActionFilter,

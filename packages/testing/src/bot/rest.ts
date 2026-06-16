@@ -91,6 +91,15 @@ export interface RouteMatcher {
 /** A recorded action enriched with the route params its matcher captured. */
 export type MatchedAction = RecordedAction & { params: Record<string, string> };
 
+/**
+ * {@link MatchedAction} with caller-supplied types for the request `body` and `response`, so assertions
+ * off a matched call don't need a cast. The generics are erased at runtime; the library casts internally.
+ */
+export type TypedMatchedAction<TBody = Record<string, unknown>, TResponse = unknown> = Omit<
+	MatchedAction,
+	'body' | 'response'
+> & { body?: TBody; response: TResponse };
+
 export type ActionPredicate = (action: RecordedAction) => boolean;
 export type ValuePredicate<T> = (value: T, action: RecordedAction) => boolean;
 
@@ -383,10 +392,21 @@ export class MockApiHandler extends ApiHandler {
 		return this.matchParams({ method: filter.method ?? action.method, route: filter.route }, action) ?? {};
 	}
 
-	findCalls(matcher: RouteMatcher | ActionPredicate, params?: Record<string, string>): MatchedAction[];
-	findCalls(matcher: RouteMatcher, filter: RouteActionFilter): MatchedAction[];
-	findCalls(matcher: ActionFilter | ActionPredicate): MatchedAction[];
-	findCalls(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction[];
+	findCalls<TBody = Record<string, unknown>, TResponse = unknown>(
+		matcher: RouteMatcher | ActionPredicate,
+		params?: Record<string, string>,
+	): TypedMatchedAction<TBody, TResponse>[];
+	findCalls<TBody = Record<string, unknown>, TResponse = unknown>(
+		matcher: RouteMatcher,
+		filter: RouteActionFilter,
+	): TypedMatchedAction<TBody, TResponse>[];
+	findCalls<TBody = Record<string, unknown>, TResponse = unknown>(
+		matcher: ActionFilter | ActionPredicate,
+	): TypedMatchedAction<TBody, TResponse>[];
+	findCalls<TBody = Record<string, unknown>, TResponse = unknown>(
+		matcher: ActionMatcher,
+		paramsOrFilter?: Record<string, string> | RouteActionFilter,
+	): TypedMatchedAction<TBody, TResponse>[];
 	findCalls(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction[] {
 		const out: MatchedAction[] = [];
 		for (const action of this.actions) {
@@ -409,13 +429,21 @@ export class MockApiHandler extends ApiHandler {
 		return out;
 	}
 
-	findCall(matcher: RouteMatcher | ActionPredicate, params?: Record<string, string>): MatchedAction | undefined;
-	findCall(matcher: RouteMatcher, filter: RouteActionFilter): MatchedAction | undefined;
-	findCall(matcher: ActionFilter | ActionPredicate): MatchedAction | undefined;
-	findCall(
+	findCall<TBody = Record<string, unknown>, TResponse = unknown>(
+		matcher: RouteMatcher | ActionPredicate,
+		params?: Record<string, string>,
+	): TypedMatchedAction<TBody, TResponse> | undefined;
+	findCall<TBody = Record<string, unknown>, TResponse = unknown>(
+		matcher: RouteMatcher,
+		filter: RouteActionFilter,
+	): TypedMatchedAction<TBody, TResponse> | undefined;
+	findCall<TBody = Record<string, unknown>, TResponse = unknown>(
+		matcher: ActionFilter | ActionPredicate,
+	): TypedMatchedAction<TBody, TResponse> | undefined;
+	findCall<TBody = Record<string, unknown>, TResponse = unknown>(
 		matcher: ActionMatcher,
 		paramsOrFilter?: Record<string, string> | RouteActionFilter,
-	): MatchedAction | undefined;
+	): TypedMatchedAction<TBody, TResponse> | undefined;
 	findCall(
 		matcher: ActionMatcher,
 		paramsOrFilter?: Record<string, string> | RouteActionFilter,
@@ -423,8 +451,14 @@ export class MockApiHandler extends ApiHandler {
 		return this.findCalls(matcher, paramsOrFilter)[0];
 	}
 
-	waitForAction(matcher: RouteMatcher | ActionFilter, timeoutMs?: number): Promise<MatchedAction>;
-	waitForAction(predicate: ActionPredicate, timeoutMs?: number): Promise<MatchedAction>;
+	waitForAction<TBody = Record<string, unknown>, TResponse = unknown>(
+		matcher: RouteMatcher | ActionFilter,
+		timeoutMs?: number,
+	): Promise<TypedMatchedAction<TBody, TResponse>>;
+	waitForAction<TBody = Record<string, unknown>, TResponse = unknown>(
+		predicate: ActionPredicate,
+		timeoutMs?: number,
+	): Promise<TypedMatchedAction<TBody, TResponse>>;
 	waitForAction(
 		matcherOrPredicate: RouteMatcher | ActionFilter | ActionPredicate,
 		timeoutMs = 2000,

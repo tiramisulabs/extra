@@ -24,6 +24,10 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		return this.execution !== undefined;
 	}
 
+	get isSettled(): boolean {
+		return this.settled;
+	}
+
 	private releaseCheckpoint(): void {
 		const release = this.releasePending;
 		this.releasePending = undefined;
