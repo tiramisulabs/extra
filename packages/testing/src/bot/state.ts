@@ -779,6 +779,27 @@ export function walkComponents(value: unknown, visit: (node: Record<string, unkn
 	}
 }
 
+/**
+ * Flatten a (possibly v2-nested) components tree into its interactive buttons, every node `type` in tree order,
+ * and the TextDisplay (type 10) contents — the shared projection used by both the dispatch result and MessageView.
+ */
+export function harvestComponents(components: unknown): {
+	buttons: ButtonView[];
+	componentTypes: number[];
+	textDisplays: string[];
+} {
+	const buttons: ButtonView[] = [];
+	const componentTypes: number[] = [];
+	const textDisplays: string[] = [];
+	collectButtons(components, buttons);
+	walkComponents(components, node => {
+		const type = numberValue(node.type);
+		if (type !== undefined) componentTypes.push(type);
+		if (type === 10 && typeof node.content === 'string') textDisplays.push(node.content);
+	});
+	return { buttons, componentTypes, textDisplays };
+}
+
 export class WorldState implements WorldStateReader {
 	private readonly world: MockWorld;
 	private readonly bansByGuild = new Map<string, Set<string>>();
@@ -2075,15 +2096,7 @@ export class WorldState implements WorldStateReader {
 	}
 
 	private buildMessageView(message: ApiMessage): MessageView {
-		const buttons: ButtonView[] = [];
-		collectButtons(message.components, buttons);
-		const componentTypes: number[] = [];
-		const textDisplays: string[] = [];
-		walkComponents(message.components, node => {
-			const type = numberValue(node.type);
-			if (type !== undefined) componentTypes.push(type);
-			if (type === 10 && typeof node.content === 'string') textDisplays.push(node.content);
-		});
+		const { buttons, componentTypes, textDisplays } = harvestComponents(message.components);
 		const reactions = this.reactionViews(message.channel_id, message.id);
 		return {
 			id: message.id,

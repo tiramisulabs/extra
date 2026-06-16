@@ -87,10 +87,10 @@ import { resolveSelectResolved } from './select-resolved';
 import {
 	type ButtonView,
 	type ChannelView,
-	collectButtons,
 	type EmbedView,
 	type GuildMemberView,
 	type GuildView,
+	harvestComponents,
 	type MessageView,
 	normalizeEmbed,
 	type RoleView,
@@ -98,7 +98,6 @@ import {
 	type WorldSnapshot,
 	WorldState,
 	type WorldStateReader,
-	walkComponents,
 } from './state';
 import { type MockWorld, seedWorld, type WorldBuilder } from './world';
 import { applyWorldEvent } from './world-events';
@@ -324,11 +323,9 @@ function messageParts(actions: RecordedAction[], messages: OutgoingMessage[]): M
 	const buttons: ButtonView[] = [];
 	const textDisplays: string[] = [];
 	for (const message of messages) {
-		const components = (message as { components?: unknown }).components;
-		collectButtons(components, buttons);
-		walkComponents(components, node => {
-			if (node.type === 10 && typeof node.content === 'string') textDisplays.push(node.content);
-		});
+		const harvested = harvestComponents((message as { components?: unknown }).components);
+		buttons.push(...harvested.buttons);
+		textDisplays.push(...harvested.textDisplays);
 	}
 	return {
 		actions,
@@ -1385,11 +1382,9 @@ export class MockBot {
 		const buttons: ButtonView[] = [];
 		const textDisplays: string[] = [];
 		for (const message of messages) {
-			const components = (message as { components?: unknown }).components;
-			collectButtons(components, buttons);
-			walkComponents(components, node => {
-				if (node.type === 10 && typeof node.content === 'string') textDisplays.push(node.content);
-			});
+			const harvested = harvestComponents((message as { components?: unknown }).components);
+			buttons.push(...harvested.buttons);
+			textDisplays.push(...harvested.textDisplays);
 		}
 		const command = this.commandLeaf(payload);
 		const target = this.commandTarget(payload);
