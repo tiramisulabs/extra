@@ -46,9 +46,9 @@ describe('management routes', () => {
 
 		const bot = await createMockBot({ commands: [DropRole], world });
 		expect(bot.cachedGuild(guild.id)?.role(role.id)).toBeDefined();
-		await expect(
-			bot.slash({ name: 'drop-role', guildId: guild.id, channel, user: actor.user }),
-		).resolves.toMatchObject({ content: 'deleted' });
+		await expect(bot.slash({ name: 'drop-role', guildId: guild.id, channel, user: actor.user })).resolves.toMatchObject(
+			{ content: 'deleted' },
+		);
 		expect(bot.cachedGuild(guild.id)?.role(role.id)).toBeUndefined();
 		await bot.close();
 	});
@@ -145,14 +145,20 @@ describe('management routes', () => {
 		await expect(
 			bot.slash({ name: 'set-overwrite', guildId: guild.id, channel, user: actor.user }),
 		).resolves.toMatchObject({ content: 'set' });
-		const overwrite = bot.cachedGuild(guild.id)?.channel(channel.id)?.overwrites.find(entry => entry.id === role.id);
+		const overwrite = bot
+			.cachedGuild(guild.id)
+			?.channel(channel.id)
+			?.overwrites.find(entry => entry.id === role.id);
 		expect(overwrite).toMatchObject({ id: role.id, type: 0, deny: '0' });
 		expect(BigInt(overwrite?.allow ?? '0')).toBeGreaterThan(0n);
 		await expect(
 			bot.slash({ name: 'clear-overwrite', guildId: guild.id, channel, user: actor.user }),
 		).resolves.toMatchObject({ content: 'cleared' });
 		expect(
-			bot.cachedGuild(guild.id)?.channel(channel.id)?.overwrites.find(entry => entry.id === role.id),
+			bot
+				.cachedGuild(guild.id)
+				?.channel(channel.id)
+				?.overwrites.find(entry => entry.id === role.id),
 		).toBeUndefined();
 		await bot.close();
 	});

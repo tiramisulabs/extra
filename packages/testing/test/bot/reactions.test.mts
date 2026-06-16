@@ -24,9 +24,9 @@ describe('message reactions', () => {
 		}
 
 		const bot = await createMockBot({ commands: [React], world });
-		await expect(
-			bot.slash({ name: 'react', guildId: guild.id, channel, user: actor.user }),
-		).resolves.toMatchObject({ content: 'reacted' });
+		await expect(bot.slash({ name: 'react', guildId: guild.id, channel, user: actor.user })).resolves.toMatchObject({
+			content: 'reacted',
+		});
 
 		const reacted = bot
 			.cachedGuild(guild.id)
@@ -56,9 +56,9 @@ describe('message reactions', () => {
 		}
 
 		const bot = await createMockBot({ commands: [Unreact], world });
-		await expect(
-			bot.slash({ name: 'unreact', guildId: guild.id, channel, user: actor.user }),
-		).resolves.toMatchObject({ content: 'unreacted' });
+		await expect(bot.slash({ name: 'unreact', guildId: guild.id, channel, user: actor.user })).resolves.toMatchObject({
+			content: 'unreacted',
+		});
 
 		const reacted = bot
 			.cachedGuild(guild.id)
