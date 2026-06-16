@@ -130,9 +130,10 @@ export class WorldBuilder {
 		throw new TypeError(`mockWorld: guild "${guildId}" is not registered. Seeded guilds: ${seeded}.`);
 	}
 
-	private requireChannel(channelId: string): void {
-		if (this.world.channels.some(channel => channel.id === channelId)) return;
-		const seeded = this.world.channels.map(channel => channel.id).join(', ') || '(none)';
+	private requireChannel(channelId: string): ApiChannel {
+		const channel = this.world.channels.find(entry => entry.id === channelId);
+		if (channel) return channel;
+		const seeded = this.world.channels.map(entry => entry.id).join(', ') || '(none)';
 		throw new TypeError(`mockWorld: channel "${channelId}" is not registered. Seeded channels: ${seeded}.`);
 	}
 
@@ -180,12 +181,11 @@ export class WorldBuilder {
 	 * it coexists with normal channels yet stays distinguishable by those fields.
 	 */
 	registerThread(parentChannelId: string, options: WorldThreadOptions = {}): ApiChannel {
-		this.requireChannel(parentChannelId);
-		const parent = this.world.channels.find(channel => channel.id === parentChannelId);
+		const parent = this.requireChannel(parentChannelId);
 		const thread = apiThread({
 			...options,
 			parentId: parentChannelId,
-			guildId: parent?.guild_id ?? null,
+			guildId: parent.guild_id ?? null,
 		});
 		this.world.channels.push(thread);
 		return thread;
@@ -199,9 +199,8 @@ export class WorldBuilder {
 	}
 
 	registerInvite(channelId: string, options: WorldInviteOptions = {}): ApiInvite {
-		this.requireChannel(channelId);
-		const channel = this.world.channels.find(entry => entry.id === channelId);
-		const invite = apiInvite({ ...options, channelId, guildId: channel?.guild_id });
+		const channel = this.requireChannel(channelId);
+		const invite = apiInvite({ ...options, channelId, guildId: channel.guild_id });
 		(this.world.invites ??= []).push(invite);
 		return invite;
 	}
@@ -214,13 +213,12 @@ export class WorldBuilder {
 	}
 
 	registerWebhook(channelId: string, options: Omit<ApiWebhookOptions, 'channelId' | 'guildId'> = {}): ApiWebhook {
-		this.requireChannel(channelId);
-		const channel = this.world.channels.find(entry => entry.id === channelId);
+		const channel = this.requireChannel(channelId);
 		const webhook = apiWebhook({
 			applicationId: TEST_BOT_ID,
 			...options,
 			channelId,
-			...(channel?.guild_id === undefined ? {} : { guildId: channel.guild_id }),
+			...(channel.guild_id === undefined ? {} : { guildId: channel.guild_id }),
 		});
 		(this.world.webhooks ??= []).push(webhook);
 		return webhook;
@@ -261,9 +259,8 @@ export class WorldBuilder {
 	}
 
 	registerStageInstance(channelId: string, options: Omit<ApiStageInstanceOptions, 'channelId'> = {}): ApiStageInstance {
-		this.requireChannel(channelId);
-		const channel = this.world.channels.find(entry => entry.id === channelId);
-		const stage = apiStageInstance({ ...options, channelId, guildId: channel?.guild_id });
+		const channel = this.requireChannel(channelId);
+		const stage = apiStageInstance({ ...options, channelId, guildId: channel.guild_id });
 		(this.world.stageInstances ??= []).push(stage);
 		return stage;
 	}
@@ -315,12 +312,11 @@ export class WorldBuilder {
 	}
 
 	registerMessage(channelId: string, options: Omit<ApiMessageOptions, 'channelId'> = {}): ApiMessage {
-		this.requireChannel(channelId);
-		const channel = this.world.channels.find(entry => entry.id === channelId);
+		const channel = this.requireChannel(channelId);
 		const message = apiMessage({
 			...options,
 			channelId,
-			...(channel?.guild_id === undefined ? {} : { guildId: channel.guild_id }),
+			...(channel.guild_id === undefined ? {} : { guildId: channel.guild_id }),
 		});
 		this.world.messages.push({ channelId, message });
 		return message;

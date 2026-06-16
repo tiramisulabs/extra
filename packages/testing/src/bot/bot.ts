@@ -785,7 +785,7 @@ export class MockBot {
 		const stored = source.channel_id
 			? this._state.rawMessage(source.channel_id, source.id)
 			: this._state.rawMessageById(source.id);
-		if (stored) return stored as unknown as ApiMessage;
+		if (stored) return stored;
 		return apiMessage({ id: source.id, channelId: source.channel_id });
 	}
 

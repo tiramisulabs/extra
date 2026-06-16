@@ -139,7 +139,7 @@ export function registerWorldDefaults(
 		rest,
 		Routes.fetchMessage,
 		params => hooks.state.rawMessage(params.channelId, params.messageId),
-		params => apiMessage({ id: params.messageId, channelId: params.channelId }) as unknown as Record<string, unknown>,
+		params => apiMessage({ id: params.messageId, channelId: params.channelId }),
 	);
 	rest.intercept(
 		Routes.fetchOriginalResponse,

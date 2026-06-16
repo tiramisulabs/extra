@@ -207,8 +207,19 @@ function matchesError(actual: unknown, expected: ActionFilter['error'], action: 
 	return matchesSubset(actual, expected);
 }
 
+/** Single source for the route-filter keys; `satisfies` makes a new RouteActionFilter field a compile error until listed. */
+const ROUTE_FILTER_KEYS = {
+	params: true,
+	body: true,
+	query: true,
+	files: true,
+	reason: true,
+	response: true,
+	error: true,
+} satisfies Record<keyof RouteActionFilter, true>;
+
 function hasRouteFilterKeys(value: Record<string, unknown>): boolean {
-	return ['params', 'body', 'query', 'files', 'reason', 'response', 'error'].some(key => key in value);
+	return Object.keys(ROUTE_FILTER_KEYS).some(key => key in value);
 }
 
 function isRouteMatcherOnly(value: ActionMatcher): value is RouteMatcher {

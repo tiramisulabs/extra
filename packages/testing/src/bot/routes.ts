@@ -216,7 +216,6 @@ export const ROUTE_COVERAGE = {
 	listGuildWebhooks: 'handled',
 } as const satisfies Record<keyof typeof Routes, 'handled' | 'synthetic'>;
 
-export const ORIGINAL_RESPONSE_ROUTE = /\/webhooks\/[^/]+\/[^/]+\/messages\/@original$/;
 export const WEBHOOK_MESSAGE_ROUTE = /\/webhooks\/[^/]+\/[^/]+\/messages\/[^/]+$/;
 export const FOLLOWUP_ROUTE = /\/webhooks\/[^/]+\/[^/]+$/;
 export const CHANNEL_MESSAGE_POST = /\/channels\/[^/]+\/messages$/;

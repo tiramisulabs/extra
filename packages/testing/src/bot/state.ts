@@ -34,6 +34,7 @@ import {
 	apiUser,
 	apiVoiceState,
 	apiWebhook,
+	type RawMessage,
 	type ThreadMetadata,
 } from './payloads';
 import type { ChannelOverwriteLike } from './permissions';
@@ -244,17 +245,17 @@ export interface WorldStateReader {
 	diff(before: WorldSnapshot): WorldDiff;
 	guild(guildId: string): GuildView | undefined;
 	dm(userId: string): ChannelView | undefined;
-	channelMessages(channelId: string, options?: MessageQuery): Record<string, unknown>[];
-	rawMessage(channelId: string, messageId: string): Record<string, unknown> | undefined;
-	rawMessageById(messageId: string): Record<string, unknown> | undefined;
-	messageForToken(token: string): Record<string, unknown> | undefined;
-	webhookMessage(token: string, messageId: string): Record<string, unknown> | undefined;
+	channelMessages(channelId: string, options?: MessageQuery): RawMessage[];
+	rawMessage(channelId: string, messageId: string): RawMessage | undefined;
+	rawMessageById(messageId: string): RawMessage | undefined;
+	messageForToken(token: string): RawMessage | undefined;
+	webhookMessage(token: string, messageId: string): RawMessage | undefined;
 	channelForToken(token: string): string | undefined;
 	reactionUsers(channelId: string, messageId: string, emoji: string): string[];
 	bans(guildId: string): string[];
 	isBanned(guildId: string, userId: string): boolean;
-	pins(channelId: string): Record<string, unknown>[];
-	archivedThreads(channelId: string, type: 'public' | 'private'): Record<string, unknown>[];
+	pins(channelId: string): RawMessage[];
+	archivedThreads(channelId: string, type: 'public' | 'private'): ApiChannel[];
 	pollVoters(channelId: string, messageId: string, answerId: number): string[];
 	emojis(guildId: string): ApiEmoji[];
 	emoji(guildId: string, emojiId: string): ApiEmoji | undefined;
@@ -265,7 +266,7 @@ export interface WorldStateReader {
 	autoModRules(guildId: string): ApiAutoModRule[];
 	autoModRule(guildId: string, ruleId: string): ApiAutoModRule | undefined;
 	threadMembers(channelId: string): string[];
-	activeThreads(guildId: string): Record<string, unknown>[];
+	activeThreads(guildId: string): ApiChannel[];
 	webhookById(id: string): ApiWebhook | undefined;
 	webhooksForGuild(guildId: string): ApiWebhook[];
 	webhooksForChannel(channelId: string): ApiWebhook[];
@@ -559,24 +560,11 @@ export class WorldState implements WorldStateReader {
 			id: guild.id,
 			name: guild.name,
 			channels,
-			channel: nameOrId =>
-				guildChannels
-					.filter(channel => !channel.thread_metadata)
-					.map(channel => this.channelView(channel))
-					.find(channel => channel.id === nameOrId || channel.name === nameOrId),
+			channel: nameOrId => channels.find(channel => channel.id === nameOrId || channel.name === nameOrId),
 			threads,
-			thread: nameOrId =>
-				guildChannels
-					.filter(channel => channel.thread_metadata)
-					.map(channel => this.channelView(channel))
-					.find(channel => channel.id === nameOrId || channel.name === nameOrId),
+			thread: nameOrId => threads.find(channel => channel.id === nameOrId || channel.name === nameOrId),
 			members,
-			member: userId => {
-				const entry = this.world.members.find(
-					member => member.guildId === guild.id && member.member.user.id === userId,
-				);
-				return entry ? this.memberView(entry.member) : undefined;
-			},
+			member: userId => members.find(entry => entry.userId === userId),
 			role: nameOrId => {
 				const role = roles.find(entry => entry.id === nameOrId || entry.name === nameOrId);
 				return role ? { id: role.id, name: role.name, position: role.position } : undefined;
@@ -605,7 +593,7 @@ export class WorldState implements WorldStateReader {
 		return channel ? this.channelView(channel) : undefined;
 	}
 
-	channelMessages(channelId: string, options?: MessageQuery): Record<string, unknown>[] {
+	channelMessages(channelId: string, options?: MessageQuery): RawMessage[] {
 		const chronological = this.world.messages
 			.filter(entry => entry.channelId === channelId)
 			.map(entry => entry.message);
@@ -632,20 +620,20 @@ export class WorldState implements WorldStateReader {
 		return slice.slice(0, limit).map(message => ({ ...message }));
 	}
 
-	rawMessage(channelId: string, messageId: string): Record<string, unknown> | undefined {
+	rawMessage(channelId: string, messageId: string): RawMessage | undefined {
 		const entry = this.world.messages.find(
 			message => message.channelId === channelId && message.message.id === messageId,
 		);
 		return entry ? this.withReactions(entry.channelId, entry.message) : undefined;
 	}
 
-	rawMessageById(messageId: string): Record<string, unknown> | undefined {
+	rawMessageById(messageId: string): RawMessage | undefined {
 		const entry = this.world.messages.find(message => message.message.id === messageId);
 		return entry ? this.withReactions(entry.channelId, entry.message) : undefined;
 	}
 
 	/** Discord reflects reactions on the message object as `{ emoji, count, me }`. */
-	private withReactions(channelId: string, message: ApiMessage): Record<string, unknown> {
+	private withReactions(channelId: string, message: ApiMessage): RawMessage {
 		const byEmoji = this.reactionsByMessage.get(this.reactionKey(channelId, message.id));
 		if (!byEmoji || byEmoji.size === 0) return { ...message };
 		const reactions = [...byEmoji].map(([emoji, users]) => ({
@@ -656,17 +644,17 @@ export class WorldState implements WorldStateReader {
 		return { ...message, reactions };
 	}
 
-	private rawMessageOr(channelId: string, messageId: string): Record<string, unknown> {
-		return this.rawMessage(channelId, messageId) ?? (apiMessage() as unknown as Record<string, unknown>);
+	private rawMessageOr(channelId: string, messageId: string): RawMessage {
+		return this.rawMessage(channelId, messageId) ?? apiMessage();
 	}
 
-	messageForToken(token: string): Record<string, unknown> | undefined {
+	messageForToken(token: string): RawMessage | undefined {
 		const channelId = this.channelIdByToken.get(token);
 		const messageId = this.messageIdByToken.get(token);
 		return channelId && messageId ? this.rawMessage(channelId, messageId) : undefined;
 	}
 
-	webhookMessage(token: string, messageId: string): Record<string, unknown> | undefined {
+	webhookMessage(token: string, messageId: string): RawMessage | undefined {
 		if (messageId === '@original') return this.messageForToken(token);
 		const channelId = this.channelIdByToken.get(token);
 		return channelId ? this.rawMessage(channelId, messageId) : undefined;
@@ -1054,15 +1042,13 @@ export class WorldState implements WorldStateReader {
 	}
 
 	/** The pinned messages of a channel, newest pin first. */
-	pins(channelId: string): Record<string, unknown>[] {
+	pins(channelId: string): RawMessage[] {
 		const ids = this.pinnedByChannel.get(channelId) ?? [];
-		return ids
-			.map(id => this.rawMessage(channelId, id))
-			.filter((message): message is Record<string, unknown> => !!message);
+		return ids.map(id => this.rawMessage(channelId, id)).filter((message): message is RawMessage => !!message);
 	}
 
 	/** The archived threads under a channel of the given type (public = 11, private = 12). */
-	archivedThreads(channelId: string, type: 'public' | 'private'): Record<string, unknown>[] {
+	archivedThreads(channelId: string, type: 'public' | 'private'): ApiChannel[] {
 		const threadType = type === 'private' ? 12 : 11;
 		return this.world.channels
 			.filter(
@@ -1097,7 +1083,7 @@ export class WorldState implements WorldStateReader {
 	}
 
 	/** @internal Mock internals normally call this when Discord finalizes a poll. */
-	finalizePoll(channelId: string, messageId: string): Record<string, unknown> | undefined {
+	finalizePoll(channelId: string, messageId: string): RawMessage | undefined {
 		const entry = this.world.messages.find(
 			message => message.channelId === channelId && message.message.id === messageId,
 		);
@@ -1307,7 +1293,7 @@ export class WorldState implements WorldStateReader {
 	}
 
 	/** The non-archived threads of a guild (the active set). */
-	activeThreads(guildId: string): Record<string, unknown>[] {
+	activeThreads(guildId: string): ApiChannel[] {
 		return this.world.channels
 			.filter(
 				channel =>
@@ -1523,12 +1509,7 @@ export class WorldState implements WorldStateReader {
 	}
 
 	/** @internal Mock internals normally call this for an interaction's first visible reply. */
-	addOriginalResponse(
-		token: string,
-		channelId: string,
-		raw: Record<string, unknown>,
-		authorId: string,
-	): Record<string, unknown> {
+	addOriginalResponse(token: string, channelId: string, raw: Record<string, unknown>, authorId: string): RawMessage {
 		this.registerInteractionToken(token, channelId);
 		const view = this.addMessage(channelId, { ...raw, author_id: authorId });
 		this.messageIdByToken.set(token, view.id);
@@ -1536,7 +1517,7 @@ export class WorldState implements WorldStateReader {
 	}
 
 	/** @internal Mock internals normally call this for webhook edits of @original. */
-	upsertOriginalResponse(token: string, raw: Record<string, unknown>, authorId: string): Record<string, unknown> {
+	upsertOriginalResponse(token: string, raw: Record<string, unknown>, authorId: string): RawMessage | Record<string, never> {
 		const channelId = this.channelIdByToken.get(token);
 		if (!channelId) return {};
 		const messageId = this.messageIdByToken.get(token);
@@ -1551,7 +1532,7 @@ export class WorldState implements WorldStateReader {
 		messageId: string,
 		raw: Record<string, unknown>,
 		authorId: string,
-	): Record<string, unknown> {
+	): RawMessage | Record<string, never> {
 		if (messageId === '@original') return this.upsertOriginalResponse(token, raw, authorId);
 		const channelId = this.channelIdByToken.get(token);
 		if (!channelId) return {};
@@ -1560,7 +1541,7 @@ export class WorldState implements WorldStateReader {
 	}
 
 	/** @internal Mock internals normally call this for webhook followups. */
-	addFollowup(token: string, raw: Record<string, unknown>, authorId: string): Record<string, unknown> {
+	addFollowup(token: string, raw: Record<string, unknown>, authorId: string): RawMessage | Record<string, never> {
 		const channelId = this.channelIdByToken.get(token);
 		if (!channelId) return {};
 		const view = this.addMessage(channelId, { ...raw, author_id: authorId });

@@ -738,6 +738,11 @@ export function apiMessage(options: ApiMessageOptions = {}): ApiMessage {
 	};
 }
 
+/** An {@link ApiMessage} as the world readers return it: the stored message plus any reflected reactions. */
+export type RawMessage = ApiMessage & {
+	reactions?: { emoji: { name: string; id: string | null }; count: number; me: boolean }[];
+};
+
 export interface ApiPollMedia {
 	text?: string;
 	emoji?: { id: string | null; name: string | null };
