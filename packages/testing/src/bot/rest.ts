@@ -42,6 +42,35 @@ export function apiError(status: number, code: number, message: string): never {
 	throw new MockApiError(status, code, message);
 }
 
+export interface DiscordErrorInit {
+	status: number;
+	statusText?: string;
+	code?: number;
+	message?: string;
+	retryAfter?: number;
+}
+
+const STATUS_TEXT: Record<number, string> = {
+	400: 'Bad Request',
+	401: 'Unauthorized',
+	403: 'Forbidden',
+	404: 'Not Found',
+	429: 'Too Many Requests',
+	500: 'Internal Server Error',
+};
+
+/**
+ * A small set of common Discord REST errors for {@link MockApiHandler.fail}. The raw
+ * {@link DiscordErrorInit} shape is the primary contract — spread/override these or pass your own
+ * for anything off this list. statusText is derived from status (see STATUS_TEXT).
+ */
+export const DiscordErrors = {
+	MissingPermissions: { status: 403, code: 50013, message: 'Missing Permissions' },
+	MissingAccess: { status: 403, code: 50001, message: 'Missing Access' },
+	UnknownMember: { status: 404, code: 10007, message: 'Unknown Member' },
+	RateLimited: { status: 429, code: 0, message: 'You are being rate limited.' },
+} as const satisfies Record<string, DiscordErrorInit>;
+
 export function gate(): { open: Promise<void>; release: () => void } {
 	let release!: () => void;
 	const open = new Promise<void>(resolve => {
@@ -245,6 +274,29 @@ export class MockApiHandler extends ApiHandler {
 			const index = this.interceptors.indexOf(interceptor);
 			if (index !== -1) this.interceptors.splice(index, 1);
 		};
+	}
+
+	/**
+	 * Make a route reject with a Discord-faithful {@link SeyfertError} (built via the same
+	 * parseError the real ApiHandler uses), so a command's own error handling runs. Persistent
+	 * until the returned disposer or reset() clears it; pass { times } to fail the first N matching
+	 * calls then fall through to normal handling. For sequential or request-conditional failures,
+	 * use intercept() with a closure counter.
+	 */
+	fail(matcher: RouteMatcher, error: DiscordErrorInit, opts?: { times?: number }): () => void {
+		let n = 0;
+		const off = this.intercept(matcher, () => {
+			if (opts?.times !== undefined && ++n >= opts.times) off();
+			throw this.discordError(matcher.method, matcher.route, error);
+		});
+		return off;
+	}
+
+	private discordError(method: HttpMethods, route: string, error: DiscordErrorInit): unknown {
+		const statusText = error.statusText ?? STATUS_TEXT[error.status] ?? '';
+		const body: Record<string, unknown> = { code: error.code ?? 0, message: error.message ?? statusText };
+		if (error.retryAfter !== undefined) body.retry_after = error.retryAfter;
+		return this.parseError(method, route as `/${string}`, { status: error.status, statusText } as unknown as Response, body, undefined);
 	}
 
 	/**

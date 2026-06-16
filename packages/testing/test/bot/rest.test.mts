@@ -1,6 +1,7 @@
+import { SeyfertError } from 'seyfert/lib/common';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
-import { MockApiHandler } from '../../src/bot/rest';
+import { DiscordErrors, MockApiHandler } from '../../src/bot/rest';
 import { Routes } from '../../src/bot/routes';
 
 const englishLang = { greeting: 'Hello!' };
@@ -119,5 +120,58 @@ describe('MockApiHandler', () => {
 
 		const fallback = await rest.request<{ name?: string }>('GET', '/guilds/999');
 		expect(fallback.name).toBeUndefined();
+	});
+});
+
+describe('MockApiHandler.fail', () => {
+	test('rejects with a Discord-faithful SeyfertError from a catalog entry', async () => {
+		const rest = new MockApiHandler({ onUnhandledRest: 'silent' });
+		rest.fail(Routes.ban, DiscordErrors.MissingPermissions);
+
+		const error = (await rest.request('PUT', '/guilds/1/bans/2').then(
+			() => undefined,
+			(e: unknown) => e,
+		)) as SeyfertError;
+
+		expect(error).toBeInstanceOf(SeyfertError);
+		expect(error.name).toBe('SeyfertError');
+		expect(error.code).toBe('API_Forbidden_50013');
+		const metadata = error.metadata as { status: number; statusText: string; response: { code: number } };
+		expect(metadata.status).toBe(403);
+		expect(metadata.statusText).toBe('Forbidden');
+		expect(metadata.response.code).toBe(50013);
+		expect(rest.findCalls(Routes.ban)).toHaveLength(1);
+	});
+
+	test('synthesizes statusText for a raw shape and passes retryAfter through', async () => {
+		const rest = new MockApiHandler({ onUnhandledRest: 'silent' });
+		rest.fail(Routes.createMessage, { status: 429, retryAfter: 5 });
+
+		const error = (await rest.request('POST', '/channels/1/messages').then(
+			() => undefined,
+			(e: unknown) => e,
+		)) as SeyfertError;
+
+		expect(error.code).toBe('API_Too Many Requests_0');
+		const metadata = error.metadata as { statusText: string; response: { retry_after?: number } };
+		expect(metadata.statusText).toBe('Too Many Requests');
+		expect(metadata.response.retry_after).toBe(5);
+	});
+
+	test('{ times } fails the first N calls then falls through', async () => {
+		const rest = new MockApiHandler({ onUnhandledRest: 'silent' });
+		rest.fail(Routes.fetchGuild, DiscordErrors.UnknownMember, { times: 2 });
+
+		await expect(rest.request('GET', '/guilds/9')).rejects.toBeInstanceOf(SeyfertError);
+		await expect(rest.request('GET', '/guilds/9')).rejects.toBeInstanceOf(SeyfertError);
+		await expect(rest.request('GET', '/guilds/9')).resolves.toBeDefined();
+	});
+
+	test('returns a disposer that restores normal handling', async () => {
+		const rest = new MockApiHandler({ onUnhandledRest: 'silent' });
+		const off = rest.fail(Routes.fetchGuild, DiscordErrors.MissingAccess);
+		await expect(rest.request('GET', '/guilds/9')).rejects.toBeInstanceOf(SeyfertError);
+		off();
+		await expect(rest.request('GET', '/guilds/9')).resolves.toBeDefined();
 	});
 });
