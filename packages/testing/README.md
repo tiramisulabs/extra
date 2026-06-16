@@ -459,21 +459,30 @@ and modal `waitFor` options use real timers unless you drive a fake clock — se
 ### Testing timed behavior
 
 Collector `idle`/`timeout` and modal `waitFor` use seyfert's bare global
-`setTimeout`, which the mock can't own. To advance them instantly, bridge your
-runner's fake clock with `withFakeTimers(vi)` — it fakes the right subset
-(`setTimeout`/`clearTimeout` only; faking `setImmediate` would deadlock the drain)
-and returns the `timers` bag in one call. Then `bot.advanceTime(ms)` fires them:
+`setTimeout`, which the mock can't own. Bridge your runner's fake clock through the
+`timers` callback — the package imports no test runner, so the bridge is yours —
+then `bot.advanceTime(ms)` fires them. Fake only `setTimeout`/`clearTimeout`:
+faking `setImmediate` deadlocks the mock's drain.
 
 ```ts
 import { afterEach, vi } from 'vitest';
-import { createMockBot, withFakeTimers } from '@slipher/testing';
+import { createMockBot } from '@slipher/testing';
 
 afterEach(() => vi.useRealTimers());
 
-const bot = await createMockBot({ commands: [Cmd], timers: withFakeTimers(vi) });
+// vitest / sinon: list the timers TO fake
+vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+const bot = await createMockBot({
+	commands: [Cmd],
+	timers: { advance: ms => vi.advanceTimersByTime(ms) },
+});
+
 await bot.slash({ name: 'opens-a-60s-collector' });
 await bot.advanceTime(60_000); // collector onStop('idle') runs now, no real wait
 ```
+
+Jest's fake timers use the inverted option — `jest.useFakeTimers({ doNotFake: ['setImmediate'] })`
+keeps `setImmediate` real — with `timers: { advance: ms => jest.advanceTimersByTime(ms) }`.
 
 ### Recorded actions
 

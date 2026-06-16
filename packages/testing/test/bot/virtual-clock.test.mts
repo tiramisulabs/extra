@@ -13,7 +13,6 @@ import {
 import { ButtonStyle, TextInputStyle } from 'seyfert/lib/types';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
-import { withFakeTimers } from '../../src/bot/fake-timers';
 import { apiUser } from '../../src/bot/payloads';
 
 // seyfert's collector idle/timeout and modal waitFor timers use the bare GLOBAL setTimeout, with no injection
@@ -170,36 +169,6 @@ describe('virtual clock', () => {
 		});
 
 		await bot.slash({ name: 'idlecollector' });
-		expect(stops).toEqual([]);
-		await bot.advanceTime(60_000);
-		expect(stops).toEqual(['idle']);
-
-		await bot.close();
-	});
-
-	test('withFakeTimers(vi) wires the clock and timers bag in one call', async () => {
-		const stops: (string | undefined)[] = [];
-
-		@Declare({ name: 'idlecollector2', description: 'Opens a collector that idles out' })
-		class IdleCommand extends Command {
-			async run(ctx: CommandContext) {
-				const row = new ActionRow<Button>().setComponents([
-					new Button().setCustomId('idle-btn2').setLabel('Click').setStyle(ButtonStyle.Primary),
-				]);
-				const message = await ctx.write({ content: 'collecting', components: [row] }, true);
-				const collector = message.createComponentCollector({
-					idle: 60_000,
-					onStop: async reason => {
-						stops.push(reason);
-					},
-				});
-				collector.run('idle-btn2', async () => {});
-			}
-		}
-
-		const bot = await createMockBot({ commands: [IdleCommand], timers: withFakeTimers(vi) });
-
-		await bot.slash({ name: 'idlecollector2' });
 		expect(stops).toEqual([]);
 		await bot.advanceTime(60_000);
 		expect(stops).toEqual(['idle']);

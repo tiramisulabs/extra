@@ -524,9 +524,9 @@ export interface MockBotOptions {
 	 * seyfert's collector/modal timers (they use bare global setTimeout with no injection seam), so advancing
 	 * them is delegated to the runner's fake timers via this user-supplied callback — keeping the package source
 	 * runner-agnostic (no vitest/jest import). The runner's clock MUST fake only `setTimeout`/`clearTimeout`
-	 * (faking `setImmediate` deadlocks the mock's drain). Prefer the `withFakeTimers(vi)` adapter, which installs
-	 * that subset and returns this bag in one call; or wire it by hand:
-	 * `vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }); timers: { advance: ms => vi.advanceTimersByTime(ms) }`.
+	 * (faking `setImmediate` deadlocks the mock's drain): vitest/sinon list the timers TO fake
+	 * (`vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })`); jest uses the inverted `doNotFake` to keep
+	 * `setImmediate` real. Then `timers: { advance: ms => vi.advanceTimersByTime(ms) }`.
 	 */
 	timers?: { advance(ms: number): void | Promise<void> };
 }

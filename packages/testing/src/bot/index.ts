@@ -203,7 +203,6 @@ export {
 	expectReply,
 	MockAssertionError,
 } from './assertions';
-export { FAKE_TIMER_OPTIONS, type FakeTimerController, withFakeTimers } from './fake-timers';
 export { Routes } from './routes';
 export {
 	type AutoModRuleSnapshot,
