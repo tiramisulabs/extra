@@ -25,6 +25,10 @@ export interface DispatchContext {
 	resolveDenial?: () => void;
 	/** Structured denial metadata, set by the middleware/permission wrappers when a denial is detected. */
 	denial?: DispatchDenial;
+	/** First unhandled error thrown inside the command/component/modal `run`, captured via the onRunError hook. */
+	error?: unknown;
+	/** True when an author-provided onRunError handled `error`, so the dispatch should not throw on it. */
+	errorHandled?: boolean;
 }
 
 export const dispatchStore = new AsyncLocalStorage<DispatchContext>();

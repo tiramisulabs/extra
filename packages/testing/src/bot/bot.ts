@@ -183,6 +183,11 @@ export interface DispatchResult {
 	denied: boolean;
 	/** Structured denial detail; present only when `denied` is true. */
 	denial?: DispatchDenial;
+	/**
+	 * An unhandled error thrown inside the command/component/modal `run` that the author did not handle. Present
+	 * only under `onCommandError: 'capture'`; with the default `'throw'` the dispatch rejects with it instead.
+	 */
+	error?: unknown;
 }
 
 /** userMenu/menu(UserCommand) result: `target` is always present, so no optional chaining is needed. */
@@ -440,6 +445,12 @@ export interface MockBotOptions {
 	worldData?: Record<string, unknown>;
 	/** How unmatched fallback GET requests are handled. */
 	onUnhandledRest?: 'warn' | 'error' | 'silent';
+	/**
+	 * How an unhandled error thrown inside a command/component/modal `run` (that the author did not handle with
+	 * their own `onRunError`) is surfaced. `'throw'` (default) rejects the dispatch so a happy-path test fails
+	 * loud; `'capture'` resolves normally and exposes it on {@link DispatchResult.error} for explicit assertion.
+	 */
+	onCommandError?: 'throw' | 'capture';
 	/** Emit matching cache/gateway events for stateful REST mutations. */
 	simulateGateway?: boolean;
 	/** Number of mock gateway shards to expose. */
@@ -561,6 +572,7 @@ export class MockBot {
 		private readonly _state: WorldState = new WorldState(world),
 		private readonly validateOptions = false,
 		private readonly timers?: { advance(ms: number): void | Promise<void> },
+		private readonly onCommandError: 'throw' | 'capture' = 'throw',
 	) {}
 
 	/**
@@ -1210,6 +1222,9 @@ export class MockBot {
 			]);
 		});
 		const { componentCommandExecuted, collectorMatched, modalMatched } = ctx;
+		// An unhandled error inside the command/component/modal run was captured by the onRunError hook. Fail loud
+		// by default so a happy-path test surfaces the bug; 'capture' exposes it on result.error instead.
+		if (ctx.error !== undefined && !ctx.errorHandled && this.onCommandError === 'throw') throw ctx.error;
 		if (
 			isComponentPayload &&
 			this.canDetectCollector &&
@@ -1300,6 +1315,7 @@ export class MockBot {
 			target,
 			denied: denial !== undefined,
 			denial,
+			...(ctx.error === undefined ? {} : { error: ctx.error }),
 			get reply() {
 				return replies[0];
 			},
@@ -1712,6 +1728,32 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 				}
 			: options.clientOptions;
 	const client = options.client ?? new Client(clientOptions);
+	// Capture unhandled run() errors into the active dispatch context. seyfert binds a noisy built-in onRunError
+	// default that only logs and swallows, so without this a command that throws (e.g. a second ctx.write) would
+	// let a happy-path test pass green. Installed before commands/components load so seyfert's `??=` default
+	// binding picks it up. A command with its OWN onRunError keeps it (the `??=` skips our default), so that path
+	// never reaches here. When the AUTHOR supplied a client-level default, we delegate and mark it handled (no
+	// throw); otherwise we replace seyfert's logger and let the dispatch fail loud.
+	const userClientOptions = options.clientOptions as
+		| Record<string, { defaults?: { onRunError?: (context: unknown, error: unknown) => unknown } } | undefined>
+		| undefined;
+	const installRunErrorCapture = (scope: 'commands' | 'components' | 'modals'): void => {
+		const authorHandler = userClientOptions?.[scope]?.defaults?.onRunError;
+		const clientOpts = client.options as Record<string, { defaults?: { onRunError?: unknown } } | undefined>;
+		const target = (clientOpts[scope] ??= {});
+		const defaults = (target.defaults ??= {});
+		defaults.onRunError = (context: unknown, error: unknown) => {
+			const ctx = dispatchStore.getStore();
+			if (ctx && ctx.error === undefined) {
+				ctx.error = error;
+				if (authorHandler) ctx.errorHandled = true;
+			}
+			return authorHandler?.(context, error);
+		};
+	};
+	installRunErrorCapture('commands');
+	installRunErrorCapture('components');
+	installRunErrorCapture('modals');
 	const gateway = new MockGateway(options.shards ?? 1, options.shardLatency ?? 0);
 	// Client#setServices wraps the custom gateway's existing send hook; seed it from clientOptions first.
 	if (options.clientOptions?.handleSendPayload)
@@ -1782,7 +1824,16 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	});
 	rest.markDefaultsBaseline();
 
-	const bot = new MockBot(client, rest, gateway, world, state, options.validateOptions ?? false, options.timers);
+	const bot = new MockBot(
+		client,
+		rest,
+		gateway,
+		world,
+		state,
+		options.validateOptions ?? false,
+		options.timers,
+		options.onCommandError ?? 'throw',
+	);
 	bot.installDispatchHooks();
 	return bot;
 }
