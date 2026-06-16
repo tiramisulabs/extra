@@ -1,6 +1,7 @@
 import { Command, type CommandContext, ComponentCommand, type ComponentContext, Declare } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
+import { chatInputInteraction } from '../../src/bot/interactions';
 
 describe('concurrent dispatch isolation', () => {
 	test('a slash and a button racing through one dedup gate are attributed to themselves', async () => {
@@ -104,6 +105,32 @@ describe('concurrent dispatch isolation', () => {
 		const seqSets = results.map(result => result.actions.map(action => action.seq));
 		const flat = seqSets.flat();
 		expect(new Set(flat).size).toBe(flat.length);
+
+		await bot.close();
+	});
+
+	test('an out-of-band action whose route only contains the token as a substring is not attributed', async () => {
+		@Declare({ name: 'tokenleak', description: 'Replies; another interaction owns the near-miss action' })
+		class TokenLeakCommand extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.write({ content: 'reply:tokenleak' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [TokenLeakCommand] });
+
+		// Craft a payload with a known token, then record (OUTSIDE any dispatch, so dispatchId 0) a webhook-message
+		// action whose token segment is `${token}X` — i.e. the dispatch's token is a SUBSTRING of a longer segment.
+		// Substring matching would mis-attribute it; segment-exact matching must not.
+		const payload = chatInputInteraction({ name: 'tokenleak' });
+		payload.token = 'slipher-mock-interaction-token-attribution-probe';
+		await bot.rest.request('PATCH', `/webhooks/app/${payload.token}X/messages/@original`);
+
+		const result = await bot.dispatchInteraction(payload);
+
+		expect(result.actions.some(action => action.route.includes(`${payload.token}X`))).toBe(false);
+		expect(result.edits).toHaveLength(0);
+		expect(result.messages.map(message => message.content)).toEqual(['reply:tokenleak']);
 
 		await bot.close();
 	});

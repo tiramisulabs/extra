@@ -167,4 +167,27 @@ describe('virtual clock', () => {
 		await expect(bot.advanceTime(1000)).rejects.toThrow(/no fake timers configured/);
 		await bot.close();
 	});
+
+	test('advanceTime throws clearly when fake timers also faked setImmediate', async () => {
+		const bot = await createMockBot({
+			timers: {
+				advance: ms => {
+					vi.advanceTimersByTime(ms);
+				},
+			},
+		});
+		// Default toFake replaces global setImmediate, which would deadlock the mock's drain — guard must throw.
+		vi.useFakeTimers();
+		await expect(bot.advanceTime(1000)).rejects.toThrow(/fake timers/);
+		vi.useRealTimers();
+		await bot.close();
+	});
+
+	test('flushPending throws clearly when fake timers also faked setImmediate', async () => {
+		const bot = await createMockBot({});
+		vi.useFakeTimers();
+		await expect(bot.flushPending()).rejects.toThrow(/fake timers/);
+		vi.useRealTimers();
+		await bot.close();
+	});
 });

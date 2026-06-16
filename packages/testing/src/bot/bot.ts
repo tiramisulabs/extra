@@ -609,8 +609,11 @@ const DRAIN_MAX_ITERATIONS = 1000;
  * faked global timers (vi.useFakeTimers() replaces globalThis.setImmediate). If the runtime has no
  * setImmediate, fall through to a microtask yield.
  */
-const realSetImmediate: typeof setImmediate | undefined =
-	typeof setImmediate === 'function' ? setImmediate.bind(globalThis) : undefined;
+const capturedSetImmediate: typeof setImmediate | undefined =
+	typeof setImmediate === 'function' ? setImmediate : undefined;
+const realSetImmediate: typeof setImmediate | undefined = capturedSetImmediate
+	? capturedSetImmediate.bind(globalThis)
+	: undefined;
 
 /**
  * Yield once so pending async (REST hops, collector onStop continuations) can settle. Uses the real
@@ -620,6 +623,22 @@ const realSetImmediate: typeof setImmediate | undefined =
 function drainTick(): Promise<void> {
 	if (realSetImmediate) return new Promise<void>(resolve => realSetImmediate(() => resolve()));
 	return Promise.resolve();
+}
+
+/**
+ * Fail fast if the global setImmediate the drain relies on has been faked since module load. vi.useFakeTimers()
+ * with its default toFake replaces globalThis.setImmediate, which deadlocks {@link drainTick} (it would spin to
+ * the iteration cap and return non-quiescent). Only trips when a real setImmediate was captured at load and the
+ * current global no longer matches it; on runtimes without setImmediate the guard is skipped.
+ */
+function assertRealSetImmediate(): void {
+	if (!capturedSetImmediate) return;
+	if (globalThis.setImmediate === capturedSetImmediate) return;
+	throw new Error(
+		'advanceTime/flushPending: global setImmediate has been replaced by fake timers, which deadlocks the ' +
+			"mock's async drain. Fake only the timers seyfert uses: " +
+			"vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }).",
+	);
 }
 
 export class MockBot {
@@ -1304,6 +1323,7 @@ export class MockBot {
 	 * drain tick yields through the REAL setImmediate captured at module load, so faking globals cannot hang it.
 	 */
 	async flushPending(): Promise<void> {
+		assertRealSetImmediate();
 		let iterations = 0;
 		// Yield until the REST surface stops changing AND nothing is in flight, bounded by iteration count.
 		let lastCount = -1;
@@ -1330,6 +1350,7 @@ export class MockBot {
 					'and pass timers:{ advance: ms => vi.advanceTimersByTime(ms) } to createMockBot.',
 			);
 		}
+		assertRealSetImmediate();
 		await this.timers.advance(ms);
 		await this.flushPending();
 	}
@@ -1629,7 +1650,7 @@ export class MockBot {
 		// frame — e.g. a modal submit whose reply is written inside the opener command's resumed continuation — so
 		// the token, which is unique per interaction, is the reliable owner key for those responses.
 		const actions = this.rest.actions.filter(
-			action => action.dispatchId === dispatchId || action.route.includes(payload.token),
+			action => action.dispatchId === dispatchId || action.route.split('/').includes(payload.token),
 		);
 		if (replies.length === 0) {
 			const callback = actions.find(
@@ -1665,9 +1686,11 @@ export class MockBot {
 			};
 		};
 		const isWebhookMessageEdit = (action: RecordedAction) =>
-			action.method === 'PATCH' && WEBHOOK_MESSAGE_ROUTE.test(action.route) && action.route.includes(payload.token);
+			action.method === 'PATCH' &&
+			WEBHOOK_MESSAGE_ROUTE.test(action.route) &&
+			action.route.split('/').includes(payload.token);
 		const isFollowup = (action: RecordedAction) =>
-			action.method === 'POST' && FOLLOWUP_ROUTE.test(action.route) && action.route.includes(payload.token);
+			action.method === 'POST' && FOLLOWUP_ROUTE.test(action.route) && action.route.split('/').includes(payload.token);
 		const edits = actions.filter(isWebhookMessageEdit).map(toOutgoingMessage);
 		const followups = actions.filter(isFollowup).map(toOutgoingMessage);
 		const messages = [
