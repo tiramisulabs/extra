@@ -77,7 +77,7 @@ import {
 	type TypedMatchedAction,
 } from './rest';
 import { FOLLOWUP_ROUTE, WEBHOOK_MESSAGE_ROUTE } from './routes';
-import { type ChannelView, type GuildView, WorldState } from './state';
+import { type ChannelView, type GuildView, type WorldDiff, type WorldSnapshot, WorldState } from './state';
 import { type MockWorld, seedWorld, type WorldBuilder } from './world';
 
 export { Dispatch } from './dispatch';
@@ -1062,6 +1062,24 @@ export class MockBot {
 		return this.state.dm(userId);
 	}
 
+	/**
+	 * Capture the current world (members, channels, messages, roles, bans) as an immutable, plain-data
+	 * snapshot. Pair with {@link worldDiff} to assert state mutations declaratively. The snapshot is deeply
+	 * frozen, so later dispatches never alter it.
+	 */
+	worldSnapshot(): WorldSnapshot {
+		return this.state.snapshot();
+	}
+
+	/**
+	 * Compare a prior {@link worldSnapshot} against the current world and return a structured changeset
+	 * (added/removed/changed per entity type), so a test can assert e.g.
+	 * `diff.members.changed[0].fields` contains `'roles'` instead of querying field by field.
+	 */
+	worldDiff(before: WorldSnapshot): WorldDiff {
+		return this.state.diff(before);
+	}
+
 	dispatchInteraction(payload: ApiInteractionPayload): Dispatch<DispatchResult> {
 		this.assertOpen('dispatchInteraction');
 		const userId = payload.member?.user.id ?? payload.user?.id;
@@ -1215,8 +1233,7 @@ export class MockBot {
 					// stop(reason) terminates the chain and routes through onMiddlewaresError: record it as a
 					// structured 'stop' denial, capturing the reason argument, before delegating.
 					const stop: MiddlewareControl = (...args) => {
-						if (ctx)
-							ctx.denial = { kind: 'stop', reason: args[0], middleware: key };
+						if (ctx) ctx.denial = { kind: 'stop', reason: args[0], middleware: key };
 						progressed = true;
 						return controls.stop(...args);
 					};

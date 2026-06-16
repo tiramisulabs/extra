@@ -88,7 +88,127 @@ export interface GuildView {
 	bans: string[];
 }
 
+/** One member captured in a {@link WorldSnapshot}, identified by `guildId` + `userId`. */
+export interface MemberSnapshot {
+	guildId: string;
+	userId: string;
+	roles: string[];
+	nick: string | null;
+	communicationDisabledUntil: string | null;
+}
+
+/** One channel captured in a {@link WorldSnapshot}, identified by `id`. */
+export interface ChannelSnapshot {
+	id: string;
+	guildId?: string;
+	name: string;
+	type: number;
+	parentId?: string;
+	overwrites: { id: string; type: number; allow: string; deny: string }[];
+}
+
+/** One message captured in a {@link WorldSnapshot}, identified by `id`. */
+export interface MessageSnapshot {
+	id: string;
+	channelId: string;
+	authorId: string;
+	content: string;
+}
+
+/** One role captured in a {@link WorldSnapshot}, identified by `id`. */
+export interface RoleSnapshot {
+	guildId: string;
+	id: string;
+	name: string;
+	permissions: string;
+	position: number;
+}
+
+/** One ban captured in a {@link WorldSnapshot}, identified by `guildId` + `userId`. */
+export interface BanSnapshot {
+	guildId: string;
+	userId: string;
+}
+
+/**
+ * Immutable, plain-data capture of the world at a point in time. Produced by {@link WorldState.snapshot}
+ * and consumed by {@link WorldState.diff}. Deeply frozen so later world mutations never alter it.
+ */
+export interface WorldSnapshot {
+	members: MemberSnapshot[];
+	channels: ChannelSnapshot[];
+	messages: MessageSnapshot[];
+	roles: RoleSnapshot[];
+	bans: BanSnapshot[];
+}
+
+/** A single entity that changed between two snapshots, with the names of the differing fields. */
+export interface ChangedEntity<T> {
+	before: T;
+	after: T;
+	fields: string[];
+}
+
+/** Added/removed/changed buckets for one entity type in a {@link WorldDiff}. */
+export interface EntityDiff<T> {
+	added: T[];
+	removed: T[];
+	changed: ChangedEntity<T>[];
+}
+
+/**
+ * Structured changeset between a prior {@link WorldSnapshot} and the current world, keyed by entity type.
+ * Entities are matched by their stable id (member/ban = guildId+userId, channel/message/role = id);
+ * `changed` lists the entities present in both with differing fields.
+ */
+export interface WorldDiff {
+	members: EntityDiff<MemberSnapshot>;
+	channels: EntityDiff<ChannelSnapshot>;
+	messages: EntityDiff<MessageSnapshot>;
+	roles: EntityDiff<RoleSnapshot>;
+	bans: EntityDiff<BanSnapshot>;
+}
+
 const EMPTY_WORLD = (): MockWorld => ({ guilds: [], channels: [], users: [], members: [], roles: [], messages: [] });
+
+function deepFreeze<T>(value: T): T {
+	if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+		Object.freeze(value);
+		for (const key of Object.keys(value)) deepFreeze((value as Record<string, unknown>)[key]);
+	}
+	return value;
+}
+
+/** Field-by-field comparison for the snapshot scalar/array fields; lists the names that differ. */
+function changedFields<T extends object>(before: T, after: T): string[] {
+	const fields: string[] = [];
+	const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+	for (const key of keys) {
+		const a = (before as Record<string, unknown>)[key];
+		const b = (after as Record<string, unknown>)[key];
+		if (JSON.stringify(a) !== JSON.stringify(b)) fields.push(key);
+	}
+	return fields;
+}
+
+function diffEntities<T extends object>(before: T[], after: T[], identity: (entity: T) => string): EntityDiff<T> {
+	const beforeById = new Map(before.map(entity => [identity(entity), entity]));
+	const afterById = new Map(after.map(entity => [identity(entity), entity]));
+	const result: EntityDiff<T> = { added: [], removed: [], changed: [] };
+	for (const [id, entity] of afterById) {
+		const prior = beforeById.get(id);
+		if (!prior) {
+			result.added.push(entity);
+			continue;
+		}
+		const fields = changedFields(prior, entity);
+		if (fields.length) result.changed.push({ before: prior, after: entity, fields });
+	}
+	for (const [id, entity] of beforeById) {
+		if (!afterById.has(id)) result.removed.push(entity);
+	}
+	return result;
+}
 
 function asRecord(value: unknown): Record<string, unknown> {
 	return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
@@ -182,6 +302,62 @@ export class WorldState {
 		}
 	}
 
+	/**
+	 * Capture the current world entities (members, channels, messages, roles, bans) as an immutable,
+	 * plain-data snapshot. Deeply frozen, so later world mutations never alter a captured snapshot. Pair
+	 * with {@link diff} to read state mutations declaratively instead of with field-by-field point queries.
+	 */
+	snapshot(): WorldSnapshot {
+		const members: MemberSnapshot[] = this.world.members.map(entry => ({
+			guildId: entry.guildId,
+			userId: entry.member.user.id,
+			roles: [...entry.member.roles],
+			nick: entry.member.nick ?? null,
+			communicationDisabledUntil: entry.member.communication_disabled_until ?? null,
+		}));
+		const channels: ChannelSnapshot[] = this.world.channels.map(channel => ({
+			id: channel.id,
+			...(channel.guild_id === undefined ? {} : { guildId: channel.guild_id }),
+			name: channel.name,
+			type: channel.type,
+			...(channel.parent_id === undefined ? {} : { parentId: channel.parent_id }),
+			overwrites: channel.permission_overwrites.map(overwrite => ({ ...overwrite })),
+		}));
+		const messages: MessageSnapshot[] = this.world.messages.map(entry => ({
+			id: entry.message.id,
+			channelId: entry.channelId,
+			authorId: entry.message.author.id,
+			content: entry.message.content,
+		}));
+		const roles: RoleSnapshot[] = this.world.roles.map(entry => ({
+			guildId: entry.guildId,
+			id: entry.role.id,
+			name: entry.role.name,
+			permissions: entry.role.permissions,
+			position: entry.role.position,
+		}));
+		const bans: BanSnapshot[] = [...this.bansByGuild].flatMap(([guildId, userIds]) =>
+			[...userIds].map(userId => ({ guildId, userId })),
+		);
+		return deepFreeze({ members, channels, messages, roles, bans });
+	}
+
+	/**
+	 * Compare a prior {@link WorldSnapshot} against the CURRENT world and return a structured changeset.
+	 * Entities are matched by stable id (member/ban = guildId+userId, channel/message/role = id); `changed`
+	 * lists entities present in both whose fields differ, naming those fields.
+	 */
+	diff(before: WorldSnapshot): WorldDiff {
+		const after = this.snapshot();
+		return {
+			members: diffEntities(before.members, after.members, entity => `${entity.guildId}:${entity.userId}`),
+			channels: diffEntities(before.channels, after.channels, entity => entity.id),
+			messages: diffEntities(before.messages, after.messages, entity => entity.id),
+			roles: diffEntities(before.roles, after.roles, entity => entity.id),
+			bans: diffEntities(before.bans, after.bans, entity => `${entity.guildId}:${entity.userId}`),
+		};
+	}
+
 	guild(guildId: string): GuildView | undefined {
 		const guild = this.world.guilds.find(entry => entry.id === guildId);
 		if (!guild) return undefined;
@@ -225,7 +401,9 @@ export class WorldState {
 	}
 
 	channelMessages(channelId: string, options?: MessageQuery): Record<string, unknown>[] {
-		const chronological = this.world.messages.filter(entry => entry.channelId === channelId).map(entry => entry.message);
+		const chronological = this.world.messages
+			.filter(entry => entry.channelId === channelId)
+			.map(entry => entry.message);
 		const newestFirst = [...chronological].reverse();
 		const limit = Math.min(Math.max(options?.limit ?? 50, 0), 100);
 
@@ -315,7 +493,8 @@ export class WorldState {
 	removeChannel(channelId: string): void {
 		this.world.channels = this.world.channels.filter(channel => channel.id !== channelId);
 		for (const message of this.world.messages) {
-			if (message.channelId === channelId) this.reactionsByMessage.delete(this.reactionKey(channelId, message.message.id));
+			if (message.channelId === channelId)
+				this.reactionsByMessage.delete(this.reactionKey(channelId, message.message.id));
 		}
 		this.world.messages = this.world.messages.filter(message => message.channelId !== channelId);
 		for (const [userId, dmChannelId] of this.dmChannelByUser) {
