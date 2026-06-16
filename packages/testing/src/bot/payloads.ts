@@ -169,6 +169,19 @@ export function apiInvite(options: ApiInviteOptions = {}): ApiInvite {
 	};
 }
 
+export interface AutoModTriggerMetadata {
+	keyword_filter?: string[];
+	regex_patterns?: string[];
+	presets?: number[];
+	allow_list?: string[];
+	mention_total_limit?: number;
+}
+
+export interface AutoModAction {
+	type: number;
+	metadata?: Record<string, unknown>;
+}
+
 export interface ApiAutoModRuleOptions {
 	id?: string;
 	guildId?: string;
@@ -176,7 +189,8 @@ export interface ApiAutoModRuleOptions {
 	triggerType?: number;
 	eventType?: number;
 	enabled?: boolean;
-	actions?: unknown[];
+	triggerMetadata?: AutoModTriggerMetadata;
+	actions?: AutoModAction[];
 }
 
 export interface ApiAutoModRule {
@@ -186,8 +200,8 @@ export interface ApiAutoModRule {
 	creator_id: string;
 	event_type: number;
 	trigger_type: number;
-	trigger_metadata: Record<string, unknown>;
-	actions: unknown[];
+	trigger_metadata: AutoModTriggerMetadata;
+	actions: AutoModAction[];
 	enabled: boolean;
 	exempt_roles: string[];
 	exempt_channels: string[];
@@ -201,7 +215,7 @@ export function apiAutoModRule(options: ApiAutoModRuleOptions = {}): ApiAutoModR
 		creator_id: mockId(),
 		event_type: options.eventType ?? 1,
 		trigger_type: options.triggerType ?? 1,
-		trigger_metadata: {},
+		trigger_metadata: options.triggerMetadata ?? {},
 		actions: options.actions ?? [],
 		enabled: options.enabled ?? true,
 		exempt_roles: [],
@@ -432,7 +446,7 @@ export interface ApiAuditLogEntry {
 	action_type: number;
 	user_id: string | null;
 	target_id: string | null;
-	changes: unknown[];
+	changes: { key: string; old_value?: unknown; new_value?: unknown }[];
 	reason?: string;
 }
 

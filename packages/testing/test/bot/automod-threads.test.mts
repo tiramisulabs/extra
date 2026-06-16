@@ -6,12 +6,21 @@ import { apiUser } from '../../src/bot/payloads';
 import { mockWorld } from '../../src/bot/world';
 
 describe('automod rules', () => {
-	test('a seeded rule reads back via the guild view', async () => {
+	test('a seeded rule reads back via the guild view with typed metadata and actions', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'am-guild' });
-		world.registerAutoModRule(guild.id, { id: 'rule-1', name: 'block-spam', triggerType: 3 });
+		world.registerAutoModRule(guild.id, {
+			id: 'rule-1',
+			name: 'block-spam',
+			triggerType: 1,
+			triggerMetadata: { keyword_filter: ['spam'] },
+			actions: [{ type: 1 }],
+		});
 		const bot = await createMockBot({ world });
-		expect(bot.cachedGuild(guild.id)?.autoModRule('rule-1')).toMatchObject({ name: 'block-spam', trigger_type: 3 });
+		const rule = bot.cachedGuild(guild.id)?.autoModRule('rule-1');
+		expect(rule).toMatchObject({ name: 'block-spam', trigger_type: 1 });
+		expect(rule?.trigger_metadata.keyword_filter).toEqual(['spam']);
+		expect(rule?.actions[0]?.type).toBe(1);
 		expect(bot.cachedGuild(guild.id)?.autoModRules).toHaveLength(1);
 		await bot.close();
 	});

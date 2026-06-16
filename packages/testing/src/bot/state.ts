@@ -4,6 +4,8 @@ import {
 	type ApiAuditLogEntry,
 	type ApiAttachment,
 	type ApiAutoModRule,
+	type AutoModAction,
+	type AutoModTriggerMetadata,
 	type ApiChannel,
 	type ApiEmoji,
 	type ApiGuildTemplate,
@@ -1246,7 +1248,10 @@ export class WorldState implements WorldStateReader {
 			...(numberValue(raw.trigger_type) === undefined ? {} : { triggerType: numberValue(raw.trigger_type) }),
 			...(numberValue(raw.event_type) === undefined ? {} : { eventType: numberValue(raw.event_type) }),
 			...(typeof raw.enabled === 'boolean' ? { enabled: raw.enabled } : {}),
-			actions: arrayValue(raw.actions),
+			...(raw.trigger_metadata === undefined
+				? {}
+				: { triggerMetadata: asRecord(raw.trigger_metadata) as AutoModTriggerMetadata }),
+			actions: arrayValue(raw.actions) as AutoModAction[],
 		});
 		(this.world.autoModRules ??= []).push({ guildId, rule });
 		return rule;
@@ -1260,7 +1265,7 @@ export class WorldState implements WorldStateReader {
 		if (typeof patch.enabled === 'boolean') entry.rule.enabled = patch.enabled;
 		if (numberValue(patch.trigger_type) !== undefined) entry.rule.trigger_type = numberValue(patch.trigger_type)!;
 		if (numberValue(patch.event_type) !== undefined) entry.rule.event_type = numberValue(patch.event_type)!;
-		if ('actions' in patch) entry.rule.actions = arrayValue(patch.actions);
+		if ('actions' in patch) entry.rule.actions = arrayValue(patch.actions) as AutoModAction[];
 		return { ...entry.rule };
 	}
 
