@@ -69,30 +69,27 @@ export interface NamedOptionInput {
 }
 export type OptionInputBag = Record<string, OptionInput> | readonly NamedOptionInput[];
 
+/** The shared `EncodedOption` envelope every option builder produces. */
+function option(type: number, value: string | number | boolean, resolved?: EncodedOption['resolved']): EncodedOption {
+	return { __slipherOption: true, type, value, ...(resolved ? { resolved } : {}) };
+}
+
 export function rawOption(type: number, value: string | number | boolean): EncodedOption {
-	return { __slipherOption: true, type, value };
+	return option(type, value);
 }
 
 export function userOption(user: ApiUser = apiUser(), member?: MemberInput): EncodedOption {
 	const memberPayload = member ? resolvedMember(member) : undefined;
-	return {
-		__slipherOption: true,
-		type: OptionType.User,
-		value: user.id,
-		resolved: {
-			users: { [user.id]: user },
-			...(memberPayload ? { members: { [user.id]: memberPayload } } : {}),
-		},
-	};
+	return option(OptionType.User, user.id, {
+		users: { [user.id]: user },
+		...(memberPayload ? { members: { [user.id]: memberPayload } } : {}),
+	});
 }
 
 export function channelOption(channel: ApiChannel = apiChannel()): EncodedOption {
-	return {
-		__slipherOption: true,
-		type: OptionType.Channel,
-		value: channel.id,
-		resolved: { channels: { [channel.id]: { ...channel, permissions: DEFAULT_PERMISSIONS } } },
-	};
+	return option(OptionType.Channel, channel.id, {
+		channels: { [channel.id]: { ...channel, permissions: DEFAULT_PERMISSIONS } },
+	});
 }
 
 function resolvedMember(member: MemberInput): Omit<ApiMember, 'user'> {
@@ -113,41 +110,20 @@ function resolvedRole(role: ApiRole | { id: string; name: string }): ApiRole {
 
 export function roleOption(role: ApiRole | { id: string; name: string }): EncodedOption {
 	const rolePayload = resolvedRole(role);
-	return {
-		__slipherOption: true,
-		type: OptionType.Role,
-		value: rolePayload.id,
-		resolved: { roles: { [rolePayload.id]: rolePayload } },
-	};
+	return option(OptionType.Role, rolePayload.id, { roles: { [rolePayload.id]: rolePayload } });
 }
 
 /** A user or a role. Pass the entity object. */
 export function mentionableOption(entity: ApiUser | { id: string; name: string }): EncodedOption {
-	const isUser = 'username' in entity;
-	if (isUser) {
-		return {
-			__slipherOption: true,
-			type: OptionType.Mentionable,
-			value: entity.id,
-			resolved: { users: { [entity.id]: entity } },
-		};
+	if ('username' in entity) {
+		return option(OptionType.Mentionable, entity.id, { users: { [entity.id]: entity } });
 	}
 	const role = resolvedRole(entity);
-	return {
-		__slipherOption: true,
-		type: OptionType.Mentionable,
-		value: entity.id,
-		resolved: { roles: { [role.id]: role } },
-	};
+	return option(OptionType.Mentionable, entity.id, { roles: { [role.id]: role } });
 }
 
 export function attachmentOption(attachment: ApiAttachment = apiAttachment()): EncodedOption {
-	return {
-		__slipherOption: true,
-		type: OptionType.Attachment,
-		value: attachment.id,
-		resolved: { attachments: { [attachment.id]: attachment } },
-	};
+	return option(OptionType.Attachment, attachment.id, { attachments: { [attachment.id]: attachment } });
 }
 
 interface ApiCommandDataOption {
