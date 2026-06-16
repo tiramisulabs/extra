@@ -514,6 +514,14 @@ export interface MockBotOptions {
 	eventsDir?: string;
 	/** Explicit langs directory; overrides config-resolved lang locations. */
 	langsDir?: string;
+	/**
+	 * Bridge to the test runner's fake-timer clock, used by {@link MockBot.advanceTime}. The mock cannot own
+	 * seyfert's collector/modal timers (they use bare global setTimeout with no injection seam), so advancing
+	 * them is delegated to the runner's fake timers via this user-supplied callback — keeping the package source
+	 * runner-agnostic (no vitest/jest import). Example:
+	 * `timers: { advance: ms => vi.advanceTimersByTime(ms) }`.
+	 */
+	timers?: { advance(ms: number): void | Promise<void> };
 }
 
 type WorldEventMutator = (state: WorldState, d: Record<string, unknown>) => void;
@@ -555,10 +563,33 @@ const WORLD_EVENT_MUTATORS: Record<string, WorldEventMutator> = {
 
 export const WORLD_EVENT_NAMES = Object.keys(WORLD_EVENT_MUTATORS) as readonly string[];
 
+/** Upper bound on drain loop iterations: terminates the loop even when Date.now() is frozen by fake timers. */
+const DRAIN_MAX_ITERATIONS = 1000;
+
+/**
+ * Capture the real setImmediate at module load so a drain tick can yield a macrotask even after the user has
+ * faked global timers (vi.useFakeTimers() replaces globalThis.setImmediate). If the runtime has no
+ * setImmediate, fall through to a microtask yield.
+ */
+const realSetImmediate: typeof setImmediate | undefined =
+	typeof setImmediate === 'function' ? setImmediate.bind(globalThis) : undefined;
+
+/**
+ * Yield once so pending async (REST hops, collector onStop continuations) can settle. Uses the real
+ * setImmediate captured at load — so it advances even when the user faked global timers — and otherwise a
+ * microtask. Robust to faked timers: never schedules through the faked global, so it cannot hang.
+ */
+function drainTick(): Promise<void> {
+	if (realSetImmediate) return new Promise<void>(resolve => realSetImmediate(() => resolve()));
+	return Promise.resolve();
+}
+
 export class MockBot {
 	readonly defaultUser: ApiUser = apiUser({ id: TEST_USER_ID, username: 'slipher-tester' });
 	private readonly unregisteredMemberWarnings = new Set<string>();
 	private readonly dispatches: Dispatch<unknown>[] = [];
+	/** Pending modal waiters keyed by userId; resolved when seyfert registers a modal via components.modals.set. */
+	private readonly modalWaiters = new Map<string, (() => void)[]>();
 	private closed = false;
 	/** The most recent interaction-original message, used to resolve a collector source for an immediate reply. */
 	private lastInteractionMessage?: { id: string; channel_id?: string };
@@ -574,6 +605,7 @@ export class MockBot {
 		protected readonly world?: MockWorld,
 		readonly state: WorldState = new WorldState(world),
 		private readonly validateOptions = false,
+		private readonly timers?: { advance(ms: number): void | Promise<void> },
 	) {}
 
 	private assertOpen(verb: string): void {
@@ -1158,11 +1190,70 @@ export class MockBot {
 		return this.state.diff(before);
 	}
 
+	/**
+	 * Resolve when a modal is registered for `userId` via seyfert's `components.modals.set` (which the opener
+	 * command calls synchronously while replying). Used by {@link Dispatch.untilModal} to await registration
+	 * event-driven instead of polling a wall clock. If a modal is already registered, resolves immediately.
+	 */
+	onModalRegistered(userId: string): Promise<void> {
+		if (this.client.components.modals.has(userId)) return Promise.resolve();
+		return new Promise<void>(resolve => {
+			const waiters = this.modalWaiters.get(userId);
+			if (waiters) waiters.push(resolve);
+			else this.modalWaiters.set(userId, [resolve]);
+		});
+	}
+
+	/**
+	 * Drain the mock's pending async — the setImmediate/microtask loop — so callbacks that fire after a timer
+	 * advance (e.g. a collector onStop('idle') that dispatches through the mock) settle before assertions.
+	 * Iteration-bounded so it terminates even when the user's fake timers froze Date.now()/setImmediate; the
+	 * drain tick yields through the REAL setImmediate captured at module load, so faking globals cannot hang it.
+	 */
+	async flushPending(): Promise<void> {
+		let iterations = 0;
+		// Yield until the REST surface stops changing AND nothing is in flight, bounded by iteration count.
+		let lastCount = -1;
+		while (true) {
+			await drainTick();
+			const count = this.rest.actions.length;
+			const quiet = count === lastCount && !this.rest.hasPendingRequests();
+			if (quiet) return;
+			lastCount = count;
+			if (++iterations > DRAIN_MAX_ITERATIONS) return;
+		}
+	}
+
+	/**
+	 * Advance the test runner's fake timers by `ms`, then flush the mock's pending async so timer-driven
+	 * callbacks (collector idle/timeout onStop, ctx.modal waitFor) and any mock dispatch they trigger settle
+	 * before assertions. Delegates the actual clock advance to the runner-supplied `timers.advance` callback —
+	 * the package source imports no vitest/jest. Throws clearly if no fake timers were configured.
+	 */
+	async advanceTime(ms: number): Promise<void> {
+		if (!this.timers) {
+			throw new Error(
+				"advanceTime: no fake timers configured. Call vi.useFakeTimers() (or your runner's equivalent) " +
+					'and pass timers:{ advance: ms => vi.advanceTimersByTime(ms) } to createMockBot.',
+			);
+		}
+		await this.timers.advance(ms);
+		await this.flushPending();
+	}
+
 	dispatchInteraction(payload: ApiInteractionPayload): Dispatch<DispatchResult> {
 		this.assertOpen('dispatchInteraction');
 		const userId = payload.member?.user.id ?? payload.user?.id;
 		const dispatchId = nextDispatchId();
-		return this.track(new Dispatch(this.rest, this.client, userId, () => this.runInteraction(payload, dispatchId)));
+		return this.track(
+			new Dispatch(
+				this.rest,
+				this.client,
+				userId,
+				() => this.runInteraction(payload, dispatchId),
+				id => this.onModalRegistered(id),
+			),
+		);
 	}
 
 	private materializeInteractionResponse(payload: ApiInteractionPayload, body: APIInteractionResponse): void {
@@ -1232,17 +1323,19 @@ export class MockBot {
 	private async drainUntilQuiescent(
 		dispatchId: number | undefined,
 		aborted: () => boolean,
-		timeoutMs = 2000,
+		maxIterations = DRAIN_MAX_ITERATIONS,
 	): Promise<void> {
-		const deadline = Date.now() + timeoutMs;
 		let lastCount = -1;
+		let iterations = 0;
 		while (!aborted()) {
 			const count = this.rest.actions.filter(action => action.dispatchId === dispatchId).length;
 			const quiet = count === lastCount && !this.rest.hasPendingRequests(dispatchId);
 			if (quiet) return;
 			lastCount = count;
-			if (Date.now() > deadline) return;
-			await new Promise<void>(resolve => setImmediate(resolve));
+			// Iteration cap (not a wall clock) so the loop terminates even when Date.now() is frozen by the
+			// user's fake timers. Each iteration yields a macrotask, so the bound is generous yet finite.
+			if (++iterations > maxIterations) return;
+			await drainTick();
 		}
 	}
 
@@ -1289,6 +1382,22 @@ export class MockBot {
 				return onModalSubmit?.(interaction);
 			};
 		}
+		// Modal registration signal: seyfert's ctx.interaction.modal() calls components.modals.set(userId, exec)
+		// synchronously while replying. Wrap set() ONCE so any pending untilModal() waiter for that user resolves
+		// the instant the modal is registered — event-driven, no wall-clock poll.
+		const modals = this.client.components.modals as unknown as {
+			set: (key: string, value: unknown) => unknown;
+		};
+		const realSet = modals.set.bind(modals);
+		modals.set = (key: string, value: unknown) => {
+			const result = realSet(key, value);
+			const waiters = this.modalWaiters.get(key);
+			if (waiters) {
+				this.modalWaiters.delete(key);
+				for (const resolve of waiters) resolve();
+			}
+			return result;
+		};
 		// Denial detection: seyfert's __runMiddlewares only resolves on next()/stop()/pass(). A guard that
 		// replies and returns without calling any of them leaves the chain pending forever, so command.run is
 		// structurally never reached and handleCommand.interaction never settles. Wrap each middleware to notice
@@ -1586,11 +1695,17 @@ export class MockBot {
 		const userId = payload.member?.user.id ?? payload.user?.id;
 		const dispatchId = nextDispatchId();
 		return this.track(
-			new Dispatch(this.rest, this.client, userId, async () => {
-				const result = await this.runInteraction(payload, dispatchId);
-				const body = result.reply?.body;
-				return { ...result, choices: body?.type === 8 ? body.data?.choices : undefined };
-			}),
+			new Dispatch(
+				this.rest,
+				this.client,
+				userId,
+				async () => {
+					const result = await this.runInteraction(payload, dispatchId);
+					const body = result.reply?.body;
+					return { ...result, choices: body?.type === 8 ? body.data?.choices : undefined };
+				},
+				id => this.onModalRegistered(id),
+			),
 		);
 	}
 
@@ -1714,15 +1829,21 @@ export class MockBot {
 
 		const dispatchId = nextDispatchId();
 		return this.track(
-			new Dispatch(this.rest, this.client, author.id, async () => {
-				await dispatchStore.run(
-					{ dispatchId, componentCommandExecuted: false, collectorMatched: false, modalMatched: false },
-					() => this.client.handleCommand.message(raw as Parameters<HandleCommand['message']>[0], -1),
-				);
-				const actions = this.rest.actions.filter(action => action.dispatchId === dispatchId);
-				const messages = actions.filter(isOutgoingMessagePost).map(action => (action.body ?? {}) as OutgoingMessage);
-				return messageParts(actions, messages);
-			}),
+			new Dispatch(
+				this.rest,
+				this.client,
+				author.id,
+				async () => {
+					await dispatchStore.run(
+						{ dispatchId, componentCommandExecuted: false, collectorMatched: false, modalMatched: false },
+						() => this.client.handleCommand.message(raw as Parameters<HandleCommand['message']>[0], -1),
+					);
+					const actions = this.rest.actions.filter(action => action.dispatchId === dispatchId);
+					const messages = actions.filter(isOutgoingMessagePost).map(action => (action.body ?? {}) as OutgoingMessage);
+					return messageParts(actions, messages);
+				},
+				id => this.onModalRegistered(id),
+			),
 		);
 	}
 
@@ -1925,7 +2046,7 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	});
 	rest.markDefaultsBaseline();
 
-	const bot = new MockBot(client, rest, gateway, world, state, options.validateOptions ?? false);
+	const bot = new MockBot(client, rest, gateway, world, state, options.validateOptions ?? false, options.timers);
 	bot.installDispatchHooks();
 	return bot;
 }

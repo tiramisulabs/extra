@@ -13,6 +13,8 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		private readonly clientRef: Client,
 		readonly userId: string | undefined,
 		private readonly executor: () => Promise<T>,
+		/** Resolves when seyfert registers a modal for the given userId; supplied by MockBot. */
+		private readonly modalWaiter?: (userId: string) => Promise<void>,
 	) {}
 
 	private start(): Promise<T> {
@@ -55,23 +57,34 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		return Promise.race([gated.hit, failure.then(() => gated.hit)]);
 	}
 
-	async untilModal(timeoutMs = 2000): Promise<void> {
+	/**
+	 * Resolve the instant seyfert registers a modal for this dispatch's user (event-driven, no wall-clock poll),
+	 * so it works under frozen/fake timers. Fails fast and deterministically if the dispatch runs to completion
+	 * without ever opening a modal. `timeoutMs` is accepted for backward compatibility but ignored — registration
+	 * is awaited as an event, not raced against a clock.
+	 */
+	async untilModal(_timeoutMs = 2000): Promise<void> {
 		if (!this.userId) {
 			throw new TypeError('untilModal: this dispatch has no user - pass `user` to the dispatch options');
 		}
+		const userId = this.userId;
 		this.releaseCheckpoint();
 		this.start();
-		const deadline = Date.now() + timeoutMs;
-		while (!this.clientRef.components.modals.has(this.userId)) {
-			if (Date.now() > deadline) {
-				const waiting = [...this.clientRef.components.modals.keys()].join(', ') || '(none)';
-				throw new Error(
-					`untilModal: no modal was opened for user ${this.userId} within ${timeoutMs}ms. ` +
-						`Modals are waiting for: ${waiting}.`,
-				);
-			}
-			await new Promise(resolve => setImmediate(resolve));
-		}
+		if (this.clientRef.components.modals.has(userId)) return;
+		const registered = this.modalWaiter
+			? this.modalWaiter(userId)
+			: // Fallback when no waiter hook was threaded: resolve only via the completion guard below.
+				new Promise<void>(() => {});
+		// Swallow late rejection if `registered` wins the race; the awaiting test owns the dispatch promise.
+		this.execution!.catch(() => {});
+		await Promise.race([
+			registered,
+			this.execution!.then(() => {
+				if (!this.clientRef.components.modals.has(userId)) {
+					throw new Error(`untilModal: dispatch completed without opening a modal for user ${userId}.`);
+				}
+			}),
+		]);
 	}
 
 	then<TResult1 = T, TResult2 = never>(
