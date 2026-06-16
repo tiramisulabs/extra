@@ -157,6 +157,11 @@ The raw interaction response stays available as `result.reply?.body` (`{ type, d
 for the rare assertion where the Discord wire shape itself is the contract. Prefer
 `result.content`, `result.deferred`, and `result.edits` for normal behavior checks.
 
+Embeds and components come back parsed and typed, so you assert without casting:
+`result.embedView?.title`, `result.embedViews`, `result.buttons`,
+`result.button('Approve')?.customId`, and `result.textDisplays` (components-v2). The
+raw `result.embeds`/`result.embed` remain as escape hatches.
+
 `createMockBot()` accepts:
 
 - `commands`, `components`, `events` - your real classes, registered programmatically

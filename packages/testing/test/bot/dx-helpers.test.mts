@@ -1,4 +1,5 @@
-import { Command, type CommandContext, Declare, Middlewares } from 'seyfert';
+import { ActionRow, Button, Command, type CommandContext, Declare, Embed, Middlewares } from 'seyfert';
+import { ButtonStyle } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
 import { expectDenied, expectError, expectReply, MockAssertionError } from '../../src/bot/assertions';
 import { createMockBot } from '../../src/bot/bot';
@@ -110,6 +111,35 @@ describe('F37 symmetric readers', () => {
 		expect(bot.cachedVoiceState(guild.id, 'dx-vc-user')?.channel_id).toBe(channel.id);
 		expect(bot.state.voiceState(guild.id, 'dx-vc-user')?.channel_id).toBe(channel.id);
 		expect(bot.cachedVoiceState(guild.id, 'absent')).toBeUndefined();
+		await bot.close();
+	});
+});
+
+@Declare({ name: 'panel', description: 'Replies with an embed and a button' })
+class PanelCommand extends Command {
+	async run(ctx: CommandContext) {
+		const embed = new Embed().setTitle('Profile').setDescription('Level 7');
+		const row = new ActionRow<Button>().setComponents([
+			new Button().setCustomId('approve').setLabel('Approve').setStyle(ButtonStyle.Success),
+		]);
+		await ctx.write({ embeds: [embed], components: [row] });
+	}
+}
+
+describe('F34 typed DispatchResult accessors', () => {
+	test('embedView and button(...) read parsed views without casts', async () => {
+		const bot = await createMockBot({ commands: [PanelCommand] });
+		const result = await bot.slash({ name: 'panel' });
+
+		// embedView is typed EmbedView — no `as APIEmbed`.
+		expect(result.embedView?.title).toBe('Profile');
+		expect(result.embedView?.description).toBe('Level 7');
+		expect(result.embedViews).toHaveLength(1);
+
+		expect(result.buttons.map(view => view.customId)).toEqual(['approve']);
+		expect(result.button('Approve')?.customId).toBe('approve');
+		expect(result.button('approve')?.label).toBe('Approve');
+		expect(result.button('missing')).toBeUndefined();
 		await bot.close();
 	});
 });

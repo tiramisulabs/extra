@@ -514,7 +514,7 @@ function roleView(role: { id: string; name: string; position: number; permission
 	return { id: role.id, name: role.name, position: role.position, permissions: role.permissions, color: role.color };
 }
 
-function normalizeEmbed(value: unknown): EmbedView {
+export function normalizeEmbed(value: unknown): EmbedView {
 	const raw = asRecord(value);
 	const fields = arrayValue(raw.fields).map(field => {
 		const entry = asRecord(field);
@@ -543,7 +543,7 @@ interface DerivedMentions {
 	mention_roles: string[];
 }
 
-function collectButtons(value: unknown, out: ButtonView[]): void {
+export function collectButtons(value: unknown, out: ButtonView[]): void {
 	if (Array.isArray(value)) {
 		for (const entry of value) collectButtons(entry, out);
 		return;
@@ -567,7 +567,7 @@ const MESSAGE_FLAG_COMPONENTS_V2 = 1 << 15;
  * Walk a (possibly nested) Components v2 tree — containers (17), sections (9, plus their `accessory`),
  * action rows (1), etc. — visiting every node so v2 layouts can be surfaced flat for assertions.
  */
-function walkComponents(value: unknown, visit: (node: Record<string, unknown>) => void): void {
+export function walkComponents(value: unknown, visit: (node: Record<string, unknown>) => void): void {
 	for (const entry of arrayValue(value)) {
 		const node = asRecord(entry);
 		visit(node);

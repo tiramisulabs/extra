@@ -84,11 +84,16 @@ import {
 import { FOLLOWUP_ROUTE, WEBHOOK_MESSAGE_ROUTE } from './routes';
 import { resolveSelectResolved } from './select-resolved';
 import {
+	type ButtonView,
 	type ChannelView,
+	collectButtons,
+	type EmbedView,
 	type GuildMemberView,
 	type GuildView,
 	type MessageView,
+	normalizeEmbed,
 	type RoleView,
+	walkComponents,
 	type WorldDiff,
 	type WorldSnapshot,
 	WorldState,
@@ -156,10 +161,20 @@ export interface DispatchResult {
 	followups: OutgoingMessage[];
 	/** User-visible messages produced by replies, updates, edits, and followups in dispatch order. */
 	messages: OutgoingMessage[];
-	/** Embeds flattened from `messages`, in dispatch order. */
+	/** Raw embeds flattened from `messages`, in dispatch order (escape hatch; prefer `embedViews`). */
 	embeds: unknown[];
-	/** First embed from `embeds`, for simple one-embed assertions. */
+	/** First raw embed from `embeds` (escape hatch; prefer `embedView`). */
 	embed?: unknown;
+	/** Parsed, typed camelCase embed views over `messages` — assert on these instead of casting raw `embed`. */
+	embedViews: EmbedView[];
+	/** First parsed embed view, for the common single-embed assertion. */
+	embedView?: EmbedView;
+	/** Interactive buttons collected from `messages[].components` (recursively, incl. v2 sections). */
+	buttons: ButtonView[];
+	/** A button by its label or customId, or undefined. */
+	button(labelOrCustomId: string): ButtonView | undefined;
+	/** Components-v2 TextDisplay (type 10) contents, in dispatch order. */
+	textDisplays: string[];
 	/** Files flattened from `messages`, in dispatch order. */
 	files: unknown[];
 	/** REST actions scoped to this dispatch. */
@@ -222,6 +237,16 @@ export interface MessageResultBase {
 	embed?: unknown;
 	files: unknown[];
 	content?: string;
+	/** Parsed, typed camelCase embed views over `messages` — assert on these instead of casting raw `embed`. */
+	embedViews: EmbedView[];
+	/** First parsed embed view, for the common single-embed assertion. */
+	embedView?: EmbedView;
+	/** Interactive buttons collected from `messages[].components` (recursively, incl. v2 sections). */
+	buttons: ButtonView[];
+	/** A button by its label or customId, or undefined. */
+	button(labelOrCustomId: string): ButtonView | undefined;
+	/** Components-v2 TextDisplay (type 10) contents, in dispatch order. */
+	textDisplays: string[];
 }
 
 export interface SayResult extends MessageResultBase {}
@@ -294,14 +319,33 @@ export interface BotDiagnostics {
 function messageParts(actions: RecordedAction[], messages: OutgoingMessage[]): MessageResultBase {
 	const embeds = messages.flatMap(message => message.embeds ?? []);
 	const files = messages.flatMap(message => message.files ?? []);
+	const embedViews = embeds.map(normalizeEmbed);
+	const buttons: ButtonView[] = [];
+	const textDisplays: string[] = [];
+	for (const message of messages) {
+		const components = (message as { components?: unknown }).components;
+		collectButtons(components, buttons);
+		walkComponents(components, node => {
+			if (node.type === 10 && typeof node.content === 'string') textDisplays.push(node.content);
+		});
+	}
 	return {
 		actions,
 		messages,
 		embeds,
 		files,
 		content: messages.at(-1)?.content,
+		embedViews,
+		buttons,
+		textDisplays,
 		get embed() {
 			return embeds[0];
+		},
+		get embedView() {
+			return embedViews[0];
+		},
+		button(labelOrCustomId: string) {
+			return buttons.find(view => view.customId === labelOrCustomId || view.label === labelOrCustomId);
 		},
 	};
 }
@@ -1348,6 +1392,16 @@ export class MockBot {
 		];
 		const embeds = messages.flatMap(message => message.embeds ?? []);
 		const files = messages.flatMap(message => message.files ?? []);
+		const embedViews = embeds.map(normalizeEmbed);
+		const buttons: ButtonView[] = [];
+		const textDisplays: string[] = [];
+		for (const message of messages) {
+			const components = (message as { components?: unknown }).components;
+			collectButtons(components, buttons);
+			walkComponents(components, node => {
+				if (node.type === 10 && typeof node.content === 'string') textDisplays.push(node.content);
+			});
+		}
 		const command = this.commandLeaf(payload);
 		const target = this.commandTarget(payload);
 		const denial = ctx.denial;
@@ -1359,6 +1413,12 @@ export class MockBot {
 			messages,
 			embeds,
 			files,
+			embedViews,
+			buttons,
+			textDisplays,
+			button(labelOrCustomId: string) {
+				return buttons.find(view => view.customId === labelOrCustomId || view.label === labelOrCustomId);
+			},
 			actions,
 			command,
 			target,
@@ -1388,6 +1448,9 @@ export class MockBot {
 			},
 			get embed() {
 				return embeds[0];
+			},
+			get embedView() {
+				return embedViews[0];
 			},
 			get modal() {
 				const body = replies[0]?.body;
