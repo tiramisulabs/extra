@@ -46,6 +46,87 @@ import type { MockWorld } from './world';
 const MAX_MESSAGE_CONTENT = 2000;
 const MESSAGE_FLAG_COMPONENTS_V2 = 1 << 15;
 
+const cp = (value: string): number => [...value].length;
+
+/**
+ * Reject an embed media/link URL whose scheme Discord forbids (real 50035 "Not a well formed URL"). `url` and
+ * `author.url` accept only http/https; image/thumbnail/icon URLs additionally accept `attachment://`. Absent or
+ * empty values are fine.
+ */
+function assertEmbedUrl(value: unknown, label: string, allowAttachment: boolean): void {
+	if (typeof value !== 'string' || value.length === 0) return;
+	const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(value)?.[1]?.toLowerCase();
+	const ok = scheme === 'http' || scheme === 'https' || (allowAttachment && scheme === 'attachment');
+	if (!ok) apiError(400, 50035, `Invalid Form Body: ${label} is not a valid URL`);
+}
+
+/**
+ * Validate a message's embeds against Discord's full documented limits (the F4 superset): at most 10 embeds;
+ * per-embed title<=256, description<=4096, <=25 fields, each field name 1..256 and value 1..1024, footer
+ * text<=2048, author name<=256, color a 0..0xFFFFFF integer, and well-formed media URLs; plus the combined
+ * 6000-character cap across all embeds. Throws 50035 so an over-limit embed fails loud.
+ */
+function assertValidEmbeds(embeds: unknown[]): void {
+	if (embeds.length > 10) apiError(400, 50035, 'Invalid Form Body: a message can have at most 10 embeds');
+	let total = 0;
+	for (const entry of embeds) {
+		const embed = asRecord(entry);
+		const title = stringValue(embed.title);
+		if (title !== undefined) {
+			if (cp(title) > 256) apiError(400, 50035, 'Invalid Form Body: embed title must be 256 or fewer in length');
+			total += cp(title);
+		}
+		const description = stringValue(embed.description);
+		if (description !== undefined) {
+			if (cp(description) > 4096) {
+				apiError(400, 50035, 'Invalid Form Body: embed description must be 4096 or fewer in length');
+			}
+			total += cp(description);
+		}
+		const fields = arrayValue(embed.fields);
+		if (fields.length > 25) apiError(400, 50035, 'Invalid Form Body: an embed can have at most 25 fields');
+		for (const rawField of fields) {
+			const field = asRecord(rawField);
+			const name = stringValue(field.name) ?? '';
+			const value = stringValue(field.value) ?? '';
+			if (cp(name) < 1 || cp(name) > 256) {
+				apiError(400, 50035, 'Invalid Form Body: embed field name must be between 1 and 256 in length');
+			}
+			if (cp(value) < 1 || cp(value) > 1024) {
+				apiError(400, 50035, 'Invalid Form Body: embed field value must be between 1 and 1024 in length');
+			}
+			total += cp(name) + cp(value);
+		}
+		const footer = asRecord(embed.footer);
+		const footerText = stringValue(footer.text);
+		if (footerText !== undefined) {
+			if (cp(footerText) > 2048) {
+				apiError(400, 50035, 'Invalid Form Body: embed footer text must be 2048 or fewer in length');
+			}
+			total += cp(footerText);
+		}
+		const author = asRecord(embed.author);
+		const authorName = stringValue(author.name);
+		if (authorName !== undefined) {
+			if (cp(authorName) > 256) apiError(400, 50035, 'Invalid Form Body: embed author name must be 256 or fewer in length');
+			total += cp(authorName);
+		}
+		const color = numberValue(embed.color);
+		if (color !== undefined && (!Number.isInteger(color) || color < 0 || color > 0xffffff)) {
+			apiError(400, 50035, 'Invalid Form Body: embed color must be an integer between 0 and 16777215');
+		}
+		assertEmbedUrl(embed.url, 'embed url', false);
+		assertEmbedUrl(author.url, 'embed author url', false);
+		assertEmbedUrl(asRecord(embed.image).url, 'embed image url', true);
+		assertEmbedUrl(asRecord(embed.thumbnail).url, 'embed thumbnail url', true);
+		assertEmbedUrl(footer.icon_url, 'embed footer icon url', true);
+		assertEmbedUrl(author.icon_url, 'embed author icon url', true);
+	}
+	if (total > 6000) {
+		apiError(400, 50035, 'Invalid Form Body: the combined length of all embeds must be 6000 or fewer in length');
+	}
+}
+
 /**
  * Validate an outgoing message's components against Discord's documented form limits (F5): every interactive
  * custom_id is <=100 chars and unique across the message, string selects carry 1..25 options, and select
@@ -97,19 +178,7 @@ function assertSendableMessage(raw: Record<string, unknown>, mode: 'create' | 'e
 		apiError(400, 50035, `Invalid Form Body: content must be ${MAX_MESSAGE_CONTENT} or fewer in length`);
 	}
 	const embeds = Array.isArray(raw.embeds) ? raw.embeds : [];
-	if (embeds.length > 10) apiError(400, 50035, 'Invalid Form Body: a message can have at most 10 embeds');
-	for (const entry of embeds) {
-		const embed = typeof entry === 'object' && entry !== null ? (entry as Record<string, unknown>) : {};
-		if (typeof embed.title === 'string' && [...embed.title].length > 256) {
-			apiError(400, 50035, 'Invalid Form Body: embed title must be 256 or fewer in length');
-		}
-		if (typeof embed.description === 'string' && [...embed.description].length > 4096) {
-			apiError(400, 50035, 'Invalid Form Body: embed description must be 4096 or fewer in length');
-		}
-		if (Array.isArray(embed.fields) && embed.fields.length > 25) {
-			apiError(400, 50035, 'Invalid Form Body: an embed can have at most 25 fields');
-		}
-	}
+	assertValidEmbeds(embeds);
 	// F19: a Components-v2 body forbids top-level content/embeds and requires a non-empty components tree.
 	if (((numberValue(raw.flags) ?? 0) & MESSAGE_FLAG_COMPONENTS_V2) !== 0) {
 		if (content !== undefined && content !== '') {

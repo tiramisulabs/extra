@@ -111,6 +111,64 @@ describe('outgoing message payload limits (fail loud)', () => {
 		await close();
 	});
 
+	test('embed field value over 1024 is rejected', async () => {
+		const { dispatch, close } = await botWith((ctx, channelId) =>
+			ctx.client.messages.write(channelId, { embeds: [{ fields: [{ name: 'n', value: 'x'.repeat(1025) }] }] }),
+		)();
+		await expect(dispatch).rejects.toThrow(/field value must be between 1 and 1024/);
+		await close();
+	});
+
+	test('embed footer text over 2048 is rejected', async () => {
+		const { dispatch, close } = await botWith((ctx, channelId) =>
+			ctx.client.messages.write(channelId, { embeds: [{ footer: { text: 'x'.repeat(2049) } }] }),
+		)();
+		await expect(dispatch).rejects.toThrow(/footer text must be 2048/);
+		await close();
+	});
+
+	test('embed author name over 256 is rejected', async () => {
+		const { dispatch, close } = await botWith((ctx, channelId) =>
+			ctx.client.messages.write(channelId, { embeds: [{ author: { name: 'x'.repeat(257) } }] }),
+		)();
+		await expect(dispatch).rejects.toThrow(/author name must be 256/);
+		await close();
+	});
+
+	test('combined embed length over 6000 is rejected', async () => {
+		const { dispatch, close } = await botWith((ctx, channelId) =>
+			ctx.client.messages.write(channelId, {
+				embeds: [{ description: 'x'.repeat(4096) }, { description: 'y'.repeat(4096) }],
+			}),
+		)();
+		await expect(dispatch).rejects.toThrow(/combined length of all embeds must be 6000/);
+		await close();
+	});
+
+	test('embed color outside 0..0xFFFFFF is rejected', async () => {
+		const { dispatch, close } = await botWith((ctx, channelId) =>
+			ctx.client.messages.write(channelId, { embeds: [{ title: 't', color: 0x1000000 }] }),
+		)();
+		await expect(dispatch).rejects.toThrow(/color must be an integer/);
+		await close();
+	});
+
+	test('embed url with a forbidden scheme is rejected', async () => {
+		const { dispatch, close } = await botWith((ctx, channelId) =>
+			ctx.client.messages.write(channelId, { embeds: [{ title: 't', url: 'javascript:alert(1)' }] }),
+		)();
+		await expect(dispatch).rejects.toThrow(/embed url is not a valid URL/);
+		await close();
+	});
+
+	test('embed attachment:// image url is accepted', async () => {
+		const { dispatch, close } = await botWith((ctx, channelId) =>
+			ctx.client.messages.write(channelId, { embeds: [{ title: 't', image: { url: 'attachment://logo.png' } }] }),
+		)();
+		await expect(dispatch).resolves.toBeDefined();
+		await close();
+	});
+
 	test('editing a channel name over 100 chars is rejected (F22)', async () => {
 		const { world, guild, actor, channel } = seedGuildFixture('cn');
 		@Declare({ name: 'cn', description: 'renames a channel too long' })
