@@ -43,6 +43,23 @@ describe('createMockBot', () => {
 		await bot.close();
 	});
 
+	test('OutgoingMessage rejects misspelled body fields at compile time', async () => {
+		const bot = await createMockBot({ commands: [GreetCommand] });
+		const result = await bot.slash({ name: 'greet', options: { name: 'slipher' } });
+		const message = result.messages[0];
+
+		const content: string | undefined = message?.content;
+		const embeds: unknown[] | undefined = message?.embeds;
+		expect(content).toBe('Hello, slipher!');
+		expect(embeds).toBeUndefined();
+
+		// @ts-expect-error flgs is not a field on OutgoingMessage (typo of flags)
+		expect(message?.flgs).toBeUndefined();
+		// @ts-expect-error contnet is not a field on OutgoingMessage (typo of content)
+		expect(message?.contnet).toBeUndefined();
+		await bot.close();
+	});
+
 	test('omitted guild and channel ids are stable across dispatches', async () => {
 		const seen: { guildId?: string; channelId?: string }[] = [];
 

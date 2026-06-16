@@ -171,13 +171,27 @@ export interface CapturedReply {
 	files?: unknown;
 }
 
-/** Message-shaped body sent through followups, edits, prefix commands, or REST echoes. */
+/**
+ * Message-shaped body sent through followups, edits, prefix commands, or REST echoes.
+ *
+ * Fields are the Discord message-create/edit *body* fields the mock surfaces — not a full API
+ * message. The set is declared explicitly (no open index signature) so a misspelled field
+ * (`result.messages[0].flgs`) is a compile error rather than silently typed `unknown`.
+ */
 export interface OutgoingMessage {
 	content?: string;
 	embeds?: unknown[];
 	components?: unknown[];
 	files?: unknown[];
-	[key: string]: unknown;
+	flags?: number;
+	tts?: boolean;
+	nonce?: string | number;
+	enforce_nonce?: boolean;
+	allowed_mentions?: unknown;
+	attachments?: unknown[];
+	message_reference?: unknown;
+	sticker_ids?: string[];
+	poll?: unknown;
 }
 
 /** Semantic result produced by interaction dispatchers. */
