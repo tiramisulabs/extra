@@ -1,9 +1,12 @@
 import {
 	Client,
 	type Command,
+	type CommandContext,
 	type ContextMenuCommand,
+	type ContextOptions,
 	type EntryPointCommand,
 	ModalCommand,
+	type OptionsRecord,
 	type UsingClient,
 } from 'seyfert';
 import { CacheFrom } from 'seyfert/lib/cache';
@@ -316,6 +319,7 @@ export interface ActorOptions {
 
 /** Bound dispatcher facade that reuses one identity across a flow. */
 export interface Actor {
+	slash<C extends SlashCommandClass>(command: C, options?: SlashClassOptions<C>): Dispatch<DispatchResult>;
 	slash(options: ChatInputInteractionOptions): Dispatch<DispatchResult>;
 	autocomplete(options: AutocompleteInteractionOptions): Dispatch<AutocompleteResult>;
 	userMenu(options: UserCommandInteractionOptions): Dispatch<UserMenuResult>;
@@ -393,6 +397,48 @@ export type MenuOptions<C extends MenuCommandClass> = Omit<
 /** Resolves a menu command class to its dispatch result, so `result.target` is correctly typed and non-optional. */
 export type MenuResultFor<C extends MenuCommandClass> =
 	TargetFor<C> extends ApiUser ? UserMenuResult : TargetFor<C> extends ApiMessage ? MessageMenuResult : DispatchResult;
+
+/** A chat-input command class, accepted by the class-first {@link MockBot.slash} overload. */
+export type SlashCommandClass = new () => Command;
+
+/**
+ * Extracts the seyfert {@link OptionsRecord} a chat-input command declares, by reading the generic of its
+ * `run` parameter's {@link CommandContext}. This is the same record the author already wires up to get typed
+ * `ctx.options`, i.e. `run(ctx: CommandContext<typeof options>)` (the standard seyfert idiom).
+ *
+ * The shape is recovered from the `run` *override's* parameter type, NOT from the class itself: seyfert's
+ * `@Options(...)` decorator widens the instance `options` field to `SubCommand[] | CommandOption[]` and a
+ * decorator's return type is not applied to `typeof Class`, so the named option shape lives only on the
+ * `CommandContext<T>` the author annotated. When `run` is left as the base `CommandContext` (no generic, or
+ * the class omits a typed `run`), `T` is seyfert's default `{}` and this degrades to an empty record —
+ * exactly the graceful fallback the `menu(Class)` precedent uses for non-`as const` classes.
+ */
+export type OptionsRecordOf<C extends SlashCommandClass> = InstanceType<C>['run'] extends (
+	ctx: infer Ctx,
+	...rest: never[]
+) => unknown
+	? Ctx extends CommandContext<infer T>
+		? T
+		: {}
+	: {};
+
+/**
+ * Resolves a chat-input command class to the value-typed options bag — `{ count: number, query?: string }` —
+ * by mapping {@link OptionsRecordOf} through seyfert's own `ContextOptions`. Used to type BOTH the `options`
+ * you pass to `slash(Class, { options })` and, transitively, the author's `ctx.options`. Degrades to an empty
+ * record (`Record<string, never>`) when the class does not declare a typed options record.
+ */
+export type SlashOptionsOf<C extends SlashCommandClass> =
+	OptionsRecordOf<C> extends OptionsRecord ? ContextOptions<OptionsRecordOf<C>> : Record<string, never>;
+
+/**
+ * Options accepted by the class-first {@link MockBot.slash} overload: every {@link ChatInputInteractionOptions}
+ * field except `name` (derived from the class) and `options` (whose value bag is inferred to {@link SlashOptionsOf}).
+ */
+export type SlashClassOptions<C extends SlashCommandClass> = Omit<ChatInputInteractionOptions, 'name' | 'options'> & {
+	options?: SlashOptionsOf<C>;
+};
+
 export type MockEvent = Omit<ClientEvent, 'data'> & {
 	data: Omit<ClientEvent['data'], 'once'> & { once?: boolean };
 };
@@ -1482,7 +1528,25 @@ export class MockBot {
 		return this.dispatchInteraction(build(prepared)) as Dispatch<R>;
 	}
 
-	slash(options: ChatInputInteractionOptions): Dispatch<DispatchResult> {
+	/**
+	 * Dispatch a chat-input command by its class, inferring the option-value bag from the command's declared
+	 * options — both the `options` you pass here AND the author's `ctx.options` are typed, no cast. The shape is
+	 * read from the `run(ctx: CommandContext<typeof options>)` annotation the author already writes (the standard
+	 * seyfert idiom); see {@link SlashOptionsOf}. The command's `name` comes from the class, so it is omitted here.
+	 *
+	 * Without a typed `run` the option bag degrades to an empty record (graceful, no compile error), mirroring the
+	 * `menu(Class)` precedent. The string overload — `slash({ name, options })` — remains the untyped escape hatch.
+	 */
+	slash<C extends SlashCommandClass>(command: C, options?: SlashClassOptions<C>): Dispatch<DispatchResult>;
+	slash(options: ChatInputInteractionOptions): Dispatch<DispatchResult>;
+	slash<C extends SlashCommandClass>(
+		commandOrOptions: C | ChatInputInteractionOptions,
+		classOptions?: SlashClassOptions<C>,
+	): Dispatch<DispatchResult> {
+		const options: ChatInputInteractionOptions =
+			typeof commandOrOptions === 'function'
+				? ({ ...(classOptions ?? {}), name: new commandOrOptions().name } as ChatInputInteractionOptions)
+				: commandOrOptions;
 		this.assertCommandRegistered(options.name, ApplicationCommandType.ChatInput, 'slash');
 		return this.dispatchVia('slash', this.prepareChatInputOptions(options), chatInputInteraction);
 	}
@@ -1653,7 +1717,13 @@ export class MockBot {
 		const base = { user, guildId, channel };
 
 		return {
-			slash: options => this.slash({ ...base, ...options }),
+			slash: (
+				commandOrOptions: SlashCommandClass | ChatInputInteractionOptions,
+				classOptions?: SlashClassOptions<SlashCommandClass>,
+			) =>
+				typeof commandOrOptions === 'function'
+					? this.slash(commandOrOptions, { ...base, ...classOptions })
+					: this.slash({ ...base, ...commandOrOptions }),
 			autocomplete: options => this.autocomplete({ ...base, ...options }),
 			userMenu: options => this.userMenu({ ...base, ...options }),
 			messageMenu: options => this.messageMenu({ ...base, ...options }),

@@ -4,6 +4,7 @@ import {
 	ComponentCommand,
 	type ComponentContext,
 	ContextMenuCommand,
+	createIntegerOption,
 	createMiddleware,
 	createStringOption,
 	Declare,
@@ -199,6 +200,21 @@ const searchOptions = {
 export class SearchCommand extends Command {
 	async run(ctx: CommandContext<typeof searchOptions>) {
 		await ctx.write({ content: ctx.options.query });
+	}
+}
+
+export const filterOptions = {
+	count: createIntegerOption({ description: 'How many', required: true }),
+	label: createStringOption({ description: 'Optional label' }),
+};
+
+@Declare({ name: 'filter', description: 'Filters by count' })
+@Options(filterOptions)
+export class FilterCommand extends Command {
+	async run(ctx: CommandContext<typeof filterOptions>) {
+		const count: number = ctx.options.count;
+		const label: string | undefined = ctx.options.label;
+		await ctx.write({ content: `${label ?? 'items'}:${count}` });
 	}
 }
 
