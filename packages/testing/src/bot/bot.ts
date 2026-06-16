@@ -22,7 +22,13 @@ import { resetMockIds } from '../id';
 import { TEST_APPLICATION_ID, TEST_BOT_ID, TEST_CHANNEL_ID, TEST_GUILD_ID, TEST_USER_ID } from './constants';
 import { registerWorldDefaults } from './defaults';
 import { Dispatch } from './dispatch';
-import { type DispatchContext, dispatchStore, nextDispatchId, resetDispatchIds } from './dispatch-context';
+import {
+	type DispatchContext,
+	type DispatchDenial,
+	dispatchStore,
+	nextDispatchId,
+	resetDispatchIds,
+} from './dispatch-context';
 import { MockGateway } from './gateway';
 import {
 	type ApiInteractionPayload,
@@ -137,6 +143,18 @@ interface MiddlewareControls {
 }
 type WrappedMiddleware = (controls: MiddlewareControls) => unknown;
 
+interface PermissionGuardedCommand {
+	onPermissionsFail?: (context: unknown, missing: unknown) => unknown;
+	onBotPermissionsFail?: (context: unknown, missing: unknown) => unknown;
+	options?: unknown[];
+}
+
+/** Seyfert passes the missing permissions as a string[] of flag names; normalize anything else to undefined. */
+function toPermissionNames(missing: unknown): string[] | undefined {
+	if (Array.isArray(missing) && missing.every(name => typeof name === 'string')) return missing as string[];
+	return undefined;
+}
+
 function optionEntries(options: OptionInputBag | undefined): [string, OptionInput][] {
 	if (!options) return [];
 	return Array.isArray(options) ? options.map(option => [option.name, option.value]) : Object.entries(options);
@@ -200,6 +218,14 @@ export interface DispatchResult {
 		member?: ApiMember;
 		message?: ApiMessage;
 	};
+	/**
+	 * True when the dispatch was denied before the command's `run` body: a permission guard rejected it, or a
+	 * middleware stopped the chain / returned without progressing. Lets security tests assert the denial
+	 * structurally instead of matching the reply copy. Defaults to false.
+	 */
+	denied: boolean;
+	/** Structured denial detail; present only when `denied` is true. */
+	denial?: DispatchDenial;
 }
 
 /** userMenu/menu(UserCommand) result: `target` is always present, so no optional chaining is needed. */
@@ -1186,10 +1212,18 @@ export class MockBot {
 							progressed = true;
 							return fn(...args);
 						};
+					// stop(reason) terminates the chain and routes through onMiddlewaresError: record it as a
+					// structured 'stop' denial, capturing the reason argument, before delegating.
+					const stop: MiddlewareControl = (...args) => {
+						if (ctx)
+							ctx.denial = { kind: 'stop', reason: args[0], middleware: key };
+						progressed = true;
+						return controls.stop(...args);
+					};
 					const result = real({
 						...controls,
 						next: mark(controls.next),
-						stop: mark(controls.stop),
+						stop,
 						pass: mark(controls.pass),
 					});
 					Promise.resolve(result).then(
@@ -1198,6 +1232,7 @@ export class MockBot {
 							// The middleware denied (replied + returned without next/stop/pass). Its reply may still be
 							// recording through async REST hops, so don't settle after a single tick. Drain until this
 							// dispatch's REST surface is quiescent: action count stable across a tick AND none in flight.
+							if (ctx && !ctx.denial) ctx.denial = { kind: 'no-next', middleware: key };
 							void this.drainUntilQuiescent(ctx?.dispatchId, () => progressed).then(() => {
 								if (!progressed) ctx?.resolveDenial?.();
 							});
@@ -1208,6 +1243,39 @@ export class MockBot {
 				};
 			}
 		}
+		this.installPermissionDenialHooks();
+	}
+
+	/**
+	 * Seyfert checks `defaultMemberPermissions` / `botPermissions` BEFORE the middleware chain and, on failure,
+	 * calls the command's own `onPermissionsFail` / `onBotPermissionsFail` and returns — `run` is never reached.
+	 * These are command-instance methods (optional), so we wrap each command (and its subcommands) to record a
+	 * structured permissions denial. The original hook still fires, so existing copy-based assertions keep working.
+	 */
+	private installPermissionDenialHooks(): void {
+		const wrapped = new WeakSet<object>();
+		const wrap = (command: PermissionGuardedCommand): void => {
+			if (wrapped.has(command)) return;
+			wrapped.add(command);
+			const real = {
+				onPermissionsFail: command.onPermissionsFail,
+				onBotPermissionsFail: command.onBotPermissionsFail,
+			};
+			command.onPermissionsFail = function (this: unknown, context: unknown, missing: unknown) {
+				const ctx = dispatchStore.getStore();
+				if (ctx) ctx.denial = { kind: 'permissions', missing: toPermissionNames(missing) };
+				return real.onPermissionsFail?.call(this, context, missing);
+			};
+			command.onBotPermissionsFail = function (this: unknown, context: unknown, missing: unknown) {
+				const ctx = dispatchStore.getStore();
+				if (ctx) ctx.denial = { kind: 'bot-permissions', missing: toPermissionNames(missing) };
+				return real.onBotPermissionsFail?.call(this, context, missing);
+			};
+			for (const option of command.options ?? []) {
+				if (option && typeof option === 'object' && 'run' in option) wrap(option as PermissionGuardedCommand);
+			}
+		};
+		for (const command of this.client.commands.values as unknown as PermissionGuardedCommand[]) wrap(command);
 	}
 
 	private async runInteraction(payload: ApiInteractionPayload, dispatchId: number): Promise<DispatchResult> {
@@ -1313,6 +1381,7 @@ export class MockBot {
 		const files = messages.flatMap(message => message.files ?? []);
 		const command = this.commandLeaf(payload);
 		const target = this.commandTarget(payload);
+		const denial = ctx.denial;
 
 		return {
 			replies,
@@ -1324,6 +1393,8 @@ export class MockBot {
 			actions,
 			command,
 			target,
+			denied: denial !== undefined,
+			denial,
 			get reply() {
 				return replies[0];
 			},
