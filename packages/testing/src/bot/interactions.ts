@@ -1,4 +1,5 @@
 import { mockId } from '../id';
+import { ApplicationCommandOptionType } from 'seyfert/lib/types';
 import { TEST_APPLICATION_ID, TEST_CHANNEL_ID, TEST_GUILD_ID } from './constants';
 import {
 	type ApiAttachment,
@@ -24,20 +25,8 @@ import {
 	permissionBits,
 } from './permissions';
 
-/** Discord ApplicationCommandOptionType values used by the encoder. */
-const OptionType = {
-	SubCommand: 1,
-	SubCommandGroup: 2,
-	String: 3,
-	Integer: 4,
-	Boolean: 5,
-	User: 6,
-	Channel: 7,
-	Role: 8,
-	Mentionable: 9,
-	Number: 10,
-	Attachment: 11,
-} as const;
+/** Discord application-command option types, single-sourced from seyfert's enum. */
+const OptionType = ApplicationCommandOptionType;
 
 /**
  * String payload default for app_permissions / resolved entities: every
@@ -311,11 +300,11 @@ export function chatInputInteraction(options: ChatInputInteractionOptions): ApiI
 
 	let dataOptions = encoded;
 	if (options.subcommand) {
-		dataOptions = [{ name: options.subcommand, type: OptionType.SubCommand, options: dataOptions }];
+		dataOptions = [{ name: options.subcommand, type: OptionType.Subcommand, options: dataOptions }];
 	}
 	if (options.group) {
 		if (!options.subcommand) throw new TypeError('chatInputInteraction: "group" requires "subcommand"');
-		dataOptions = [{ name: options.group, type: OptionType.SubCommandGroup, options: dataOptions }];
+		dataOptions = [{ name: options.group, type: OptionType.SubcommandGroup, options: dataOptions }];
 	}
 
 	payload.data = {
@@ -355,11 +344,11 @@ export function autocompleteInteraction(options: AutocompleteInteractionOptions)
 	};
 	let dataOptions = [...encoded, focusedOption];
 	if (options.subcommand) {
-		dataOptions = [{ name: options.subcommand, type: OptionType.SubCommand, options: dataOptions }];
+		dataOptions = [{ name: options.subcommand, type: OptionType.Subcommand, options: dataOptions }];
 	}
 	if (options.group) {
 		if (!options.subcommand) throw new TypeError('autocompleteInteraction: "group" requires "subcommand"');
-		dataOptions = [{ name: options.group, type: OptionType.SubCommandGroup, options: dataOptions }];
+		dataOptions = [{ name: options.group, type: OptionType.SubcommandGroup, options: dataOptions }];
 	}
 
 	payload.data = {

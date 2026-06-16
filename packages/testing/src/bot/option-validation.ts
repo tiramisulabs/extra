@@ -1,19 +1,9 @@
 import { ApplicationCommandType } from 'seyfert';
+import { ApplicationCommandOptionType } from 'seyfert/lib/types';
 import type { ChatInputInteractionOptions, OptionInput, OptionInputBag } from './interactions';
 
-export const CommandOptionType = {
-	SubCommand: 1,
-	SubCommandGroup: 2,
-	String: 3,
-	Integer: 4,
-	Boolean: 5,
-	User: 6,
-	Channel: 7,
-	Role: 8,
-	Mentionable: 9,
-	Number: 10,
-	Attachment: 11,
-} as const;
+/** Discord application-command option types, single-sourced from seyfert's enum. */
+export const CommandOptionType = ApplicationCommandOptionType;
 
 export interface CommandOptionDefinition {
 	name: string;
@@ -66,7 +56,7 @@ function chatCommand(commands: CommandList, name: string): CommandWithOptions | 
 // seyfert stores subcommands flat on `command.options`, each carrying `.group` for its group; the type-2
 // SubcommandGroup wrapper only exists in the wire payload, never in the registered command metadata.
 function subcommandsOf(commands: CommandList, name: string): CommandOptionDefinition[] {
-	return (chatCommand(commands, name)?.options ?? []).filter(option => option.type === CommandOptionType.SubCommand);
+	return (chatCommand(commands, name)?.options ?? []).filter(option => option.type === CommandOptionType.Subcommand);
 }
 
 export function optionDefinitionsFor(
@@ -81,7 +71,7 @@ export function optionDefinitionsFor(
 		definitions = sub?.options ?? [];
 	}
 	return definitions.filter(
-		option => option.type !== CommandOptionType.SubCommand && option.type !== CommandOptionType.SubCommandGroup,
+		option => option.type !== CommandOptionType.Subcommand && option.type !== CommandOptionType.SubcommandGroup,
 	);
 }
 

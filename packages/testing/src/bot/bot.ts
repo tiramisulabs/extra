@@ -1112,11 +1112,11 @@ export class MockBot {
 		let group: string | undefined;
 		let subcommand: string | undefined;
 		const first = Array.isArray(data.options) ? data.options[0] : undefined;
-		if (first?.type === CommandOptionType.SubCommandGroup) {
+		if (first?.type === CommandOptionType.SubcommandGroup) {
 			group = first.name;
 			const nested = first.options?.[0];
-			if (nested?.type === CommandOptionType.SubCommand) subcommand = nested.name;
-		} else if (first?.type === CommandOptionType.SubCommand) {
+			if (nested?.type === CommandOptionType.Subcommand) subcommand = nested.name;
+		} else if (first?.type === CommandOptionType.Subcommand) {
 			subcommand = first.name;
 		}
 		return { name: data.name, ...(group ? { group } : {}), ...(subcommand ? { subcommand } : {}) };
