@@ -2,6 +2,7 @@ import { mockId, mockTimestamp } from '../id';
 import { TEST_BOT_ID } from './constants';
 import {
 	type ApiAttachment,
+	type ApiAutoModRule,
 	type ApiChannel,
 	type ApiEmoji,
 	type ApiInvite,
@@ -11,6 +12,7 @@ import {
 	type ApiUser,
 	type ApiVoiceState,
 	apiAttachment,
+	apiAutoModRule,
 	apiChannel,
 	apiEmoji,
 	apiInvite,
@@ -128,6 +130,8 @@ export interface GuildView {
 	emojis: { id: string; name: string }[];
 	emoji(nameOrId: string): { id: string; name: string } | undefined;
 	invites: { code: string; channelId: string; uses: number }[];
+	autoModRules: ApiAutoModRule[];
+	autoModRule(id: string): ApiAutoModRule | undefined;
 }
 
 /** One member captured in a {@link WorldSnapshot}, identified by `guildId` + `userId`. */
@@ -240,6 +244,10 @@ export interface WorldStateReader {
 	invite(code: string): ApiInvite | undefined;
 	channelInvites(channelId: string): ApiInvite[];
 	guildInvites(guildId: string): ApiInvite[];
+	autoModRules(guildId: string): ApiAutoModRule[];
+	autoModRule(guildId: string, ruleId: string): ApiAutoModRule | undefined;
+	threadMembers(channelId: string): string[];
+	activeThreads(guildId: string): Record<string, unknown>[];
 }
 
 const EMPTY_WORLD = (): MockWorld => ({ guilds: [], channels: [], users: [], members: [], roles: [], messages: [] });
@@ -404,12 +412,14 @@ export class WorldState implements WorldStateReader {
 	private readonly reactionsByMessage = new Map<string, Map<string, Set<string>>>();
 	private readonly pinnedByChannel = new Map<string, string[]>();
 	private readonly pollVotersByMessage = new Map<string, Map<number, Set<string>>>();
+	private readonly threadMembersByChannel = new Map<string, Set<string>>();
 
 	constructor(seed?: MockWorld) {
 		this.world = seed ?? EMPTY_WORLD();
 		this.world.roles ??= [];
 		this.world.messages ??= [];
 		this.world.guildEmojis ??= [];
+		this.world.autoModRules ??= [];
 		for (const invite of this.world.invites ?? []) this.invitesByCode.set(invite.code, invite);
 		for (const channel of this.world.channels) {
 			if (channel.type === 1 && channel.id) this.dmChannelByUser.set(channel.id, channel.id);
@@ -489,6 +499,9 @@ export class WorldState implements WorldStateReader {
 			.filter(entry => entry.guildId === guild.id)
 			.map(entry => entry.emoji);
 		const guildInvites = [...this.invitesByCode.values()].filter(invite => invite.guild_id === guild.id);
+		const guildAutoModRules = (this.world.autoModRules ?? [])
+			.filter(entry => entry.guildId === guild.id)
+			.map(entry => entry.rule);
 
 		return {
 			id: guild.id,
@@ -523,6 +536,8 @@ export class WorldState implements WorldStateReader {
 				return emoji ? { id: emoji.id, name: emoji.name } : undefined;
 			},
 			invites: guildInvites.map(invite => ({ code: invite.code, channelId: invite.channel_id, uses: invite.uses })),
+			autoModRules: guildAutoModRules,
+			autoModRule: id => guildAutoModRules.find(rule => rule.id === id),
 		};
 	}
 
@@ -634,6 +649,7 @@ export class WorldState implements WorldStateReader {
 		}
 		this.world.messages = this.world.messages.filter(message => message.channelId !== channelId);
 		this.pinnedByChannel.delete(channelId);
+		this.threadMembersByChannel.delete(channelId);
 		for (const [userId, dmChannelId] of this.dmChannelByUser) {
 			if (dmChannelId === channelId) this.dmChannelByUser.delete(userId);
 		}
@@ -1165,6 +1181,82 @@ export class WorldState implements WorldStateReader {
 	/** The invites of a guild. */
 	guildInvites(guildId: string): ApiInvite[] {
 		return [...this.invitesByCode.values()].filter(invite => invite.guild_id === guildId);
+	}
+
+	/** @internal Mock internals normally call this when Discord creates an automod rule. */
+	addAutoModRule(guildId: string, raw: Record<string, unknown>): ApiAutoModRule {
+		const rule = apiAutoModRule({
+			id: stringValue(raw.id),
+			guildId,
+			name: stringValue(raw.name),
+			...(numberValue(raw.trigger_type) === undefined ? {} : { triggerType: numberValue(raw.trigger_type) }),
+			...(numberValue(raw.event_type) === undefined ? {} : { eventType: numberValue(raw.event_type) }),
+			...(typeof raw.enabled === 'boolean' ? { enabled: raw.enabled } : {}),
+			actions: arrayValue(raw.actions),
+		});
+		(this.world.autoModRules ??= []).push({ guildId, rule });
+		return rule;
+	}
+
+	/** @internal Mock internals normally call this when Discord edits an automod rule. */
+	editAutoModRule(guildId: string, ruleId: string, patch: Record<string, unknown>): ApiAutoModRule | undefined {
+		const entry = (this.world.autoModRules ?? []).find(r => r.guildId === guildId && r.rule.id === ruleId);
+		if (!entry) return undefined;
+		if ('name' in patch) entry.rule.name = stringValue(patch.name) ?? entry.rule.name;
+		if (typeof patch.enabled === 'boolean') entry.rule.enabled = patch.enabled;
+		if (numberValue(patch.trigger_type) !== undefined) entry.rule.trigger_type = numberValue(patch.trigger_type)!;
+		if (numberValue(patch.event_type) !== undefined) entry.rule.event_type = numberValue(patch.event_type)!;
+		if ('actions' in patch) entry.rule.actions = arrayValue(patch.actions);
+		return { ...entry.rule };
+	}
+
+	/** @internal Mock internals normally call this when Discord deletes an automod rule. */
+	removeAutoModRule(guildId: string, ruleId: string): void {
+		this.world.autoModRules = (this.world.autoModRules ?? []).filter(
+			r => r.guildId !== guildId || r.rule.id !== ruleId,
+		);
+	}
+
+	/** The automod rules of a guild. */
+	autoModRules(guildId: string): ApiAutoModRule[] {
+		return (this.world.autoModRules ?? []).filter(r => r.guildId === guildId).map(r => r.rule);
+	}
+
+	/** A single automod rule by id. */
+	autoModRule(guildId: string, ruleId: string): ApiAutoModRule | undefined {
+		return (this.world.autoModRules ?? []).find(r => r.guildId === guildId && r.rule.id === ruleId)?.rule;
+	}
+
+	/** @internal Mock internals normally call this when a user joins a thread. Idempotent. */
+	addThreadMember(channelId: string, userId: string): void {
+		const set = this.threadMembersByChannel.get(channelId) ?? new Set<string>();
+		set.add(userId);
+		this.threadMembersByChannel.set(channelId, set);
+	}
+
+	/** @internal Mock internals normally call this when a user leaves a thread. */
+	removeThreadMember(channelId: string, userId: string): void {
+		const set = this.threadMembersByChannel.get(channelId);
+		if (!set) return;
+		set.delete(userId);
+		if (set.size === 0) this.threadMembersByChannel.delete(channelId);
+	}
+
+	/** The user ids currently in a thread. */
+	threadMembers(channelId: string): string[] {
+		return [...(this.threadMembersByChannel.get(channelId) ?? new Set<string>())];
+	}
+
+	/** The non-archived threads of a guild (the active set). */
+	activeThreads(guildId: string): Record<string, unknown>[] {
+		return this.world.channels
+			.filter(
+				channel =>
+					channel.guild_id === guildId &&
+					channel.thread_metadata !== undefined &&
+					channel.thread_metadata.archived !== true,
+			)
+			.map(channel => ({ ...channel }));
 	}
 
 	/** @internal Mock internals normally call this when Discord edits a guild. */

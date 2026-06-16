@@ -1,5 +1,6 @@
 import {
 	type ApiMember,
+	apiAutoModRule,
 	apiChannel,
 	apiEmoji,
 	apiGuild,
@@ -7,6 +8,7 @@ import {
 	apiMember,
 	apiMessage,
 	apiRole,
+	apiThreadMember,
 	apiUser,
 } from './payloads';
 import { apiError, type MockApiHandler, type RouteMatcher, type RouteResponder } from './rest';
@@ -321,6 +323,44 @@ export function registerWorldDefaults(
 		for (const userId of userIds) await removeMember(params.guildId, userId, true);
 		return { banned_users: userIds, failed_users: [] };
 	});
+	rest.intercept(Routes.createAutoModRule, (pending, params) =>
+		hooks.state.addAutoModRule(params.guildId, bodyRecord(pending.body)),
+	);
+	rest.intercept(Routes.fetchAutoModRules, (_pending, params) => hooks.state.autoModRules(params.guildId));
+	interceptFetchOne(
+		rest,
+		Routes.fetchAutoModRule,
+		params => hooks.state.autoModRule(params.guildId, params.ruleId),
+		params => apiAutoModRule({ id: params.ruleId, guildId: params.guildId }),
+	);
+	rest.intercept(Routes.editAutoModRule, (pending, params) => {
+		const updated = hooks.state.editAutoModRule(params.guildId, params.ruleId, bodyRecord(pending.body));
+		return updated ?? apiAutoModRule({ id: params.ruleId, guildId: params.guildId });
+	});
+	rest.intercept(Routes.deleteAutoModRule, (_pending, params) => {
+		hooks.state.removeAutoModRule(params.guildId, params.ruleId);
+		return {};
+	});
+	const resolveThreadUser = (userId: string) => (userId === '@me' ? hooks.botId : userId);
+	rest.intercept(Routes.addThreadMember, (_pending, params) => {
+		hooks.state.addThreadMember(params.channelId, resolveThreadUser(params.userId));
+		return {};
+	});
+	rest.intercept(Routes.removeThreadMember, (_pending, params) => {
+		hooks.state.removeThreadMember(params.channelId, resolveThreadUser(params.userId));
+		return {};
+	});
+	rest.intercept(Routes.listThreadMembers, (_pending, params) =>
+		hooks.state.threadMembers(params.channelId).map(userId => apiThreadMember({ threadId: params.channelId, userId })),
+	);
+	rest.intercept(Routes.fetchThreadMember, (_pending, params) =>
+		apiThreadMember({ threadId: params.channelId, userId: resolveThreadUser(params.userId) }),
+	);
+	rest.intercept(Routes.fetchActiveThreads, (_pending, params) => ({
+		threads: hooks.state.activeThreads(params.guildId),
+		members: [],
+		has_more: false,
+	}));
 	rest.intercept(Routes.editGuild, (pending, params) => {
 		const updated = hooks.state.editGuild(params.guildId, bodyRecord(pending.body));
 		return updated ?? { ...apiGuild({ id: params.guildId }), ...bodyRecord(pending.body) };

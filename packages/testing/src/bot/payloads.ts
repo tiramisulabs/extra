@@ -169,6 +169,68 @@ export function apiInvite(options: ApiInviteOptions = {}): ApiInvite {
 	};
 }
 
+export interface ApiAutoModRuleOptions {
+	id?: string;
+	guildId?: string;
+	name?: string;
+	triggerType?: number;
+	eventType?: number;
+	enabled?: boolean;
+	actions?: unknown[];
+}
+
+export interface ApiAutoModRule {
+	id: string;
+	guild_id: string;
+	name: string;
+	creator_id: string;
+	event_type: number;
+	trigger_type: number;
+	trigger_metadata: Record<string, unknown>;
+	actions: unknown[];
+	enabled: boolean;
+	exempt_roles: string[];
+	exempt_channels: string[];
+}
+
+export function apiAutoModRule(options: ApiAutoModRuleOptions = {}): ApiAutoModRule {
+	return {
+		id: options.id ?? mockId(),
+		guild_id: options.guildId ?? mockId(),
+		name: options.name ?? 'slipher-test-automod-rule',
+		creator_id: mockId(),
+		event_type: options.eventType ?? 1,
+		trigger_type: options.triggerType ?? 1,
+		trigger_metadata: {},
+		actions: options.actions ?? [],
+		enabled: options.enabled ?? true,
+		exempt_roles: [],
+		exempt_channels: [],
+	};
+}
+
+export interface ApiThreadMemberOptions {
+	threadId?: string;
+	userId?: string;
+	flags?: number;
+}
+
+export interface ApiThreadMember {
+	id?: string;
+	user_id?: string;
+	join_timestamp: string;
+	flags: number;
+}
+
+export function apiThreadMember(options: ApiThreadMemberOptions = {}): ApiThreadMember {
+	return {
+		...(options.threadId === undefined ? {} : { id: options.threadId }),
+		...(options.userId === undefined ? {} : { user_id: options.userId }),
+		join_timestamp: mockTimestamp(),
+		flags: options.flags ?? 0,
+	};
+}
+
 export interface ThreadMetadata {
 	archived: boolean;
 	auto_archive_duration: number;

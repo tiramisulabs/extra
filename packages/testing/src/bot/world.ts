@@ -2,6 +2,8 @@ import type { UsingClient } from 'seyfert';
 import { CacheFrom } from 'seyfert/lib/cache';
 import { TEST_BOT_ID } from './constants';
 import {
+	type ApiAutoModRule,
+	type ApiAutoModRuleOptions,
 	type ApiChannel,
 	type ApiChannelOptions,
 	type ApiEmoji,
@@ -21,6 +23,7 @@ import {
 	type ApiUserOptions,
 	type ApiVoiceState,
 	type ApiVoiceStateOptions,
+	apiAutoModRule,
 	apiChannel,
 	apiEmoji,
 	apiGuild,
@@ -45,6 +48,7 @@ export interface MockWorld {
 	voiceStates?: { guildId: string; voiceState: ApiVoiceState }[];
 	guildEmojis?: { guildId: string; emoji: ApiEmoji }[];
 	invites?: ApiInvite[];
+	autoModRules?: { guildId: string; rule: ApiAutoModRule }[];
 	/**
 	 * App-specific key/value store, untouched by the mock. A domain layer seeds its own state here (and a test
 	 * reads it back via {@link MockBot.worldData}); the mock never interprets or mutates it. Pure passthrough.
@@ -88,6 +92,7 @@ export class WorldBuilder {
 		voiceStates: [],
 		guildEmojis: [],
 		invites: [],
+		autoModRules: [],
 	};
 
 	private requireGuild(guildId: string): void {
@@ -170,6 +175,13 @@ export class WorldBuilder {
 		const invite = apiInvite({ ...options, channelId, guildId: channel?.guild_id });
 		(this.world.invites ??= []).push(invite);
 		return invite;
+	}
+
+	registerAutoModRule(guildId: string, options: Omit<ApiAutoModRuleOptions, 'guildId'> = {}): ApiAutoModRule {
+		this.requireGuild(guildId);
+		const rule = apiAutoModRule({ ...options, guildId });
+		(this.world.autoModRules ??= []).push({ guildId, rule });
+		return rule;
 	}
 
 	registerUser(options: ApiUserOptions = {}): ApiUser {
