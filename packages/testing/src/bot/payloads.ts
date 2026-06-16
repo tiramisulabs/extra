@@ -172,6 +172,37 @@ export function apiMember(options: ApiMemberOptions = {}): ApiMember {
 	};
 }
 
+/**
+ * Single member input accepted everywhere a `member`/`targetMember` is supplied: either the loose
+ * camelCase options bag (without `user`, since the dispatcher already owns the invoking user) OR a
+ * full `ApiMember` as returned by {@link apiMember}. This lets `apiMember({ roles: ['r1'] })` be passed
+ * as a dispatcher `member:`, a `targetMember:`, or to `actor({ member })` with no cast. Normalize with
+ * {@link memberOptionsFrom} before handing it to {@link apiMember}.
+ */
+export type MemberInput = Omit<ApiMemberOptions, 'user'> | ApiMember;
+
+function isApiMember(input: MemberInput): input is ApiMember {
+	return 'joined_at' in input || 'user' in input;
+}
+
+/**
+ * Normalize a {@link MemberInput} into the camelCase {@link ApiMemberOptions} bag that {@link apiMember}
+ * consumes, mapping snake_case fields from a full `ApiMember` back to their camelCase option names. The
+ * member's `user` is intentionally dropped: dispatchers set the invoking/target user themselves.
+ */
+export function memberOptionsFrom(input: MemberInput): Omit<ApiMemberOptions, 'user'> {
+	if (!isApiMember(input)) return input;
+	return {
+		nick: input.nick,
+		roles: input.roles,
+		joinedAt: input.joined_at,
+		...(input.permissions === undefined ? {} : { permissions: input.permissions }),
+		...(input.communication_disabled_until === undefined
+			? {}
+			: { communicationDisabledUntil: input.communication_disabled_until }),
+	};
+}
+
 export interface ApiVoiceStateOptions {
 	userId?: string;
 	channelId?: string | null;

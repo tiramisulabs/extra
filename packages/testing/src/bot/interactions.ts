@@ -4,7 +4,6 @@ import {
 	type ApiAttachment,
 	type ApiChannel,
 	type ApiMember,
-	type ApiMemberOptions,
 	type ApiMessage,
 	type ApiRole,
 	type ApiUser,
@@ -14,6 +13,8 @@ import {
 	apiMessage,
 	apiRole,
 	apiUser,
+	type MemberInput,
+	memberOptionsFrom,
 } from './payloads';
 import {
 	ALL_PERMISSIONS,
@@ -72,7 +73,7 @@ export function rawOption(type: number, value: string | number | boolean): Encod
 	return { __slipherOption: true, type, value };
 }
 
-export function userOption(user: ApiUser = apiUser(), member?: Omit<ApiMember, 'user'>): EncodedOption {
+export function userOption(user: ApiUser = apiUser(), member?: MemberInput): EncodedOption {
 	const memberPayload = member ? resolvedMember(member) : undefined;
 	return {
 		__slipherOption: true,
@@ -94,11 +95,11 @@ export function channelOption(channel: ApiChannel = apiChannel()): EncodedOption
 	};
 }
 
-function resolvedMember(member: Omit<ApiMember, 'user'> | ApiMember): Omit<ApiMember, 'user'> | ApiMember {
-	const raw = member as Partial<ApiMember> & Omit<ApiMember, 'user'>;
+function resolvedMember(member: MemberInput): Omit<ApiMember, 'user'> {
+	const { user: _user, ...wire } = apiMember(memberOptionsFrom(member));
 	return {
-		...raw,
-		permissions: raw.permissions ?? DEFAULT_PERMISSIONS,
+		...wire,
+		permissions: wire.permissions ?? DEFAULT_PERMISSIONS,
 	};
 }
 
@@ -213,7 +214,12 @@ function encodeOptions(
 
 export interface BaseInteractionOptions {
 	user?: ApiUser;
-	member?: Omit<ApiMemberOptions, 'user'>;
+	/**
+	 * The invoking guild member. Accepts either a loose options bag or a full {@link ApiMember} (so
+	 * `apiMember({ roles: ['r1'] })` can be passed directly, no cast). The `user` is owned by the
+	 * dispatcher and ignored here.
+	 */
+	member?: MemberInput;
 	/** Pass null for a DM interaction with no guild and no member. */
 	guildId?: string | null;
 	channel?: ApiChannel;
@@ -283,22 +289,23 @@ function baseInteraction(options: BaseInteractionOptions, type: number): ApiInte
 	const guildId = dm ? undefined : (options.guildId ?? options.channel?.guild_id ?? TEST_GUILD_ID);
 	const channel = options.channel ?? apiChannel({ id: TEST_CHANNEL_ID, guildId: guildId ?? null });
 	const permissions = permissionBits(options.permissions ?? DEFAULT_PERMISSIONS);
+	const memberOptions = options.member ? memberOptionsFrom(options.member) : undefined;
 	const memberPermissions =
 		options.memberPermissions !== undefined
 			? options.memberPermissions === 'all'
 				? ALL_PERMISSIONS.toString()
 				: permissionBits(options.memberPermissions)
-			: options.member?.permissions !== undefined
-				? permissionBits(options.member.permissions)
+			: memberOptions?.permissions !== undefined
+				? permissionBits(memberOptions.permissions)
 				: options.memberRoles !== undefined
 					? combineRolePermissions(options.memberRoles)
 					: DEFAULT_MEMBER_PERMISSIONS_STRING;
 	const memberRoleIds = options.memberRoles?.map(role => role.id) ?? [];
-	const memberRoles = [...new Set([...(options.member?.roles ?? []), ...memberRoleIds])];
+	const memberRoles = [...new Set([...(memberOptions?.roles ?? []), ...memberRoleIds])];
 	const member = dm
 		? undefined
 		: {
-				...apiMember({ user, ...(options.member ?? {}), permissions: memberPermissions, roles: memberRoles }),
+				...apiMember({ user, ...(memberOptions ?? {}), permissions: memberPermissions, roles: memberRoles }),
 				user,
 			};
 
@@ -392,7 +399,8 @@ export function autocompleteInteraction(options: AutocompleteInteractionOptions)
 export interface UserCommandInteractionOptions extends BaseInteractionOptions {
 	name: string;
 	target?: ApiUser;
-	targetMember?: Omit<ApiMember, 'user'> | ApiMember;
+	/** The target user's guild member. Accepts a loose options bag or a full {@link ApiMember}. */
+	targetMember?: MemberInput;
 }
 
 export function userCommandInteraction(options: UserCommandInteractionOptions): ApiInteractionPayload {
@@ -415,8 +423,8 @@ export function userCommandInteraction(options: UserCommandInteractionOptions): 
 export interface MessageCommandInteractionOptions extends BaseInteractionOptions {
 	name: string;
 	target?: ApiMessage;
-	/** The target message author's guild member, populated into resolved.members. */
-	targetMember?: Omit<ApiMember, 'user'> | ApiMember;
+	/** The target message author's guild member, populated into resolved.members. Accepts a loose options bag or a full {@link ApiMember}. */
+	targetMember?: MemberInput;
 }
 
 export function messageCommandInteraction(options: MessageCommandInteractionOptions): ApiInteractionPayload {

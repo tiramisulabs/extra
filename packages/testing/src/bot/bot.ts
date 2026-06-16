@@ -56,12 +56,13 @@ import {
 import {
 	type ApiChannel,
 	type ApiMember,
-	type ApiMemberOptions,
 	type ApiMessage,
 	type ApiUser,
 	apiMember,
 	apiMessage,
 	apiUser,
+	type MemberInput,
+	memberOptionsFrom,
 } from './payloads';
 import { computeChannelPermissions } from './permissions';
 import {
@@ -245,7 +246,8 @@ export interface MessageMenuResult extends DispatchResult {
 export interface DispatchMessageOptions {
 	/** The message author; equivalent to `user` on every interaction dispatcher. */
 	user?: ApiUser;
-	member?: Omit<ApiMemberOptions, 'user'>;
+	/** The author's guild member. Accepts a loose options bag or a full {@link ApiMember}. */
+	member?: MemberInput;
 	/** Pass null for a DM message. */
 	guildId?: string | null;
 	channel?: ApiChannel;
@@ -364,7 +366,16 @@ export type MockCommandClass = new () => Command | ContextMenuCommand | EntryPoi
 
 export type MenuCommandClass = new () => ContextMenuCommand;
 
-/** Resolves a menu command class to its target type: User menus take an ApiUser, Message menus an ApiMessage. */
+/**
+ * Resolves a menu command class to its target type: User menus take an ApiUser, Message menus an ApiMessage.
+ *
+ * The narrowing depends on the class declaring its `type` as a literal, i.e.
+ * `type = ApplicationCommandType.User as const`. Without `as const`, `type` widens to the full
+ * `ApplicationCommandType` enum, the literal branches no longer match, and this degrades **gracefully** to
+ * the `ApiUser | ApiMessage` union (paired with {@link MenuResultFor} → {@link DispatchResult}). That is a
+ * usable fallback, not a type error — but you lose the checked, narrowed target. Declare `as const` to opt
+ * into the strict path.
+ */
 export type TargetFor<C extends MenuCommandClass> =
 	InstanceType<C> extends { type: infer T }
 		? [T] extends [ApplicationCommandType.User]
@@ -573,7 +584,7 @@ export class MockBot {
 			...options,
 			user: memberEntry.member.user,
 			member: {
-				...(options.member ?? {}),
+				...(options.member ? memberOptionsFrom(options.member) : {}),
 				roles: [...memberEntry.member.roles],
 				communicationDisabledUntil: memberEntry.member.communication_disabled_until,
 			},
@@ -1514,6 +1525,24 @@ export class MockBot {
 		});
 	}
 
+	/**
+	 * Dispatch a context-menu command by its class, inferring the target kind and result type from the class.
+	 *
+	 * For the strict, checked typing — `target` constrained to exactly `ApiUser`/`ApiMessage` and a non-optional
+	 * `result.target` (`UserMenuResult`/`MessageMenuResult`) — the command must declare its type as a literal:
+	 *
+	 * ```ts
+	 * class ReportUser extends ContextMenuCommand {
+	 *   type = ApplicationCommandType.User as const; // ← the `as const` enables narrowing
+	 *   name = 'Report User';
+	 * }
+	 * ```
+	 *
+	 * Without `as const`, `type` widens to `ApplicationCommandType` and the inference degrades **gracefully**:
+	 * `target` accepts `ApiUser | ApiMessage` and the result is the base {@link DispatchResult} (so `result.target`
+	 * is optional). The dispatch still runs correctly; you only lose the narrowed compile-time target. See
+	 * {@link TargetFor} and {@link MenuResultFor}.
+	 */
 	menu<C extends MenuCommandClass>(command: C, options: MenuOptions<C> = {}): Dispatch<MenuResultFor<C>> {
 		const instance = new command();
 		if (instance.type === ApplicationCommandType.User) {
@@ -1586,7 +1615,7 @@ export class MockBot {
 		const author = options.user ?? this.defaultUser;
 		const dm = options.guildId === null;
 		const guildId = dm ? undefined : (options.guildId ?? options.channel?.guild_id ?? TEST_GUILD_ID);
-		const member = apiMember({ user: author, ...(options.member ?? {}) });
+		const member = apiMember({ user: author, ...(options.member ? memberOptionsFrom(options.member) : {}) });
 		const { user: _user, ...gatewayMember } = member;
 		const raw = {
 			...apiMessage({

@@ -30,12 +30,72 @@ export interface MockMemberOptions {
 	joinedAt?: string;
 }
 
-export type MockUser = ReturnType<typeof mockUser>;
-export type MockGuild = ReturnType<typeof mockGuild>;
-export type MockChannel = ReturnType<typeof mockChannel>;
-export type MockMember = ReturnType<typeof mockMember>;
+/**
+ * Factory shapes are declared interfaces (not `ReturnType<typeof ...>`) so the public surface is an
+ * intentional, documented contract instead of whatever the implementation happens to return. The
+ * camelCase + snake_case pairs (e.g. `globalName`/`global_name`) are deliberate: the camelCase field is
+ * the ergonomic accessor for assertions, while the snake_case field lets the factory output be dropped
+ * straight into wire-shaped payloads (resolved option data, gateway `d`). Both are part of the contract.
+ */
+export interface MockUser {
+	id: string;
+	username: string;
+	/** Ergonomic accessor; mirrors {@link global_name}. */
+	globalName: string | null;
+	/** Wire field; mirrors {@link globalName}. */
+	global_name: string | null;
+	bot: boolean;
+	discriminator: string;
+	avatar: string | null;
+}
 
-export function mockUser(options: MockUserOptions = {}) {
+export interface MockGuild {
+	id: string;
+	name: string;
+	/** Ergonomic accessor; mirrors {@link preferred_locale}. */
+	preferredLocale: string;
+	/** Wire field; mirrors {@link preferredLocale}. */
+	preferred_locale: string;
+	/** Ergonomic accessor; mirrors {@link owner_id}. */
+	ownerId: string;
+	/** Wire field; mirrors {@link ownerId}. */
+	owner_id: string;
+	icon: null;
+	features: string[];
+	roles: never[];
+	description: null;
+	verification_level: number;
+	nsfw_level: number;
+	premium_tier: number;
+}
+
+export interface MockChannel {
+	id: string;
+	/** Ergonomic accessor; mirrors {@link guild_id}. `null` for a DM channel. */
+	guildId: string | null;
+	/** Wire field; present only for guild channels, mirroring {@link guildId}. */
+	guild_id?: string;
+	name: string;
+	type: number;
+	position: number;
+	permission_overwrites: never[];
+	nsfw: boolean;
+}
+
+export interface MockMember {
+	user: MockUser;
+	roles: string[];
+	nick: string | null;
+	/** Ergonomic accessor; mirrors {@link joined_at}. */
+	joinedAt: string;
+	/** Wire field; mirrors {@link joinedAt}. */
+	joined_at: string;
+	deaf: boolean;
+	mute: boolean;
+	flags: number;
+}
+
+export function mockUser(options: MockUserOptions = {}): MockUser {
 	const globalName = options.globalName === undefined ? (options.username ?? 'Slipher Test User') : options.globalName;
 	return {
 		id: options.id ?? mockId(),
@@ -48,7 +108,7 @@ export function mockUser(options: MockUserOptions = {}) {
 	};
 }
 
-export function mockGuild(options: MockGuildOptions = {}) {
+export function mockGuild(options: MockGuildOptions = {}): MockGuild {
 	const ownerId = options.ownerId ?? mockId();
 	const preferredLocale = options.preferredLocale ?? 'en-US';
 	return {
@@ -68,7 +128,7 @@ export function mockGuild(options: MockGuildOptions = {}) {
 	};
 }
 
-export function mockChannel(options: MockChannelOptions = {}) {
+export function mockChannel(options: MockChannelOptions = {}): MockChannel {
 	const guildId = options.guildId === undefined ? mockId() : options.guildId;
 	return {
 		id: options.id ?? mockId(),
@@ -82,7 +142,7 @@ export function mockChannel(options: MockChannelOptions = {}) {
 	};
 }
 
-export function mockMember(options: MockMemberOptions = {}) {
+export function mockMember(options: MockMemberOptions = {}): MockMember {
 	const joinedAt = options.joinedAt ?? new Date(0).toISOString();
 	return {
 		user: options.user ?? mockUser(),
