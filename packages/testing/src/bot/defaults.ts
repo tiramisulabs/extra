@@ -423,7 +423,9 @@ export function registerWorldDefaults(
 		members: [],
 		has_more: false,
 	}));
-	rest.intercept(Routes.createSticker, (pending, params) => hooks.state.addSticker(params.guildId, bodyRecord(pending.body)));
+	rest.intercept(Routes.createSticker, (pending, params) =>
+		hooks.state.addSticker(params.guildId, bodyRecord(pending.body)),
+	);
 	rest.intercept(Routes.fetchStickers, (_pending, params) => hooks.state.stickers(params.guildId));
 	interceptFetchOne(
 		rest,

@@ -240,14 +240,20 @@ export class WorldBuilder {
 		return event;
 	}
 
-	registerGuildTemplate(guildId: string, options: Omit<ApiGuildTemplateOptions, 'sourceGuildId'> = {}): ApiGuildTemplate {
+	registerGuildTemplate(
+		guildId: string,
+		options: Omit<ApiGuildTemplateOptions, 'sourceGuildId'> = {},
+	): ApiGuildTemplate {
 		this.requireGuild(guildId);
 		const template = apiGuildTemplate({ ...options, sourceGuildId: guildId });
 		(this.world.guildTemplates ??= []).push({ guildId, template });
 		return template;
 	}
 
-	registerSoundboardSound(guildId: string, options: Omit<ApiSoundboardSoundOptions, 'guildId'> = {}): ApiSoundboardSound {
+	registerSoundboardSound(
+		guildId: string,
+		options: Omit<ApiSoundboardSoundOptions, 'guildId'> = {},
+	): ApiSoundboardSound {
 		this.requireGuild(guildId);
 		const sound = apiSoundboardSound({ ...options, guildId });
 		(this.world.soundboardSounds ??= []).push({ guildId, sound });
