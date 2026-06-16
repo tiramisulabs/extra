@@ -159,7 +159,8 @@ export function registerWorldDefaults(
 	// Permission/hierarchy enforcement is OPT-IN: it only activates once a bot member is seeded
 	// (world.registerBotMember). Without one, botGuildPerms returns undefined and every guard early-returns,
 	// so bare moderation dispatches stay permissive (the default a test mock wants).
-	const guildRolesOf = (guildId: string) => world?.roles.filter(entry => entry.guildId === guildId).map(e => e.role) ?? [];
+	const guildRolesOf = (guildId: string) =>
+		world?.roles.filter(entry => entry.guildId === guildId).map(e => e.role) ?? [];
 	const botMemberOf = (guildId: string) =>
 		world?.members.find(entry => entry.guildId === guildId && entry.member.user.id === hooks.botId);
 	const botGuildPerms = (guildId: string): bigint | undefined => {

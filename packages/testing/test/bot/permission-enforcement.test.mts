@@ -28,9 +28,9 @@ describe('permission enforcement (opt-in via seeded bot member)', () => {
 	test('ban without BanMembers is rejected 403 Missing Permissions', async () => {
 		const { world, guild, channel, actor } = seed([], 5, 1);
 		const bot = await createMockBot({ commands: [BanTarget], world });
-		await expect(
-			bot.slash({ name: 'ban-target', guildId: guild.id, channel, user: actor.user }),
-		).rejects.toThrow(/Missing Permissions/);
+		await expect(bot.slash({ name: 'ban-target', guildId: guild.id, channel, user: actor.user })).rejects.toThrow(
+			/Missing Permissions/,
+		);
 		await bot.close();
 	});
 
@@ -46,9 +46,9 @@ describe('permission enforcement (opt-in via seeded bot member)', () => {
 	test('ban with BanMembers but a target ranked at/above the bot is rejected (hierarchy)', async () => {
 		const { world, guild, channel, actor } = seed(['BanMembers'], 5, 5);
 		const bot = await createMockBot({ commands: [BanTarget], world });
-		await expect(
-			bot.slash({ name: 'ban-target', guildId: guild.id, channel, user: actor.user }),
-		).rejects.toThrow(/Missing Permissions/);
+		await expect(bot.slash({ name: 'ban-target', guildId: guild.id, channel, user: actor.user })).rejects.toThrow(
+			/Missing Permissions/,
+		);
 		await bot.close();
 	});
 });
