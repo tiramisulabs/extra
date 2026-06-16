@@ -18,8 +18,7 @@ const summarize = (result: DispatchResult) => {
 	return 'dispatch produced no user-visible output';
 };
 
-const describeError = (error: unknown) =>
-	error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+const describeError = (error: unknown) => (error instanceof Error ? `${error.name}: ${error.message}` : String(error));
 
 /**
  * Assert that the dispatch produced at least one user-visible reply, edit, or followup. Throws when the

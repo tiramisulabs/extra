@@ -78,7 +78,12 @@ describe('F37 symmetric readers', () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'dx-guild' });
 		const channel = world.registerChannel(guild.id, { name: 'general' });
-		const role = world.registerRole(guild.id, { id: 'dx-role', name: 'mods', permissions: ['BanMembers'], position: 3 });
+		const role = world.registerRole(guild.id, {
+			id: 'dx-role',
+			name: 'mods',
+			permissions: ['BanMembers'],
+			position: 3,
+		});
 		world.registerMember(guild.id, { user: apiUser({ id: 'dx-user' }) });
 		const bot = await createMockBot({ commands: [GreetCommand], world });
 
