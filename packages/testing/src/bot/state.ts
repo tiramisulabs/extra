@@ -3,6 +3,8 @@ import { TEST_BOT_ID } from './constants';
 import {
 	type ApiAttachment,
 	type ApiChannel,
+	type ApiEmoji,
+	type ApiInvite,
 	type ApiMessage,
 	type ApiPoll,
 	type ApiRole,
@@ -10,6 +12,8 @@ import {
 	type ApiVoiceState,
 	apiAttachment,
 	apiChannel,
+	apiEmoji,
+	apiInvite,
 	apiMember,
 	apiMessage,
 	apiPoll,
@@ -121,6 +125,9 @@ export interface GuildView {
 	member(userId: string): GuildMemberView | undefined;
 	role(nameOrId: string): { id: string; name: string; position: number } | undefined;
 	bans: string[];
+	emojis: { id: string; name: string }[];
+	emoji(nameOrId: string): { id: string; name: string } | undefined;
+	invites: { code: string; channelId: string; uses: number }[];
 }
 
 /** One member captured in a {@link WorldSnapshot}, identified by `guildId` + `userId`. */
@@ -227,6 +234,12 @@ export interface WorldStateReader {
 	pins(channelId: string): Record<string, unknown>[];
 	archivedThreads(channelId: string, type: 'public' | 'private'): Record<string, unknown>[];
 	pollVoters(channelId: string, messageId: string, answerId: number): string[];
+	emojis(guildId: string): ApiEmoji[];
+	emoji(guildId: string, emojiId: string): ApiEmoji | undefined;
+	invites(): ApiInvite[];
+	invite(code: string): ApiInvite | undefined;
+	channelInvites(channelId: string): ApiInvite[];
+	guildInvites(guildId: string): ApiInvite[];
 }
 
 const EMPTY_WORLD = (): MockWorld => ({ guilds: [], channels: [], users: [], members: [], roles: [], messages: [] });
@@ -387,6 +400,7 @@ export class WorldState implements WorldStateReader {
 	private readonly dmChannelByUser = new Map<string, string>();
 	private readonly messageIdByToken = new Map<string, string>();
 	private readonly channelIdByToken = new Map<string, string>();
+	private readonly invitesByCode = new Map<string, ApiInvite>();
 	private readonly reactionsByMessage = new Map<string, Map<string, Set<string>>>();
 	private readonly pinnedByChannel = new Map<string, string[]>();
 	private readonly pollVotersByMessage = new Map<string, Map<number, Set<string>>>();
@@ -395,6 +409,8 @@ export class WorldState implements WorldStateReader {
 		this.world = seed ?? EMPTY_WORLD();
 		this.world.roles ??= [];
 		this.world.messages ??= [];
+		this.world.guildEmojis ??= [];
+		for (const invite of this.world.invites ?? []) this.invitesByCode.set(invite.code, invite);
 		for (const channel of this.world.channels) {
 			if (channel.type === 1 && channel.id) this.dmChannelByUser.set(channel.id, channel.id);
 		}
@@ -469,6 +485,10 @@ export class WorldState implements WorldStateReader {
 			.map(entry => this.memberView(entry.member));
 		const roles = this.world.roles.filter(entry => entry.guildId === guild.id).map(entry => entry.role);
 		const bans = [...(this.bansByGuild.get(guild.id) ?? new Set<string>())];
+		const guildEmojis = (this.world.guildEmojis ?? [])
+			.filter(entry => entry.guildId === guild.id)
+			.map(entry => entry.emoji);
+		const guildInvites = [...this.invitesByCode.values()].filter(invite => invite.guild_id === guild.id);
 
 		return {
 			id: guild.id,
@@ -497,6 +517,12 @@ export class WorldState implements WorldStateReader {
 				return role ? { id: role.id, name: role.name, position: role.position } : undefined;
 			},
 			bans,
+			emojis: guildEmojis.map(emoji => ({ id: emoji.id, name: emoji.name })),
+			emoji: nameOrId => {
+				const emoji = guildEmojis.find(entry => entry.id === nameOrId || entry.name === nameOrId);
+				return emoji ? { id: emoji.id, name: emoji.name } : undefined;
+			},
+			invites: guildInvites.map(invite => ({ code: invite.code, channelId: invite.channel_id, uses: invite.uses })),
 		};
 	}
 
@@ -1060,6 +1086,85 @@ export class WorldState implements WorldStateReader {
 	/** @internal Mock internals normally call this when Discord deletes a role. */
 	removeRole(guildId: string, roleId: string): void {
 		this.world.roles = this.world.roles.filter(entry => entry.guildId !== guildId || entry.role.id !== roleId);
+	}
+
+	/** @internal Mock internals normally call this when Discord creates an emoji. */
+	addEmoji(guildId: string, raw: Record<string, unknown>): ApiEmoji {
+		const emoji = apiEmoji({
+			id: stringValue(raw.id),
+			name: stringValue(raw.name),
+			guildId,
+			...(typeof raw.animated === 'boolean' ? { animated: raw.animated } : {}),
+			roles: arrayValue(raw.roles).map(String),
+		});
+		(this.world.guildEmojis ??= []).push({ guildId, emoji });
+		return emoji;
+	}
+
+	/** @internal Mock internals normally call this when Discord edits an emoji. */
+	editEmoji(guildId: string, emojiId: string, patch: Record<string, unknown>): ApiEmoji | undefined {
+		const entry = (this.world.guildEmojis ?? []).find(e => e.guildId === guildId && e.emoji.id === emojiId);
+		if (!entry) return undefined;
+		if ('name' in patch) entry.emoji.name = stringValue(patch.name) ?? entry.emoji.name;
+		if ('roles' in patch) entry.emoji.roles = arrayValue(patch.roles).map(String);
+		return { ...entry.emoji };
+	}
+
+	/** @internal Mock internals normally call this when Discord deletes an emoji. */
+	removeEmoji(guildId: string, emojiId: string): void {
+		this.world.guildEmojis = (this.world.guildEmojis ?? []).filter(
+			e => e.guildId !== guildId || e.emoji.id !== emojiId,
+		);
+	}
+
+	/** The custom emojis of a guild. */
+	emojis(guildId: string): ApiEmoji[] {
+		return (this.world.guildEmojis ?? []).filter(e => e.guildId === guildId).map(e => e.emoji);
+	}
+
+	/** A single guild emoji by id. */
+	emoji(guildId: string, emojiId: string): ApiEmoji | undefined {
+		return (this.world.guildEmojis ?? []).find(e => e.guildId === guildId && e.emoji.id === emojiId)?.emoji;
+	}
+
+	/** @internal Mock internals normally call this when Discord creates an invite. */
+	addInvite(channelId: string, guildId: string | undefined, raw: Record<string, unknown>): ApiInvite {
+		const invite = apiInvite({
+			code: stringValue(raw.code),
+			channelId,
+			...(guildId === undefined ? {} : { guildId }),
+			...(numberValue(raw.max_uses) === undefined ? {} : { maxUses: numberValue(raw.max_uses) }),
+			...(numberValue(raw.max_age) === undefined ? {} : { maxAge: numberValue(raw.max_age) }),
+		});
+		this.invitesByCode.set(invite.code, invite);
+		return invite;
+	}
+
+	/** @internal Mock internals normally call this when Discord revokes an invite. */
+	removeInvite(code: string): ApiInvite | undefined {
+		const invite = this.invitesByCode.get(code);
+		this.invitesByCode.delete(code);
+		return invite;
+	}
+
+	/** Every invite in the world. */
+	invites(): ApiInvite[] {
+		return [...this.invitesByCode.values()];
+	}
+
+	/** A single invite by code. */
+	invite(code: string): ApiInvite | undefined {
+		return this.invitesByCode.get(code);
+	}
+
+	/** The invites pointing at a channel. */
+	channelInvites(channelId: string): ApiInvite[] {
+		return [...this.invitesByCode.values()].filter(invite => invite.channel_id === channelId);
+	}
+
+	/** The invites of a guild. */
+	guildInvites(guildId: string): ApiInvite[] {
+		return [...this.invitesByCode.values()].filter(invite => invite.guild_id === guildId);
 	}
 
 	/** @internal Mock internals normally call this when Discord edits a guild. */

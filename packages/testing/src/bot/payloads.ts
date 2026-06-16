@@ -101,6 +101,74 @@ export function apiRole(options: ApiRoleOptions = {}): ApiRole {
 	};
 }
 
+export interface ApiEmojiOptions {
+	id?: string;
+	name?: string;
+	guildId?: string;
+	animated?: boolean;
+	roles?: string[];
+}
+
+export interface ApiEmoji {
+	id: string;
+	name: string;
+	guild_id?: string;
+	animated: boolean;
+	roles: string[];
+	require_colons: boolean;
+	managed: boolean;
+	available: boolean;
+}
+
+export function apiEmoji(options: ApiEmojiOptions = {}): ApiEmoji {
+	return {
+		id: options.id ?? mockId(),
+		name: options.name ?? 'slipher_test_emoji',
+		...(options.guildId === undefined ? {} : { guild_id: options.guildId }),
+		animated: options.animated ?? false,
+		roles: options.roles ?? [],
+		require_colons: true,
+		managed: false,
+		available: true,
+	};
+}
+
+export interface ApiInviteOptions {
+	code?: string;
+	channelId?: string;
+	guildId?: string;
+	uses?: number;
+	maxUses?: number;
+	maxAge?: number;
+	inviter?: ApiUser;
+}
+
+export interface ApiInvite {
+	code: string;
+	channel_id: string;
+	guild_id?: string;
+	uses: number;
+	max_uses: number;
+	max_age: number;
+	temporary: boolean;
+	created_at: string;
+	inviter?: ApiUser;
+}
+
+export function apiInvite(options: ApiInviteOptions = {}): ApiInvite {
+	return {
+		code: options.code ?? mockId(),
+		channel_id: options.channelId ?? mockId(),
+		...(options.guildId === undefined ? {} : { guild_id: options.guildId }),
+		uses: options.uses ?? 0,
+		max_uses: options.maxUses ?? 0,
+		max_age: options.maxAge ?? 86400,
+		temporary: false,
+		created_at: mockTimestamp(),
+		...(options.inviter === undefined ? {} : { inviter: options.inviter }),
+	};
+}
+
 export interface ThreadMetadata {
 	archived: boolean;
 	auto_archive_duration: number;

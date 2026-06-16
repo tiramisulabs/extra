@@ -1,4 +1,14 @@
-import { type ApiMember, apiChannel, apiGuild, apiMember, apiMessage, apiRole, apiUser } from './payloads';
+import {
+	type ApiMember,
+	apiChannel,
+	apiEmoji,
+	apiGuild,
+	apiInvite,
+	apiMember,
+	apiMessage,
+	apiRole,
+	apiUser,
+} from './payloads';
 import { apiError, type MockApiHandler, type RouteMatcher, type RouteResponder } from './rest';
 import { Routes } from './routes';
 import type { MessageQuery, WorldState } from './state';
@@ -271,6 +281,45 @@ export function registerWorldDefaults(
 	rest.intercept(Routes.deleteRole, (_pending, params) => {
 		hooks.state.removeRole(params.guildId, params.roleId);
 		return {};
+	});
+	rest.intercept(Routes.createEmoji, (pending, params) => hooks.state.addEmoji(params.guildId, bodyRecord(pending.body)));
+	rest.intercept(Routes.fetchEmojis, (_pending, params) => hooks.state.emojis(params.guildId));
+	interceptFetchOne(
+		rest,
+		Routes.fetchEmoji,
+		params => hooks.state.emoji(params.guildId, params.emojiId),
+		params => apiEmoji({ id: params.emojiId, guildId: params.guildId }),
+	);
+	rest.intercept(Routes.editEmoji, (pending, params) => {
+		const updated = hooks.state.editEmoji(params.guildId, params.emojiId, bodyRecord(pending.body));
+		return updated ?? apiEmoji({ id: params.emojiId, guildId: params.guildId });
+	});
+	rest.intercept(Routes.deleteEmoji, (_pending, params) => {
+		hooks.state.removeEmoji(params.guildId, params.emojiId);
+		return {};
+	});
+	rest.intercept(Routes.createInvite, (pending, params) =>
+		hooks.state.addInvite(
+			params.channelId,
+			world?.channels.find(channel => channel.id === params.channelId)?.guild_id,
+			bodyRecord(pending.body),
+		),
+	);
+	rest.intercept(Routes.listChannelInvites, (_pending, params) => hooks.state.channelInvites(params.channelId));
+	rest.intercept(Routes.listGuildInvites, (_pending, params) => hooks.state.guildInvites(params.guildId));
+	rest.intercept(
+		Routes.fetchInvite,
+		(_pending, params) => hooks.state.invite(params.code) ?? apiInvite({ code: params.code }),
+	);
+	rest.intercept(
+		Routes.deleteInvite,
+		(_pending, params) => hooks.state.removeInvite(params.code) ?? apiInvite({ code: params.code }),
+	);
+	rest.intercept(Routes.bulkBan, async (pending, params) => {
+		const rawIds = bodyRecord(pending.body).user_ids;
+		const userIds = (Array.isArray(rawIds) ? rawIds : []).map(String);
+		for (const userId of userIds) await removeMember(params.guildId, userId, true);
+		return { banned_users: userIds, failed_users: [] };
 	});
 	rest.intercept(Routes.editGuild, (pending, params) => {
 		const updated = hooks.state.editGuild(params.guildId, bodyRecord(pending.body));

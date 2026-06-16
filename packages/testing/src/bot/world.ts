@@ -4,8 +4,12 @@ import { TEST_BOT_ID } from './constants';
 import {
 	type ApiChannel,
 	type ApiChannelOptions,
+	type ApiEmoji,
+	type ApiEmojiOptions,
 	type ApiGuild,
 	type ApiGuildOptions,
+	type ApiInvite,
+	type ApiInviteOptions,
 	type ApiMember,
 	type ApiMemberOptions,
 	type ApiMessage,
@@ -18,7 +22,9 @@ import {
 	type ApiVoiceState,
 	type ApiVoiceStateOptions,
 	apiChannel,
+	apiEmoji,
 	apiGuild,
+	apiInvite,
 	apiMember,
 	apiMessage,
 	apiRole,
@@ -37,6 +43,8 @@ export interface MockWorld {
 	roles: { guildId: string; role: ApiRole }[];
 	messages: { channelId: string; message: ApiMessage }[];
 	voiceStates?: { guildId: string; voiceState: ApiVoiceState }[];
+	guildEmojis?: { guildId: string; emoji: ApiEmoji }[];
+	invites?: ApiInvite[];
 	/**
 	 * App-specific key/value store, untouched by the mock. A domain layer seeds its own state here (and a test
 	 * reads it back via {@link MockBot.worldData}); the mock never interprets or mutates it. Pure passthrough.
@@ -65,6 +73,10 @@ export type WorldGuildOptions = ApiGuildOptions & {
 
 export type WorldThreadOptions = Omit<ApiThreadOptions, 'parentId' | 'guildId'>;
 
+export type WorldEmojiOptions = Omit<ApiEmojiOptions, 'guildId'>;
+
+export type WorldInviteOptions = Omit<ApiInviteOptions, 'channelId' | 'guildId'>;
+
 export class WorldBuilder {
 	private readonly world: MockWorld = {
 		guilds: [],
@@ -74,6 +86,8 @@ export class WorldBuilder {
 		roles: [],
 		messages: [],
 		voiceStates: [],
+		guildEmojis: [],
+		invites: [],
 	};
 
 	private requireGuild(guildId: string): void {
@@ -141,6 +155,21 @@ export class WorldBuilder {
 		});
 		this.world.channels.push(thread);
 		return thread;
+	}
+
+	registerEmoji(guildId: string, options: WorldEmojiOptions = {}): ApiEmoji {
+		this.requireGuild(guildId);
+		const emoji = apiEmoji({ ...options, guildId });
+		(this.world.guildEmojis ??= []).push({ guildId, emoji });
+		return emoji;
+	}
+
+	registerInvite(channelId: string, options: WorldInviteOptions = {}): ApiInvite {
+		this.requireChannel(channelId);
+		const channel = this.world.channels.find(entry => entry.id === channelId);
+		const invite = apiInvite({ ...options, channelId, guildId: channel?.guild_id });
+		(this.world.invites ??= []).push(invite);
+		return invite;
 	}
 
 	registerUser(options: ApiUserOptions = {}): ApiUser {

@@ -226,11 +226,11 @@ describe('stateful world defaults', () => {
 		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'fail-loud-actor' }) });
 		const channel = world.registerChannel(guild.id);
 
-		@Declare({ name: 'make-invite', description: 'Creates an invite' })
-		class MakeInvite extends Command {
+		@Declare({ name: 'crosspost', description: 'Crossposts a message' })
+		class Crosspost extends Command {
 			async run(ctx: CommandContext) {
 				try {
-					await ctx.client.invites.channels.create({ channelId: channel.id });
+					await ctx.client.messages.crosspost('some-message', channel.id);
 					await ctx.write({ content: 'created' });
 				} catch {
 					await ctx.write({ content: 'rejected' });
@@ -238,9 +238,9 @@ describe('stateful world defaults', () => {
 			}
 		}
 
-		const bot = await createMockBot({ commands: [MakeInvite], world, onUnhandledRest: 'error' });
+		const bot = await createMockBot({ commands: [Crosspost], world, onUnhandledRest: 'error' });
 		await expect(
-			bot.slash({ name: 'make-invite', guildId: guild.id, channel, user: actor.user }),
+			bot.slash({ name: 'crosspost', guildId: guild.id, channel, user: actor.user }),
 		).resolves.toMatchObject({ content: 'rejected' });
 		await bot.close();
 	});
