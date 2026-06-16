@@ -1109,6 +1109,12 @@ export class MockBot {
 			if (id) this.lastInteractionMessage = { id, channel_id: payload.channel_id };
 			return;
 		}
+		if (body.type === 6 && payload.message) {
+			// DeferredMessageUpdate: @original IS the source message (already pointed there synchronously by the
+			// callback interceptor); just track it as the latest interaction message for collector resolution.
+			this.lastInteractionMessage = { id: payload.message.id, channel_id: payload.message.channel_id };
+			return;
+		}
 		if (body.type === 7 && payload.message) {
 			const data = 'data' in body ? ((body.data ?? {}) as Record<string, unknown>) : {};
 			this._state.editMessage(payload.message.channel_id, payload.message.id, data);
@@ -1217,6 +1223,9 @@ export class MockBot {
 			ctx.resolveDenial = resolve;
 		});
 		this._state.registerInteractionToken(payload.token, payload.channel_id);
+		if (payload.message) {
+			this._state.registerComponentSource(payload.token, payload.message.channel_id, payload.message.id);
+		}
 		// The builders preserve Discord's payload shape while exposing a wider test input type.
 		await dispatchStore.run(ctx, async () => {
 			await Promise.race([

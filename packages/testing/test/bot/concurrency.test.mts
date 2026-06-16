@@ -181,7 +181,9 @@ describe('concurrent dispatch isolation', () => {
 		// Substring matching would mis-attribute it; segment-exact matching must not.
 		const payload = chatInputInteraction({ name: 'tokenleak' });
 		payload.token = 'slipher-mock-interaction-token-attribution-probe';
-		await bot.rest.request('PATCH', `/webhooks/app/${payload.token}X/messages/@original`);
+		// The probe token is never acknowledged, so the edit now 404s (real Discord behavior); the action is still
+		// recorded before the rejection, which is what the substring-attribution assertions below check.
+		await bot.rest.request('PATCH', `/webhooks/app/${payload.token}X/messages/@original`).catch(() => {});
 
 		const result = await bot.dispatchInteraction(payload);
 

@@ -196,10 +196,10 @@ export function registerWorldDefaults(
 		params => hooks.state.rawMessage(params.channelId, params.messageId),
 		params => apiMessage({ id: params.messageId, channelId: params.channelId }),
 	);
-	rest.intercept(
-		Routes.fetchOriginalResponse,
-		(_pending, params) => hooks.state.messageForToken(params.interactionToken) ?? apiMessage(),
-	);
+	rest.intercept(Routes.fetchOriginalResponse, (_pending, params) => {
+		if (!hooks.state.isAcknowledged(params.interactionToken)) apiError(404, 10008, 'Unknown Message');
+		return hooks.state.messageForToken(params.interactionToken) ?? apiMessage();
+	});
 	// A webhook execute (POST /webhooks/:id/:token) and webhook-message ops share the route shape of
 	// interaction followups/webhook-messages. Disambiguate by the registry: a known webhook id whose
 	// token matches resolves to its channel; otherwise the `wh-` sendLog encoding; otherwise it is an
@@ -263,6 +263,14 @@ export function registerWorldDefaults(
 	// with_response, return the resource so editOrReply(body, true) resolves to a real message.
 	rest.intercept(Routes.interactionCallback, (pending, params) => {
 		const body = bodyRecord(pending.body) as { type?: number; data?: Record<string, unknown> };
+		hooks.state.acknowledgeToken(params.token);
+		if (body.type === 6) {
+			// DeferredMessageUpdate: point @original at the component's source message NOW (synchronously), so a
+			// later editResponse in the same handler edits it in place instead of minting a new message.
+			const source = hooks.state.componentSource(params.token);
+			if (source) hooks.state.registerOriginalResponse(params.token, source.channelId, source.messageId);
+			return {};
+		}
 		if (body.type !== 4) return {};
 		const channelId = hooks.state.channelForToken(params.token);
 		if (!channelId) return {};

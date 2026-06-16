@@ -497,6 +497,8 @@ export class WorldState implements WorldStateReader {
 	private readonly dmChannelByUser = new Map<string, string>();
 	private readonly messageIdByToken = new Map<string, string>();
 	private readonly channelIdByToken = new Map<string, string>();
+	private readonly acknowledgedTokens = new Set<string>();
+	private readonly componentSourceByToken = new Map<string, { channelId: string; messageId: string }>();
 	private readonly invitesByCode = new Map<string, ApiInvite>();
 	private readonly webhooksById = new Map<string, ApiWebhook>();
 	private readonly reactionsByMessage = new Map<string, Map<string, Set<string>>>();
@@ -718,6 +720,32 @@ export class WorldState implements WorldStateReader {
 
 	registerInteractionToken(token: string, channelId: string): void {
 		this.channelIdByToken.set(token, channelId);
+	}
+
+	/** @internal Mark an interaction acknowledged (any callback: reply/defer/update/modal). */
+	acknowledgeToken(token: string): void {
+		this.acknowledgedTokens.add(token);
+	}
+
+	/** Whether the interaction was acknowledged — followups/@original ops 404 until it is. */
+	isAcknowledged(token: string): boolean {
+		return this.acknowledgedTokens.has(token);
+	}
+
+	/** @internal Point a token at an EXISTING message as its @original (deferUpdate on a component). */
+	registerOriginalResponse(token: string, channelId: string, messageId: string): void {
+		this.channelIdByToken.set(token, channelId);
+		this.messageIdByToken.set(token, messageId);
+	}
+
+	/** @internal Record a component interaction's source message so a deferUpdate can point @original at it. */
+	registerComponentSource(token: string, channelId: string, messageId: string): void {
+		this.componentSourceByToken.set(token, { channelId, messageId });
+	}
+
+	/** The message a component interaction was raised on, if known. */
+	componentSource(token: string): { channelId: string; messageId: string } | undefined {
+		return this.componentSourceByToken.get(token);
 	}
 
 	/** @internal When Discord creates a channel. */
@@ -1579,6 +1607,7 @@ export class WorldState implements WorldStateReader {
 		raw: Record<string, unknown>,
 		authorId: string,
 	): RawMessage | Record<string, never> {
+		if (!this.acknowledgedTokens.has(token)) apiError(404, 10008, 'Unknown Message');
 		const channelId = this.channelIdByToken.get(token);
 		if (!channelId) return {};
 		const messageId = this.messageIdByToken.get(token);
@@ -1603,6 +1632,7 @@ export class WorldState implements WorldStateReader {
 
 	/** @internal For webhook followups. */
 	addFollowup(token: string, raw: Record<string, unknown>, authorId: string): RawMessage | Record<string, never> {
+		if (!this.acknowledgedTokens.has(token)) apiError(404, 10015, 'Unknown Webhook');
 		const channelId = this.channelIdByToken.get(token);
 		if (!channelId) return {};
 		const view = this.addMessage(channelId, { ...raw, author_id: authorId });
@@ -1611,6 +1641,7 @@ export class WorldState implements WorldStateReader {
 
 	/** @internal For webhook deletes of @original. */
 	deleteOriginalResponse(token: string): void {
+		if (!this.acknowledgedTokens.has(token)) apiError(404, 10008, 'Unknown Message');
 		const channelId = this.channelIdByToken.get(token);
 		const messageId = this.messageIdByToken.get(token);
 		if (channelId && messageId) this.deleteMessage(channelId, messageId);
