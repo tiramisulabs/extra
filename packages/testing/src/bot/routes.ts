@@ -37,6 +37,7 @@ export const Routes = {
 	listChannelWebhooks: { method: 'GET', route: '/channels/:channelId/webhooks' },
 	createWebhook: { method: 'POST', route: '/channels/:channelId/webhooks' },
 	fetchMessages: { method: 'GET', route: '/channels/:channelId/messages' },
+	fetchMessage: { method: 'GET', route: '/channels/:channelId/messages/:messageId' },
 	fetchRoles: { method: 'GET', route: '/guilds/:guildId/roles' },
 	fetchChannels: { method: 'GET', route: '/guilds/:guildId/channels' },
 	fetchBans: { method: 'GET', route: '/guilds/:guildId/bans' },

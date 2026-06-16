@@ -14,6 +14,13 @@ import {
 import type { ChannelOverwriteLike } from './permissions';
 import type { MockWorld } from './world';
 
+export interface MessageQuery {
+	limit?: number;
+	before?: string;
+	after?: string;
+	around?: string;
+}
+
 export interface EmbedView {
 	title?: string;
 	description?: string;
@@ -217,12 +224,29 @@ export class WorldState {
 		return channel ? this.channelView(channel) : undefined;
 	}
 
-	channelMessages(channelId: string): Record<string, unknown>[] {
-		return this.world.messages
-			.filter(entry => entry.channelId === channelId)
-			.map(entry => entry.message)
-			.reverse()
-			.map(message => ({ ...message }));
+	channelMessages(channelId: string, options?: MessageQuery): Record<string, unknown>[] {
+		const chronological = this.world.messages.filter(entry => entry.channelId === channelId).map(entry => entry.message);
+		const newestFirst = [...chronological].reverse();
+		const limit = Math.min(Math.max(options?.limit ?? 50, 0), 100);
+
+		if (options?.after !== undefined) {
+			const index = chronological.findIndex(message => message.id === options.after);
+			const newer = index === -1 ? newestFirst : newestFirst.filter((_, i) => i < newestFirst.length - index - 1);
+			return newer.slice(-limit).map(message => ({ ...message }));
+		}
+
+		let slice = newestFirst;
+		if (options?.before !== undefined) {
+			const index = newestFirst.findIndex(message => message.id === options.before);
+			slice = index === -1 ? newestFirst : newestFirst.slice(index + 1);
+		} else if (options?.around !== undefined) {
+			const index = newestFirst.findIndex(message => message.id === options.around);
+			if (index !== -1) {
+				const half = Math.floor(limit / 2);
+				slice = newestFirst.slice(Math.max(0, index - half), index - half + limit);
+			}
+		}
+		return slice.slice(0, limit).map(message => ({ ...message }));
 	}
 
 	rawMessage(channelId: string, messageId: string): Record<string, unknown> | undefined {

@@ -1,7 +1,7 @@
 import { type ApiMember, apiChannel, apiGuild, apiMember, apiMessage, apiUser } from './payloads';
 import { apiError, type MockApiHandler, type RouteMatcher, type RouteResponder } from './rest';
 import { Routes } from './routes';
-import type { WorldState } from './state';
+import type { MessageQuery, WorldState } from './state';
 import type { MockWorld } from './world';
 
 type WorldEmitEvent =
@@ -23,6 +23,23 @@ interface WorldDefaultHooks {
 
 function bodyRecord(body: Record<string, unknown> | undefined): Record<string, unknown> {
 	return body ?? {};
+}
+
+function queryString(value: unknown): string | undefined {
+	if (typeof value === 'string') return value;
+	if (typeof value === 'number') return String(value);
+	return undefined;
+}
+
+function messageQuery(query: Record<string, unknown> | undefined): MessageQuery {
+	if (!query) return {};
+	const limit = queryString(query.limit);
+	return {
+		...(limit === undefined ? {} : { limit: Number(limit) }),
+		...(queryString(query.before) === undefined ? {} : { before: queryString(query.before) }),
+		...(queryString(query.after) === undefined ? {} : { after: queryString(query.after) }),
+		...(queryString(query.around) === undefined ? {} : { around: queryString(query.around) }),
+	};
 }
 
 function interceptFetchOne<T>(
@@ -105,7 +122,15 @@ export function registerWorldDefaults(
 		Routes.fetchChannels,
 		(_pending, params) => world?.channels.filter(channel => channel.guild_id === params.guildId) ?? [],
 	);
-	rest.intercept(Routes.fetchMessages, (_pending, params) => hooks.state.channelMessages(params.channelId));
+	rest.intercept(Routes.fetchMessages, (pending, params) =>
+		hooks.state.channelMessages(params.channelId, messageQuery(pending.query)),
+	);
+	interceptFetchOne(
+		rest,
+		Routes.fetchMessage,
+		params => hooks.state.rawMessage(params.channelId, params.messageId),
+		params => apiMessage({ id: params.messageId, channelId: params.channelId }) as unknown as Record<string, unknown>,
+	);
 	rest.intercept(
 		Routes.fetchOriginalResponse,
 		(_pending, params) => hooks.state.messageForToken(params.interactionToken) ?? apiMessage(),
