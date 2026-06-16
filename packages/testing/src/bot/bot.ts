@@ -10,6 +10,7 @@ import {
 	type UsingClient,
 } from 'seyfert';
 import { CacheFrom } from 'seyfert/lib/cache';
+import type { AnySeyfertPlugin, PluginDiagnostics, ResolvedPluginList } from 'seyfert/lib/client/plugins';
 import { HandleCommand } from 'seyfert/lib/commands/handle';
 import type { ClientEvent } from 'seyfert/lib/events/event';
 import type { LangInstance } from 'seyfert/lib/langs/handler';
@@ -297,6 +298,30 @@ export interface RegisteredComponent {
 	kind: 'component' | 'modal';
 }
 
+/**
+ * Read-only descriptor of a plugin loaded on the client, surfaced by {@link MockBot.plugins}. Pairs each
+ * plugin's identity (`name`/`instanceId`) with seyfert's own resolved diagnostics — the contribution counts
+ * (`commands`, `components`, `modals`), the keys it added to the client/context (`clientKeys`, `ctxKeys`),
+ * its `events`, `middlewares`, `shared` keys, and lifecycle `status`. `plugin` is the original plugin object,
+ * for asserting against a setup-set flag or surface directly. `diagnostics` is undefined when seyfert produced
+ * no diagnostic entry for the plugin (e.g. it failed to resolve).
+ */
+export interface PluginInfo {
+	name: string;
+	instanceId?: string;
+	status?: PluginDiagnostics['status'];
+	clientKeys: readonly string[];
+	ctxKeys: readonly string[];
+	commands: number;
+	components: number;
+	modals: number;
+	events: readonly string[];
+	middlewares: readonly string[];
+	shared: readonly string[];
+	plugin: AnySeyfertPlugin;
+	diagnostics?: PluginDiagnostics;
+}
+
 /** Plain-data snapshot for debugging a hung dispatch, surfaced by {@link MockBot.diagnostics}. */
 export interface BotDiagnostics {
 	/** Dispatches created but not yet settled. */
@@ -488,6 +513,13 @@ export interface MockBotOptions {
 	 * REST/cache through that singleton is captured. Pass an unstarted client; `clientOptions`/prefixes are ignored.
 	 */
 	client?: Client;
+	/**
+	 * Seyfert plugins to load on the client. First-class form of `clientOptions.plugins`: both forward to the
+	 * Client constructor, where seyfert resolves them and runs each plugin's `setup`. `bot.plugins` surfaces the
+	 * loaded list and `bot.close()` (via `client.close()`) runs each plugin's `teardown`. When both are given,
+	 * this wins.
+	 */
+	plugins?: readonly AnySeyfertPlugin[];
 	/** Raw Seyfert client constructor options. */
 	clientOptions?: ClientConstructorOptions;
 	/** Global middlewares forwarded to the real Seyfert client. */
@@ -1086,6 +1118,52 @@ export class MockBot {
 			name: (command as { constructor: { name: string } }).constructor?.name ?? '(anonymous)',
 			kind: command instanceof ModalCommand ? 'modal' : 'component',
 		}));
+	}
+
+	/**
+	 * Read-only list of the plugins loaded on the client, each paired with seyfert's resolved diagnostics
+	 * (contribution counts and the client/context keys it added). Pure read of `client.plugins` — the
+	 * {@link ResolvedPluginList} seyfert resolved at construction; no mutation or side effects. The list is the
+	 * resolved order seyfert ran `setup` in, so a plugin appearing here means its `setup` was invoked. Returns an
+	 * empty array when no plugins were passed.
+	 */
+	get plugins(): readonly PluginInfo[] {
+		const resolved = this.client.plugins as ResolvedPluginList | undefined;
+		if (!resolved) return [];
+		const diagnostics = resolved.diagnostics ?? [];
+		const diagnosticFor = (plugin: AnySeyfertPlugin): PluginDiagnostics | undefined =>
+			diagnostics.find(
+				entry => entry.name === plugin.name && (entry.instanceId ?? undefined) === (plugin.instanceId ?? undefined),
+			);
+		return resolved.map(plugin => {
+			const diag = diagnosticFor(plugin);
+			return {
+				name: plugin.name,
+				instanceId: plugin.instanceId,
+				status: diag?.status,
+				clientKeys: diag?.clientKeys ?? [],
+				ctxKeys: diag?.ctxKeys ?? [],
+				commands: diag?.commands ?? 0,
+				components: diag?.components ?? 0,
+				modals: diag?.modals ?? 0,
+				events: diag?.events ?? [],
+				middlewares: diag?.middlewares ?? [],
+				shared: diag?.shared ?? [],
+				plugin,
+				diagnostics: diag,
+			};
+		});
+	}
+
+	/**
+	 * Run plugin teardown explicitly. Seyfert's `Client.close()` IS the plugin lifecycle close — it waits for
+	 * in-flight `setup` and runs each plugin's `teardown` (it does not touch the gateway, REST, or cache). This
+	 * delegates to it and is idempotent: seyfert caches the close promise, so repeated calls (or a later
+	 * {@link MockBot.close}) run teardown once. {@link MockBot.close} already calls this path, so explicit use is
+	 * only needed to assert teardown without ending the mock session.
+	 */
+	async teardownPlugins(): Promise<void> {
+		await this.client.close();
 	}
 
 	/**
@@ -1941,6 +2019,8 @@ export class MockBot {
 			console.warn(`[@slipher/testing] ${unstarted.length} dispatch(es) were created but never awaited or stepped.`);
 		}
 		this.rest.releasePending();
+		// client.close() is seyfert's plugin lifecycle close: it awaits in-flight setup and runs each plugin's
+		// teardown. Plugin teardown is therefore driven here symmetrically with the setup run at construction.
 		await this.client.close();
 	}
 
@@ -1960,10 +2040,15 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	const world = built ? structuredClone(built) : undefined;
 	const botId = options.botId ?? TEST_BOT_ID;
 	const prefixList = [...(options.prefixes ?? []), ...(options.mentionAsPrefix ? [`<@${botId}>`, `<@!${botId}>`] : [])];
+	// First-class `plugins` merges into `clientOptions.plugins`; the existing `clientOptions.plugins` path
+	// keeps working. Plugins must reach the Client constructor — seyfert resolves `client.plugins` there and
+	// `setupPlugins()`/teardown read that resolved list; setting plugins post-construction would not register them.
+	const mergedPlugins = options.plugins ?? options.clientOptions?.plugins;
 	const clientOptions: ClientConstructorOptions =
-		prefixList.length || options.globalMiddlewares
+		prefixList.length || options.globalMiddlewares || options.plugins
 			? {
 					...options.clientOptions,
+					...(mergedPlugins ? { plugins: mergedPlugins } : {}),
 					...(options.globalMiddlewares ? { globalMiddlewares: options.globalMiddlewares } : {}),
 					...(prefixList.length
 						? {
