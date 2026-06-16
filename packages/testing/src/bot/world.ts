@@ -12,6 +12,7 @@ import {
 	type ApiMessageOptions,
 	type ApiRole,
 	type ApiRoleOptions,
+	type ApiThreadOptions,
 	type ApiUser,
 	type ApiUserOptions,
 	type ApiVoiceState,
@@ -21,6 +22,7 @@ import {
 	apiMember,
 	apiMessage,
 	apiRole,
+	apiThread,
 	apiUser,
 	apiVoiceState,
 } from './payloads';
@@ -55,6 +57,8 @@ export type WorldRoleOptions = Omit<ApiRoleOptions, 'permissions'> & {
 export type WorldGuildOptions = ApiGuildOptions & {
 	everyonePermissions?: PermissionInput;
 };
+
+export type WorldThreadOptions = Omit<ApiThreadOptions, 'parentId' | 'guildId'>;
 
 export class WorldBuilder {
 	private readonly world: MockWorld = {
@@ -115,6 +119,23 @@ export class WorldBuilder {
 		const channel = apiChannel({ ...options, guildId, permissionOverwrites });
 		this.world.channels.push(channel);
 		return channel;
+	}
+
+	/**
+	 * Register a thread under an existing channel. A thread is a channel of a thread type (default 11
+	 * PublicThread) carrying the parent's `parent_id`, the parent's guild, and a `thread_metadata` block, so
+	 * it coexists with normal channels yet stays distinguishable by those fields.
+	 */
+	registerThread(parentChannelId: string, options: WorldThreadOptions = {}): ApiChannel {
+		this.requireChannel(parentChannelId);
+		const parent = this.world.channels.find(channel => channel.id === parentChannelId);
+		const thread = apiThread({
+			...options,
+			parentId: parentChannelId,
+			guildId: parent?.guild_id ?? null,
+		});
+		this.world.channels.push(thread);
+		return thread;
 	}
 
 	registerUser(options: ApiUserOptions = {}): ApiUser {

@@ -61,6 +61,7 @@ import {
 	type ApiMember,
 	type ApiMessage,
 	type ApiUser,
+	type ApiVoiceState,
 	apiMember,
 	apiMessage,
 	apiUser,
@@ -1131,6 +1132,12 @@ export class MockBot {
 
 	cachedDm(userId: string): ChannelView | undefined {
 		return this.state.dm(userId);
+	}
+
+	/** The seeded voice state for a guild/user, or undefined when the user is not in voice. */
+	voiceState(guildId: string, userId: string): ApiVoiceState | undefined {
+		return this.world?.voiceStates?.find(entry => entry.guildId === guildId && entry.voiceState.user_id === userId)
+			?.voiceState;
 	}
 
 	/**

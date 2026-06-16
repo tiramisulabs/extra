@@ -101,6 +101,13 @@ export function apiRole(options: ApiRoleOptions = {}): ApiRole {
 	};
 }
 
+export interface ThreadMetadata {
+	archived: boolean;
+	auto_archive_duration: number;
+	locked: boolean;
+	archive_timestamp: string;
+}
+
 export interface ApiChannelOptions {
 	id?: string;
 	guildId?: string | null;
@@ -108,6 +115,7 @@ export interface ApiChannelOptions {
 	type?: number;
 	parentId?: string;
 	permissionOverwrites?: ChannelOverwriteLike[];
+	threadMetadata?: ThreadMetadata;
 }
 
 export interface ApiChannel {
@@ -119,6 +127,7 @@ export interface ApiChannel {
 	position: number;
 	permission_overwrites: ChannelOverwriteLike[];
 	nsfw: boolean;
+	thread_metadata?: ThreadMetadata;
 }
 
 export function apiChannel(options: ApiChannelOptions = {}): ApiChannel {
@@ -132,7 +141,40 @@ export function apiChannel(options: ApiChannelOptions = {}): ApiChannel {
 		position: 0,
 		permission_overwrites: options.permissionOverwrites ?? [],
 		nsfw: false,
+		...(options.threadMetadata === undefined ? {} : { thread_metadata: options.threadMetadata }),
 	};
+}
+
+export interface ApiThreadOptions {
+	id?: string;
+	guildId?: string | null;
+	parentId: string;
+	name?: string;
+	type?: number;
+	archived?: boolean;
+	autoArchiveDuration?: number;
+	locked?: boolean;
+}
+
+/**
+ * A thread is a channel of a thread type (11 PublicThread / 12 PrivateThread) that carries a `parent_id`
+ * and `thread_metadata`. Built on {@link apiChannel} so threads coexist with normal channels in the same
+ * collection, yet stay distinguishable by their `parent_id` + `thread_metadata`.
+ */
+export function apiThread(options: ApiThreadOptions): ApiChannel {
+	return apiChannel({
+		...(options.id === undefined ? {} : { id: options.id }),
+		guildId: options.guildId,
+		name: options.name ?? 'slipher-test-thread',
+		type: options.type ?? 11,
+		parentId: options.parentId,
+		threadMetadata: {
+			archived: options.archived ?? false,
+			auto_archive_duration: options.autoArchiveDuration ?? 1440,
+			locked: options.locked ?? false,
+			archive_timestamp: mockTimestamp(),
+		},
+	});
 }
 
 export interface ApiMemberOptions {

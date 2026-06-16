@@ -1,4 +1,4 @@
-import { mockId } from '../id';
+import { mockId, mockTimestamp } from '../id';
 import { TEST_BOT_ID } from './constants';
 import {
 	type ApiChannel,
@@ -10,6 +10,7 @@ import {
 	apiMessage,
 	apiRole,
 	apiUser,
+	type ThreadMetadata,
 } from './payloads';
 import type { ChannelOverwriteLike } from './permissions';
 import type { MockWorld } from './world';
@@ -65,6 +66,7 @@ export interface ChannelView {
 	name?: string;
 	type: number;
 	parentId?: string;
+	threadMetadata?: ThreadMetadata;
 	overwrites: { id: string; type: number; allow: string; deny: string }[];
 	messages: MessageView[];
 	lastMessage?: MessageView;
@@ -82,6 +84,8 @@ export interface GuildView {
 	name?: string;
 	channels: ChannelView[];
 	channel(nameOrId: string): ChannelView | undefined;
+	threads: ChannelView[];
+	thread(nameOrId: string): ChannelView | undefined;
 	members: GuildMemberView[];
 	member(userId: string): GuildMemberView | undefined;
 	role(nameOrId: string): { id: string; name: string; position: number } | undefined;
@@ -238,6 +242,16 @@ function normalizeOverwrites(value: unknown): ChannelOverwriteLike[] {
 	});
 }
 
+function normalizeThreadMetadata(value: unknown): ThreadMetadata {
+	const raw = asRecord(value);
+	return {
+		archived: typeof raw.archived === 'boolean' ? raw.archived : false,
+		auto_archive_duration: numberValue(raw.auto_archive_duration) ?? 1440,
+		locked: typeof raw.locked === 'boolean' ? raw.locked : false,
+		archive_timestamp: stringValue(raw.archive_timestamp) ?? mockTimestamp(),
+	};
+}
+
 function normalizeEmbed(value: unknown): EmbedView {
 	const raw = asRecord(value);
 	const fields = arrayValue(raw.fields).map(field => {
@@ -361,9 +375,11 @@ export class WorldState {
 	guild(guildId: string): GuildView | undefined {
 		const guild = this.world.guilds.find(entry => entry.id === guildId);
 		if (!guild) return undefined;
-		const channels = this.world.channels
-			.filter(channel => channel.guild_id === guild.id)
+		const guildChannels = this.world.channels.filter(channel => channel.guild_id === guild.id);
+		const channels = guildChannels
+			.filter(channel => !channel.thread_metadata)
 			.map(channel => this.channelView(channel));
+		const threads = guildChannels.filter(channel => channel.thread_metadata).map(channel => this.channelView(channel));
 		const members = this.world.members
 			.filter(entry => entry.guildId === guild.id)
 			.map(entry => this.memberView(entry.member));
@@ -375,8 +391,14 @@ export class WorldState {
 			name: guild.name,
 			channels,
 			channel: nameOrId =>
-				this.world.channels
-					.filter(channel => channel.guild_id === guild.id)
+				guildChannels
+					.filter(channel => !channel.thread_metadata)
+					.map(channel => this.channelView(channel))
+					.find(channel => channel.id === nameOrId || channel.name === nameOrId),
+			threads,
+			thread: nameOrId =>
+				guildChannels
+					.filter(channel => channel.thread_metadata)
 					.map(channel => this.channelView(channel))
 					.find(channel => channel.id === nameOrId || channel.name === nameOrId),
 			members,
@@ -477,13 +499,17 @@ export class WorldState {
 
 	/** @internal Mock internals normally call this when Discord creates a channel. */
 	addChannel(guildId: string | undefined, raw: Record<string, unknown>): Record<string, unknown> {
+		const type = numberValue(raw.type);
+		const parentId = stringValue(raw.parent_id);
+		const isThread = type === 11 || type === 12 || raw.thread_metadata !== undefined;
 		const channel = apiChannel({
 			id: stringValue(raw.id),
 			guildId: stringValue(raw.guild_id) ?? guildId ?? null,
 			name: stringValue(raw.name),
-			type: numberValue(raw.type),
-			parentId: stringValue(raw.parent_id),
+			type,
+			...(parentId === undefined ? {} : { parentId }),
 			permissionOverwrites: normalizeOverwrites(raw.permission_overwrites),
+			...(isThread ? { threadMetadata: normalizeThreadMetadata(raw.thread_metadata) } : {}),
 		});
 		this.world.channels.push(channel);
 		return { ...channel };
@@ -763,7 +789,8 @@ export class WorldState {
 		if (!entry) return undefined;
 		if ('name' in patch) entry.role.name = stringValue(patch.name) ?? entry.role.name;
 		if ('permissions' in patch) entry.role.permissions = stringValue(patch.permissions) ?? entry.role.permissions;
-		if ('position' in patch && numberValue(patch.position) !== undefined) entry.role.position = numberValue(patch.position)!;
+		if ('position' in patch && numberValue(patch.position) !== undefined)
+			entry.role.position = numberValue(patch.position)!;
 		if ('color' in patch && numberValue(patch.color) !== undefined) entry.role.color = numberValue(patch.color)!;
 		return { ...entry.role };
 	}
@@ -881,6 +908,7 @@ export class WorldState {
 			name: channel.name,
 			type: channel.type,
 			parentId: channel.parent_id,
+			...(channel.thread_metadata === undefined ? {} : { threadMetadata: channel.thread_metadata }),
 			overwrites: channel.permission_overwrites.map(overwrite => ({ ...overwrite })),
 			messages,
 			lastMessage: messages.at(-1),
