@@ -30,9 +30,37 @@ describe('emitEvent result and factories', () => {
 		const alice = world.registerMember(guild.id, { user: apiUser({ id: 'alice' }), roles: [] });
 		const bot = await createMockBot({ world });
 
-		await bot.actor({ member: alice, guildId: guild.id }).emitEvent('GUILD_MEMBER_UPDATE', { roles: ['r1'] });
+		await bot
+			.actor({ member: alice, guildId: guild.id })
+			.emitEvent('GUILD_MEMBER_UPDATE', { roles: ['r1'] }, { allowNoHandler: true });
 
 		expect(bot.cachedMember(guild.id, 'alice')?.roles).toEqual(['r1']);
+		await bot.close();
+	});
+
+	test('emitEvent fails loud when no handler ran, unless allowNoHandler is set', async () => {
+		const onJoin = createEvent({
+			data: { name: 'guildMemberAdd' },
+			run() {},
+		});
+		const bot = await createMockBot({ events: [onJoin] });
+
+		expect(bot.registeredEvents()).toContain('GUILD_MEMBER_ADD');
+
+		// Mis-cased gateway name: seyfert finds no handler and silently no-ops — now it throws.
+		await expect(
+			bot.emitEvent('guildMemberAdd' as 'GUILD_MEMBER_ADD', { guild_id: '1' }),
+		).rejects.toThrow(/no handler ran/);
+
+		// A correct name with a registered handler runs fine.
+		await expect(bot.emitEvent('GUILD_MEMBER_ADD', { guild_id: '1', ...apiMember({ user: apiUser() }) })).resolves
+			.toBeDefined();
+
+		// An unregistered event used purely to seed world state opts out explicitly.
+		await expect(
+			bot.emitEvent('CHANNEL_CREATE', { id: 'c', guild_id: '1', name: 'x', type: 0 }, { allowNoHandler: true }),
+		).resolves.toBeDefined();
+
 		await bot.close();
 	});
 

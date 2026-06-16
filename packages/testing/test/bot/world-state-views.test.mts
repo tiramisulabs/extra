@@ -152,7 +152,7 @@ describe('emitEvent bridges into world views', () => {
 		await bot.emitEvent('GUILD_MEMBER_ADD', {
 			guild_id: guild.id,
 			...apiMember({ user: apiUser({ id: 'joiner' }), roles: ['r1'] }),
-		});
+		}, { allowNoHandler: true });
 		expect(bot.cachedGuild(guild.id)?.member('joiner')?.roles).toEqual(['r1']);
 
 		await bot.emitEvent('GUILD_MEMBER_UPDATE', {
@@ -160,11 +160,11 @@ describe('emitEvent bridges into world views', () => {
 			user: apiUser({ id: 'joiner' }),
 			roles: ['r1', 'r2'],
 			nick: 'Joey',
-		});
+		}, { allowNoHandler: true });
 		expect(bot.cachedGuild(guild.id)?.member('joiner')?.roles).toEqual(['r1', 'r2']);
 		expect(bot.cachedGuild(guild.id)?.member('joiner')?.nick).toBe('Joey');
 
-		await bot.emitEvent('GUILD_MEMBER_REMOVE', { guild_id: guild.id, user: apiUser({ id: 'joiner' }) });
+		await bot.emitEvent('GUILD_MEMBER_REMOVE', { guild_id: guild.id, user: apiUser({ id: 'joiner' }) }, { allowNoHandler: true });
 		expect(bot.cachedGuild(guild.id)?.member('joiner')).toBeUndefined();
 		expect(bot.cachedGuild(guild.id)?.bans).toEqual([]);
 		expect(bot.cachedMember(guild.id, 'joiner')).toBeUndefined();
@@ -176,16 +176,16 @@ describe('emitEvent bridges into world views', () => {
 		const guild = world.registerGuild({ id: 'cm-guild' });
 		const bot = await createMockBot({ world });
 
-		await bot.emitEvent('CHANNEL_CREATE', { id: 'c1', guild_id: guild.id, name: 'new-chan', type: 0 });
+		await bot.emitEvent('CHANNEL_CREATE', { id: 'c1', guild_id: guild.id, name: 'new-chan', type: 0 }, { allowNoHandler: true });
 		expect(bot.cachedGuild(guild.id)?.channel('new-chan')?.id).toBe('c1');
 
-		await bot.emitEvent('MESSAGE_CREATE', { id: 'm1', channel_id: 'c1', author: apiUser({ id: 'u1' }), content: 'hi' });
+		await bot.emitEvent('MESSAGE_CREATE', { id: 'm1', channel_id: 'c1', author: apiUser({ id: 'u1' }), content: 'hi' }, { allowNoHandler: true });
 		expect(bot.cachedGuild(guild.id)?.channel('c1')?.lastMessage?.content).toBe('hi');
 
-		await bot.emitEvent('MESSAGE_DELETE', { id: 'm1', channel_id: 'c1' });
+		await bot.emitEvent('MESSAGE_DELETE', { id: 'm1', channel_id: 'c1' }, { allowNoHandler: true });
 		expect(bot.cachedGuild(guild.id)?.channel('c1')?.messages).toEqual([]);
 
-		await bot.emitEvent('CHANNEL_DELETE', { id: 'c1', guild_id: guild.id });
+		await bot.emitEvent('CHANNEL_DELETE', { id: 'c1', guild_id: guild.id }, { allowNoHandler: true });
 		expect(bot.cachedGuild(guild.id)?.channel('new-chan')).toBeUndefined();
 		await bot.close();
 	});
@@ -198,7 +198,7 @@ describe('emitEvent bridges into world views', () => {
 		await bot.emitEvent(
 			'GUILD_MEMBER_ADD',
 			{ guild_id: guild.id, ...apiMember({ user: apiUser({ id: 'ghost' }) }) },
-			{ updateCache: false },
+			{ updateCache: false, allowNoHandler: true },
 		);
 
 		expect(bot.cachedGuild(guild.id)?.member('ghost')).toBeUndefined();
@@ -268,7 +268,7 @@ describe('emitEvent bridges into world views', () => {
 				emoji: { name: '👍', id: null },
 				guild_id: guild.id,
 			},
-			{ updateCache: true },
+			{ updateCache: true, allowNoHandler: true },
 		);
 
 		expect(bot.state.reactionUsers(channel.id, message.id, '👍')).toEqual(['reactor']);
@@ -307,7 +307,7 @@ describe('emitEvent bridges into world views', () => {
 				emoji: { name: '🔥', id: null },
 				guild_id: guild.id,
 			},
-			{ updateCache: true },
+			{ updateCache: true, allowNoHandler: true },
 		);
 
 		expect(bot.state.reactionUsers(channel.id, message.id, '🔥')).toEqual([TEST_BOT_ID, 'event-reactor']);
@@ -323,14 +323,14 @@ describe('emitEvent bridges into world views', () => {
 		await bot.emitEvent(
 			'VOICE_STATE_UPDATE',
 			{ guild_id: guild.id, user_id: 'speaker', channel_id: channel.id },
-			{ updateCache: true },
+			{ updateCache: true, allowNoHandler: true },
 		);
 		expect(bot.cachedVoiceState(guild.id, 'speaker')?.channel_id).toBe(channel.id);
 
 		await bot.emitEvent(
 			'VOICE_STATE_UPDATE',
 			{ guild_id: guild.id, user_id: 'speaker', channel_id: null },
-			{ updateCache: true },
+			{ updateCache: true, allowNoHandler: true },
 		);
 		expect(bot.cachedVoiceState(guild.id, 'speaker')).toBeUndefined();
 		await bot.close();
@@ -348,12 +348,12 @@ describe('emitEvent bridges into world views', () => {
 			parent_id: parent.id,
 			type: 11,
 			thread_metadata: { archived: false, locked: false, auto_archive_duration: 1440 },
-		});
+		}, { allowNoHandler: true });
 		const thread = bot.cachedGuild(guild.id)?.thread('event-thread');
 		expect(thread?.id).toBe('event-thread');
 		expect(thread?.parentId).toBe(parent.id);
 
-		await bot.emitEvent('THREAD_DELETE', { id: 'event-thread', guild_id: guild.id });
+		await bot.emitEvent('THREAD_DELETE', { id: 'event-thread', guild_id: guild.id }, { allowNoHandler: true });
 		expect(bot.cachedGuild(guild.id)?.thread('event-thread')).toBeUndefined();
 		await bot.close();
 	});

@@ -69,7 +69,11 @@ describe('worldData passthrough store', () => {
 
 		await using bot = await createMockBot({ world, worldData: { custom: payload } });
 
-		await bot.emitEvent('GUILD_MEMBER_UPDATE', { guild_id: guild.id, user: member.user, roles: ['r1'] });
+		await bot.emitEvent(
+			'GUILD_MEMBER_UPDATE',
+			{ guild_id: guild.id, user: member.user, roles: ['r1'] },
+			{ allowNoHandler: true },
+		);
 
 		expect(bot.cachedMember(guild.id, 'wd-user')?.roles).toEqual(['r1']);
 		expect(bot.worldData('custom')).toEqual(payload);

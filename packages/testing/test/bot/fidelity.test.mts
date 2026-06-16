@@ -26,7 +26,7 @@ describe('fidelity fixes', () => {
 			channel_id: channel.id,
 			author: apiUser({ id: 'author' }),
 			content: '<@123> and <@&456> and @everyone',
-		});
+		}, { allowNoHandler: true });
 
 		const raw = bot.state.rawMessage(channel.id, 'mention-msg');
 		expect(raw).toBeDefined();
@@ -43,7 +43,7 @@ describe('fidelity fixes', () => {
 			author: apiUser({ id: 'author' }),
 			content: '<@123> and <@&456> and @everyone',
 			allowed_mentions: { parse: ['users'] },
-		});
+		}, { allowNoHandler: true });
 		const limited = bot.state.rawMessage(channel.id, 'limited-msg');
 		expect((limited?.mentions as { id: string }[]).map(user => user.id)).toEqual(['123']);
 		expect(limited?.mention_roles).toEqual([]);

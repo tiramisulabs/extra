@@ -235,6 +235,18 @@ export interface EventDispatchResult extends MessageResultBase {
 	error?: unknown;
 }
 
+/** Options for {@link MockBot.emitEvent}. */
+export interface EmitEventOptions {
+	/** Apply the event to world state via the world bridge (default `true`). */
+	updateCache?: boolean;
+	/**
+	 * Permit an emit that no registered `Event`/listener handled. By default emitEvent fails loud when nothing
+	 * ran — the typo (`'guildMemberAdd'` for `'GUILD_MEMBER_ADD'`) and forgot-to-register cases. Set `true` when
+	 * intentionally emitting only to seed world state with no handler (default `false`).
+	 */
+	allowNoHandler?: boolean;
+}
+
 /** Read-only descriptor of a registered application command, surfaced by {@link MockBot.registeredCommands}. */
 export interface RegisteredCommand {
 	name: string;
@@ -330,9 +342,9 @@ export interface Actor {
 	emitEvent<TName extends GatewayDispatchPayload['t']>(
 		name: TName,
 		payload?: Partial<Extract<GatewayDispatchPayload, { t: TName }>['d']>,
-		options?: { updateCache?: boolean },
+		options?: EmitEventOptions,
 	): Dispatch<EventDispatchResult>;
-	emitEvent(name: string, payload?: object, options?: { updateCache?: boolean }): Dispatch<EventDispatchResult>;
+	emitEvent(name: string, payload?: object, options?: EmitEventOptions): Dispatch<EventDispatchResult>;
 }
 
 /** Autocomplete dispatch result with the responded choices lifted out semantically. */
@@ -1649,7 +1661,7 @@ export class MockBot {
 			clickButton: (customId, options = {}) => this.clickButton(customId, { ...base, ...options }),
 			selectMenu: (customId, values, options = {}) => this.selectMenu(customId, values, { ...base, ...options }),
 			say: (content, options = {}) => this.say(content, { ...base, ...options }),
-			emitEvent: (name: string, payload: Record<string, unknown> = {}, options?: { updateCache?: boolean }) => {
+			emitEvent: (name: string, payload: Record<string, unknown> = {}, options?: EmitEventOptions) => {
 				const merged: Record<string, unknown> = {
 					...(guildId ? { guild_id: guildId } : {}),
 					...(user ? { user } : {}),
@@ -1663,13 +1675,13 @@ export class MockBot {
 	emitEvent<TName extends GatewayDispatchPayload['t']>(
 		name: TName,
 		payload: Partial<Extract<GatewayDispatchPayload, { t: TName }>['d']>,
-		options?: { updateCache?: boolean },
+		options?: EmitEventOptions,
 	): Dispatch<EventDispatchResult>;
-	emitEvent(name: string, payload: object, options?: { updateCache?: boolean }): Dispatch<EventDispatchResult>;
+	emitEvent(name: string, payload: object, options?: EmitEventOptions): Dispatch<EventDispatchResult>;
 	emitEvent(
 		name: string,
 		payload: object,
-		{ updateCache = true }: { updateCache?: boolean } = {},
+		{ updateCache = true, allowNoHandler = false }: EmitEventOptions = {},
 	): Dispatch<EventDispatchResult> {
 		this.assertOpen('emitEvent');
 		const d = payload as Record<string, unknown>;
@@ -1681,6 +1693,14 @@ export class MockBot {
 				undefined,
 				async () => {
 					if (updateCache) this.applyWorldEvent(name, d);
+					if (!allowNoHandler && !this.eventHandlerRan(name)) {
+						throw new Error(
+							`emitEvent: no handler ran for "${name}". Gateway names are UPPER_SNAKE_CASE ` +
+								`(e.g. 'GUILD_MEMBER_ADD', not 'guildMemberAdd'). Register an Event via events:[...], or pass ` +
+								`{ allowNoHandler: true } if you are emitting only to seed world state. ` +
+								`Registered events: ${this.registeredEvents().join(', ') || '(none)'}.`,
+						);
+					}
 					const ctx: DispatchContext = {
 						dispatchId,
 						componentCommandExecuted: false,
@@ -1710,6 +1730,30 @@ export class MockBot {
 
 	private applyWorldEvent(name: string, d: Record<string, unknown>): void {
 		applyWorldEvent(this._state, name, d);
+	}
+
+	/**
+	 * The gateway event names with a registered handler (`Event` from `events:[...]`), keyed UPPER_SNAKE_CASE the
+	 * way the gateway delivers them. Use it to assert wiring, or to debug an `emitEvent` that found no handler.
+	 */
+	registeredEvents(): string[] {
+		return Object.keys(this.eventsHandler.values);
+	}
+
+	/** Whether emitting `name` now would reach a handler: a live (not once-fired) Event, or a plugin listener. */
+	private eventHandlerRan(name: string): boolean {
+		const events = this.eventsHandler;
+		const event = events.values[name];
+		if (event && !(event.data.once && event.fired)) return true;
+		return events.getPluginListeners(name).length > 0 || events.getPluginAnyListeners().length > 0;
+	}
+
+	private get eventsHandler(): {
+		values: Record<string, { data: { once?: boolean }; fired?: boolean } | undefined>;
+		getPluginListeners(name: string): unknown[];
+		getPluginAnyListeners(): unknown[];
+	} {
+		return this.client.events as unknown as MockBot['eventsHandler'];
 	}
 
 	reset(): void {

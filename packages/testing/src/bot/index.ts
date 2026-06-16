@@ -28,6 +28,7 @@ export {
 	type CapturedReply,
 	createMockBot,
 	DISPATCHER_VERBS,
+	type EmitEventOptions,
 	type DispatchMessageOptions,
 	type DispatchResult,
 	type EventDispatchResult,

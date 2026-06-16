@@ -245,7 +245,7 @@ const alice = bot.actor({ member: aliceMember, guildId: guild.id, channel });
 
 await alice.slash({ name: 'poll' });
 await alice.clickButton('poll/yes');
-await bot.emitEvent('GUILD_MEMBER_ADD', newMember);
+await bot.emitEvent('GUILD_MEMBER_ADD', newMember, { allowNoHandler: true });
 const result = await alice.slash({ name: 'results' });
 
 expect(result.content).toContain('1 vote');
@@ -275,6 +275,16 @@ await bot.selectMenu('pick-color', ['red']);
 await bot.fillModal('feedback', { rating: '5' });
 await bot.say('!echo -text hello');
 await bot.emitEvent('GUILD_MEMBER_ADD', rawMemberPayload);
+```
+
+`emitEvent` fails loud when no registered handler ran — the silent trap where a
+mis-cased gateway name (`'guildMemberAdd'` instead of `'GUILD_MEMBER_ADD'`) or a
+forgotten `events:[...]` registration makes the assertion pass green over a handler
+that never fired. `registeredEvents()` lists what's wired. When you emit only to
+seed world state (no handler expected), opt out explicitly:
+
+```ts
+await bot.emitEvent('CHANNEL_CREATE', rawChannelPayload, { allowNoHandler: true });
 ```
 
 Every dispatch defaults to the bot's single test user (`bot.defaultUser`), so
