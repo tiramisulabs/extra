@@ -1,11 +1,11 @@
 import { mockId, mockTimestamp } from '../id';
 import { TEST_BOT_ID } from './constants';
+import { decodeEmoji, emojiPayload } from './emoji';
+import { isEphemeral, MESSAGE_FLAG_COMPONENTS_V2 } from './message-flags';
 import {
-	type ApiAuditLogEntry,
 	type ApiAttachment,
+	type ApiAuditLogEntry,
 	type ApiAutoModRule,
-	type AutoModAction,
-	type AutoModTriggerMetadata,
 	type ApiChannel,
 	type ApiEmoji,
 	type ApiGuildTemplate,
@@ -20,6 +20,8 @@ import {
 	type ApiUser,
 	type ApiVoiceState,
 	type ApiWebhook,
+	type AutoModAction,
+	type AutoModTriggerMetadata,
 	apiAttachment,
 	apiAutoModRule,
 	apiChannel,
@@ -44,13 +46,6 @@ import { apiError } from './rest';
 import type { MockWorld } from './world';
 
 const MAX_MESSAGE_CONTENT = 2000;
-const MESSAGE_FLAG_COMPONENTS_V2 = 1 << 15;
-const MESSAGE_FLAG_EPHEMERAL = 1 << 6;
-
-// F17: ephemeral interaction messages are not part of the channel — absent from GET /channels/{id}/messages and
-// from channel views. They remain reachable by interaction token (@original / followup webhook routes).
-const isEphemeral = (message: { flags?: number }): boolean =>
-	((message.flags ?? 0) & MESSAGE_FLAG_EPHEMERAL) !== 0;
 
 const cp = (value: string): number => [...value].length;
 
@@ -114,7 +109,8 @@ function assertValidEmbeds(embeds: unknown[]): void {
 		const author = asRecord(embed.author);
 		const authorName = stringValue(author.name);
 		if (authorName !== undefined) {
-			if (cp(authorName) > 256) apiError(400, 50035, 'Invalid Form Body: embed author name must be 256 or fewer in length');
+			if (cp(authorName) > 256)
+				apiError(400, 50035, 'Invalid Form Body: embed author name must be 256 or fewer in length');
 			total += cp(authorName);
 		}
 		const color = numberValue(embed.color);
@@ -148,7 +144,8 @@ function assertValidComponents(components: unknown): void {
 			if ([...customId].length > 100) {
 				apiError(400, 50035, 'Invalid Form Body: component custom_id must be 100 or fewer in length');
 			}
-			if (customIds.has(customId)) apiError(400, 50035, `Invalid Form Body: duplicate component custom_id "${customId}"`);
+			if (customIds.has(customId))
+				apiError(400, 50035, `Invalid Form Body: duplicate component custom_id "${customId}"`);
 			customIds.add(customId);
 		}
 		if (type !== undefined && type >= 3 && type <= 8) {
@@ -190,7 +187,8 @@ function assertSendableMessage(raw: Record<string, unknown>, mode: 'create' | 'e
 		if (content !== undefined && content !== '') {
 			apiError(400, 50035, 'Invalid Form Body: content is not allowed with the IsComponentsV2 flag');
 		}
-		if (embeds.length > 0) apiError(400, 50035, 'Invalid Form Body: embeds are not allowed with the IsComponentsV2 flag');
+		if (embeds.length > 0)
+			apiError(400, 50035, 'Invalid Form Body: embeds are not allowed with the IsComponentsV2 flag');
 		if (!Array.isArray(raw.components) || raw.components.length === 0) {
 			apiError(400, 50035, 'Invalid Form Body: the IsComponentsV2 flag requires a non-empty components array');
 		}
@@ -1058,7 +1056,7 @@ export class WorldState implements WorldStateReader {
 		const byEmoji = this.reactionsByMessage.get(this.reactionKey(channelId, message.id));
 		if (!byEmoji || byEmoji.size === 0) return { ...message };
 		const reactions = [...byEmoji].map(([emoji, users]) => ({
-			emoji: emoji.includes(':') ? { name: emoji.split(':')[0], id: emoji.split(':')[1] } : { name: emoji, id: null },
+			emoji: emojiPayload(emoji),
 			count: users.size,
 			me: users.has(TEST_BOT_ID),
 		}));
@@ -1346,20 +1344,10 @@ export class WorldState implements WorldStateReader {
 		return `${channelId}:${messageId}`;
 	}
 
-	/** Reaction emojis arrive URL-encoded on the route (`%`-escaped); decode for stable state keys. */
-	private decodeEmoji(emoji: string): string {
-		if (!emoji.includes('%')) return emoji;
-		try {
-			return decodeURIComponent(emoji);
-		} catch {
-			return emoji;
-		}
-	}
-
 	/** @internal When a user reacts to a message. */
 	addReaction(channelId: string, messageId: string, emoji: string, userId: string): void {
 		const key = this.reactionKey(channelId, messageId);
-		const decoded = this.decodeEmoji(emoji);
+		const decoded = decodeEmoji(emoji);
 		const byEmoji = this.reactionsByMessage.get(key) ?? new Map<string, Set<string>>();
 		const users = byEmoji.get(decoded) ?? new Set<string>();
 		users.add(userId);
@@ -1371,7 +1359,7 @@ export class WorldState implements WorldStateReader {
 	removeReaction(channelId: string, messageId: string, emoji: string, userId: string): void {
 		const byEmoji = this.reactionsByMessage.get(this.reactionKey(channelId, messageId));
 		if (!byEmoji) return;
-		const decoded = this.decodeEmoji(emoji);
+		const decoded = decodeEmoji(emoji);
 		const users = byEmoji.get(decoded);
 		if (!users) return;
 		users.delete(userId);
@@ -1385,12 +1373,12 @@ export class WorldState implements WorldStateReader {
 
 	/** @internal When one emoji's reactions are purged. */
 	removeEmojiReactions(channelId: string, messageId: string, emoji: string): void {
-		this.reactionsByMessage.get(this.reactionKey(channelId, messageId))?.delete(this.decodeEmoji(emoji));
+		this.reactionsByMessage.get(this.reactionKey(channelId, messageId))?.delete(decodeEmoji(emoji));
 	}
 
 	/** The user ids who reacted to a message with a given emoji. */
 	reactionUsers(channelId: string, messageId: string, emoji: string): string[] {
-		const users = this.reactionsByMessage.get(this.reactionKey(channelId, messageId))?.get(this.decodeEmoji(emoji));
+		const users = this.reactionsByMessage.get(this.reactionKey(channelId, messageId))?.get(decodeEmoji(emoji));
 		return users ? [...users] : [];
 	}
 
@@ -2125,7 +2113,7 @@ export class WorldState implements WorldStateReader {
 			button: labelOrCustomId =>
 				buttons.find(button => button.label === labelOrCustomId || button.customId === labelOrCustomId),
 			reactions,
-			reaction: emoji => reactions.find(entry => entry.emoji === this.decodeEmoji(emoji)),
+			reaction: emoji => reactions.find(entry => entry.emoji === decodeEmoji(emoji)),
 			...(message.message_reference === undefined
 				? {}
 				: {

@@ -1,4 +1,4 @@
-import { type ComponentContext, ComponentCommand, Modal } from 'seyfert';
+import { ComponentCommand, type ComponentContext, Modal } from 'seyfert';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { apiUser } from '../../src/bot/payloads';

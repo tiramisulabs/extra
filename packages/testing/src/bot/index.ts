@@ -21,6 +21,14 @@
  */
 
 export {
+	type ErrorMatcher,
+	type ExpectedDenial,
+	expectDenied,
+	expectError,
+	expectReply,
+	MockAssertionError,
+} from './assertions';
+export {
 	type Actor,
 	type ActorOptions,
 	type AutocompleteResult,
@@ -28,9 +36,9 @@ export {
 	type CapturedReply,
 	createMockBot,
 	DISPATCHER_VERBS,
-	type EmitEventOptions,
 	type DispatchMessageOptions,
 	type DispatchResult,
+	type EmitEventOptions,
 	type EventDispatchResult,
 	type MenuCommandClass,
 	type MenuOptions,
@@ -135,6 +143,8 @@ export {
 	type ApiVoiceStateOptions,
 	type ApiWebhook,
 	type ApiWebhookOptions,
+	type AutoModAction,
+	type AutoModTriggerMetadata,
 	apiAttachment,
 	apiAuditLogEntry,
 	apiAutoModRule,
@@ -156,8 +166,6 @@ export {
 	apiUser,
 	apiVoiceState,
 	apiWebhook,
-	type AutoModAction,
-	type AutoModTriggerMetadata,
 	type MemberEventOptions,
 	type MemberInput,
 	type MemberUpdateEventOptions,
@@ -195,14 +203,6 @@ export {
 	type TypedMatchedAction,
 	type ValuePredicate,
 } from './rest';
-export {
-	type ErrorMatcher,
-	type ExpectedDenial,
-	expectDenied,
-	expectError,
-	expectReply,
-	MockAssertionError,
-} from './assertions';
 export { Routes } from './routes';
 export {
 	type AutoModRuleSnapshot,

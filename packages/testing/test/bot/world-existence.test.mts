@@ -37,7 +37,9 @@ describe('world-mode existence enforcement', () => {
 		}
 
 		const bot = await createMockBot({ commands: [WriteGhost], world });
-		await expect(bot.slash({ name: 'write-ghost', guildId: guild.id, channel, user: actor.user })).rejects.toMatchObject({
+		await expect(
+			bot.slash({ name: 'write-ghost', guildId: guild.id, channel, user: actor.user }),
+		).rejects.toMatchObject({
 			code: DiscordErrors.UnknownChannel.code,
 		});
 		expect(bot.cachedChannel('ghost-channel')).toBeUndefined();

@@ -72,7 +72,11 @@ export const DiscordErrors = {
 	UnknownMessage: { status: 404, code: 10008, message: 'Unknown Message' },
 	UnknownMember: { status: 404, code: 10007, message: 'Unknown Member' },
 	UnknownBan: { status: 404, code: 10026, message: 'Unknown Ban' },
-	CannotEditAnotherUsersMessage: { status: 403, code: 50005, message: 'Cannot edit a message authored by another user' },
+	CannotEditAnotherUsersMessage: {
+		status: 403,
+		code: 50005,
+		message: 'Cannot edit a message authored by another user',
+	},
 	RateLimited: { status: 429, code: 0, message: 'You are being rate limited.' },
 } as const satisfies Record<string, DiscordErrorInit>;
 

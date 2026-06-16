@@ -1,3 +1,4 @@
+import { emojiKey } from './emoji';
 import type { WorldState } from './state';
 
 /**
@@ -23,19 +24,6 @@ export type WorldEmitEvent =
 	| 'THREAD_DELETE';
 
 type WorldEventMutator = (state: WorldState, d: Record<string, unknown>) => void;
-
-/**
- * Reaction state keys an emoji as `name` (unicode) or `name:id` (custom) — the SAME string the REST path
- * stores via `state.addReaction` (where the route's encoded `name`/`name:id` is decoded then used as the key).
- * Gateway reaction events carry `emoji` as `{ name, id }`, so reconstruct that key here so the event path and
- * the REST path land under the same key and agree.
- */
-function reactionEmojiKey(emoji: unknown): string | undefined {
-	if (typeof emoji !== 'object' || emoji === null) return undefined;
-	const { name, id } = emoji as { name?: unknown; id?: unknown };
-	if (typeof name !== 'string') return undefined;
-	return typeof id === 'string' && id.length > 0 ? `${name}:${id}` : name;
-}
 
 const WORLD_EVENT_MUTATORS: Record<WorldEmitEvent, WorldEventMutator> = {
 	GUILD_MEMBER_ADD: (state, d) => {
@@ -71,12 +59,12 @@ const WORLD_EVENT_MUTATORS: Record<WorldEmitEvent, WorldEventMutator> = {
 		if (typeof d.channel_id === 'string' && typeof d.id === 'string') state.deleteMessage(d.channel_id, d.id);
 	},
 	MESSAGE_REACTION_ADD: (state, d) => {
-		const emoji = reactionEmojiKey(d.emoji);
+		const emoji = emojiKey(d.emoji);
 		if (typeof d.channel_id === 'string' && typeof d.message_id === 'string' && typeof d.user_id === 'string' && emoji)
 			state.addReaction(d.channel_id, d.message_id, emoji, d.user_id);
 	},
 	MESSAGE_REACTION_REMOVE: (state, d) => {
-		const emoji = reactionEmojiKey(d.emoji);
+		const emoji = emojiKey(d.emoji);
 		if (typeof d.channel_id === 'string' && typeof d.message_id === 'string' && typeof d.user_id === 'string' && emoji)
 			state.removeReaction(d.channel_id, d.message_id, emoji, d.user_id);
 	},
@@ -85,7 +73,7 @@ const WORLD_EVENT_MUTATORS: Record<WorldEmitEvent, WorldEventMutator> = {
 			state.removeAllReactions(d.channel_id, d.message_id);
 	},
 	MESSAGE_REACTION_REMOVE_EMOJI: (state, d) => {
-		const emoji = reactionEmojiKey(d.emoji);
+		const emoji = emojiKey(d.emoji);
 		if (typeof d.channel_id === 'string' && typeof d.message_id === 'string' && emoji)
 			state.removeEmojiReactions(d.channel_id, d.message_id, emoji);
 	},

@@ -1,5 +1,5 @@
-import { mockId } from '../id';
 import { ApplicationCommandOptionType } from 'seyfert/lib/types';
+import { mockId } from '../id';
 import { TEST_APPLICATION_ID, TEST_CHANNEL_ID, TEST_GUILD_ID } from './constants';
 import {
 	type ApiAttachment,

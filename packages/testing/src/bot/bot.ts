@@ -55,6 +55,7 @@ import {
 	type UserCommandInteractionOptions,
 	userCommandInteraction,
 } from './interactions';
+import { isEphemeral } from './message-flags';
 import { CommandOptionType, optionDefinitionsFor, optionTypesFor, prepareChatInputOptions } from './option-validation';
 import {
 	type ApiChannel,
@@ -93,11 +94,11 @@ import {
 	type MessageView,
 	normalizeEmbed,
 	type RoleView,
-	walkComponents,
 	type WorldDiff,
 	type WorldSnapshot,
 	WorldState,
 	type WorldStateReader,
+	walkComponents,
 } from './state';
 import { type MockWorld, seedWorld, type WorldBuilder } from './world';
 import { applyWorldEvent } from './world-events';
@@ -1024,10 +1025,6 @@ export class MockBot {
 		return this.rest.findCall(matcher, paramsOrFilter);
 	}
 
-	clearActions(): void {
-		this.rest.clearActions();
-	}
-
 	cachedGuild(guildId: string): GuildView | undefined {
 		return this._state.guild(guildId);
 	}
@@ -1072,14 +1069,6 @@ export class MockBot {
 	}
 
 	/**
-	 * @deprecated Use {@link MockBot.cachedVoiceState} — renamed to join the `cached*` accessor family. This alias
-	 * delegates to it and will be removed in a future release.
-	 */
-	voiceState(guildId: string, userId: string): ApiVoiceState | undefined {
-		return this.cachedVoiceState(guildId, userId);
-	}
-
-	/**
 	 * Read an app-specific value from the world's passthrough data store, seeded via `createMockBot({ worldData })`
 	 * or `world.set(key, value)`. The caller owns the type (`T`); the mock stores and returns the value verbatim,
 	 * never interpreting it. Returns `undefined` when the key was never set.
@@ -1108,11 +1097,11 @@ export class MockBot {
 	}
 
 	/**
-	 * Resolve when a modal is registered for `userId` via seyfert's `components.modals.set` (which the opener
-	 * command calls synchronously while replying). Used by {@link Dispatch.untilModal} to await registration
-	 * event-driven instead of polling a wall clock. If a modal is already registered, resolves immediately.
+	 * @internal Resolve when a modal is registered for `userId` via seyfert's `components.modals.set` (which the
+	 * opener command calls synchronously while replying). Used by {@link Dispatch.untilModal} to await
+	 * registration event-driven instead of polling a wall clock. Resolves immediately if already registered.
 	 */
-	onModalRegistered(userId: string): Promise<void> {
+	private onModalRegistered(userId: string): Promise<void> {
 		if (this.client.components.modals.has(userId)) return Promise.resolve();
 		return new Promise<void>(resolve => {
 			const waiters = this.modalWaiters.get(userId);
@@ -1440,11 +1429,9 @@ export class MockBot {
 			get ephemeral() {
 				const replyEphemeral = replies.some(reply => {
 					const data = 'data' in reply.body ? (reply.body.data as { flags?: number } | undefined) : undefined;
-					return Boolean(typeof data?.flags === 'number' && data.flags & 64);
+					return isEphemeral(data ?? {});
 				});
-				return (
-					replyEphemeral || messages.some(message => Boolean(typeof message.flags === 'number' && message.flags & 64))
-				);
+				return replyEphemeral || messages.some(message => isEphemeral(message));
 			},
 			get embed() {
 				return embeds[0];

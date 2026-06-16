@@ -162,10 +162,9 @@ describe('virtual clock', () => {
 					return ctx.customId === 'open-stall';
 				}
 				async run(ctx: ComponentContext<'Button'>) {
-					await ctx.interaction.modal(
-						new Modal().setCustomId('stall-modal').setTitle('Stall').setComponents([]),
-						{ waitFor: 30_000 },
-					);
+					await ctx.interaction.modal(new Modal().setCustomId('stall-modal').setTitle('Stall').setComponents([]), {
+						waitFor: 30_000,
+					});
 				}
 			}
 

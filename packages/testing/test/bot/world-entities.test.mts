@@ -123,7 +123,7 @@ describe('world voice states', () => {
 
 		expect(bot.cachedVoiceState(guild.id, 'absent-user')).toBeUndefined();
 
-		expect(bot.voiceState(guild.id, member.user.id)).toEqual(voice);
+		expect(bot.cachedVoiceState(guild.id, member.user.id)).toEqual(voice);
 	});
 
 	test('a command reads a seeded voice state from the cache', async () => {

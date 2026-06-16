@@ -1,3 +1,5 @@
+import { PermissionFlagsBits } from 'seyfert/lib/types';
+import { emojiPayload } from './emoji';
 import {
 	type ApiMember,
 	apiAutoModRule,
@@ -16,7 +18,6 @@ import {
 	apiUser,
 	apiWebhook,
 } from './payloads';
-import { PermissionFlagsBits } from 'seyfert/lib/types';
 import { computeChannelPermissions } from './permissions';
 import { apiError, type MockApiHandler, type RouteMatcher, type RouteResponder } from './rest';
 import { Routes } from './routes';
@@ -170,7 +171,11 @@ export function registerWorldDefaults(
 	// Created channels/threads and DMs are pushed into world.channels, so they pass. Worldless mode stays lenient.
 	const requireChannel = (channelId: string) => {
 		if (!world) return;
-		if (channelId === 'undefined' || channelId === 'null' || !world.channels.some(channel => channel.id === channelId)) {
+		if (
+			channelId === 'undefined' ||
+			channelId === 'null' ||
+			!world.channels.some(channel => channel.id === channelId)
+		) {
 			apiError(404, 10003, 'Unknown Channel');
 		}
 	};
@@ -341,7 +346,11 @@ export function registerWorldDefaults(
 		const origin = hooks.state.interactionOrigin(params.token);
 		if (origin !== undefined) {
 			if ((body.type === 6 || body.type === 7) && origin !== 3 && origin !== 5) {
-				apiError(400, 50035, 'Invalid Form Body: message update callbacks are only valid for component or modal interactions');
+				apiError(
+					400,
+					50035,
+					'Invalid Form Body: message update callbacks are only valid for component or modal interactions',
+				);
 			}
 			if (body.type === 9 && origin === 5) {
 				apiError(400, 50035, 'Invalid Form Body: cannot respond to a modal submit with another modal');
@@ -705,20 +714,6 @@ export function registerWorldDefaults(
 		return {};
 	});
 
-	const decodeEmoji = (emoji: string): string => {
-		if (!emoji.includes('%')) return emoji;
-		try {
-			return decodeURIComponent(emoji);
-		} catch {
-			return emoji;
-		}
-	};
-	// Reaction routes carry the emoji as `name` (unicode) or `name:id` (custom), per seyfert's encodeEmoji.
-	const emojiPayload = (emoji: string): { name: string; id: string | null } => {
-		const decoded = decodeEmoji(emoji);
-		const colon = decoded.indexOf(':');
-		return colon === -1 ? { name: decoded, id: null } : { name: decoded.slice(0, colon), id: decoded.slice(colon + 1) };
-	};
 	const reactionEventBase = (channelId: string, messageId: string) => {
 		const guildId = world?.channels.find(channel => channel.id === channelId)?.guild_id;
 		return {
