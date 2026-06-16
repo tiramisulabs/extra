@@ -414,11 +414,7 @@ export function registerWorldDefaults(
 		fallback: (guildId, id) => apiEmoji({ id, guildId }),
 	});
 	rest.intercept(Routes.createInvite, (pending, params) =>
-		hooks.state.addInvite(
-			params.channelId,
-			guildOfChannel(params.channelId),
-			bodyRecord(pending.body),
-		),
+		hooks.state.addInvite(params.channelId, guildOfChannel(params.channelId), bodyRecord(pending.body)),
 	);
 	rest.intercept(Routes.listChannelInvites, (_pending, params) => hooks.state.channelInvites(params.channelId));
 	rest.intercept(Routes.listGuildInvites, (_pending, params) => hooks.state.guildInvites(params.guildId));
@@ -641,9 +637,7 @@ export function registerWorldDefaults(
 		return {};
 	});
 	rest.intercept(Routes.listReactions, (_pending, params) =>
-		hooks.state
-			.reactionUsers(params.channelId, params.messageId, params.emoji)
-			.map(userId => resolveUser(userId)),
+		hooks.state.reactionUsers(params.channelId, params.messageId, params.emoji).map(userId => resolveUser(userId)),
 	);
 	const interceptRoleMutation = (
 		route: RouteMatcher,
