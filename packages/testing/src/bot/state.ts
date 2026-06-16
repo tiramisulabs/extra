@@ -1,11 +1,13 @@
 import { mockId, mockTimestamp } from '../id';
 import { TEST_BOT_ID } from './constants';
 import {
+	type ApiAttachment,
 	type ApiChannel,
 	type ApiMessage,
 	type ApiRole,
 	type ApiUser,
 	type ApiVoiceState,
+	apiAttachment,
 	apiChannel,
 	apiMember,
 	apiMessage,
@@ -50,6 +52,20 @@ export interface ReactionView {
 	users: string[];
 }
 
+export interface AttachmentView {
+	id: string;
+	filename: string;
+	contentType?: string;
+	size?: number;
+	url?: string;
+}
+
+export interface MessageReferenceView {
+	messageId?: string;
+	channelId?: string;
+	type?: number;
+}
+
 export interface MessageView {
 	id: string;
 	channelId: string;
@@ -57,10 +73,13 @@ export interface MessageView {
 	content?: string;
 	embeds: EmbedView[];
 	components: unknown[];
+	attachments: AttachmentView[];
 	buttons: ButtonView[];
 	button(labelOrCustomId: string): ButtonView | undefined;
 	reactions: ReactionView[];
 	reaction(emoji: string): ReactionView | undefined;
+	reference?: MessageReferenceView;
+	referencedMessage?: { id: string; channelId: string; authorId?: string; content?: string };
 }
 
 export interface ChannelView {
@@ -283,6 +302,19 @@ function normalizeThreadMetadata(value: unknown): ThreadMetadata {
 		locked: typeof raw.locked === 'boolean' ? raw.locked : false,
 		archive_timestamp: stringValue(raw.archive_timestamp) ?? mockTimestamp(),
 	};
+}
+
+function normalizeAttachments(value: unknown): ApiAttachment[] {
+	return arrayValue(value).map(entry => {
+		const raw = asRecord(entry);
+		return apiAttachment({
+			...(stringValue(raw.id) === undefined ? {} : { id: stringValue(raw.id) }),
+			...(stringValue(raw.filename) === undefined ? {} : { filename: stringValue(raw.filename) }),
+			...(stringValue(raw.content_type) === undefined ? {} : { contentType: stringValue(raw.content_type) }),
+			...(numberValue(raw.size) === undefined ? {} : { size: numberValue(raw.size) }),
+			...(stringValue(raw.url) === undefined ? {} : { url: stringValue(raw.url) }),
+		});
+	});
 }
 
 function normalizeEmbed(value: unknown): EmbedView {
@@ -673,12 +705,39 @@ export class WorldState implements WorldStateReader {
 			content,
 			embeds: arrayValue(raw.embeds),
 			components: arrayValue(raw.components),
+			attachments: normalizeAttachments(raw.attachments),
 			flags: numberValue(raw.flags),
 		});
 		const derived = this.deriveMentions(content, raw.allowed_mentions);
 		message.mention_everyone = derived.mention_everyone;
 		message.mentions = derived.mentions;
 		message.mention_roles = derived.mention_roles;
+		if ('message_reference' in raw && raw.message_reference) {
+			const ref = asRecord(raw.message_reference);
+			message.message_reference = {
+				...(stringValue(ref.message_id) === undefined ? {} : { message_id: stringValue(ref.message_id) }),
+				...(stringValue(ref.channel_id) === undefined ? {} : { channel_id: stringValue(ref.channel_id) }),
+				...(numberValue(ref.type) === undefined ? {} : { type: numberValue(ref.type) }),
+			};
+			const referencedId = stringValue(ref.message_id);
+			const referenced = referencedId
+				? this.world.messages.find(entry => entry.message.id === referencedId)?.message
+				: undefined;
+			if (referenced && numberValue(ref.type) === 1) {
+				message.message_snapshots = [
+					{
+						message: {
+							content: referenced.content,
+							embeds: referenced.embeds,
+							attachments: referenced.attachments,
+							type: referenced.type,
+						},
+					},
+				];
+			} else if (referenced) {
+				message.referenced_message = referenced;
+			}
+		}
 		this.world.messages.push({ channelId, message });
 		return this.messageView(message);
 	}
@@ -692,6 +751,7 @@ export class WorldState implements WorldStateReader {
 		if ('content' in raw) entry.message.content = stringValue(raw.content) ?? '';
 		if ('embeds' in raw) entry.message.embeds = arrayValue(raw.embeds);
 		if ('components' in raw) entry.message.components = arrayValue(raw.components);
+		if ('attachments' in raw) entry.message.attachments = normalizeAttachments(raw.attachments);
 		if ('flags' in raw) entry.message.flags = numberValue(raw.flags) ?? entry.message.flags;
 	}
 
@@ -1089,11 +1149,41 @@ export class WorldState implements WorldStateReader {
 			content: message.content,
 			embeds: message.embeds.map(normalizeEmbed),
 			components: [...message.components],
+			attachments: message.attachments.map(attachment => ({
+				id: attachment.id,
+				filename: attachment.filename,
+				contentType: attachment.content_type,
+				size: attachment.size,
+				url: attachment.url,
+			})),
 			buttons,
 			button: labelOrCustomId =>
 				buttons.find(button => button.label === labelOrCustomId || button.customId === labelOrCustomId),
 			reactions,
 			reaction: emoji => reactions.find(entry => entry.emoji === this.decodeEmoji(emoji)),
+			...(message.message_reference === undefined
+				? {}
+				: {
+						reference: {
+							...(message.message_reference.message_id === undefined
+								? {}
+								: { messageId: message.message_reference.message_id }),
+							...(message.message_reference.channel_id === undefined
+								? {}
+								: { channelId: message.message_reference.channel_id }),
+							...(message.message_reference.type === undefined ? {} : { type: message.message_reference.type }),
+						},
+					}),
+			...(message.referenced_message === undefined
+				? {}
+				: {
+						referencedMessage: {
+							id: message.referenced_message.id,
+							channelId: message.referenced_message.channel_id,
+							authorId: message.referenced_message.author?.id,
+							content: message.referenced_message.content,
+						},
+					}),
 		};
 	}
 }

@@ -340,6 +340,7 @@ export interface ApiMessageOptions {
 	content?: string;
 	embeds?: unknown[];
 	components?: unknown[];
+	attachments?: unknown[];
 	flags?: number;
 }
 
@@ -355,9 +356,12 @@ export interface ApiMessage {
 	mention_everyone: boolean;
 	mentions: unknown[];
 	mention_roles: string[];
-	attachments: unknown[];
+	attachments: ApiAttachment[];
 	embeds: unknown[];
 	components: unknown[];
+	message_reference?: { message_id?: string; channel_id?: string; type?: number };
+	referenced_message?: ApiMessage;
+	message_snapshots?: { message: Record<string, unknown> }[];
 	pinned: boolean;
 	type: number;
 	flags: number;
@@ -376,7 +380,7 @@ export function apiMessage(options: ApiMessageOptions = {}): ApiMessage {
 		mention_everyone: false,
 		mentions: [],
 		mention_roles: [],
-		attachments: [],
+		attachments: (options.attachments as ApiAttachment[]) ?? [],
 		embeds: options.embeds ?? [],
 		components: options.components ?? [],
 		pinned: false,
