@@ -1,0 +1,81 @@
+import type { WorldState } from './state';
+
+type WorldEventMutator = (state: WorldState, d: Record<string, unknown>) => void;
+
+/**
+ * Reaction state keys an emoji as `name` (unicode) or `name:id` (custom) — the SAME string the REST path
+ * stores via `state.addReaction` (where the route's encoded `name`/`name:id` is decoded then used as the key).
+ * Gateway reaction events carry `emoji` as `{ name, id }`, so reconstruct that key here so the event path and
+ * the REST path land under the same key and agree.
+ */
+function reactionEmojiKey(emoji: unknown): string | undefined {
+	if (typeof emoji !== 'object' || emoji === null) return undefined;
+	const { name, id } = emoji as { name?: unknown; id?: unknown };
+	if (typeof name !== 'string') return undefined;
+	return typeof id === 'string' && id.length > 0 ? `${name}:${id}` : name;
+}
+
+const WORLD_EVENT_MUTATORS: Record<string, WorldEventMutator> = {
+	GUILD_MEMBER_ADD: (state, d) => {
+		const guildId = typeof d.guild_id === 'string' ? d.guild_id : undefined;
+		if (guildId) state.addMember(guildId, d);
+	},
+	GUILD_MEMBER_REMOVE: (state, d) => {
+		const guildId = typeof d.guild_id === 'string' ? d.guild_id : undefined;
+		const user = d.user as { id?: string } | undefined;
+		if (guildId && user?.id) state.removeMember(guildId, user.id, false);
+	},
+	GUILD_MEMBER_UPDATE: (state, d) => {
+		const guildId = typeof d.guild_id === 'string' ? d.guild_id : undefined;
+		const user = d.user as { id?: string } | undefined;
+		if (guildId && user?.id) {
+			state.patchMember(guildId, user.id, {
+				...('nick' in d ? { nick: d.nick as string | null } : {}),
+				...(Array.isArray(d.roles) ? { roles: d.roles.map(String) } : {}),
+				...('communication_disabled_until' in d
+					? { communication_disabled_until: d.communication_disabled_until as string | null }
+					: {}),
+			});
+		}
+	},
+	CHANNEL_CREATE: (state, d) => state.addChannel(typeof d.guild_id === 'string' ? d.guild_id : undefined, d),
+	CHANNEL_DELETE: (state, d) => {
+		if (typeof d.id === 'string') state.removeChannel(d.id);
+	},
+	MESSAGE_CREATE: (state, d) => {
+		if (typeof d.channel_id === 'string') state.addMessage(d.channel_id, d);
+	},
+	MESSAGE_DELETE: (state, d) => {
+		if (typeof d.channel_id === 'string' && typeof d.id === 'string') state.deleteMessage(d.channel_id, d.id);
+	},
+	MESSAGE_REACTION_ADD: (state, d) => {
+		const emoji = reactionEmojiKey(d.emoji);
+		if (typeof d.channel_id === 'string' && typeof d.message_id === 'string' && typeof d.user_id === 'string' && emoji)
+			state.addReaction(d.channel_id, d.message_id, emoji, d.user_id);
+	},
+	MESSAGE_REACTION_REMOVE: (state, d) => {
+		const emoji = reactionEmojiKey(d.emoji);
+		if (typeof d.channel_id === 'string' && typeof d.message_id === 'string' && typeof d.user_id === 'string' && emoji)
+			state.removeReaction(d.channel_id, d.message_id, emoji, d.user_id);
+	},
+	MESSAGE_REACTION_REMOVE_ALL: (state, d) => {
+		if (typeof d.channel_id === 'string' && typeof d.message_id === 'string')
+			state.removeAllReactions(d.channel_id, d.message_id);
+	},
+	MESSAGE_REACTION_REMOVE_EMOJI: (state, d) => {
+		const emoji = reactionEmojiKey(d.emoji);
+		if (typeof d.channel_id === 'string' && typeof d.message_id === 'string' && emoji)
+			state.removeEmojiReactions(d.channel_id, d.message_id, emoji);
+	},
+	VOICE_STATE_UPDATE: (state, d) => state.setVoiceState(d),
+	THREAD_CREATE: (state, d) => state.addChannel(typeof d.guild_id === 'string' ? d.guild_id : undefined, d),
+	THREAD_DELETE: (state, d) => {
+		if (typeof d.id === 'string') state.removeChannel(d.id);
+	},
+};
+
+export const WORLD_EVENT_NAMES = Object.keys(WORLD_EVENT_MUTATORS) as readonly string[];
+
+export function applyWorldEvent(state: WorldState, name: string, d: Record<string, unknown>): void {
+	WORLD_EVENT_MUTATORS[name]?.(state, d);
+}

@@ -34,6 +34,7 @@ import {
 	resetDispatchIds,
 } from './dispatch-context';
 import { MockGateway } from './gateway';
+import { installDispatchHooks as installDispatchHooksImpl } from './hooks';
 import {
 	type ApiInteractionPayload,
 	type AutocompleteInteractionOptions,
@@ -43,20 +44,18 @@ import {
 	buttonInteraction,
 	type ChatInputInteractionOptions,
 	chatInputInteraction,
-	DEFAULT_PERMISSIONS,
 	type EntryPointInteractionOptions,
 	entryPointInteraction,
 	type MessageCommandInteractionOptions,
 	type ModalSubmitInteractionOptions,
 	messageCommandInteraction,
 	modalSubmitInteraction,
-	type OptionInput,
-	type OptionInputBag,
 	type SelectMenuInteractionOptions,
 	selectMenuInteraction,
 	type UserCommandInteractionOptions,
 	userCommandInteraction,
 } from './interactions';
+import { CommandOptionType, optionDefinitionsFor, optionTypesFor, prepareChatInputOptions } from './option-validation';
 import {
 	type ApiChannel,
 	type ApiMember,
@@ -83,6 +82,7 @@ import {
 	type TypedMatchedAction,
 } from './rest';
 import { FOLLOWUP_ROUTE, WEBHOOK_MESSAGE_ROUTE } from './routes';
+import { resolveSelectResolved } from './select-resolved';
 import {
 	type ChannelView,
 	type GuildMemberView,
@@ -92,86 +92,14 @@ import {
 	WorldState,
 } from './state';
 import { type MockWorld, seedWorld, type WorldBuilder } from './world';
+import { applyWorldEvent } from './world-events';
 
 export { Dispatch } from './dispatch';
+export { WORLD_EVENT_NAMES } from './world-events';
 
 type ClientConstructorOptions = ConstructorParameters<typeof Client>[0];
 type ClientOptions = NonNullable<ClientConstructorOptions>;
 type ServicesOptions = Parameters<Client['setServices']>[0];
-
-const CommandOptionType = {
-	SubCommand: 1,
-	SubCommandGroup: 2,
-	String: 3,
-	Integer: 4,
-	Boolean: 5,
-	User: 6,
-	Channel: 7,
-	Role: 8,
-	Mentionable: 9,
-	Number: 10,
-	Attachment: 11,
-} as const;
-
-interface CommandOptionDefinition {
-	name: string;
-	type: number;
-	/** Set on a SubCommand instance when it belongs to a group; seyfert keys group membership here, not via a nested type-2 option. */
-	group?: string;
-	required?: boolean;
-	choices?: { name: string; value: string | number }[];
-	min_value?: number;
-	max_value?: number;
-	min_length?: number;
-	max_length?: number;
-	channel_types?: number[];
-	options?: CommandOptionDefinition[];
-}
-
-interface CommandWithOptions {
-	name: string;
-	type: ApplicationCommandType;
-	options?: CommandOptionDefinition[];
-}
-
-interface EncodedOptionLike {
-	__slipherOption: true;
-	type: number;
-	value: string | number | boolean;
-	resolved?: {
-		channels?: Record<string, { type?: number }>;
-	};
-}
-
-function isEncodedOption(value: OptionInput): value is EncodedOptionLike {
-	return typeof value === 'object' && value !== null && '__slipherOption' in value;
-}
-
-type MiddlewareControl = (...args: never[]) => unknown;
-interface MiddlewareControls {
-	context: unknown;
-	next: MiddlewareControl;
-	stop: MiddlewareControl;
-	pass: MiddlewareControl;
-}
-type WrappedMiddleware = (controls: MiddlewareControls) => unknown;
-
-interface PermissionGuardedCommand {
-	onPermissionsFail?: (context: unknown, missing: unknown) => unknown;
-	onBotPermissionsFail?: (context: unknown, missing: unknown) => unknown;
-	options?: unknown[];
-}
-
-/** Seyfert passes the missing permissions as a string[] of flag names; normalize anything else to undefined. */
-function toPermissionNames(missing: unknown): string[] | undefined {
-	if (Array.isArray(missing) && missing.every(name => typeof name === 'string')) return missing as string[];
-	return undefined;
-}
-
-function optionEntries(options: OptionInputBag | undefined): [string, OptionInput][] {
-	if (!options) return [];
-	return Array.isArray(options) ? options.map(option => [option.name, option.value]) : Object.entries(options);
-}
 
 export interface CapturedReply {
 	/** Discord interaction callback body captured before it would be sent. */
@@ -569,82 +497,6 @@ export interface MockBotOptions {
 	timers?: { advance(ms: number): void | Promise<void> };
 }
 
-type WorldEventMutator = (state: WorldState, d: Record<string, unknown>) => void;
-
-/**
- * Reaction state keys an emoji as `name` (unicode) or `name:id` (custom) — the SAME string the REST path
- * stores via `state.addReaction` (where the route's encoded `name`/`name:id` is decoded then used as the key).
- * Gateway reaction events carry `emoji` as `{ name, id }`, so reconstruct that key here so the event path and
- * the REST path land under the same key and agree.
- */
-function reactionEmojiKey(emoji: unknown): string | undefined {
-	if (typeof emoji !== 'object' || emoji === null) return undefined;
-	const { name, id } = emoji as { name?: unknown; id?: unknown };
-	if (typeof name !== 'string') return undefined;
-	return typeof id === 'string' && id.length > 0 ? `${name}:${id}` : name;
-}
-
-const WORLD_EVENT_MUTATORS: Record<string, WorldEventMutator> = {
-	GUILD_MEMBER_ADD: (state, d) => {
-		const guildId = typeof d.guild_id === 'string' ? d.guild_id : undefined;
-		if (guildId) state.addMember(guildId, d);
-	},
-	GUILD_MEMBER_REMOVE: (state, d) => {
-		const guildId = typeof d.guild_id === 'string' ? d.guild_id : undefined;
-		const user = d.user as { id?: string } | undefined;
-		if (guildId && user?.id) state.removeMember(guildId, user.id, false);
-	},
-	GUILD_MEMBER_UPDATE: (state, d) => {
-		const guildId = typeof d.guild_id === 'string' ? d.guild_id : undefined;
-		const user = d.user as { id?: string } | undefined;
-		if (guildId && user?.id) {
-			state.patchMember(guildId, user.id, {
-				...('nick' in d ? { nick: d.nick as string | null } : {}),
-				...(Array.isArray(d.roles) ? { roles: d.roles.map(String) } : {}),
-				...('communication_disabled_until' in d
-					? { communication_disabled_until: d.communication_disabled_until as string | null }
-					: {}),
-			});
-		}
-	},
-	CHANNEL_CREATE: (state, d) => state.addChannel(typeof d.guild_id === 'string' ? d.guild_id : undefined, d),
-	CHANNEL_DELETE: (state, d) => {
-		if (typeof d.id === 'string') state.removeChannel(d.id);
-	},
-	MESSAGE_CREATE: (state, d) => {
-		if (typeof d.channel_id === 'string') state.addMessage(d.channel_id, d);
-	},
-	MESSAGE_DELETE: (state, d) => {
-		if (typeof d.channel_id === 'string' && typeof d.id === 'string') state.deleteMessage(d.channel_id, d.id);
-	},
-	MESSAGE_REACTION_ADD: (state, d) => {
-		const emoji = reactionEmojiKey(d.emoji);
-		if (typeof d.channel_id === 'string' && typeof d.message_id === 'string' && typeof d.user_id === 'string' && emoji)
-			state.addReaction(d.channel_id, d.message_id, emoji, d.user_id);
-	},
-	MESSAGE_REACTION_REMOVE: (state, d) => {
-		const emoji = reactionEmojiKey(d.emoji);
-		if (typeof d.channel_id === 'string' && typeof d.message_id === 'string' && typeof d.user_id === 'string' && emoji)
-			state.removeReaction(d.channel_id, d.message_id, emoji, d.user_id);
-	},
-	MESSAGE_REACTION_REMOVE_ALL: (state, d) => {
-		if (typeof d.channel_id === 'string' && typeof d.message_id === 'string')
-			state.removeAllReactions(d.channel_id, d.message_id);
-	},
-	MESSAGE_REACTION_REMOVE_EMOJI: (state, d) => {
-		const emoji = reactionEmojiKey(d.emoji);
-		if (typeof d.channel_id === 'string' && typeof d.message_id === 'string' && emoji)
-			state.removeEmojiReactions(d.channel_id, d.message_id, emoji);
-	},
-	VOICE_STATE_UPDATE: (state, d) => state.setVoiceState(d),
-	THREAD_CREATE: (state, d) => state.addChannel(typeof d.guild_id === 'string' ? d.guild_id : undefined, d),
-	THREAD_DELETE: (state, d) => {
-		if (typeof d.id === 'string') state.removeChannel(d.id);
-	},
-};
-
-export const WORLD_EVENT_NAMES = Object.keys(WORLD_EVENT_MUTATORS) as readonly string[];
-
 /** Upper bound on drain loop iterations: terminates the loop even when Date.now() is frozen by fake timers. */
 const DRAIN_MAX_ITERATIONS = 1000;
 
@@ -804,124 +656,6 @@ export class MockBot {
 		return next;
 	}
 
-	private chatCommand(name: string): CommandWithOptions | undefined {
-		return this.client.commands.values.find(
-			command => command.type === ApplicationCommandType.ChatInput && command.name === name,
-		) as CommandWithOptions | undefined;
-	}
-
-	// seyfert stores subcommands flat on `command.options`, each carrying `.group` for its group; the type-2
-	// SubcommandGroup wrapper only exists in the wire payload, never in the registered command metadata.
-	private subcommandsOf(name: string): CommandOptionDefinition[] {
-		return (this.chatCommand(name)?.options ?? []).filter(option => option.type === CommandOptionType.SubCommand);
-	}
-
-	private optionDefinitionsFor(options: Pick<ChatInputInteractionOptions, 'name' | 'group' | 'subcommand'>) {
-		let definitions = this.chatCommand(options.name)?.options ?? [];
-		if (options.subcommand) {
-			const sub = this.subcommandsOf(options.name).find(
-				option =>
-					option.name === options.subcommand && (options.group ? option.group === options.group : !option.group),
-			);
-			definitions = sub?.options ?? [];
-		}
-		return definitions.filter(
-			option => option.type !== CommandOptionType.SubCommand && option.type !== CommandOptionType.SubCommandGroup,
-		);
-	}
-
-	private assertSubcommandTarget(options: Pick<ChatInputInteractionOptions, 'name' | 'group' | 'subcommand'>): void {
-		if (!options.group && !options.subcommand) return;
-		const subcommands = this.subcommandsOf(options.name);
-		if (options.group && !subcommands.some(sub => sub.group === options.group)) {
-			throw new TypeError(`slash: subcommand group "${options.group}" is not registered on "${options.name}".`);
-		}
-		if (!options.subcommand) return;
-		const found = subcommands.some(
-			sub => sub.name === options.subcommand && (options.group ? sub.group === options.group : !sub.group),
-		);
-		if (!found) {
-			const where = options.group ? `group "${options.group}"` : `"${options.name}"`;
-			throw new TypeError(`slash: subcommand "${options.subcommand}" is not registered on ${where}.`);
-		}
-	}
-
-	private optionTypesFor(definitions: CommandOptionDefinition[]): Record<string, number> {
-		return Object.fromEntries(definitions.map(option => [option.name, option.type]));
-	}
-
-	private validateChatInputOptions(options: ChatInputInteractionOptions, definitions: CommandOptionDefinition[]): void {
-		const entries = new Map(optionEntries(options.options));
-		for (const definition of definitions) {
-			const input = entries.get(definition.name);
-			if (input === undefined) {
-				if (definition.required) throw new TypeError(`slash: option "${definition.name}" is required.`);
-				continue;
-			}
-
-			const actualType = isEncodedOption(input) ? input.type : undefined;
-			const value = isEncodedOption(input) ? input.value : input;
-			if (actualType !== undefined && actualType !== definition.type) {
-				throw new TypeError(`slash: option "${definition.name}" has type ${actualType}, expected ${definition.type}.`);
-			}
-			if (definition.choices?.length && !definition.choices.some(choice => Object.is(choice.value, value))) {
-				throw new TypeError(
-					`slash: option "${definition.name}" must be one of: ${definition.choices
-						.map(choice => String(choice.value))
-						.join(', ')}.`,
-				);
-			}
-
-			if (definition.type === CommandOptionType.String) {
-				if (typeof value !== 'string') throw new TypeError(`slash: option "${definition.name}" must be a string.`);
-				if (definition.min_length !== undefined && value.length < definition.min_length) {
-					throw new TypeError(`slash: option "${definition.name}" is shorter than ${definition.min_length}.`);
-				}
-				if (definition.max_length !== undefined && value.length > definition.max_length) {
-					throw new TypeError(`slash: option "${definition.name}" is longer than ${definition.max_length}.`);
-				}
-				continue;
-			}
-
-			if (definition.type === CommandOptionType.Integer || definition.type === CommandOptionType.Number) {
-				if (typeof value !== 'number') throw new TypeError(`slash: option "${definition.name}" must be a number.`);
-				if (definition.type === CommandOptionType.Integer && !Number.isInteger(value)) {
-					throw new TypeError(`slash: option "${definition.name}" must be an integer.`);
-				}
-				if (definition.min_value !== undefined && value < definition.min_value) {
-					throw new TypeError(`slash: option "${definition.name}" is less than ${definition.min_value}.`);
-				}
-				if (definition.max_value !== undefined && value > definition.max_value) {
-					throw new TypeError(`slash: option "${definition.name}" is greater than ${definition.max_value}.`);
-				}
-				continue;
-			}
-
-			if (definition.type === CommandOptionType.Channel && definition.channel_types?.length && isEncodedOption(input)) {
-				const channel = input.resolved?.channels?.[String(input.value)];
-				if (channel?.type !== undefined && !definition.channel_types.includes(channel.type)) {
-					throw new TypeError(
-						`slash: option "${definition.name}" channel type ${channel.type} is not allowed. ` +
-							`Allowed: ${definition.channel_types.join(', ')}.`,
-					);
-				}
-			}
-		}
-	}
-
-	private prepareChatInputOptions(options: ChatInputInteractionOptions): ChatInputInteractionOptions {
-		this.assertSubcommandTarget(options);
-		const definitions = this.optionDefinitionsFor(options);
-		if (this.validateOptions) this.validateChatInputOptions(options, definitions);
-		return {
-			...options,
-			optionTypes: {
-				...(options.optionTypes ?? {}),
-				...this.optionTypesFor(definitions),
-			},
-		};
-	}
-
 	private componentCommands(): readonly unknown[] {
 		return this.client.components.commands;
 	}
@@ -1036,119 +770,6 @@ export class MockBot {
 	private worldMemberFor(guildId: string | null | undefined, user: ApiUser | undefined): ApiMember | undefined {
 		if (!this.world || !guildId || !user) return undefined;
 		return this.world.members.find(entry => entry.guildId === guildId && entry.member.user.id === user.id)?.member;
-	}
-
-	private normalizedSelectType(componentType: SelectMenuInteractionOptions['componentType']): 3 | 5 | 6 | 7 | 8 {
-		if (componentType === undefined || componentType === 'string') return 3;
-		if (componentType === 'user') return 5;
-		if (componentType === 'role') return 6;
-		if (componentType === 'mentionable') return 7;
-		if (componentType === 'channel') return 8;
-		return componentType;
-	}
-
-	private unknownSelectId(kind: string, customId: string, value: string, seeded: string[]): never {
-		throw new TypeError(
-			`selectMenu: unknown ${kind} id "${value}" for "${customId}". Seeded ${kind}s: ${seeded.join(', ') || '(none)'}.`,
-		);
-	}
-
-	private resolveSelectResolved(
-		customId: string,
-		values: string[],
-		options: Omit<SelectMenuInteractionOptions, 'customId' | 'values' | 'message'>,
-	): SelectMenuInteractionOptions['resolved'] {
-		if (options.resolved) return options.resolved;
-		const type = this.normalizedSelectType(options.componentType);
-		if (type === 3) return undefined;
-		if (!this.world) {
-			throw new TypeError(`selectMenu: "${customId}" is an entity select but no world or resolved data was provided.`);
-		}
-
-		if (type === 6) {
-			const roles = this.world.roles.map(entry => entry.role);
-			return {
-				roles: Object.fromEntries(
-					values.map(value => {
-						const role = roles.find(entry => entry.id === value);
-						if (!role)
-							this.unknownSelectId(
-								'role',
-								customId,
-								value,
-								roles.map(entry => entry.id),
-							);
-						return [value, role];
-					}),
-				),
-			};
-		}
-
-		if (type === 8) {
-			const channels = this.world.channels;
-			return {
-				channels: Object.fromEntries(
-					values.map(value => {
-						const channel = channels.find(entry => entry.id === value);
-						if (!channel)
-							this.unknownSelectId(
-								'channel',
-								customId,
-								value,
-								channels.map(entry => entry.id),
-							);
-						return [value, { ...channel, permissions: DEFAULT_PERMISSIONS }];
-					}),
-				),
-			};
-		}
-
-		const users: Record<string, unknown> = {};
-		const members: Record<string, unknown> = {};
-		const roles: Record<string, unknown> = {};
-		for (const value of values) {
-			const role = this.world.roles.find(entry => entry.role.id === value)?.role;
-			const user = this.world.users.find(entry => entry.id === value);
-			const member = this.world.members.find(
-				entry =>
-					entry.member.user.id === value &&
-					(options.guildId === undefined || options.guildId === null || entry.guildId === options.guildId),
-			);
-			if (type === 5) {
-				const resolvedUser = user ?? member?.member.user;
-				if (!resolvedUser)
-					this.unknownSelectId(
-						'user',
-						customId,
-						value,
-						this.world.users.map(entry => entry.id),
-					);
-				users[value] = resolvedUser;
-				if (member) members[value] = { permissions: DEFAULT_PERMISSIONS, ...member.member };
-				continue;
-			}
-			if (role) {
-				roles[value] = role;
-				continue;
-			}
-			const resolvedUser = user ?? member?.member.user;
-			if (resolvedUser) {
-				users[value] = resolvedUser;
-				if (member) members[value] = { permissions: DEFAULT_PERMISSIONS, ...member.member };
-				continue;
-			}
-			this.unknownSelectId('mentionable', customId, value, [
-				...this.world.roles.map(entry => entry.role.id),
-				...this.world.users.map(entry => entry.id),
-				...this.world.members.map(entry => entry.member.user.id),
-			]);
-		}
-
-		return {
-			...(Object.keys(users).length ? { users } : {}),
-			...(Object.keys(members).length ? { members } : {}),
-			...(Object.keys(roles).length ? { roles } : {}),
-		};
 	}
 
 	get actions(): readonly RecordedAction[] {
@@ -1511,146 +1132,19 @@ export class MockBot {
 	}
 
 	/**
-	 * Install the component/middleware wrappers ONCE on the shared client singletons. Each wrapper reads the
-	 * active dispatch via AsyncLocalStorage (dispatchStore.getStore()) instead of closing over per-dispatch
-	 * call-local flags, so concurrent dispatches never clobber each other's resolution state.
+	 * Install the component/middleware wrappers ONCE on the shared client singletons. Delegates to the free
+	 * function in ./hooks and stores the detected capabilities it returns.
 	 *
 	 * @internal Called once by createMockBot after setup; not part of the public surface.
 	 */
 	installDispatchHooks(): void {
-		const componentHooks = this.client.components as unknown as {
-			execute?: (...args: unknown[]) => Promise<unknown>;
-			onComponent?: (id: string, interaction: { customId: string }) => Promise<unknown>;
-			hasComponent?: (id: string, customId: string) => boolean | undefined;
-			onModalSubmit?: (interaction: { user: { id: string } }) => unknown;
-		};
-		this.canDetectComponentCommand = typeof componentHooks.execute === 'function';
-		this.canDetectCollector =
-			typeof componentHooks.onComponent === 'function' && typeof componentHooks.hasComponent === 'function';
-		this.canDetectModalCollector = typeof componentHooks.onModalSubmit === 'function';
-
-		if (this.canDetectComponentCommand) {
-			const execute = componentHooks.execute?.bind(componentHooks);
-			componentHooks.execute = async (...args: unknown[]) => {
-				const ctx = dispatchStore.getStore();
-				if (ctx) ctx.componentCommandExecuted = true;
-				return execute?.(...args);
-			};
-		}
-		if (this.canDetectCollector) {
-			const onComponent = componentHooks.onComponent?.bind(componentHooks);
-			componentHooks.onComponent = async (id, interaction) => {
-				const ctx = dispatchStore.getStore();
-				if (ctx) ctx.collectorMatched = Boolean(componentHooks.hasComponent?.(id, interaction.customId));
-				return onComponent?.(id, interaction);
-			};
-		}
-		if (this.canDetectModalCollector) {
-			const onModalSubmit = componentHooks.onModalSubmit?.bind(componentHooks);
-			componentHooks.onModalSubmit = interaction => {
-				const ctx = dispatchStore.getStore();
-				if (ctx) ctx.modalMatched = true;
-				return onModalSubmit?.(interaction);
-			};
-		}
-		// Modal registration signal: seyfert's ctx.interaction.modal() calls components.modals.set(userId, exec)
-		// synchronously while replying. Wrap set() ONCE so any pending untilModal() waiter for that user resolves
-		// the instant the modal is registered — event-driven, no wall-clock poll.
-		const modals = this.client.components.modals as unknown as {
-			set: (key: string, value: unknown) => unknown;
-		};
-		const realSet = modals.set.bind(modals);
-		modals.set = (key: string, value: unknown) => {
-			const result = realSet(key, value);
-			const waiters = this.modalWaiters.get(key);
-			if (waiters) {
-				this.modalWaiters.delete(key);
-				for (const resolve of waiters) resolve();
-			}
-			return result;
-		};
-		// Denial detection: seyfert's __runMiddlewares only resolves on next()/stop()/pass(). A guard that
-		// replies and returns without calling any of them leaves the chain pending forever, so command.run is
-		// structurally never reached and handleCommand.interaction never settles. Wrap each middleware to notice
-		// when it terminates the chain and settle the dispatch with whatever was already captured.
-		const middlewares = this.client.middlewares as Record<string, WrappedMiddleware> | undefined;
-		if (middlewares) {
-			for (const key of Object.keys(middlewares)) {
-				const real = middlewares[key];
-				middlewares[key] = (controls: MiddlewareControls) => {
-					const ctx = dispatchStore.getStore();
-					// progressed is per-invocation: a middleware chain runs sequentially, so each invocation
-					// gets its own flag. It must NOT be hoisted into the shared dispatch context.
-					let progressed = false;
-					const mark =
-						(fn: MiddlewareControl): MiddlewareControl =>
-						(...args) => {
-							progressed = true;
-							return fn(...args);
-						};
-					// stop(reason) terminates the chain and routes through onMiddlewaresError: record it as a
-					// structured 'stop' denial, capturing the reason argument, before delegating.
-					const stop: MiddlewareControl = (...args) => {
-						if (ctx) ctx.denial = { kind: 'stop', reason: args[0], middleware: key };
-						progressed = true;
-						return controls.stop(...args);
-					};
-					const result = real({
-						...controls,
-						next: mark(controls.next),
-						stop,
-						pass: mark(controls.pass),
-					});
-					Promise.resolve(result).then(
-						() => {
-							if (progressed) return;
-							// The middleware denied (replied + returned without next/stop/pass). Its reply may still be
-							// recording through async REST hops, so don't settle after a single tick. Drain until this
-							// dispatch's REST surface is quiescent: action count stable across a tick AND none in flight.
-							if (ctx && !ctx.denial) ctx.denial = { kind: 'no-next', middleware: key };
-							void this.drainUntilQuiescent(ctx?.dispatchId, () => progressed).then(() => {
-								if (!progressed) ctx?.resolveDenial?.();
-							});
-						},
-						() => {},
-					);
-					return result;
-				};
-			}
-		}
-		this.installPermissionDenialHooks();
-	}
-
-	/**
-	 * Seyfert checks `defaultMemberPermissions` / `botPermissions` BEFORE the middleware chain and, on failure,
-	 * calls the command's own `onPermissionsFail` / `onBotPermissionsFail` and returns — `run` is never reached.
-	 * These are command-instance methods (optional), so we wrap each command (and its subcommands) to record a
-	 * structured permissions denial. The original hook still fires, so existing copy-based assertions keep working.
-	 */
-	private installPermissionDenialHooks(): void {
-		const wrapped = new WeakSet<object>();
-		const wrap = (command: PermissionGuardedCommand): void => {
-			if (wrapped.has(command)) return;
-			wrapped.add(command);
-			const real = {
-				onPermissionsFail: command.onPermissionsFail,
-				onBotPermissionsFail: command.onBotPermissionsFail,
-			};
-			command.onPermissionsFail = function (this: unknown, context: unknown, missing: unknown) {
-				const ctx = dispatchStore.getStore();
-				if (ctx) ctx.denial = { kind: 'permissions', missing: toPermissionNames(missing) };
-				return real.onPermissionsFail?.call(this, context, missing);
-			};
-			command.onBotPermissionsFail = function (this: unknown, context: unknown, missing: unknown) {
-				const ctx = dispatchStore.getStore();
-				if (ctx) ctx.denial = { kind: 'bot-permissions', missing: toPermissionNames(missing) };
-				return real.onBotPermissionsFail?.call(this, context, missing);
-			};
-			for (const option of command.options ?? []) {
-				if (option && typeof option === 'object' && 'run' in option) wrap(option as PermissionGuardedCommand);
-			}
-		};
-		for (const command of this.client.commands.values as unknown as PermissionGuardedCommand[]) wrap(command);
+		const capabilities = installDispatchHooksImpl(this.client, {
+			modalWaiters: this.modalWaiters,
+			drainUntilQuiescent: (dispatchId, aborted) => this.drainUntilQuiescent(dispatchId, aborted),
+		});
+		this.canDetectComponentCommand = capabilities.canDetectComponentCommand;
+		this.canDetectCollector = capabilities.canDetectCollector;
+		this.canDetectModalCollector = capabilities.canDetectModalCollector;
 	}
 
 	private async runInteraction(payload: ApiInteractionPayload, dispatchId: number): Promise<DispatchResult> {
@@ -1851,18 +1345,22 @@ export class MockBot {
 				? ({ ...(classOptions ?? {}), name: new commandOrOptions().name } as ChatInputInteractionOptions)
 				: commandOrOptions;
 		this.assertCommandRegistered(options.name, ApplicationCommandType.ChatInput, 'slash');
-		return this.dispatchVia('slash', this.prepareChatInputOptions(options), chatInputInteraction);
+		return this.dispatchVia(
+			'slash',
+			prepareChatInputOptions(this.client.commands.values, options, this.validateOptions),
+			chatInputInteraction,
+		);
 	}
 
 	autocomplete(options: AutocompleteInteractionOptions): Dispatch<AutocompleteResult> {
 		this.assertOpen('autocomplete');
 		this.assertCommandRegistered(options.name, ApplicationCommandType.ChatInput, 'autocomplete');
-		const definitions = this.optionDefinitionsFor(options);
+		const definitions = optionDefinitionsFor(this.client.commands.values, options);
 		const payload = autocompleteInteraction(
 			this.applyWorldPermissions({
 				user: this.defaultUser,
 				...options,
-				optionTypes: { ...(options.optionTypes ?? {}), ...this.optionTypesFor(definitions) },
+				optionTypes: { ...(options.optionTypes ?? {}), ...optionTypesFor(definitions) },
 			}),
 		);
 		const userId = payload.member?.user.id ?? payload.user?.id;
@@ -1962,7 +1460,7 @@ export class MockBot {
 		return this.dispatchVia('selectMenu', opts, prepared => {
 			const message = this.resolveMessageSource(source);
 			this.assertComponentHandleable('selectMenu', customId, message);
-			const resolved = this.resolveSelectResolved(customId, values, prepared);
+			const resolved = resolveSelectResolved(this.world, customId, values, prepared);
 			return selectMenuInteraction({
 				...prepared,
 				...(resolved ? { resolved } : {}),
@@ -2095,7 +1593,7 @@ export class MockBot {
 	}
 
 	private applyWorldEvent(name: string, d: Record<string, unknown>): void {
-		WORLD_EVENT_MUTATORS[name]?.(this.state, d);
+		applyWorldEvent(this.state, name, d);
 	}
 
 	reset(): void {
