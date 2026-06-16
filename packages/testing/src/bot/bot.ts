@@ -1825,6 +1825,13 @@ export class MockBot {
 		this.rest.releasePending();
 		this.rest.resetInterceptors();
 		this.dispatches.length = 0;
+		// F26: clear the client-side runtime component state so a modal or collector registered by an earlier
+		// dispatch can't match a later, unrelated one (every dispatch defaults to the same user, so a stale modal
+		// would otherwise run its callback for any custom_id). The registered ComponentCommands and the seeded
+		// world persist — reset() clears recorded traffic and transient handler state, not the bot's wiring.
+		this.client.components.modals.clear();
+		this.client.components.values.clear();
+		this.modalWaiters.clear();
 	}
 
 	async close(): Promise<void> {
