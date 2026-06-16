@@ -98,7 +98,7 @@ describe('world threads', () => {
 });
 
 describe('world voice states', () => {
-	test('registers a voice state readable via bot.voiceState and the cache', async () => {
+	test('registers a voice state readable via bot.cachedVoiceState and the cache', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'voice-guild' });
 		const member = world.registerMember(guild.id, { user: apiUser({ id: 'voice-user' }) });
@@ -112,7 +112,7 @@ describe('world voice states', () => {
 
 		await using bot = await createMockBot({ world });
 
-		const voice = bot.voiceState(guild.id, member.user.id);
+		const voice = bot.cachedVoiceState(guild.id, member.user.id);
 		expect(voice?.channel_id).toBe(channel.id);
 		expect(voice?.user_id).toBe(member.user.id);
 		expect(voice?.self_mute).toBe(true);
@@ -121,7 +121,9 @@ describe('world voice states', () => {
 		const cached = await bot.client.cache.voiceStates?.get(member.user.id, guild.id);
 		expect(cached?.channelId).toBe(channel.id);
 
-		expect(bot.voiceState(guild.id, 'absent-user')).toBeUndefined();
+		expect(bot.cachedVoiceState(guild.id, 'absent-user')).toBeUndefined();
+
+		expect(bot.voiceState(guild.id, member.user.id)).toEqual(voice);
 	});
 
 	test('a command reads a seeded voice state from the cache', async () => {

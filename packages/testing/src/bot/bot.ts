@@ -83,7 +83,14 @@ import {
 	type TypedMatchedAction,
 } from './rest';
 import { FOLLOWUP_ROUTE, WEBHOOK_MESSAGE_ROUTE } from './routes';
-import { type ChannelView, type GuildView, type WorldDiff, type WorldSnapshot, WorldState } from './state';
+import {
+	type ChannelView,
+	type GuildMemberView,
+	type GuildView,
+	type WorldDiff,
+	type WorldSnapshot,
+	WorldState,
+} from './state';
 import { type MockWorld, seedWorld, type WorldBuilder } from './world';
 
 export { Dispatch } from './dispatch';
@@ -1297,9 +1304,14 @@ export class MockBot {
 		return this.state.guild(guildId);
 	}
 
-	/** The current world member for a guild/user, or undefined when absent (e.g. after a kick). */
-	cachedMember(guildId: string, userId: string): ApiMember | undefined {
-		return this.world?.members.find(entry => entry.guildId === guildId && entry.member.user.id === userId)?.member;
+	/**
+	 * The current world member for a guild/user as a {@link GuildMemberView}, or undefined when absent (e.g.
+	 * after a kick) or the guild is not in the world. Returns the SAME camelCase View that
+	 * `cachedGuild(guildId)?.member(userId)` returns, so switching between the two accessors reads identical
+	 * field names (`communicationDisabledUntil`, not the raw `communication_disabled_until`).
+	 */
+	cachedMember(guildId: string, userId: string): GuildMemberView | undefined {
+		return this.state.guild(guildId)?.member(userId);
 	}
 
 	cachedDm(userId: string): ChannelView | undefined {
@@ -1307,9 +1319,17 @@ export class MockBot {
 	}
 
 	/** The seeded voice state for a guild/user, or undefined when the user is not in voice. */
-	voiceState(guildId: string, userId: string): ApiVoiceState | undefined {
+	cachedVoiceState(guildId: string, userId: string): ApiVoiceState | undefined {
 		return this.world?.voiceStates?.find(entry => entry.guildId === guildId && entry.voiceState.user_id === userId)
 			?.voiceState;
+	}
+
+	/**
+	 * @deprecated Use {@link MockBot.cachedVoiceState} — renamed to join the `cached*` accessor family. This alias
+	 * delegates to it and will be removed in a future release.
+	 */
+	voiceState(guildId: string, userId: string): ApiVoiceState | undefined {
+		return this.cachedVoiceState(guildId, userId);
 	}
 
 	/**

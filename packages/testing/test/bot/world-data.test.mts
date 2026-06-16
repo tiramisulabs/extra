@@ -9,7 +9,7 @@ interface EconomyState {
 }
 
 describe('worldData passthrough store', () => {
-	test('round-trips app-specific data seeded via createMockBot({ worldData })', async () => {
+	test('seeds via createMockBot({ worldData }) isolated from the caller-owned input object', async () => {
 		const economy: EconomyState = { balances: { alice: 100, bob: 50 }, currency: 'gold' };
 		await using bot = await createMockBot({ worldData: { economy } });
 
@@ -17,9 +17,17 @@ describe('worldData passthrough store', () => {
 		expect(read).toEqual(economy);
 		expect(read?.balances.alice).toBe(100);
 		expect(bot.worldData('missing')).toBeUndefined();
+
+		// The store is seeded by value, not by reference: mutating the original input after construction must not
+		// leak into the bot's copy, and the bot's copy is a distinct object from what the caller still holds.
+		expect(read).not.toBe(economy);
+		economy.balances.alice = 999;
+		economy.currency = 'mutated';
+		expect(bot.worldData<EconomyState>('economy')?.balances.alice).toBe(100);
+		expect(bot.worldData<EconomyState>('economy')?.currency).toBe('gold');
 	});
 
-	test('round-trips data attached with world.set() alongside world entities', async () => {
+	test('worldData returns the live stored reference, so a write through it is observed by later reads', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ name: 'Lab' });
 		world.set('featureFlags', { economy: true, beta: false });
@@ -29,18 +37,28 @@ describe('worldData passthrough store', () => {
 
 		expect(bot.worldData<Record<string, boolean>>('featureFlags')).toEqual({ economy: true, beta: false });
 		expect(bot.worldData<string>('seedGuildId')).toBe(guild.id);
+
+		// worldData() hands back the live store entry (no per-read clone): two reads are the same object, and a
+		// domain layer that mutates the returned object sees the change on the next read.
+		const flags = bot.worldData<Record<string, boolean>>('featureFlags');
+		expect(bot.worldData('featureFlags')).toBe(flags);
+		flags!.beta = true;
+		expect(bot.worldData<Record<string, boolean>>('featureFlags')?.beta).toBe(true);
 	});
 
-	test('worldData option merges over world.set() data without mangling it', async () => {
+	test('worldData option deep-merges over world.set() data, overriding only the colliding key', async () => {
 		const world = mockWorld();
 		world.set('a', 1);
 		world.set('b', 2);
+		world.set('nested', { keep: 'me' });
 
 		await using bot = await createMockBot({ world, worldData: { b: 20, c: 30 } });
 
 		expect(bot.worldData('a')).toBe(1);
 		expect(bot.worldData('b')).toBe(20);
 		expect(bot.worldData('c')).toBe(30);
+		// Keys the option did not touch survive the merge untouched.
+		expect(bot.worldData('nested')).toEqual({ keep: 'me' });
 	});
 
 	test('the mock never interprets the data: it survives a dispatch verbatim', async () => {

@@ -1,9 +1,16 @@
 import { Command, type CommandContext, Declare, Middlewares } from 'seyfert';
-import { describe, expect, test } from 'vitest';
+import { beforeEach, describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { GreetCommand, testMiddlewares } from './_setup';
 
 describe('structured denial info on dispatch results', () => {
+	// Same pattern as slash.test.mts' deniedBodyRan: a denied command's run body pushes here, so a test can
+	// assert the body never executed (the tracker stays empty) rather than only inspecting the denial metadata.
+	const bodyRan: string[] = [];
+	beforeEach(() => {
+		bodyRan.length = 0;
+	});
+
 	@Declare({ name: 'blocked-command', description: 'Blocked by middleware' })
 	@Middlewares(['blocker'])
 	class BlockedCommand extends Command {
@@ -11,6 +18,7 @@ describe('structured denial info on dispatch results', () => {
 			await ctx.write({ content: `middleware:${error}` });
 		}
 		async run(ctx: CommandContext) {
+			bodyRan.push('blocked-command');
 			await ctx.write({ content: 'should not run' });
 		}
 	}
@@ -19,6 +27,7 @@ describe('structured denial info on dispatch results', () => {
 	@Middlewares(['denier'])
 	class DeniedCommand extends Command {
 		async run(ctx: CommandContext) {
+			bodyRan.push('denied-command');
 			await ctx.write({ content: 'should not run' });
 		}
 	}
@@ -33,6 +42,7 @@ describe('structured denial info on dispatch results', () => {
 			await ctx.editOrReply({ content: 'missing member perms' });
 		}
 		async run(ctx: CommandContext) {
+			bodyRan.push('needs-member-ban');
 			await ctx.write({ content: 'member ok' });
 		}
 	}
@@ -47,6 +57,7 @@ describe('structured denial info on dispatch results', () => {
 			await ctx.editOrReply({ content: 'missing bot perms' });
 		}
 		async run(ctx: CommandContext) {
+			bodyRan.push('needs-bot-ban');
 			await ctx.write({ content: 'bot ok' });
 		}
 	}
@@ -59,6 +70,7 @@ describe('structured denial info on dispatch results', () => {
 		expect(result.denial?.kind).toBe('stop');
 		expect(result.denial?.reason).toBe('blocked');
 		expect(result.denial?.middleware).toBe('blocker');
+		expect(bodyRan).toEqual([]);
 		await bot.close();
 	});
 
@@ -69,6 +81,7 @@ describe('structured denial info on dispatch results', () => {
 		expect(result.denied).toBe(true);
 		expect(result.denial?.kind).toBe('no-next');
 		expect(result.denial?.middleware).toBe('denier');
+		expect(bodyRan).toEqual([]);
 		await bot.close();
 	});
 
@@ -79,6 +92,7 @@ describe('structured denial info on dispatch results', () => {
 		expect(result.denied).toBe(true);
 		expect(result.denial?.kind).toBe('permissions');
 		expect(result.denial?.missing).toContain('BanMembers');
+		expect(bodyRan).toEqual([]);
 		await bot.close();
 	});
 
@@ -89,6 +103,7 @@ describe('structured denial info on dispatch results', () => {
 		expect(result.denied).toBe(true);
 		expect(result.denial?.kind).toBe('bot-permissions');
 		expect(result.denial?.missing).toContain('BanMembers');
+		expect(bodyRan).toEqual([]);
 		await bot.close();
 	});
 

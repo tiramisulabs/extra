@@ -80,4 +80,26 @@ describe('message list pagination', () => {
 	test('limit composes with before', async () => {
 		expect(await fetchIds({ before: 'm5', limit: 2 })).toEqual(['m4', 'm3']);
 	});
+
+	test('before the oldest message returns empty', async () => {
+		expect(await fetchIds({ before: 'm1' })).toEqual([]);
+	});
+
+	test('after the newest message returns empty', async () => {
+		expect(await fetchIds({ after: 'm5' })).toEqual([]);
+	});
+
+	test('limit: 0 returns empty', async () => {
+		expect(await fetchIds({ limit: 0 })).toEqual([]);
+	});
+
+	// Discord rejects an out-of-range before/after id, but the mock has no such validation: an unknown
+	// anchor falls back to the unfiltered newest-first page. Pinned here so the fallback cannot drift silently.
+	test('before an unknown id falls back to the full newest-first page', async () => {
+		expect(await fetchIds({ before: 'does-not-exist' })).toEqual(['m5', 'm4', 'm3', 'm2', 'm1']);
+	});
+
+	test('after an unknown id falls back to the full newest-first page', async () => {
+		expect(await fetchIds({ after: 'does-not-exist' })).toEqual(['m5', 'm4', 'm3', 'm2', 'm1']);
+	});
 });

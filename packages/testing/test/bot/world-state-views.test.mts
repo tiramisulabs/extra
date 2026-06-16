@@ -325,14 +325,14 @@ describe('emitEvent bridges into world views', () => {
 			{ guild_id: guild.id, user_id: 'speaker', channel_id: channel.id },
 			{ updateCache: true },
 		);
-		expect(bot.voiceState(guild.id, 'speaker')?.channel_id).toBe(channel.id);
+		expect(bot.cachedVoiceState(guild.id, 'speaker')?.channel_id).toBe(channel.id);
 
 		await bot.emitEvent(
 			'VOICE_STATE_UPDATE',
 			{ guild_id: guild.id, user_id: 'speaker', channel_id: null },
 			{ updateCache: true },
 		);
-		expect(bot.voiceState(guild.id, 'speaker')).toBeUndefined();
+		expect(bot.cachedVoiceState(guild.id, 'speaker')).toBeUndefined();
 		await bot.close();
 	});
 
