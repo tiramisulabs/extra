@@ -37,6 +37,11 @@ export interface MockWorld {
 	roles: { guildId: string; role: ApiRole }[];
 	messages: { channelId: string; message: ApiMessage }[];
 	voiceStates?: { guildId: string; voiceState: ApiVoiceState }[];
+	/**
+	 * App-specific key/value store, untouched by the mock. A domain layer seeds its own state here (and a test
+	 * reads it back via {@link MockBot.worldData}); the mock never interprets or mutates it. Pure passthrough.
+	 */
+	data?: Record<string, unknown>;
 }
 
 export type ChannelOverwriteInput = {
@@ -166,6 +171,15 @@ export class WorldBuilder {
 			user: apiUser({ id: options.botId ?? TEST_BOT_ID, bot: true, username: TEST_BOT_ID }),
 			roles: options.roles,
 		});
+	}
+
+	/**
+	 * Attach an app-specific value under `key` in the world's passthrough data store, read back via
+	 * {@link MockBot.worldData}. The mock never interprets it. Returns `this` for chaining.
+	 */
+	set(key: string, value: unknown): this {
+		(this.world.data ??= {})[key] = value;
+		return this;
 	}
 
 	registerMessage(channelId: string, options: Omit<ApiMessageOptions, 'channelId'> = {}): ApiMessage {

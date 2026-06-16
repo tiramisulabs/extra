@@ -495,6 +495,12 @@ export interface MockBotOptions {
 	middlewares?: ServicesOptions['middlewares'];
 	/** World entities to clone into the client cache and REST defaults. */
 	world?: MockWorld | WorldBuilder;
+	/**
+	 * App-specific key/value data attached to the world, read back via {@link MockBot.worldData}. The mock
+	 * never interprets or mutates it — pure passthrough storage for a domain layer to seed its own state and a
+	 * test to assert it. Merged over any `data` already on a passed `world`.
+	 */
+	worldData?: Record<string, unknown>;
 	/** How unmatched fallback GET requests are handled. */
 	onUnhandledRest?: 'warn' | 'error' | 'silent';
 	/** Emit matching cache/gateway events for stateful REST mutations. */
@@ -1248,6 +1254,15 @@ export class MockBot {
 	voiceState(guildId: string, userId: string): ApiVoiceState | undefined {
 		return this.world?.voiceStates?.find(entry => entry.guildId === guildId && entry.voiceState.user_id === userId)
 			?.voiceState;
+	}
+
+	/**
+	 * Read an app-specific value from the world's passthrough data store, seeded via `createMockBot({ worldData })`
+	 * or `world.set(key, value)`. The caller owns the type (`T`); the mock stores and returns the value verbatim,
+	 * never interpreting it. Returns `undefined` when the key was never set.
+	 */
+	worldData<T = unknown>(key: string): T | undefined {
+		return this.world?.data?.[key] as T | undefined;
 	}
 
 	/**
@@ -2037,7 +2052,12 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 		options.world && typeof (options.world as WorldBuilder).build === 'function'
 			? (options.world as WorldBuilder).build()
 			: (options.world as MockWorld | undefined);
-	const world = built ? structuredClone(built) : undefined;
+	const world: MockWorld | undefined = built
+		? structuredClone(built)
+		: options.worldData
+			? { guilds: [], channels: [], users: [], members: [], roles: [], messages: [] }
+			: undefined;
+	if (options.worldData && world) world.data = { ...world.data, ...structuredClone(options.worldData) };
 	const botId = options.botId ?? TEST_BOT_ID;
 	const prefixList = [...(options.prefixes ?? []), ...(options.mentionAsPrefix ? [`<@${botId}>`, `<@!${botId}>`] : [])];
 	// First-class `plugins` merges into `clientOptions.plugins`; the existing `clientOptions.plugins` path
