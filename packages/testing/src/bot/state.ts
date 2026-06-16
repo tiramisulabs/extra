@@ -11,6 +11,7 @@ import {
 	type ApiRole,
 	type ApiUser,
 	type ApiVoiceState,
+	type ApiWebhook,
 	apiAttachment,
 	apiAutoModRule,
 	apiChannel,
@@ -22,6 +23,7 @@ import {
 	apiRole,
 	apiUser,
 	apiVoiceState,
+	apiWebhook,
 	type ThreadMetadata,
 } from './payloads';
 import type { ChannelOverwriteLike } from './permissions';
@@ -248,6 +250,9 @@ export interface WorldStateReader {
 	autoModRule(guildId: string, ruleId: string): ApiAutoModRule | undefined;
 	threadMembers(channelId: string): string[];
 	activeThreads(guildId: string): Record<string, unknown>[];
+	webhookById(id: string): ApiWebhook | undefined;
+	webhooksForGuild(guildId: string): ApiWebhook[];
+	webhooksForChannel(channelId: string): ApiWebhook[];
 }
 
 const EMPTY_WORLD = (): MockWorld => ({ guilds: [], channels: [], users: [], members: [], roles: [], messages: [] });
@@ -409,6 +414,7 @@ export class WorldState implements WorldStateReader {
 	private readonly messageIdByToken = new Map<string, string>();
 	private readonly channelIdByToken = new Map<string, string>();
 	private readonly invitesByCode = new Map<string, ApiInvite>();
+	private readonly webhooksById = new Map<string, ApiWebhook>();
 	private readonly reactionsByMessage = new Map<string, Map<string, Set<string>>>();
 	private readonly pinnedByChannel = new Map<string, string[]>();
 	private readonly pollVotersByMessage = new Map<string, Map<number, Set<string>>>();
@@ -421,6 +427,7 @@ export class WorldState implements WorldStateReader {
 		this.world.guildEmojis ??= [];
 		this.world.autoModRules ??= [];
 		for (const invite of this.world.invites ?? []) this.invitesByCode.set(invite.code, invite);
+		for (const webhook of this.world.webhooks ?? []) this.webhooksById.set(webhook.id, webhook);
 		for (const channel of this.world.channels) {
 			if (channel.type === 1 && channel.id) this.dmChannelByUser.set(channel.id, channel.id);
 		}
@@ -815,11 +822,12 @@ export class WorldState implements WorldStateReader {
 			message => message.channelId === channelId && message.message.id === messageId,
 		);
 		if (!entry) return;
-		if ('content' in raw) entry.message.content = stringValue(raw.content) ?? '';
-		if ('embeds' in raw) entry.message.embeds = arrayValue(raw.embeds);
-		if ('components' in raw) entry.message.components = arrayValue(raw.components);
-		if ('attachments' in raw) entry.message.attachments = normalizeAttachments(raw.attachments);
-		if ('flags' in raw) entry.message.flags = numberValue(raw.flags) ?? entry.message.flags;
+		if ('content' in raw && raw.content !== undefined) entry.message.content = stringValue(raw.content) ?? '';
+		if (raw.embeds !== undefined) entry.message.embeds = arrayValue(raw.embeds);
+		if (raw.components !== undefined) entry.message.components = arrayValue(raw.components);
+		if ('attachments' in raw && raw.attachments !== undefined)
+			entry.message.attachments = normalizeAttachments(raw.attachments);
+		if (raw.flags !== undefined) entry.message.flags = numberValue(raw.flags) ?? entry.message.flags;
 	}
 
 	/** @internal Mock internals normally call this when Discord deletes a message. */
@@ -1257,6 +1265,42 @@ export class WorldState implements WorldStateReader {
 					channel.thread_metadata.archived !== true,
 			)
 			.map(channel => ({ ...channel }));
+	}
+
+	/** @internal Mock internals normally call this when Discord creates a webhook. */
+	registerWebhook(options: Parameters<typeof apiWebhook>[0]): ApiWebhook {
+		const webhook = apiWebhook(options);
+		this.webhooksById.set(webhook.id, webhook);
+		return webhook;
+	}
+
+	/** @internal Mock internals normally call this when Discord edits a webhook. */
+	editWebhook(id: string, patch: Record<string, unknown>): ApiWebhook | undefined {
+		const webhook = this.webhooksById.get(id);
+		if (!webhook) return undefined;
+		if ('name' in patch) webhook.name = stringValue(patch.name) ?? webhook.name;
+		if ('channel_id' in patch) webhook.channel_id = stringValue(patch.channel_id) ?? webhook.channel_id;
+		return { ...webhook };
+	}
+
+	/** @internal Mock internals normally call this when Discord deletes a webhook. */
+	removeWebhook(id: string): void {
+		this.webhooksById.delete(id);
+	}
+
+	/** A webhook by id. */
+	webhookById(id: string): ApiWebhook | undefined {
+		return this.webhooksById.get(id);
+	}
+
+	/** The webhooks of a guild. */
+	webhooksForGuild(guildId: string): ApiWebhook[] {
+		return [...this.webhooksById.values()].filter(webhook => webhook.guild_id === guildId);
+	}
+
+	/** The webhooks of a channel. */
+	webhooksForChannel(channelId: string): ApiWebhook[] {
+		return [...this.webhooksById.values()].filter(webhook => webhook.channel_id === channelId);
 	}
 
 	/** @internal Mock internals normally call this when Discord edits a guild. */

@@ -10,6 +10,7 @@ import {
 	apiRole,
 	apiThreadMember,
 	apiUser,
+	apiWebhook,
 } from './payloads';
 import { apiError, type MockApiHandler, type RouteMatcher, type RouteResponder } from './rest';
 import { Routes } from './routes';
@@ -140,24 +141,64 @@ export function registerWorldDefaults(
 		Routes.fetchOriginalResponse,
 		(_pending, params) => hooks.state.messageForToken(params.interactionToken) ?? apiMessage(),
 	);
-	rest.intercept(
-		Routes.fetchWebhookMessage,
-		(_pending, params) => hooks.state.webhookMessage(params.interactionToken, params.messageId) ?? apiMessage(),
-	);
-	// Channel webhooks (sendLog-style). list returns [] so the bot takes the create path;
-	// create hands back a webhook whose id encodes the channel, so the later execute resolves it.
+	// A webhook execute (POST /webhooks/:id/:token) and webhook-message ops share the route shape of
+	// interaction followups/webhook-messages. Disambiguate by the registry: a known webhook id whose
+	// token matches resolves to its channel; otherwise the `wh-` sendLog encoding; otherwise it is an
+	// interaction token. Returns undefined for interaction tokens so they fall to the interaction path.
+	const resolveWebhookChannel = (id: string, token: string): string | undefined => {
+		const entry = hooks.state.webhookById(id);
+		if (entry && entry.token === token) return entry.channel_id;
+		return webhookChannelOf(id);
+	};
+	rest.intercept(Routes.fetchWebhookMessage, (_pending, params) => {
+		const channelId = resolveWebhookChannel(params.applicationId, params.interactionToken);
+		if (channelId) return hooks.state.rawMessage(channelId, params.messageId) ?? apiMessage();
+		return hooks.state.webhookMessage(params.interactionToken, params.messageId) ?? apiMessage();
+	});
+	// Channel webhooks (sendLog-style). list returns [] so the bot takes the create path; create hands
+	// back a webhook whose id encodes the channel AND registers it, so the later execute resolves it.
 	rest.intercept(Routes.listChannelWebhooks, () => []);
 	rest.intercept(Routes.createWebhook, (pending, params) => {
 		const raw = bodyRecord(pending.body);
-		return {
+		const guildId = world?.channels.find(channel => channel.id === params.channelId)?.guild_id;
+		return hooks.state.registerWebhook({
 			id: `${WEBHOOK_ID_PREFIX}${params.channelId}`,
-			type: 1,
-			channel_id: params.channelId,
+			channelId: params.channelId,
+			...(guildId === undefined ? {} : { guildId }),
 			name: typeof raw.name === 'string' ? raw.name : 'mock-webhook',
 			token: 'mock-webhook-token',
-			application_id: hooks.botId,
-		};
+			applicationId: hooks.botId,
+		});
 	});
+	rest.intercept(
+		Routes.fetchWebhook,
+		(_pending, params) => hooks.state.webhookById(params.webhookId) ?? apiWebhook({ id: params.webhookId }),
+	);
+	rest.intercept(
+		Routes.fetchWebhookToken,
+		(_pending, params) =>
+			hooks.state.webhookById(params.webhookId) ?? apiWebhook({ id: params.webhookId, token: params.webhookToken }),
+	);
+	rest.intercept(
+		Routes.editWebhook,
+		(pending, params) =>
+			hooks.state.editWebhook(params.webhookId, bodyRecord(pending.body)) ?? apiWebhook({ id: params.webhookId }),
+	);
+	rest.intercept(
+		Routes.editWebhookToken,
+		(pending, params) =>
+			hooks.state.editWebhook(params.webhookId, bodyRecord(pending.body)) ??
+			apiWebhook({ id: params.webhookId, token: params.webhookToken }),
+	);
+	rest.intercept(Routes.deleteWebhook, (_pending, params) => {
+		hooks.state.removeWebhook(params.webhookId);
+		return {};
+	});
+	rest.intercept(Routes.deleteWebhookToken, (_pending, params) => {
+		hooks.state.removeWebhook(params.webhookId);
+		return {};
+	});
+	rest.intercept(Routes.listGuildWebhooks, (_pending, params) => hooks.state.webhooksForGuild(params.guildId));
 	// Gateway reply transport: seyfert posts the interaction callback here. Materialize the original
 	// message synchronously (so an in-run fetchResponse sees it) and, when the caller asked for
 	// with_response, return the resource so editOrReply(body, true) resolves to a real message.
@@ -257,17 +298,27 @@ export function registerWorldDefaults(
 		hooks.state.deleteOriginalResponse(params.interactionToken);
 		return {};
 	});
-	rest.intercept(Routes.editWebhookMessage, (pending, params) =>
-		hooks.state.editWebhookMessage(params.interactionToken, params.messageId, bodyRecord(pending.body), hooks.botId),
-	);
+	rest.intercept(Routes.editWebhookMessage, (pending, params) => {
+		const channelId = resolveWebhookChannel(params.applicationId, params.interactionToken);
+		if (channelId) {
+			hooks.state.editMessage(channelId, params.messageId, bodyRecord(pending.body));
+			return hooks.state.rawMessage(channelId, params.messageId) ?? apiMessage({ id: params.messageId, channelId });
+		}
+		return hooks.state.editWebhookMessage(params.interactionToken, params.messageId, bodyRecord(pending.body), hooks.botId);
+	});
 	rest.intercept(Routes.deleteWebhookMessage, (_pending, params) => {
+		const channelId = resolveWebhookChannel(params.applicationId, params.interactionToken);
+		if (channelId) {
+			hooks.state.deleteMessage(channelId, params.messageId);
+			return {};
+		}
 		hooks.state.deleteWebhookMessage(params.interactionToken, params.messageId);
 		return {};
 	});
 	rest.intercept(Routes.followup, (pending, params) => {
-		// Same route shape as a webhook execute. A webhook-encoded id means it's a channel
-		// webhook send (sendLog); otherwise it's an interaction followup.
-		const webhookChannel = webhookChannelOf(params.applicationId);
+		// Same route shape as a webhook execute. A registered webhook id (or the `wh-` sendLog encoding)
+		// resolves to a channel; otherwise it is an interaction followup.
+		const webhookChannel = resolveWebhookChannel(params.applicationId, params.interactionToken);
 		if (webhookChannel) {
 			const view = hooks.state.addMessage(webhookChannel, bodyRecord(pending.body));
 			return hooks.state.rawMessage(webhookChannel, view.id) ?? apiMessage();

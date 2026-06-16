@@ -23,11 +23,14 @@ import {
 	type ApiUserOptions,
 	type ApiVoiceState,
 	type ApiVoiceStateOptions,
+	type ApiWebhook,
+	type ApiWebhookOptions,
 	apiAutoModRule,
 	apiChannel,
 	apiEmoji,
 	apiGuild,
 	apiInvite,
+	apiWebhook,
 	apiMember,
 	apiMessage,
 	apiRole,
@@ -49,6 +52,7 @@ export interface MockWorld {
 	guildEmojis?: { guildId: string; emoji: ApiEmoji }[];
 	invites?: ApiInvite[];
 	autoModRules?: { guildId: string; rule: ApiAutoModRule }[];
+	webhooks?: ApiWebhook[];
 	/**
 	 * App-specific key/value store, untouched by the mock. A domain layer seeds its own state here (and a test
 	 * reads it back via {@link MockBot.worldData}); the mock never interprets or mutates it. Pure passthrough.
@@ -93,6 +97,7 @@ export class WorldBuilder {
 		guildEmojis: [],
 		invites: [],
 		autoModRules: [],
+		webhooks: [],
 	};
 
 	private requireGuild(guildId: string): void {
@@ -182,6 +187,19 @@ export class WorldBuilder {
 		const rule = apiAutoModRule({ ...options, guildId });
 		(this.world.autoModRules ??= []).push({ guildId, rule });
 		return rule;
+	}
+
+	registerWebhook(channelId: string, options: Omit<ApiWebhookOptions, 'channelId' | 'guildId'> = {}): ApiWebhook {
+		this.requireChannel(channelId);
+		const channel = this.world.channels.find(entry => entry.id === channelId);
+		const webhook = apiWebhook({
+			applicationId: TEST_BOT_ID,
+			...options,
+			channelId,
+			...(channel?.guild_id === undefined ? {} : { guildId: channel.guild_id }),
+		});
+		(this.world.webhooks ??= []).push(webhook);
+		return webhook;
 	}
 
 	registerUser(options: ApiUserOptions = {}): ApiUser {

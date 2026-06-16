@@ -231,6 +231,40 @@ export function apiThreadMember(options: ApiThreadMemberOptions = {}): ApiThread
 	};
 }
 
+export interface ApiWebhookOptions {
+	id?: string;
+	type?: number;
+	channelId?: string;
+	guildId?: string;
+	name?: string;
+	token?: string;
+	applicationId?: string | null;
+}
+
+export interface ApiWebhook {
+	id: string;
+	type: number;
+	channel_id: string;
+	guild_id?: string;
+	name: string;
+	avatar: string | null;
+	token: string;
+	application_id: string | null;
+}
+
+export function apiWebhook(options: ApiWebhookOptions = {}): ApiWebhook {
+	return {
+		id: options.id ?? mockId(),
+		type: options.type ?? 1,
+		channel_id: options.channelId ?? mockId(),
+		...(options.guildId === undefined ? {} : { guild_id: options.guildId }),
+		name: options.name ?? 'slipher-test-webhook',
+		avatar: null,
+		token: options.token ?? 'mock-webhook-token',
+		application_id: options.applicationId ?? null,
+	};
+}
+
 export interface ThreadMetadata {
 	archived: boolean;
 	auto_archive_duration: number;

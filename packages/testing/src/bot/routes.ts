@@ -78,6 +78,13 @@ export const Routes = {
 	fetchActiveThreads: { method: 'GET', route: '/guilds/:guildId/threads/active' },
 	endPoll: { method: 'POST', route: '/channels/:channelId/polls/:messageId/expire' },
 	getPollAnswerVoters: { method: 'GET', route: '/channels/:channelId/polls/:messageId/answers/:answerId' },
+	fetchWebhook: { method: 'GET', route: '/webhooks/:webhookId' },
+	fetchWebhookToken: { method: 'GET', route: '/webhooks/:webhookId/:webhookToken' },
+	editWebhook: { method: 'PATCH', route: '/webhooks/:webhookId' },
+	editWebhookToken: { method: 'PATCH', route: '/webhooks/:webhookId/:webhookToken' },
+	deleteWebhook: { method: 'DELETE', route: '/webhooks/:webhookId' },
+	deleteWebhookToken: { method: 'DELETE', route: '/webhooks/:webhookId/:webhookToken' },
+	listGuildWebhooks: { method: 'GET', route: '/guilds/:guildId/webhooks' },
 } as const satisfies Record<string, RouteMatcher>;
 
 /**
@@ -164,6 +171,13 @@ export const ROUTE_COVERAGE = {
 	fetchActiveThreads: 'handled',
 	endPoll: 'handled',
 	getPollAnswerVoters: 'handled',
+	fetchWebhook: 'handled',
+	fetchWebhookToken: 'handled',
+	editWebhook: 'handled',
+	editWebhookToken: 'handled',
+	deleteWebhook: 'handled',
+	deleteWebhookToken: 'handled',
+	listGuildWebhooks: 'handled',
 } as const satisfies Record<keyof typeof Routes, 'handled' | 'synthetic'>;
 
 export const ORIGINAL_RESPONSE_ROUTE = /\/webhooks\/[^/]+\/[^/]+\/messages\/@original$/;
