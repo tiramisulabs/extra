@@ -246,6 +246,7 @@ export interface WorldStateReader {
 	guild(guildId: string): GuildView | undefined;
 	dm(userId: string): ChannelView | undefined;
 	channelMessages(channelId: string, options?: MessageQuery): RawMessage[];
+	messageView(channelId: string, messageId: string): MessageView | undefined;
 	rawMessage(channelId: string, messageId: string): RawMessage | undefined;
 	rawMessageById(messageId: string): RawMessage | undefined;
 	messageForToken(token: string): RawMessage | undefined;
@@ -632,6 +633,14 @@ export class WorldState implements WorldStateReader {
 		return entry ? this.withReactions(entry.channelId, entry.message) : undefined;
 	}
 
+	/** The {@link MessageView} for a stored message, or undefined when it is not in the channel. */
+	messageView(channelId: string, messageId: string): MessageView | undefined {
+		const entry = this.world.messages.find(
+			message => message.channelId === channelId && message.message.id === messageId,
+		);
+		return entry ? this.buildMessageView(entry.message) : undefined;
+	}
+
 	/** Discord reflects reactions on the message object as `{ emoji, count, me }`. */
 	private withReactions(channelId: string, message: ApiMessage): RawMessage {
 		const byEmoji = this.reactionsByMessage.get(this.reactionKey(channelId, message.id));
@@ -852,7 +861,7 @@ export class WorldState implements WorldStateReader {
 			this.pollVotersByMessage.set(this.reactionKey(channelId, message.id), voters);
 		}
 		this.world.messages.push({ channelId, message });
-		return this.messageView(message);
+		return this.buildMessageView(message);
 	}
 
 	/** @internal Mock internals normally call this when Discord edits a message. */
@@ -1572,12 +1581,12 @@ export class WorldState implements WorldStateReader {
 
 	private channelView(channel: ApiChannel): ChannelView {
 		const channelMessages = this.world.messages.filter(message => message.channelId === channel.id);
-		const messages = channelMessages.map(message => this.messageView(message.message));
+		const messages = channelMessages.map(message => this.buildMessageView(message.message));
 		const pinnedIds = this.pinnedByChannel.get(channel.id) ?? [];
 		const pins = pinnedIds
 			.map(id => channelMessages.find(message => message.message.id === id))
 			.filter((entry): entry is (typeof channelMessages)[number] => !!entry)
-			.map(entry => this.messageView(entry.message));
+			.map(entry => this.buildMessageView(entry.message));
 		return {
 			id: channel.id,
 			name: channel.name,
@@ -1615,7 +1624,7 @@ export class WorldState implements WorldStateReader {
 		};
 	}
 
-	private messageView(message: ApiMessage): MessageView {
+	private buildMessageView(message: ApiMessage): MessageView {
 		const buttons: ButtonView[] = [];
 		collectButtons(message.components, buttons);
 		const componentTypes: number[] = [];

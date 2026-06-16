@@ -87,6 +87,7 @@ import {
 	type ChannelView,
 	type GuildMemberView,
 	type GuildView,
+	type MessageView,
 	type WorldDiff,
 	type WorldSnapshot,
 	WorldState,
@@ -959,6 +960,11 @@ export class MockBot {
 
 	cachedDm(userId: string): ChannelView | undefined {
 		return this._state.dm(userId);
+	}
+
+	/** The view of a stored message by channel + id — collapses the cachedGuild→channel→find chain. */
+	cachedMessage(channelId: string, messageId: string): MessageView | undefined {
+		return this._state.messageView(channelId, messageId);
 	}
 
 	/** Seed a vote on a poll answer (poll voters are not part of the message body), then read it via getAnswerVoters. */
