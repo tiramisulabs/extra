@@ -913,7 +913,8 @@ export class WorldState implements WorldStateReader {
 		if ('nsfw' in patch && typeof patch.nsfw === 'boolean') channel.nsfw = patch.nsfw;
 		if ('rate_limit_per_user' in patch && numberValue(patch.rate_limit_per_user) !== undefined)
 			channel.rate_limit_per_user = numberValue(patch.rate_limit_per_user)!;
-		if ('position' in patch && numberValue(patch.position) !== undefined) channel.position = numberValue(patch.position)!;
+		if ('position' in patch && numberValue(patch.position) !== undefined)
+			channel.position = numberValue(patch.position)!;
 		if ('bitrate' in patch && numberValue(patch.bitrate) !== undefined) channel.bitrate = numberValue(patch.bitrate)!;
 		if ('user_limit' in patch && numberValue(patch.user_limit) !== undefined)
 			channel.user_limit = numberValue(patch.user_limit)!;
@@ -954,7 +955,9 @@ export class WorldState implements WorldStateReader {
 	/** The pinned messages of a channel, newest pin first. */
 	pins(channelId: string): Record<string, unknown>[] {
 		const ids = this.pinnedByChannel.get(channelId) ?? [];
-		return ids.map(id => this.rawMessage(channelId, id)).filter((message): message is Record<string, unknown> => !!message);
+		return ids
+			.map(id => this.rawMessage(channelId, id))
+			.filter((message): message is Record<string, unknown> => !!message);
 	}
 
 	/** The archived threads under a channel of the given type (public = 11, private = 12). */
@@ -963,9 +966,7 @@ export class WorldState implements WorldStateReader {
 		return this.world.channels
 			.filter(
 				channel =>
-					channel.parent_id === channelId &&
-					channel.type === threadType &&
-					channel.thread_metadata?.archived === true,
+					channel.parent_id === channelId && channel.type === threadType && channel.thread_metadata?.archived === true,
 			)
 			.map(channel => ({ ...channel }));
 	}

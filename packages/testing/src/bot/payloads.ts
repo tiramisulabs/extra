@@ -426,7 +426,9 @@ export interface ApiPollOptions {
 
 export function apiPoll(options: ApiPollOptions = {}): ApiPoll {
 	const question: ApiPollMedia =
-		typeof options.question === 'string' ? { text: options.question } : (options.question ?? { text: 'slipher-test-poll' });
+		typeof options.question === 'string'
+			? { text: options.question }
+			: (options.question ?? { text: 'slipher-test-poll' });
 	const answers: ApiPollAnswer[] = (options.answers ?? []).map((answer, index) => ({
 		answer_id: index + 1,
 		poll_media: typeof answer === 'string' ? { text: answer } : answer,
