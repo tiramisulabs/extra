@@ -1,6 +1,11 @@
 import { mockId, mockTimestamp } from '../id';
 import type { ChannelOverwriteLike } from './permissions';
 
+/** Spread an optional snake_case field: `...opt('guild_id', options.guildId)` adds the key only when set. */
+function opt<K extends string, V>(key: K, value: V | undefined): { [P in K]?: V } {
+	return (value === undefined ? {} : { [key]: value }) as { [P in K]?: V };
+}
+
 export interface ApiUserOptions {
 	id?: string;
 	username?: string;
@@ -124,7 +129,7 @@ export function apiEmoji(options: ApiEmojiOptions = {}): ApiEmoji {
 	return {
 		id: options.id ?? mockId(),
 		name: options.name ?? 'slipher_test_emoji',
-		...(options.guildId === undefined ? {} : { guild_id: options.guildId }),
+		...opt('guild_id', options.guildId),
 		animated: options.animated ?? false,
 		roles: options.roles ?? [],
 		require_colons: true,
@@ -159,13 +164,13 @@ export function apiInvite(options: ApiInviteOptions = {}): ApiInvite {
 	return {
 		code: options.code ?? mockId(),
 		channel_id: options.channelId ?? mockId(),
-		...(options.guildId === undefined ? {} : { guild_id: options.guildId }),
+		...opt('guild_id', options.guildId),
 		uses: options.uses ?? 0,
 		max_uses: options.maxUses ?? 0,
 		max_age: options.maxAge ?? 86400,
 		temporary: false,
 		created_at: mockTimestamp(),
-		...(options.inviter === undefined ? {} : { inviter: options.inviter }),
+		...opt('inviter', options.inviter),
 	};
 }
 
@@ -238,8 +243,8 @@ export interface ApiThreadMember {
 
 export function apiThreadMember(options: ApiThreadMemberOptions = {}): ApiThreadMember {
 	return {
-		...(options.threadId === undefined ? {} : { id: options.threadId }),
-		...(options.userId === undefined ? {} : { user_id: options.userId }),
+		...opt('id', options.threadId),
+		...opt('user_id', options.userId),
 		join_timestamp: mockTimestamp(),
 		flags: options.flags ?? 0,
 	};
@@ -271,7 +276,7 @@ export function apiWebhook(options: ApiWebhookOptions = {}): ApiWebhook {
 		id: options.id ?? mockId(),
 		type: options.type ?? 1,
 		channel_id: options.channelId ?? mockId(),
-		...(options.guildId === undefined ? {} : { guild_id: options.guildId }),
+		...opt('guild_id', options.guildId),
 		name: options.name ?? 'slipher-test-webhook',
 		avatar: null,
 		token: options.token ?? 'mock-webhook-token',
@@ -307,7 +312,7 @@ export function apiSticker(options: ApiStickerOptions = {}): ApiSticker {
 		tags: options.tags ?? 'slipher',
 		type: 2,
 		format_type: options.formatType ?? 1,
-		...(options.guildId === undefined ? {} : { guild_id: options.guildId }),
+		...opt('guild_id', options.guildId),
 		available: true,
 	};
 }
@@ -402,7 +407,7 @@ export function apiSoundboardSound(options: ApiSoundboardSoundOptions = {}): Api
 		volume: options.volume ?? 1,
 		emoji_id: null,
 		emoji_name: options.emojiName ?? null,
-		...(options.guildId === undefined ? {} : { guild_id: options.guildId }),
+		...opt('guild_id', options.guildId),
 		available: true,
 	};
 }
@@ -457,7 +462,7 @@ export function apiAuditLogEntry(options: ApiAuditLogEntryOptions = {}): ApiAudi
 		user_id: options.userId ?? null,
 		target_id: options.targetId ?? null,
 		changes: [],
-		...(options.reason === undefined ? {} : { reason: options.reason }),
+		...opt('reason', options.reason),
 	};
 }
 
@@ -501,11 +506,11 @@ export function apiChannel(options: ApiChannelOptions = {}): ApiChannel {
 		type: options.type ?? 0,
 		name: options.name ?? 'general',
 		...(guildId === null ? {} : { guild_id: guildId }),
-		...(options.parentId === undefined ? {} : { parent_id: options.parentId }),
+		...opt('parent_id', options.parentId),
 		position: 0,
 		permission_overwrites: options.permissionOverwrites ?? [],
 		nsfw: false,
-		...(options.threadMetadata === undefined ? {} : { thread_metadata: options.threadMetadata }),
+		...opt('thread_metadata', options.threadMetadata),
 	};
 }
 
@@ -527,7 +532,7 @@ export interface ApiThreadOptions {
  */
 export function apiThread(options: ApiThreadOptions): ApiChannel {
 	return apiChannel({
-		...(options.id === undefined ? {} : { id: options.id }),
+		...opt('id', options.id),
 		guildId: options.guildId,
 		name: options.name ?? 'slipher-test-thread',
 		type: options.type ?? 11,
@@ -571,7 +576,7 @@ export function apiMember(options: ApiMemberOptions = {}): ApiMember {
 		deaf: false,
 		mute: false,
 		flags: 0,
-		...(options.permissions === undefined ? {} : { permissions: options.permissions }),
+		...opt('permissions', options.permissions),
 		...(options.communicationDisabledUntil === undefined
 			? {}
 			: { communication_disabled_until: options.communicationDisabledUntil }),
@@ -602,7 +607,7 @@ export function memberOptionsFrom(input: MemberInput): Omit<ApiMemberOptions, 'u
 		nick: input.nick,
 		roles: input.roles,
 		joinedAt: input.joined_at,
-		...(input.permissions === undefined ? {} : { permissions: input.permissions }),
+		...opt('permissions', input.permissions),
 		...(input.communication_disabled_until === undefined
 			? {}
 			: { communicationDisabledUntil: input.communication_disabled_until }),
@@ -733,7 +738,7 @@ export function apiMessage(options: ApiMessageOptions = {}): ApiMessage {
 	return {
 		id: options.id ?? mockId(),
 		channel_id: options.channelId ?? mockId(),
-		...(options.guildId === undefined ? {} : { guild_id: options.guildId }),
+		...opt('guild_id', options.guildId),
 		author: options.author ?? apiUser(),
 		content: options.content ?? '',
 		timestamp: mockTimestamp(),
@@ -745,7 +750,7 @@ export function apiMessage(options: ApiMessageOptions = {}): ApiMessage {
 		attachments: (options.attachments as ApiAttachment[]) ?? [],
 		embeds: options.embeds ?? [],
 		components: options.components ?? [],
-		...(options.poll === undefined ? {} : { poll: options.poll }),
+		...opt('poll', options.poll),
 		pinned: false,
 		type: 0,
 		flags: options.flags ?? 0,

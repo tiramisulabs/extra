@@ -680,7 +680,7 @@ export class WorldState implements WorldStateReader {
 		this.channelIdByToken.set(token, channelId);
 	}
 
-	/** @internal Mock internals normally call this when Discord creates a channel. */
+	/** @internal When Discord creates a channel. */
 	addChannel(guildId: string | undefined, raw: Record<string, unknown>): Record<string, unknown> {
 		const type = numberValue(raw.type);
 		const parentId = stringValue(raw.parent_id);
@@ -698,7 +698,7 @@ export class WorldState implements WorldStateReader {
 		return { ...channel };
 	}
 
-	/** @internal Mock internals normally call this when Discord deletes a channel. */
+	/** @internal When Discord deletes a channel. */
 	removeChannel(channelId: string): void {
 		this.world.channels = this.world.channels.filter(channel => channel.id !== channelId);
 		for (const message of this.world.messages) {
@@ -714,7 +714,7 @@ export class WorldState implements WorldStateReader {
 	}
 
 	/**
-	 * @internal Mock internals normally call this on VOICE_STATE_UPDATE. Upserts the voice state for
+	 * @internal On VOICE_STATE_UPDATE. Upserts the voice state for
 	 * `{guild_id, user_id}`; a null `channel_id` is a disconnect and removes the entry.
 	 */
 	setVoiceState(raw: Record<string, unknown>): void {
@@ -748,7 +748,7 @@ export class WorldState implements WorldStateReader {
 		else states.push({ guildId, voiceState });
 	}
 
-	/** @internal Mock internals normally call this when Discord opens a DM. */
+	/** @internal When Discord opens a DM. */
 	registerDm(userId: string, raw: Record<string, unknown>): Record<string, unknown> {
 		const channel = this.addChannel(undefined, { ...raw, type: raw.type ?? 1 });
 		this.dmChannelByUser.set(userId, String(channel.id));
@@ -803,7 +803,7 @@ export class WorldState implements WorldStateReader {
 		return result;
 	}
 
-	/** @internal Mock internals normally call this when Discord creates a message. */
+	/** @internal When Discord creates a message. */
 	addMessage(channelId: string, raw: Record<string, unknown>): MessageView {
 		const channel = this.world.channels.find(entry => entry.id === channelId);
 		const rawAuthor = asRecord(raw.author);
@@ -867,7 +867,7 @@ export class WorldState implements WorldStateReader {
 		return this.buildMessageView(message);
 	}
 
-	/** @internal Mock internals normally call this when Discord edits a message. */
+	/** @internal When Discord edits a message. */
 	editMessage(channelId: string, messageId: string, raw: Record<string, unknown>): void {
 		const entry = this.world.messages.find(
 			message => message.channelId === channelId && message.message.id === messageId,
@@ -881,7 +881,7 @@ export class WorldState implements WorldStateReader {
 		if (raw.flags !== undefined) entry.message.flags = numberValue(raw.flags) ?? entry.message.flags;
 	}
 
-	/** @internal Mock internals normally call this when Discord deletes a message. */
+	/** @internal When Discord deletes a message. */
 	deleteMessage(channelId: string, messageId: string): void {
 		this.world.messages = this.world.messages.filter(
 			message => message.channelId !== channelId || message.message.id !== messageId,
@@ -913,7 +913,7 @@ export class WorldState implements WorldStateReader {
 		}
 	}
 
-	/** @internal Mock internals normally call this when a user reacts to a message. */
+	/** @internal When a user reacts to a message. */
 	addReaction(channelId: string, messageId: string, emoji: string, userId: string): void {
 		const key = this.reactionKey(channelId, messageId);
 		const decoded = this.decodeEmoji(emoji);
@@ -924,7 +924,7 @@ export class WorldState implements WorldStateReader {
 		this.reactionsByMessage.set(key, byEmoji);
 	}
 
-	/** @internal Mock internals normally call this when a user removes their reaction. */
+	/** @internal When a user removes their reaction. */
 	removeReaction(channelId: string, messageId: string, emoji: string, userId: string): void {
 		const byEmoji = this.reactionsByMessage.get(this.reactionKey(channelId, messageId));
 		if (!byEmoji) return;
@@ -935,12 +935,12 @@ export class WorldState implements WorldStateReader {
 		if (users.size === 0) byEmoji.delete(decoded);
 	}
 
-	/** @internal Mock internals normally call this when all reactions are purged from a message. */
+	/** @internal When all reactions are purged from a message. */
 	removeAllReactions(channelId: string, messageId: string): void {
 		this.reactionsByMessage.delete(this.reactionKey(channelId, messageId));
 	}
 
-	/** @internal Mock internals normally call this when one emoji's reactions are purged. */
+	/** @internal When one emoji's reactions are purged. */
 	removeEmojiReactions(channelId: string, messageId: string, emoji: string): void {
 		this.reactionsByMessage.get(this.reactionKey(channelId, messageId))?.delete(this.decodeEmoji(emoji));
 	}
@@ -962,7 +962,7 @@ export class WorldState implements WorldStateReader {
 		}));
 	}
 
-	/** @internal Mock internals normally call this when Discord adds a member. Idempotent (replace-or-push). */
+	/** @internal When Discord adds a member. Idempotent (replace-or-push). */
 	addMember(guildId: string, raw: Record<string, unknown>): void {
 		const rawUser = asRecord(raw.user);
 		const userId = stringValue(rawUser.id);
@@ -979,7 +979,7 @@ export class WorldState implements WorldStateReader {
 		else this.world.members.push({ guildId, member });
 	}
 
-	/** @internal Mock internals normally call this when Discord removes a member. */
+	/** @internal When Discord removes a member. */
 	removeMember(guildId: string, userId: string, banned: boolean): void {
 		this.world.members = this.world.members.filter(
 			entry => entry.guildId !== guildId || entry.member.user.id !== userId,
@@ -991,7 +991,7 @@ export class WorldState implements WorldStateReader {
 		}
 	}
 
-	/** @internal Mock internals normally call this when Discord lifts a ban. */
+	/** @internal When Discord lifts a ban. */
 	unban(guildId: string, userId: string): void {
 		this.bansByGuild.get(guildId)?.delete(userId);
 	}
@@ -1001,7 +1001,7 @@ export class WorldState implements WorldStateReader {
 		return [...(this.bansByGuild.get(guildId) ?? new Set<string>())];
 	}
 
-	/** @internal Mock internals normally call this when Discord edits a channel. */
+	/** @internal When Discord edits a channel. */
 	editChannel(channelId: string, patch: Record<string, unknown>): Record<string, unknown> | undefined {
 		const channel = this.world.channels.find(entry => entry.id === channelId);
 		if (!channel) return undefined;
@@ -1028,7 +1028,7 @@ export class WorldState implements WorldStateReader {
 		return { ...channel };
 	}
 
-	/** @internal Mock internals normally call this when Discord pins a message. Idempotent. */
+	/** @internal When Discord pins a message. Idempotent. */
 	pinMessage(channelId: string, messageId: string): void {
 		const entry = this.world.messages.find(
 			message => message.channelId === channelId && message.message.id === messageId,
@@ -1040,7 +1040,7 @@ export class WorldState implements WorldStateReader {
 		this.pinnedByChannel.set(channelId, ids);
 	}
 
-	/** @internal Mock internals normally call this when Discord unpins a message. */
+	/** @internal When Discord unpins a message. */
 	unpinMessage(channelId: string, messageId: string): void {
 		const entry = this.world.messages.find(
 			message => message.channelId === channelId && message.message.id === messageId,
@@ -1094,7 +1094,7 @@ export class WorldState implements WorldStateReader {
 		});
 	}
 
-	/** @internal Mock internals normally call this when Discord finalizes a poll. */
+	/** @internal When Discord finalizes a poll. */
 	finalizePoll(channelId: string, messageId: string): RawMessage | undefined {
 		const entry = this.world.messages.find(
 			message => message.channelId === channelId && message.message.id === messageId,
@@ -1111,13 +1111,13 @@ export class WorldState implements WorldStateReader {
 		return voters ? [...voters] : [];
 	}
 
-	/** @internal Mock internals normally call this when Discord rewrites member roles. */
+	/** @internal When Discord rewrites member roles. */
 	setMemberRoles(guildId: string, userId: string, roles: string[]): void {
 		const entry = this.world.members.find(member => member.guildId === guildId && member.member.user.id === userId);
 		if (entry) entry.member.roles = [...roles];
 	}
 
-	/** @internal Mock internals normally call this when Discord PATCHes a member. */
+	/** @internal When Discord PATCHes a member. */
 	patchMember(
 		guildId: string,
 		userId: string,
@@ -1132,7 +1132,7 @@ export class WorldState implements WorldStateReader {
 		}
 	}
 
-	/** @internal Mock internals normally call this when Discord creates a role. */
+	/** @internal When Discord creates a role. */
 	addRole(guildId: string, raw: Record<string, unknown>): ApiRole {
 		const role = apiRole({
 			id: stringValue(raw.id),
@@ -1144,7 +1144,7 @@ export class WorldState implements WorldStateReader {
 		return role;
 	}
 
-	/** @internal Mock internals normally call this when Discord edits a role. */
+	/** @internal When Discord edits a role. */
 	editRole(guildId: string, roleId: string, patch: Record<string, unknown>): ApiRole | undefined {
 		const entry = this.world.roles.find(role => role.guildId === guildId && role.role.id === roleId);
 		if (!entry) return undefined;
@@ -1156,12 +1156,12 @@ export class WorldState implements WorldStateReader {
 		return { ...entry.role };
 	}
 
-	/** @internal Mock internals normally call this when Discord deletes a role. */
+	/** @internal When Discord deletes a role. */
 	removeRole(guildId: string, roleId: string): void {
 		this.world.roles = this.world.roles.filter(entry => entry.guildId !== guildId || entry.role.id !== roleId);
 	}
 
-	/** @internal Mock internals normally call this when Discord creates an emoji. */
+	/** @internal When Discord creates an emoji. */
 	addEmoji(guildId: string, raw: Record<string, unknown>): ApiEmoji {
 		const emoji = apiEmoji({
 			id: stringValue(raw.id),
@@ -1174,7 +1174,7 @@ export class WorldState implements WorldStateReader {
 		return emoji;
 	}
 
-	/** @internal Mock internals normally call this when Discord edits an emoji. */
+	/** @internal When Discord edits an emoji. */
 	editEmoji(guildId: string, emojiId: string, patch: Record<string, unknown>): ApiEmoji | undefined {
 		const entry = (this.world.guildEmojis ?? []).find(e => e.guildId === guildId && e.emoji.id === emojiId);
 		if (!entry) return undefined;
@@ -1183,7 +1183,7 @@ export class WorldState implements WorldStateReader {
 		return { ...entry.emoji };
 	}
 
-	/** @internal Mock internals normally call this when Discord deletes an emoji. */
+	/** @internal When Discord deletes an emoji. */
 	removeEmoji(guildId: string, emojiId: string): void {
 		this.world.guildEmojis = (this.world.guildEmojis ?? []).filter(
 			e => e.guildId !== guildId || e.emoji.id !== emojiId,
@@ -1200,7 +1200,7 @@ export class WorldState implements WorldStateReader {
 		return (this.world.guildEmojis ?? []).find(e => e.guildId === guildId && e.emoji.id === emojiId)?.emoji;
 	}
 
-	/** @internal Mock internals normally call this when Discord creates an invite. */
+	/** @internal When Discord creates an invite. */
 	addInvite(channelId: string, guildId: string | undefined, raw: Record<string, unknown>): ApiInvite {
 		const invite = apiInvite({
 			code: stringValue(raw.code),
@@ -1213,7 +1213,7 @@ export class WorldState implements WorldStateReader {
 		return invite;
 	}
 
-	/** @internal Mock internals normally call this when Discord revokes an invite. */
+	/** @internal When Discord revokes an invite. */
 	removeInvite(code: string): ApiInvite | undefined {
 		const invite = this.invitesByCode.get(code);
 		this.invitesByCode.delete(code);
@@ -1240,7 +1240,7 @@ export class WorldState implements WorldStateReader {
 		return [...this.invitesByCode.values()].filter(invite => invite.guild_id === guildId);
 	}
 
-	/** @internal Mock internals normally call this when Discord creates an automod rule. */
+	/** @internal When Discord creates an automod rule. */
 	addAutoModRule(guildId: string, raw: Record<string, unknown>): ApiAutoModRule {
 		const rule = apiAutoModRule({
 			id: stringValue(raw.id),
@@ -1258,7 +1258,7 @@ export class WorldState implements WorldStateReader {
 		return rule;
 	}
 
-	/** @internal Mock internals normally call this when Discord edits an automod rule. */
+	/** @internal When Discord edits an automod rule. */
 	editAutoModRule(guildId: string, ruleId: string, patch: Record<string, unknown>): ApiAutoModRule | undefined {
 		const entry = (this.world.autoModRules ?? []).find(r => r.guildId === guildId && r.rule.id === ruleId);
 		if (!entry) return undefined;
@@ -1270,7 +1270,7 @@ export class WorldState implements WorldStateReader {
 		return { ...entry.rule };
 	}
 
-	/** @internal Mock internals normally call this when Discord deletes an automod rule. */
+	/** @internal When Discord deletes an automod rule. */
 	removeAutoModRule(guildId: string, ruleId: string): void {
 		this.world.autoModRules = (this.world.autoModRules ?? []).filter(
 			r => r.guildId !== guildId || r.rule.id !== ruleId,
@@ -1287,14 +1287,14 @@ export class WorldState implements WorldStateReader {
 		return (this.world.autoModRules ?? []).find(r => r.guildId === guildId && r.rule.id === ruleId)?.rule;
 	}
 
-	/** @internal Mock internals normally call this when a user joins a thread. Idempotent. */
+	/** @internal When a user joins a thread. Idempotent. */
 	addThreadMember(channelId: string, userId: string): void {
 		const set = this.threadMembersByChannel.get(channelId) ?? new Set<string>();
 		set.add(userId);
 		this.threadMembersByChannel.set(channelId, set);
 	}
 
-	/** @internal Mock internals normally call this when a user leaves a thread. */
+	/** @internal When a user leaves a thread. */
 	removeThreadMember(channelId: string, userId: string): void {
 		const set = this.threadMembersByChannel.get(channelId);
 		if (!set) return;
@@ -1319,14 +1319,14 @@ export class WorldState implements WorldStateReader {
 			.map(channel => ({ ...channel }));
 	}
 
-	/** @internal Mock internals normally call this when Discord creates a webhook. */
+	/** @internal When Discord creates a webhook. */
 	registerWebhook(options: Parameters<typeof apiWebhook>[0]): ApiWebhook {
 		const webhook = apiWebhook(options);
 		this.webhooksById.set(webhook.id, webhook);
 		return webhook;
 	}
 
-	/** @internal Mock internals normally call this when Discord edits a webhook. */
+	/** @internal When Discord edits a webhook. */
 	editWebhook(id: string, patch: Record<string, unknown>): ApiWebhook | undefined {
 		const webhook = this.webhooksById.get(id);
 		if (!webhook) return undefined;
@@ -1335,7 +1335,7 @@ export class WorldState implements WorldStateReader {
 		return { ...webhook };
 	}
 
-	/** @internal Mock internals normally call this when Discord deletes a webhook. */
+	/** @internal When Discord deletes a webhook. */
 	removeWebhook(id: string): void {
 		this.webhooksById.delete(id);
 	}
@@ -1355,7 +1355,7 @@ export class WorldState implements WorldStateReader {
 		return [...this.webhooksById.values()].filter(webhook => webhook.channel_id === channelId);
 	}
 
-	/** @internal Mock internals normally call this when Discord creates a sticker. */
+	/** @internal When Discord creates a sticker. */
 	addSticker(guildId: string, raw: Record<string, unknown>): ApiSticker {
 		const sticker = apiSticker({
 			id: stringValue(raw.id),
@@ -1368,7 +1368,7 @@ export class WorldState implements WorldStateReader {
 		return sticker;
 	}
 
-	/** @internal Mock internals normally call this when Discord edits a sticker. */
+	/** @internal When Discord edits a sticker. */
 	editSticker(guildId: string, stickerId: string, patch: Record<string, unknown>): ApiSticker | undefined {
 		const entry = (this.world.guildStickers ?? []).find(s => s.guildId === guildId && s.sticker.id === stickerId);
 		if (!entry) return undefined;
@@ -1378,7 +1378,7 @@ export class WorldState implements WorldStateReader {
 		return { ...entry.sticker };
 	}
 
-	/** @internal Mock internals normally call this when Discord deletes a sticker. */
+	/** @internal When Discord deletes a sticker. */
 	removeSticker(guildId: string, stickerId: string): void {
 		this.world.guildStickers = (this.world.guildStickers ?? []).filter(
 			s => s.guildId !== guildId || s.sticker.id !== stickerId,
@@ -1395,7 +1395,7 @@ export class WorldState implements WorldStateReader {
 		return (this.world.guildStickers ?? []).find(s => s.guildId === guildId && s.sticker.id === stickerId)?.sticker;
 	}
 
-	/** @internal Mock internals normally call this when Discord creates a scheduled event. */
+	/** @internal When Discord creates a scheduled event. */
 	addScheduledEvent(guildId: string, raw: Record<string, unknown>): ApiScheduledEvent {
 		const event = apiScheduledEvent({
 			id: stringValue(raw.id),
@@ -1411,7 +1411,7 @@ export class WorldState implements WorldStateReader {
 		return event;
 	}
 
-	/** @internal Mock internals normally call this when Discord deletes a scheduled event. */
+	/** @internal When Discord deletes a scheduled event. */
 	removeScheduledEvent(guildId: string, eventId: string): void {
 		this.world.scheduledEvents = (this.world.scheduledEvents ?? []).filter(
 			e => e.guildId !== guildId || e.event.id !== eventId,
@@ -1428,7 +1428,7 @@ export class WorldState implements WorldStateReader {
 		return (this.world.scheduledEvents ?? []).find(e => e.guildId === guildId && e.event.id === eventId)?.event;
 	}
 
-	/** @internal Mock internals normally call this when Discord creates a guild template. */
+	/** @internal When Discord creates a guild template. */
 	addGuildTemplate(guildId: string, raw: Record<string, unknown>): ApiGuildTemplate {
 		const template = apiGuildTemplate({
 			code: stringValue(raw.code),
@@ -1455,7 +1455,7 @@ export class WorldState implements WorldStateReader {
 		return (this.world.soundboardSounds ?? []).filter(s => s.guildId === guildId).map(s => s.sound);
 	}
 
-	/** @internal Mock internals normally call this when Discord creates a stage instance. */
+	/** @internal When Discord creates a stage instance. */
 	addStageInstance(raw: Record<string, unknown>): ApiStageInstance {
 		const channelId = stringValue(raw.channel_id) ?? mockId();
 		const guildId = this.world.channels.find(channel => channel.id === channelId)?.guild_id;
@@ -1472,7 +1472,7 @@ export class WorldState implements WorldStateReader {
 		return stage;
 	}
 
-	/** @internal Mock internals normally call this when Discord deletes a stage instance. */
+	/** @internal When Discord deletes a stage instance. */
 	removeStageInstance(channelId: string): void {
 		this.world.stageInstances = (this.world.stageInstances ?? []).filter(entry => entry.channel_id !== channelId);
 	}
@@ -1487,7 +1487,7 @@ export class WorldState implements WorldStateReader {
 		return (this.world.auditLogEntries ?? []).filter(e => e.guildId === guildId).map(e => e.entry);
 	}
 
-	/** @internal Mock internals normally call this when Discord edits a guild. */
+	/** @internal When Discord edits a guild. */
 	editGuild(guildId: string, patch: Record<string, unknown>): Record<string, unknown> | undefined {
 		const guild = this.world.guilds.find(entry => entry.id === guildId);
 		if (!guild) return undefined;
@@ -1500,7 +1500,7 @@ export class WorldState implements WorldStateReader {
 		return this.bansByGuild.get(guildId)?.has(userId) ?? false;
 	}
 
-	/** @internal Mock internals normally call this when Discord sets a channel permission overwrite. */
+	/** @internal When Discord sets a channel permission overwrite. */
 	setChannelOverwrite(channelId: string, overwriteId: string, overwrite: Record<string, unknown>): void {
 		const channel = this.world.channels.find(entry => entry.id === channelId);
 		if (!channel) return;
@@ -1516,14 +1516,14 @@ export class WorldState implements WorldStateReader {
 		];
 	}
 
-	/** @internal Mock internals normally call this when Discord removes a channel permission overwrite. */
+	/** @internal When Discord removes a channel permission overwrite. */
 	removeChannelOverwrite(channelId: string, overwriteId: string): void {
 		const channel = this.world.channels.find(entry => entry.id === channelId);
 		if (!channel) return;
 		channel.permission_overwrites = channel.permission_overwrites.filter(current => current.id !== overwriteId);
 	}
 
-	/** @internal Mock internals normally call this for an interaction's first visible reply. */
+	/** @internal For an interaction's first visible reply. */
 	addOriginalResponse(token: string, channelId: string, raw: Record<string, unknown>, authorId: string): RawMessage {
 		this.registerInteractionToken(token, channelId);
 		const view = this.addMessage(channelId, { ...raw, author_id: authorId });
@@ -1531,7 +1531,7 @@ export class WorldState implements WorldStateReader {
 		return this.rawMessageOr(channelId, view.id);
 	}
 
-	/** @internal Mock internals normally call this for webhook edits of @original. */
+	/** @internal For webhook edits of @original. */
 	upsertOriginalResponse(
 		token: string,
 		raw: Record<string, unknown>,
@@ -1545,7 +1545,7 @@ export class WorldState implements WorldStateReader {
 		return this.rawMessageOr(channelId, messageId);
 	}
 
-	/** @internal Mock internals normally call this for webhook edits of any interaction message. */
+	/** @internal For webhook edits of any interaction message. */
 	editWebhookMessage(
 		token: string,
 		messageId: string,
@@ -1559,7 +1559,7 @@ export class WorldState implements WorldStateReader {
 		return this.rawMessageOr(channelId, messageId);
 	}
 
-	/** @internal Mock internals normally call this for webhook followups. */
+	/** @internal For webhook followups. */
 	addFollowup(token: string, raw: Record<string, unknown>, authorId: string): RawMessage | Record<string, never> {
 		const channelId = this.channelIdByToken.get(token);
 		if (!channelId) return {};
@@ -1567,7 +1567,7 @@ export class WorldState implements WorldStateReader {
 		return this.rawMessageOr(channelId, view.id);
 	}
 
-	/** @internal Mock internals normally call this for webhook deletes of @original. */
+	/** @internal For webhook deletes of @original. */
 	deleteOriginalResponse(token: string): void {
 		const channelId = this.channelIdByToken.get(token);
 		const messageId = this.messageIdByToken.get(token);
@@ -1575,7 +1575,7 @@ export class WorldState implements WorldStateReader {
 		this.messageIdByToken.delete(token);
 	}
 
-	/** @internal Mock internals normally call this for webhook deletes of any interaction message. */
+	/** @internal For webhook deletes of any interaction message. */
 	deleteWebhookMessage(token: string, messageId: string): void {
 		if (messageId === '@original') {
 			this.deleteOriginalResponse(token);
