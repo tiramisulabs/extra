@@ -70,4 +70,16 @@ describe('plugins', () => {
 		expect(bot.plugins.map(info => info.name)).toContain('slipher-test-tracker');
 		await bot.close();
 	});
+
+	test('registeredEvents() includes events a plugin listens to, not just Event classes', async () => {
+		const plugin = createPlugin({
+			name: 'slipher-event-plugin',
+			register(api) {
+				api.events.on('messageCreate', () => {});
+			},
+		});
+		const bot = await createMockBot({ plugins: [plugin] });
+		expect(bot.registeredEvents()).toContain('MESSAGE_CREATE');
+		await bot.close();
+	});
 });

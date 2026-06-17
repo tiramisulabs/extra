@@ -83,7 +83,7 @@ import {
 } from './rest';
 import { FOLLOWUP_ROUTE, WEBHOOK_MESSAGE_ROUTE } from './routes';
 import { resolveSelectResolved } from './select-resolved';
-import { asUsingClient, clientLifecycle, eventsInternals } from './seyfert-internals';
+import { asUsingClient, clientLifecycle, eventsInternals, pluginEventNames } from './seyfert-internals';
 import {
 	type ButtonView,
 	type ChannelView,
@@ -1906,7 +1906,9 @@ export class MockBot {
 	 * way the gateway delivers them. Use it to assert wiring, or to debug an `emitEvent` that found no handler.
 	 */
 	registeredEvents(): string[] {
-		return Object.keys(eventsInternals(this.client).values);
+		const names = new Set(Object.keys(eventsInternals(this.client).values));
+		for (const name of pluginEventNames(this.client)) names.add(name);
+		return [...names];
 	}
 
 	/** Whether emitting `name` now would reach a handler: a live (not once-fired) Event, or a plugin listener. */
@@ -1950,6 +1952,11 @@ export class MockBot {
 		if (unstarted.length) {
 			console.warn(`[@slipher/testing] ${unstarted.length} dispatch(es) were created but never awaited or stepped.`);
 		}
+		// Drop modal registries so a stray deferred resolution can't fire after close. We do NOT auto-resolve a
+		// still-registered modal: that would run the handler's timeout branch (side effects) after the bot is shut.
+		this.client.components.modals.clear();
+		this.modalWaiters.clear();
+		this.displayedModals.clear();
 		this.rest.releasePending();
 		// client.close() is seyfert's plugin lifecycle close: it awaits in-flight setup and runs each plugin's
 		// teardown. Plugin teardown is therefore driven here symmetrically with the setup run at construction.

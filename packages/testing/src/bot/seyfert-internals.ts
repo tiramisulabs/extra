@@ -1,4 +1,5 @@
 import type { Client, UsingClient } from 'seyfert';
+import { normalizeEventName } from 'seyfert/lib/events/utils';
 
 /*
  * The mock bot drives a REAL seyfert Client, which means it reaches into a handful of seyfert internals that are
@@ -56,6 +57,12 @@ export function modalRegistry(client: Client): ModalRegistry {
 
 export function eventsInternals(client: Client): EventsInternals {
 	return client.events as unknown as EventsInternals;
+}
+
+/** Active named plugin event listeners, normalized to the gateway UPPER_SNAKE the events handler keys on. */
+export function pluginEventNames(client: Client): string[] {
+	const registry = (client as unknown as { pluginRegistry?: { events?: { name: string; active?: boolean }[] } }).pluginRegistry;
+	return (registry?.events ?? []).filter(listener => listener.active).map(listener => normalizeEventName(listener.name));
 }
 
 export function clientLifecycle(client: Client): ClientLifecycleInternals {
