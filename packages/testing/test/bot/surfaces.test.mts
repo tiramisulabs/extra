@@ -142,8 +142,8 @@ describe('additional command surfaces', () => {
 		await bot.close();
 	});
 
-	test('attachment options require resolved attachment payloads when validation is enabled', async () => {
-		const bot = await createMockBot({ commands: [AttachmentCheckCommand], validateOptions: true });
+	test('attachment options require resolved attachment payloads by default', async () => {
+		const bot = await createMockBot({ commands: [AttachmentCheckCommand] });
 
 		expect(() => bot.slash({ name: 'attachment-check', options: { file: 'attachment-id' } })).toThrow(
 			/attachmentOption/,
@@ -165,8 +165,8 @@ describe('additional command surfaces', () => {
 		await bot.close();
 	});
 
-	test('mentionable options require resolved user or role payloads when validation is enabled', async () => {
-		const bot = await createMockBot({ commands: [MentionableCheckCommand], validateOptions: true });
+	test('mentionable options require resolved user or role payloads by default', async () => {
+		const bot = await createMockBot({ commands: [MentionableCheckCommand] });
 
 		expect(() => bot.slash({ name: 'mentionable-check', options: { target: 'mention-user' } })).toThrow(
 			/mentionableOption/,
@@ -307,12 +307,21 @@ describe('additional command surfaces', () => {
 		await bot.close();
 	});
 
-	test('slash can validate options before dispatching to Seyfert', async () => {
-		const bot = await createMockBot({ commands: [NumericCheckCommand], validateOptions: true });
+	test('slash validates options before dispatching to Seyfert by default', async () => {
+		const bot = await createMockBot({ commands: [NumericCheckCommand] });
 
 		expect(() => bot.slash({ name: 'numeric-check', options: { count: 11, ratio: 1 } })).toThrow(
 			/count.*greater than 10/i,
 		);
+		await bot.close();
+	});
+
+	test('slash can opt out of option validation for raw payload experiments', async () => {
+		const bot = await createMockBot({ commands: [NumericCheckCommand], validateOptions: false });
+
+		await expect(bot.slash({ name: 'numeric-check', options: { count: 11, ratio: 1 } })).resolves.toMatchObject({
+			content: '11:1',
+		});
 		await bot.close();
 	});
 

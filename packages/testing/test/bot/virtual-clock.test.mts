@@ -56,7 +56,7 @@ describe('virtual clock', () => {
 			const bot = await createMockBot({ components: [FeedbackButton] });
 			const user = apiUser({ id: '777' });
 
-			const dispatch = bot.clickButton('open-feedback', { user });
+			const dispatch = bot.clickButton('open-feedback', { user, allowSyntheticSource: true });
 			await dispatch.untilModal();
 			const modal = await bot.fillModal('feedback-modal', { rating: '5' }, { user });
 			await dispatch;
@@ -94,7 +94,9 @@ describe('virtual clock', () => {
 			const bot = await createMockBot({ components: [FeedbackButton] });
 			const user = apiUser({ id: '888' });
 
-			const modal = await bot.clickButton('open-feedback', { user }).fillModal('feedback-modal', { rating: '5' });
+			const modal = await bot
+				.clickButton('open-feedback', { user, allowSyntheticSource: true })
+				.fillModal('feedback-modal', { rating: '5' });
 
 			expect(submitted).toEqual(['888']);
 			expect(modal.reply?.body).toMatchObject({ data: { content: 'thanks' } });
@@ -128,7 +130,7 @@ describe('virtual clock', () => {
 			const bot = await createMockBot({ components: [FeedbackButton] });
 			const user = apiUser({ id: 'timeout-user' });
 
-			await bot.clickButton('open-feedback', { user }).timeoutModal();
+			await bot.clickButton('open-feedback', { user, allowSyntheticSource: true }).timeoutModal();
 
 			expect(outcomes).toEqual(['timed-out']);
 			await bot.close();
@@ -150,7 +152,7 @@ describe('virtual clock', () => {
 
 			const bot = await createMockBot({ components: [FeedbackButton] });
 			const user = apiUser({ id: '999' });
-			bot.clickButton('open-feedback', { user }); // created but never stepped/awaited
+			bot.clickButton('open-feedback', { user, allowSyntheticSource: true }); // created but never stepped/awaited
 
 			expect(() => bot.fillModal('feedback-modal', { rating: '5' }, { user })).toThrow(/opener has not run/);
 			await bot.close();
@@ -174,7 +176,9 @@ describe('virtual clock', () => {
 
 			// Directly awaiting the opener (no untilModal/fillModal) would, in real seyfert, block 30s on the
 			// real-clock waitFor and silently take the timeout branch. The mock fails loud immediately instead.
-			await expect(bot.clickButton('open-stall', { user })).rejects.toThrow(/awaited directly/);
+			await expect(bot.clickButton('open-stall', { user, allowSyntheticSource: true })).rejects.toThrow(
+				/awaited directly/,
+			);
 			await bot.close();
 		});
 
@@ -265,7 +269,7 @@ describe('virtual clock', () => {
 		});
 		const user = apiUser({ id: '888' });
 
-		const dispatch = bot.clickButton('open-waitfor', { user });
+		const dispatch = bot.clickButton('open-waitfor', { user, allowSyntheticSource: true });
 		await dispatch.untilModal();
 		expect(outcomes).toEqual([]);
 		await bot.advanceTime(30_000);

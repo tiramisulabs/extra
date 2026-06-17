@@ -147,6 +147,24 @@ describe('world-mode existence enforcement', () => {
 		await bot.close();
 	});
 
+	test('creating a DM with an unknown user is a 404 Unknown User in world mode', async () => {
+		const { world } = seedGuildFixture('dm-missing');
+		const bot = await createMockBot({ world });
+		await expect(
+			bot.rest.request('POST', '/users/@me/channels', { body: { recipient_id: 'ghost-user' } }),
+		).rejects.toMatchObject({ code: DiscordErrors.UnknownUser.code });
+		await bot.close();
+	});
+
+	test('kicking a user who is not a guild member is a 404 Unknown Member in world mode', async () => {
+		const { world, guild } = seedGuildFixture('kick-missing');
+		const bot = await createMockBot({ world });
+		await expect(bot.rest.request('DELETE', `/guilds/${guild.id}/members/ghost-user`)).rejects.toMatchObject({
+			code: DiscordErrors.UnknownMember.code,
+		});
+		await bot.close();
+	});
+
 	test('adding a role that does not exist writes no phantom role — 404 Unknown Role', async () => {
 		const { world, guild, actor } = seedGuildFixture('ar-role');
 		const bot = await createMockBot({ world });

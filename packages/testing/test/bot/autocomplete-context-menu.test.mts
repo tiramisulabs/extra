@@ -1,6 +1,7 @@
 import {
 	Command,
 	ContextMenuCommand,
+	createBooleanOption,
 	createNumberOption,
 	createStringOption,
 	Declare,
@@ -28,6 +29,84 @@ describe('autocomplete and context menus', () => {
 		const bot = await createMockBot({ commands: [SearchCommand] });
 		const result = await bot.autocomplete({ name: 'search', focused: 'query', value: 'sey' });
 		expect(result.choices).toEqual([{ name: 'result:sey', value: 'sey' }]);
+		await bot.close();
+	});
+
+	test('autocomplete requires the focused option to be declared', async () => {
+		const bot = await createMockBot({ commands: [SearchCommand] });
+
+		expect(() => bot.autocomplete({ name: 'search', focused: 'missing', value: 'sey' })).toThrow(
+			/focused option "missing" is not declared/,
+		);
+		await bot.close();
+	});
+
+	test('autocomplete requires the focused option to define an autocomplete callback', async () => {
+		@Options({
+			query: createStringOption({ description: 'Search query' }),
+		})
+		@Declare({ name: 'plain-search', description: 'Plain search' })
+		class PlainSearchCommand extends Command {
+			async run() {}
+		}
+
+		const bot = await createMockBot({ commands: [PlainSearchCommand] });
+
+		expect(() => bot.autocomplete({ name: 'plain-search', focused: 'query', value: 'sey' })).toThrow(
+			/does not declare an autocomplete callback/,
+		);
+		await bot.close();
+	});
+
+	test('autocomplete can opt out of validation for raw payload experiments', async () => {
+		@Options({
+			query: createStringOption({ description: 'Search query' }),
+		})
+		@Declare({ name: 'plain-search-raw', description: 'Plain search raw payload' })
+		class PlainSearchRawCommand extends Command {
+			async run() {}
+		}
+
+		const bot = await createMockBot({ commands: [PlainSearchRawCommand], validateOptions: false });
+		const result = await bot.autocomplete({ name: 'plain-search-raw', focused: 'query', value: 'sey' });
+
+		expect(result.choices).toBeUndefined();
+		await bot.close();
+	});
+
+	test('autocomplete rejects passing the focused option again in options', async () => {
+		const bot = await createMockBot({ commands: [SearchCommand] });
+
+		expect(() =>
+			bot.autocomplete({ name: 'search', focused: 'query', value: 'sey', options: { query: 'already-present' } }),
+		).toThrow(/focused option "query" must be passed with focused\/value/);
+		await bot.close();
+	});
+
+	test('autocomplete rejects focused values with the wrong type', async () => {
+		const bot = await createMockBot({ commands: [SearchCommand] });
+
+		expect(() => bot.autocomplete({ name: 'search', focused: 'query', value: 1 })).toThrow(
+			/option "query" must be a string/,
+		);
+		await bot.close();
+	});
+
+	test('autocomplete rejects focused options with unsupported Discord option types', async () => {
+		const options = {
+			flag: Object.assign(createBooleanOption({ description: 'Flag' }), { autocomplete: async () => {} }),
+		};
+		@Options(options)
+		@Declare({ name: 'flag-search', description: 'Invalid autocomplete option type' })
+		class FlagSearchCommand extends Command {
+			async run() {}
+		}
+
+		const bot = await createMockBot({ commands: [FlagSearchCommand] });
+
+		expect(() => bot.autocomplete({ name: 'flag-search', focused: 'flag', value: 'true' })).toThrow(
+			/cannot autocomplete type 5/,
+		);
 		await bot.close();
 	});
 

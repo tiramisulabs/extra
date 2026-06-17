@@ -223,7 +223,7 @@ describe('createMockBot', () => {
 
 	test('res.command is undefined for component dispatches', async () => {
 		const bot = await createMockBot({ components: [ConfirmButton] });
-		const result = await bot.clickButton('confirm');
+		const result = await bot.clickButton('confirm', { allowSyntheticSource: true });
 		expect(result.command).toBeUndefined();
 		await bot.close();
 	});

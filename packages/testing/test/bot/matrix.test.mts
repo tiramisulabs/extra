@@ -30,13 +30,13 @@ const cases: MatrixCase[] = [
 	{
 		verb: 'clickButton',
 		name: 'button -> content',
-		run: bot => bot.clickButton('confirm'),
+		run: bot => bot.clickButton('confirm', { allowSyntheticSource: true }),
 		check: result => expect(result.content).toBe('Confirmed!'),
 	},
 	{
 		verb: 'selectMenu',
 		name: 'select menu -> values',
-		run: bot => bot.selectMenu('pick', ['red']),
+		run: bot => bot.selectMenu('pick', ['red'], { allowSyntheticSource: true }),
 		check: result => expect(result.content).toBe('Picked red'),
 	},
 	{

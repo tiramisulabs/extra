@@ -1,12 +1,22 @@
 import { Command, type CommandContext, ComponentCommand, type ComponentContext, Declare } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
+import { TEST_APPLICATION_ID } from '../../src/bot/constants';
 import { apiUser } from '../../src/bot/payloads';
 import { DiscordErrors } from '../../src/bot/rest';
 import { mockWorld } from '../../src/bot/world';
 import { seedGuildFixture } from './_setup';
 
 describe('interaction acknowledgement (fail loud before ack)', () => {
+	const interactionTokenFromLastCallback = (bot: Awaited<ReturnType<typeof createMockBot>>) => {
+		const action = [...bot.actions]
+			.reverse()
+			.find(entry => /\/interactions\/[^/]+\/[^/]+\/callback$/.test(entry.route));
+		const token = action?.route.match(/\/interactions\/[^/]+\/([^/]+)\/callback$/)?.[1];
+		if (!token) throw new Error('expected recorded interaction callback token');
+		return token;
+	};
+
 	test('followup() before any reply/defer is rejected', async () => {
 		const { world, guild, actor, channel } = seedGuildFixture('fu');
 		@Declare({ name: 'fu', description: 'followup with no prior reply' })
@@ -19,6 +29,71 @@ describe('interaction acknowledgement (fail loud before ack)', () => {
 		await expect(bot.slash({ name: 'fu', guildId: guild.id, channel, user: actor.user })).rejects.toThrow(
 			/unknown webhook|404|already/i,
 		);
+		await bot.close();
+	});
+
+	test('interaction webhook routes reject the wrong application id', async () => {
+		@Declare({ name: 'app-id', description: 'Replies once' })
+		class AppIdCommand extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.write({ content: 'ok' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [AppIdCommand], applicationId: 'real-app' });
+		await bot.slash({ name: 'app-id' });
+		const token = interactionTokenFromLastCallback(bot);
+
+		await expect(bot.rest.request('GET', `/webhooks/wrong-app/${token}/messages/@original`)).rejects.toMatchObject({
+			code: DiscordErrors.UnknownWebhook.code,
+		});
+		await bot.close();
+	});
+
+	test('deleted @original cannot be fetched or recreated by editResponse webhook routes', async () => {
+		@Declare({ name: 'delete-original', description: 'Replies once' })
+		class DeleteOriginalCommand extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.write({ content: 'ok' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [DeleteOriginalCommand], applicationId: 'real-app' });
+		await bot.slash({ name: 'delete-original' });
+		const token = interactionTokenFromLastCallback(bot);
+		await bot.rest.request('DELETE', `/webhooks/real-app/${token}/messages/@original`);
+
+		await expect(bot.rest.request('GET', `/webhooks/real-app/${token}/messages/@original`)).rejects.toMatchObject({
+			code: DiscordErrors.UnknownMessage.code,
+		});
+		await expect(
+			bot.rest.request('PATCH', `/webhooks/real-app/${token}/messages/@original`, { body: { content: 'again' } }),
+		).rejects.toMatchObject({ code: DiscordErrors.UnknownMessage.code });
+		await bot.close();
+	});
+
+	test('deleting the channel containing @original tombstones the interaction original', async () => {
+		const { world, guild, actor, channel } = seedGuildFixture('delete-original-channel');
+		@Declare({ name: 'delete-original-channel', description: 'Replies once in a channel that is later deleted' })
+		class DeleteOriginalChannelCommand extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.write({ content: 'ok' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [DeleteOriginalChannelCommand], world });
+		await bot.slash({ name: 'delete-original-channel', guildId: guild.id, channel, user: actor.user });
+		const token = interactionTokenFromLastCallback(bot);
+		await bot.rest.request('DELETE', `/channels/${channel.id}`);
+
+		await expect(
+			bot.rest.request('GET', `/webhooks/${TEST_APPLICATION_ID}/${token}/messages/@original`),
+		).rejects.toMatchObject({ code: DiscordErrors.UnknownMessage.code });
+		await expect(
+			bot.rest.request('PATCH', `/webhooks/${TEST_APPLICATION_ID}/${token}/messages/@original`, {
+				body: { content: 'again' },
+			}),
+		).rejects.toMatchObject({ code: DiscordErrors.UnknownMessage.code });
 		await bot.close();
 	});
 
@@ -66,9 +141,13 @@ describe('interaction acknowledgement (fail loud before ack)', () => {
 		const bot = await createMockBot();
 
 		await expect(
-			bot.rest.request('PATCH', '/webhooks/app/ghost-token/messages/followup-id', { body: { content: 'x' } }),
+			bot.rest.request('PATCH', `/webhooks/${TEST_APPLICATION_ID}/ghost-token/messages/followup-id`, {
+				body: { content: 'x' },
+			}),
 		).rejects.toMatchObject({ code: DiscordErrors.UnknownWebhook.code });
-		await expect(bot.rest.request('DELETE', '/webhooks/app/ghost-token/messages/followup-id')).rejects.toMatchObject({
+		await expect(
+			bot.rest.request('DELETE', `/webhooks/${TEST_APPLICATION_ID}/ghost-token/messages/followup-id`),
+		).rejects.toMatchObject({
 			code: DiscordErrors.UnknownWebhook.code,
 		});
 		await bot.close();

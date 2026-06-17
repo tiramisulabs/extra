@@ -30,7 +30,7 @@ describe('reset() isolation (F26)', () => {
 		});
 		const user = apiUser({ id: 'reset-user' });
 
-		const dispatch = bot.clickButton('open', { user });
+		const dispatch = bot.clickButton('open', { user, allowSyntheticSource: true });
 		await dispatch.untilModal(); // a modal is now registered for reset-user
 
 		bot.reset();

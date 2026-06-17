@@ -252,6 +252,30 @@ describe('outgoing message payload limits (fail loud)', () => {
 		await close();
 	});
 
+	test('a link button without url is rejected', async () => {
+		const { send, close } = await postBody({
+			components: [row({ type: 2, style: 5, label: 'Open' })],
+		});
+		await expect(send).rejects.toThrow(/link button requires a url/);
+		await close();
+	});
+
+	test('a link button with custom_id is rejected', async () => {
+		const { send, close } = await postBody({
+			components: [row({ type: 2, style: 5, label: 'Open', url: 'https://example.com', custom_id: 'open' })],
+		});
+		await expect(send).rejects.toThrow(/link button cannot have custom_id/);
+		await close();
+	});
+
+	test('a non-link button with url is rejected', async () => {
+		const { send, close } = await postBody({
+			components: [row(button({ custom_id: 'open', label: 'Open', url: 'https://example.com' }))],
+		});
+		await expect(send).rejects.toThrow(/non-link buttons cannot have url/);
+		await close();
+	});
+
 	test('whitespace-only content is rejected as empty', async () => {
 		const { dispatch, close } = await botWith((ctx, channelId) =>
 			ctx.client.messages.write(channelId, { content: '   \n  ' }),
@@ -274,6 +298,14 @@ describe('outgoing message payload limits (fail loud)', () => {
 			components: [row({ type: 3, custom_id: 's', max_values: 5, options: [{ label: 'a', value: 'a' }] })],
 		});
 		await expect(send).rejects.toThrow(/max_values cannot exceed the number of options/);
+		await close();
+	});
+
+	test('a string select whose min_values exceeds its option count is rejected', async () => {
+		const { send, close } = await postBody({
+			components: [row({ type: 3, custom_id: 's', min_values: 2, options: [{ label: 'a', value: 'a' }] })],
+		});
+		await expect(send).rejects.toThrow(/min_values cannot exceed the number of options/);
 		await close();
 	});
 

@@ -119,7 +119,7 @@ describe('fidelity fixes', () => {
 		expect(replyResult.deferredReply).toBe(true);
 		expect(replyResult.deferredUpdate).toBe(false);
 
-		const updateResult = await bot.clickButton('ack');
+		const updateResult = await bot.clickButton('ack', { allowSyntheticSource: true });
 		expect(updateResult.deferred).toBe(true);
 		expect(updateResult.deferredUpdate).toBe(true);
 		expect(updateResult.deferredReply).toBe(false);
