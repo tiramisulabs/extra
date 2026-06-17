@@ -124,6 +124,7 @@ export { WORLD_EVENT_NAMES } from './world-events';
 
 type ClientConstructorOptions = ConstructorParameters<typeof Client>[0];
 type ClientOptions = NonNullable<ClientConstructorOptions>;
+type MockClientOptions = Omit<ClientOptions, 'plugins'>;
 type ServicesOptions = Parameters<Client['setServices']>[0];
 
 async function runMockClientStartup(client: Client, options: MockBotOptions): Promise<void> {
@@ -227,9 +228,9 @@ export interface DispatchResult {
 	followups: OutgoingMessage[];
 	/** User-visible messages produced by replies, updates, edits, and followups in dispatch order. */
 	messages: OutgoingMessage[];
-	/** Raw embeds flattened from `messages`, in dispatch order (escape hatch; prefer `embedViews`). */
+	/** Raw embeds flattened from `messages`, in dispatch order. */
 	embeds: unknown[];
-	/** First raw embed from `embeds` (escape hatch; prefer `embedView`). */
+	/** First raw embed from `embeds`. */
 	embed?: unknown;
 	/** Parsed, typed camelCase embed views over `messages` — assert on these instead of casting raw `embed`. */
 	embedViews: EmbedView[];
@@ -567,13 +568,7 @@ export interface MockBotOptions {
 	/** Middleware registry passed to client.setServices(). */
 	middlewares?: ServicesOptions['middlewares'];
 	/** World entities to clone into the client cache and REST defaults. */
-	world?: MockWorld | WorldBuilder;
-	/**
-	 * App-specific key/value data attached to the world, read back via {@link MockBot.worldData}. The mock
-	 * never interprets or mutates it — pure passthrough storage for a domain layer to seed its own state and a
-	 * test to assert it. Merged over any `data` already on a passed `world`.
-	 */
-	worldData?: Record<string, unknown>;
+	world?: WorldBuilder;
 	/** How unmatched fallback GET requests are handled. */
 	onUnhandledRest?: 'warn' | 'error' | 'silent';
 	/**
@@ -599,14 +594,13 @@ export interface MockBotOptions {
 	 */
 	client?: Client;
 	/**
-	 * Seyfert plugins to load on the client. First-class form of `clientOptions.plugins`: both forward to the
-	 * Client constructor, where seyfert resolves them and runs each plugin's `setup`. `bot.plugins` surfaces the
-	 * loaded list and `bot.close()` (via `client.close()`) runs each plugin's `teardown`. When both are given,
-	 * this wins.
+	 * Seyfert plugins to load on the client. Plugins must reach the Client constructor, where seyfert resolves
+	 * them and runs each plugin's `setup`. `bot.plugins` surfaces the loaded list and `bot.close()` (via
+	 * `client.close()`) runs each plugin's `teardown`.
 	 */
 	plugins?: readonly AnySeyfertPlugin[];
-	/** Raw Seyfert client constructor options. */
-	clientOptions?: ClientConstructorOptions;
+	/** Raw Seyfert client constructor options, excluding plugin loading. Use `plugins` for plugins. */
+	clientOptions?: MockClientOptions;
 	/** Global middlewares forwarded to the real Seyfert client. */
 	globalMiddlewares?: ClientOptions['globalMiddlewares'];
 	/** Prefixes enabled for message command dispatch through say(). */
@@ -1397,8 +1391,8 @@ export class MockBot {
 	}
 
 	/**
-	 * Read an app-specific value from the world's passthrough data store, seeded via `createMockBot({ worldData })`
-	 * or `world.set(key, value)`. The caller owns the type (`T`); the mock stores and returns the value verbatim,
+	 * Read an app-specific value from the world's passthrough data store, seeded via `mockWorld().setData(key, value)`.
+	 * The caller owns the type (`T`); the mock stores and returns the value verbatim,
 	 * never interpreting it. Returns `undefined` when the key was never set.
 	 */
 	worldData<T = unknown>(key: string): T | undefined {
@@ -1884,7 +1878,7 @@ export class MockBot {
 	 * seyfert idiom); see {@link SlashOptionsOf}. The command's `name` comes from the class, so it is omitted here.
 	 *
 	 * Without a typed `run` the option bag degrades to an empty record (graceful, no compile error), mirroring the
-	 * `menu(Class)` precedent. The string overload — `slash({ name, options })` — remains the untyped escape hatch.
+	 * `menu(Class)` precedent. Pass `{ name, ... }` for concise raw name-based dispatch.
 	 */
 	slash<C extends SlashCommandClass>(command: C, options?: SlashClassOptions<C>): Dispatch<DispatchResult>;
 	slash(options: ChatInputInteractionOptions): Dispatch<DispatchResult>;
@@ -1896,6 +1890,10 @@ export class MockBot {
 			typeof commandOrOptions === 'function'
 				? ({ ...(classOptions ?? {}), name: new commandOrOptions().name } as ChatInputInteractionOptions)
 				: commandOrOptions;
+		return this.dispatchSlash(options);
+	}
+
+	private dispatchSlash(options: ChatInputInteractionOptions): Dispatch<DispatchResult> {
 		this.assertCommandRegistered(options.name, ApplicationCommandType.ChatInput, 'slash');
 		return this.dispatchVia(
 			'slash',
@@ -2344,23 +2342,15 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	resetMockIds();
 	resetDispatchIds();
 	const rest = new MockApiHandler({ onUnhandledRest: options.onUnhandledRest });
-	const built =
-		options.world && typeof (options.world as WorldBuilder).build === 'function'
-			? (options.world as WorldBuilder).build()
-			: (options.world as MockWorld | undefined);
-	const world: MockWorld | undefined = built
-		? structuredClone(built)
-		: options.worldData
-			? { guilds: [], channels: [], users: [], members: [], roles: [], messages: [] }
-			: undefined;
-	if (options.worldData && world) world.data = { ...world.data, ...structuredClone(options.worldData) };
+	const built = options.world?.build();
+	const world = built ? structuredClone(built) : undefined;
 	const botId = options.botId ?? TEST_BOT_ID;
 	const prefixList = [...(options.prefixes ?? []), ...(options.mentionAsPrefix ? [`<@${botId}>`, `<@!${botId}>`] : [])];
-	// First-class `plugins` merges into `clientOptions.plugins`; the existing `clientOptions.plugins` path
-	// keeps working. Plugins must reach the Client constructor — seyfert resolves `client.plugins` there and
-	// `setupPlugins()`/teardown read that resolved list; setting plugins post-construction would not register them.
-	const mergedPlugins = options.plugins ?? options.clientOptions?.plugins;
-	if (options.client && mergedPlugins?.length) {
+	const clientOptionsBase: ClientOptions | undefined = options.clientOptions
+		? { ...(options.clientOptions as ClientOptions) }
+		: undefined;
+	if (clientOptionsBase) delete clientOptionsBase.plugins;
+	if (options.client && options.plugins?.length) {
 		console.warn(
 			'[@slipher/testing] createMockBot({ client, plugins }) ignores the passed plugins because Seyfert ' +
 				'resolves plugins in the Client constructor. Construct the Client with plugins instead: ' +
@@ -2370,19 +2360,19 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	const clientOptions: ClientConstructorOptions =
 		prefixList.length || options.globalMiddlewares || options.plugins
 			? {
-					...options.clientOptions,
-					...(mergedPlugins ? { plugins: mergedPlugins } : {}),
+					...clientOptionsBase,
+					...(options.plugins ? { plugins: options.plugins } : {}),
 					...(options.globalMiddlewares ? { globalMiddlewares: options.globalMiddlewares } : {}),
 					...(prefixList.length
 						? {
 								commands: {
-									...options.clientOptions?.commands,
+									...clientOptionsBase?.commands,
 									prefix: async () => prefixList,
 								},
 							}
 						: {}),
 				}
-			: options.clientOptions;
+			: clientOptionsBase;
 	const client = options.client ?? new Client(clientOptions);
 	// Capture unhandled run() errors into the active dispatch context. seyfert binds a noisy built-in onRunError
 	// default that only logs and swallows, so without this a command that throws (e.g. a second ctx.write) would

@@ -252,7 +252,7 @@ describe('createMockBot', () => {
 		const guild = world.registerGuild({ name: 'Slipher Lab' });
 		world.registerChannel(guild.id);
 		world.registerMember(guild.id, { user: apiUser({ id: TEST_USER_ID, username: 'slipher-tester' }) });
-		const bot = await createMockBot({ commands: [WhereCommand], world: world.build() });
+		const bot = await createMockBot({ commands: [WhereCommand], world });
 		await bot.slash({ name: 'where', guildId: guild.id });
 		expect(seen).toBe('Slipher Lab');
 		await bot.close();

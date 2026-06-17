@@ -84,11 +84,12 @@ describe('plugins', () => {
 		await bot.close();
 	});
 
-	test('clientOptions.plugins keeps working alongside the first-class option', async () => {
+	test('clientOptions does not load plugins', async () => {
 		const { plugin, state } = makeTrackerPlugin();
+		// @ts-expect-error plugin loading must use createMockBot({ plugins }).
 		const bot = await createMockBot({ clientOptions: { plugins: [plugin] } });
-		expect(state.setupRan).toBe(true);
-		expect(bot.plugins.map(info => info.name)).toContain('slipher-test-tracker');
+		expect(state.setupRan).toBe(false);
+		expect(bot.plugins).toEqual([]);
 		await bot.close();
 	});
 

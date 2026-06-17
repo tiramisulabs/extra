@@ -156,8 +156,7 @@ describe('additional command surfaces', () => {
 
 	test('attachment options resolve through the real option resolver', async () => {
 		const bot = await createMockBot({ commands: [AttachmentCheckCommand] });
-		const result = await bot.slash({
-			name: 'attachment-check',
+		const result = await bot.slash({ name: 'attachment-check',
 			options: { file: attachmentOption(apiAttachment({ filename: 'evidence.png' })) },
 		});
 		expect(result.content).toBe('evidence.png');
@@ -313,8 +312,7 @@ describe('additional command surfaces', () => {
 	test('slash accepts array-form option inputs and preserves declared number option types', async () => {
 		numericPayloads.length = 0;
 		const bot = await createMockBot({ commands: [NumericCheckCommand] });
-		const result = await bot.slash({
-			name: 'numeric-check',
+		const result = await bot.slash({ name: 'numeric-check',
 			options: [
 				{ name: 'ratio', value: 1 },
 				{ name: 'count', value: 2 },
@@ -342,8 +340,7 @@ describe('additional command surfaces', () => {
 		const bot = await createMockBot({ commands: [NumericCheckCommand] });
 
 		expect(() =>
-			bot.slash({
-				name: 'numeric-check',
+			bot.slash({ name: 'numeric-check',
 				options: [
 					{ name: 'count', value: 1 },
 					{ name: 'count', value: 2 },
@@ -374,8 +371,7 @@ describe('additional command surfaces', () => {
 		const bot = await createMockBot({ commands: [ChannelCheckCommand] });
 
 		expect(() =>
-			bot.slash({
-				name: 'channel-check',
+			bot.slash({ name: 'channel-check',
 				options: {
 					room: {
 						__slipherOption: true,
@@ -387,8 +383,7 @@ describe('additional command surfaces', () => {
 			}),
 		).toThrow(/resolved channel is missing a numeric type/);
 		await expect(
-			bot.slash({
-				name: 'channel-check',
+			bot.slash({ name: 'channel-check',
 				options: {
 					room: {
 						__slipherOption: true,

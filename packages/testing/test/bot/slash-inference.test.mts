@@ -32,10 +32,10 @@ describe('S18 slash class-inference', () => {
 		await bot.close();
 	});
 
-	test('the string overload still works unchanged (backward compatible)', async () => {
+	test('object-form slash dispatch is the concise raw-by-name path', async () => {
 		const bot = await createMockBot({ commands: [GreetCommand] });
-		const result = await bot.slash({ name: 'greet', options: { name: 'legacy' } });
-		expect(result.content).toBe('Hello, legacy!');
+		const result = await bot.slash({ name: 'greet', options: { name: 'object' } });
+		expect(result.content).toBe('Hello, object!');
 		await bot.close();
 	});
 });

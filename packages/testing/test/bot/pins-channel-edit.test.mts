@@ -4,7 +4,7 @@ import { createMockBot } from '../../src/bot/bot';
 import { apiUser } from '../../src/bot/payloads';
 import { mockWorld } from '../../src/bot/world';
 
-describe('pins (regression: stale legacy route)', () => {
+describe('pins route regression', () => {
 	test('a command pinning a message lands in the channel pins view and flags the message pinned', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'pin-guild' });

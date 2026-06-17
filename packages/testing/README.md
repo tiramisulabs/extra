@@ -7,8 +7,7 @@ Runner-agnostic testing for Seyfert bots and Slipher plugins, in two layers behi
 
 Rule of thumb: pure `run()` logic -> fixtures; anything touching option parsing,
 middlewares, permissions, components, REST, or events -> mock bot. Both come
-from the same import and coexist in one suite - existing fixture tests need no
-changes.
+from the same import and can coexist in one suite.
 
 Requires Seyfert v5 (peer dependency).
 
@@ -153,6 +152,10 @@ test('greet replies through the real pipeline', async () => {
 });
 ```
 
+Use `bot.slash(GreetCommand, { options })` when you want option inference from
+the command class. Use `bot.slash({ name, ... })` for concise raw by-name
+payload dispatch.
+
 The raw interaction response stays available as `result.reply?.body` (`{ type, data }`)
 for the rare assertion where the Discord wire shape itself is the contract. Prefer
 `result.content`, `result.deferred`, and `result.edits` for normal behavior checks.
@@ -160,7 +163,8 @@ for the rare assertion where the Discord wire shape itself is the contract. Pref
 Embeds and components come back parsed and typed, so you assert without casting:
 `result.embedView?.title`, `result.embedViews`, `result.buttons`,
 `result.button('Approve')?.customId`, and `result.textDisplays` (components-v2). The
-raw `result.embeds`/`result.embed` remain as escape hatches.
+raw `result.embeds`/`result.embed` expose the flattened Discord payloads for
+wire-shape assertions.
 
 `createMockBot()` accepts:
 
@@ -169,8 +173,9 @@ raw `result.embeds`/`result.embed` remain as escape hatches.
 - `globalMiddlewares` - forwarded to Seyfert's global middleware hooks
 - `world` - entities to seed into the client cache
 - `simulateGateway` - emit matching member update/remove events for stateful writes; defaults to `true`
-- `onUnhandledRest` - warn, throw, or stay silent for unmatched shape fallback reads
-- `clientOptions` - forwarded to the Seyfert `Client` constructor, including plugins
+- `onUnhandledRest` - throw by default, or warn/stay silent for explicitly allowed fallback reads
+- `plugins` - Seyfert plugins loaded through the mock client lifecycle
+- `clientOptions` - forwarded to the Seyfert `Client` constructor, excluding plugin loading
 - `loadFromConfig`, `commandsDir`, `componentsDir`, `eventsDir`, `langsDir` - load the real bot through Seyfert's loaders
 - `shards`, `shardLatency` - shape the in-process `MockGateway`
 - `botId`, `applicationId`
@@ -235,7 +240,7 @@ cannot deadlock.
 |---|---|
 | `await dispatch` | everything `run()` awaited: replies, edits, followups, and dispatch actions |
 | `dispatch.until(...)` resolved | the matched call started; `response` is still `undefined` while suspended |
-| `await emitEvent(...)` | REST work the handler awaited |
+| `await emit(...)` | REST work the handler awaited |
 | nothing | only `waitForAction(...)` observes fire-and-forget work |
 
 ### Step-by-step flows
@@ -246,12 +251,12 @@ world mutations persist across dispatches. Bind an identity once with
 call:
 
 ```ts
-await using bot = await createMockBot({ commands: [PurgeCommand], world: world.build() });
+await using bot = await createMockBot({ commands: [PurgeCommand], world });
 const alice = bot.actor({ member: aliceMember, guildId: guild.id, channel });
 
 await alice.slash({ name: 'poll' });
 await alice.clickButton('poll/yes');
-await bot.emitEvent('GUILD_MEMBER_ADD', newMember, { allowNoHandler: true });
+await bot.emit('GUILD_MEMBER_ADD', newMember, { allowNoHandler: true });
 const result = await alice.slash({ name: 'results' });
 
 expect(result.content).toContain('1 vote');
@@ -280,17 +285,17 @@ await bot.clickButton('confirm');
 await bot.selectMenu('pick-color', ['red']);
 await bot.fillModal('feedback', { rating: '5' });
 await bot.say('!echo -text hello');
-await bot.emitEvent('GUILD_MEMBER_ADD', rawMemberPayload);
+await bot.emit('GUILD_MEMBER_ADD', rawMemberPayload);
 ```
 
-`emitEvent` fails loud when no registered handler ran — the silent trap where a
+`emit` fails loud when no registered handler ran — the silent trap where a
 mis-cased gateway name (`'guildMemberAdd'` instead of `'GUILD_MEMBER_ADD'`) or a
 forgotten `events:[...]` registration makes the assertion pass green over a handler
 that never fired. `registeredEvents()` lists what's wired. When you emit only to
 seed world state (no handler expected), opt out explicitly:
 
 ```ts
-await bot.emitEvent('CHANNEL_CREATE', rawChannelPayload, { allowNoHandler: true });
+await bot.emit('CHANNEL_CREATE', rawChannelPayload, { allowNoHandler: true });
 ```
 
 Every dispatch defaults to the bot's single test user (`bot.defaultUser`), so
@@ -303,8 +308,7 @@ explicit helpers, which also populate `resolved` data:
 ```ts
 import { apiUser, userOption } from '@slipher/testing';
 
-await bot.slash({
-	name: 'ban',
+await bot.slash({ name: 'ban',
 	options: { user: userOption(apiUser({ id: '42' })), reason: 'spam' },
 });
 ```
@@ -380,7 +384,7 @@ expect((await bot.slash({ name: 'hello' })).content).toBe('Hello!');
 expect((await bot.slash({ name: 'hello', locale: 'es-ES' })).content).toBe('¡Hola!');
 ```
 
-App-level `DefaultLocale` augmentation works unchanged; the mock only feeds the
+App-level `DefaultLocale` augmentation is supported; the mock only feeds the
 same translation data that Seyfert would normally load from lang files.
 
 ### Autocomplete and context menus
@@ -506,10 +510,9 @@ Stub specific endpoints when a command reads from the API:
 bot.rest.intercept('GET', '/guilds/:guildId', (_action, params) => ({ id: params.guildId, name: 'Stubbed' }));
 ```
 
-Unstubbed `POST`/`PATCH` requests answer with a message-shaped echo of the body.
-Unstubbed collection `GET`s answer with the empty collection shape. Other unmatched
-`GET`s warn by default because unseeded reads are where mock tests lie; tune with
-`createMockBot({ onUnhandledRest: 'error' | 'silent' })`.
+By default, unmatched REST requests throw. Set
+`createMockBot({ onUnhandledRest: 'warn' | 'silent' })` when a test intentionally
+leans on the synthetic fallback shapes for unmodeled routes.
 
 ### Seeding a world
 
@@ -595,8 +598,9 @@ that user with `world.registerMember(...)` or pass explicit `memberPermissions`.
 Once a bot member is seeded with `world.registerBotMember(...)`, moderation REST
 routes (ban/kick/bulk-ban/edit-member/add-role/remove-role) enforce the bot's
 computed guild permissions and role hierarchy, returning Discord's `403 50013`
-just like production. Without a seeded bot member the routes stay permissive, so
-existing tests are unaffected — opt in by seeding the bot.
+just like production. Without a seeded bot member the routes stay permissive,
+which is useful for unit-style tests that are not asserting bot authorization.
+Seed the bot member whenever the permission contract matters.
 
 Use `apiError()` to drive REST error branches:
 
@@ -680,8 +684,7 @@ test('/ban bans the target and confirms', async () => {
 	await using bot = await createMockBot({ commands: [BanCommand] });
 	const target = apiUser({ id: '42', username: 'spammer' });
 
-	const result = await bot.slash({
-		name: 'ban',
+	const result = await bot.slash({ name: 'ban',
 		options: { user: userOption(target), reason: 'raid' },
 	});
 
@@ -691,13 +694,13 @@ test('/ban bans the target and confirms', async () => {
 });
 ```
 
-Plugins go through `clientOptions`; their real `setup()` runs inside
+Plugins go through `plugins`; their real `setup()` runs inside
 `createMockBot()` and teardown runs on `bot.close()`:
 
 ```ts
 const bot = await createMockBot({
 	commands: [PingCommand],
-	clientOptions: { plugins: [myPlugin()] },
+	plugins: [myPlugin()],
 });
 
 await bot.close();
@@ -787,26 +790,29 @@ in tests.
   `intercept()` the route, or set `onUnhandledRest: 'silent'` for that test.
 - **Decorator/transform errors on `@Declare`** - enable
   `experimentalDecorators` in the test transform config.
-- **Cache looks stale after `emitEvent`** - emit full Discord event shapes, not
+- **Cache looks stale after `emit`** - emit full Discord event shapes, not
   partial patches.
 - **Passes alone, fails in CI** - reset module-level state in your command files
   with `beforeEach`.
 
-### Stability
+### Current defaults
 
-Stable across minor versions: the single default user (`TEST_USER_ID`),
-`onUnhandledRest` defaulting to `'warn'`, empty collection GET fallbacks, and
-newest-first message lists. An unhandled error inside a command/component/modal/
-event handler **rejects the `Dispatch` by default** (`onCommandError: 'throw'`);
+The package is pre-1.0. Current defaults: the single default user
+(`TEST_USER_ID`), strict `onUnhandledRest: 'error'`, opt-in REST fallback shapes
+under `onUnhandledRest: 'warn' | 'silent'`, and newest-first message lists. An
+unhandled error inside a command/component/modal/event handler **rejects the
+`Dispatch` by default** (`onCommandError: 'throw'`);
 pass `onCommandError: 'capture'` to surface it on `result.error` instead. The
 read-only `bot.world` (`WorldStateReader`) is the supported way to assert on the
 ~20 entity types the views don't surface (pins, reactions, bans, webhooks,
 emojis, invites, automod rules, scheduled events, poll voters, …).
 
-Options bags only gain optional fields. Build tests through `createMockBot()` and
-`mockWorld()` rather than subclassing exported classes. Unspecified and subject
-to change during 0.x: `mockId()` format, warning text, `RecordedAction.seq`, and
-`MockGateway`.
+During 0.x, prefer direct supported entry points over subclassing exported
+classes: build bot tests through `createMockBot()`, seed worlds through
+`mockWorld()`, and use named dispatchers such as `slash()`, `clickButton()`, and
+`emit()`.
+Unspecified and subject to change during 0.x: `mockId()` format, warning text,
+`RecordedAction.seq`, and `MockGateway`.
 
 ### Scope
 

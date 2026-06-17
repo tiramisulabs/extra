@@ -9,9 +9,10 @@ interface EconomyState {
 }
 
 describe('worldData passthrough store', () => {
-	test('seeds via createMockBot({ worldData }) isolated from the caller-owned input object', async () => {
+	test('seeds via mockWorld().setData() isolated from the caller-owned input object', async () => {
 		const economy: EconomyState = { balances: { alice: 100, bob: 50 }, currency: 'gold' };
-		await using bot = await createMockBot({ worldData: { economy } });
+		const world = mockWorld().setData('economy', economy);
+		await using bot = await createMockBot({ world });
 
 		const read = bot.worldData<EconomyState>('economy');
 		expect(read).toEqual(economy);
@@ -46,28 +47,14 @@ describe('worldData passthrough store', () => {
 		expect(bot.worldData<Record<string, boolean>>('featureFlags')?.beta).toBe(true);
 	});
 
-	test('worldData option deep-merges over world.setData() data, overriding only the colliding key', async () => {
-		const world = mockWorld();
-		world.setData('a', 1);
-		world.setData('b', 2);
-		world.setData('nested', { keep: 'me' });
-
-		await using bot = await createMockBot({ world, worldData: { b: 20, c: 30 } });
-
-		expect(bot.worldData('a')).toBe(1);
-		expect(bot.worldData('b')).toBe(20);
-		expect(bot.worldData('c')).toBe(30);
-		// Keys the option did not touch survive the merge untouched.
-		expect(bot.worldData('nested')).toEqual({ keep: 'me' });
-	});
-
 	test('the mock never interprets the data: it survives a dispatch verbatim', async () => {
 		const payload = { nested: { list: [1, 2, 3], when: new Date(0).toISOString() }, n: 42 };
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'wd-guild' });
 		const member = world.registerMember(guild.id, { user: apiUser({ id: 'wd-user' }), roles: [] });
+		world.setData('custom', payload);
 
-		await using bot = await createMockBot({ world, worldData: { custom: payload } });
+		await using bot = await createMockBot({ world });
 
 		await bot.emit(
 			'GUILD_MEMBER_UPDATE',

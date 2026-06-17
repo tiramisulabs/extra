@@ -37,7 +37,7 @@ describe('real bot loading', () => {
 			},
 		});
 
-		const bot = await createMockBot({ clientOptions: { plugins: [plugin] } });
+		const bot = await createMockBot({ plugins: [plugin] });
 		const result = await bot.slash({ name: 'plugin-ping' });
 		expect(result.content).toBe('plugin pong');
 		await bot.close();
