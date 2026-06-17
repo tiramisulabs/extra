@@ -631,8 +631,11 @@ export class MockBot {
 		readonly client: Client,
 		readonly rest: MockApiHandler,
 		readonly gateway: MockGateway,
-		protected readonly world?: MockWorld,
-		private readonly _state: WorldState = new WorldState(world),
+		protected readonly world: MockWorld | undefined,
+		// Required (no default): createMockBot passes the SAME WorldState it gives registerWorldDefaults. A default
+		// `new WorldState(world)` here would silently create a second instance that shares the world arrays by
+		// reference but has its own bans/reactions/token Maps — a split-brain. Keep them the one instance.
+		private readonly _state: WorldState,
 		private readonly validateOptions = false,
 		private readonly timers?: { advance(ms: number): void | Promise<void> },
 		private readonly onCommandError: 'throw' | 'capture' = 'throw',
@@ -1239,6 +1242,9 @@ export class MockBot {
 		aborted: () => boolean,
 		maxIterations = DRAIN_MAX_ITERATIONS,
 	): Promise<void> {
+		// Same guard as advanceTime/flushPending: if the user faked global setImmediate, this drain (reached via
+		// the middleware denial path too) would spin silently to the cap. Fail loud with the fix instead.
+		assertRealSetImmediate();
 		let lastCount = -1;
 		let iterations = 0;
 		while (!aborted()) {
@@ -1793,19 +1799,28 @@ export class MockBot {
 		return events.getPluginListeners(name).length > 0 || events.getPluginAnyListeners().length > 0;
 	}
 
+	/**
+	 * Clear recorded REST traffic and transient per-dispatch handler state between phases of a test.
+	 *
+	 * Clears: recorded actions, pending/in-flight REST, custom interceptors, the dispatch list, the client-side
+	 * modal/collector runtime registries (so a stale modal/collector can't match a later dispatch), the modal
+	 * waiters, and the last-interaction message pointer (so a source-less `clickButton` after reset doesn't
+	 * resolve to a pre-reset message).
+	 *
+	 * Does NOT clear: the seeded WORLD (guilds/channels/messages/members and the bans/reactions/voice/pin state),
+	 * the registered commands/components/events, or seyfert's cache. `reset()` is "new REST traffic, same bot and
+	 * world" — for a truly clean slate (fresh world + cache), create a new bot with `createMockBot(...)`.
+	 */
 	reset(): void {
 		this.assertOpen('reset');
 		this.rest.clearActions();
 		this.rest.releasePending();
 		this.rest.resetInterceptors();
 		this.dispatches.length = 0;
-		// F26: clear the client-side runtime component state so a modal or collector registered by an earlier
-		// dispatch can't match a later, unrelated one (every dispatch defaults to the same user, so a stale modal
-		// would otherwise run its callback for any custom_id). The registered ComponentCommands and the seeded
-		// world persist — reset() clears recorded traffic and transient handler state, not the bot's wiring.
 		this.client.components.modals.clear();
 		this.client.components.values.clear();
 		this.modalWaiters.clear();
+		this.lastInteractionMessage = undefined;
 	}
 
 	async close(): Promise<void> {
