@@ -260,6 +260,14 @@ describe('outgoing message payload limits (fail loud)', () => {
 		await close();
 	});
 
+	test('a link button with a non-http url is rejected', async () => {
+		const { send, close } = await postBody({
+			components: [row({ type: 2, style: 5, label: 'Open', url: 'attachment://logo.png' })],
+		});
+		await expect(send).rejects.toThrow(/link button url is not a valid URL/);
+		await close();
+	});
+
 	test('a link button with custom_id is rejected', async () => {
 		const { send, close } = await postBody({
 			components: [row({ type: 2, style: 5, label: 'Open', url: 'https://example.com', custom_id: 'open' })],

@@ -120,6 +120,16 @@ describe('world-mode existence enforcement', () => {
 		await bot.close();
 	});
 
+	test('deleting a non-existent channel is a 404 Unknown Channel', async () => {
+		const { world } = seedGuildFixture('chan-delete');
+		const bot = await createMockBot({ world });
+
+		await expect(bot.rest.request('DELETE', '/channels/ghost-channel')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownChannel.code,
+		});
+		await bot.close();
+	});
+
 	test('fetching a ban in an unseeded guild is Unknown Guild, not Unknown Ban', async () => {
 		const { world, guild, actor, channel } = seedGuildFixture('ban-fetch');
 
@@ -258,6 +268,14 @@ describe('world-mode existence enforcement', () => {
 		await expect(bot.rest.request('GET', '/channels/ghost-channel/messages')).rejects.toMatchObject({
 			code: DiscordErrors.UnknownChannel.code,
 		});
+		await expect(
+			bot.rest.request('PATCH', '/channels/ghost-channel/messages/ghost-message', { body: { content: 'x' } }),
+		).rejects.toMatchObject({
+			code: DiscordErrors.UnknownChannel.code,
+		});
+		await expect(bot.rest.request('DELETE', '/channels/ghost-channel/messages/ghost-message')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownChannel.code,
+		});
 		await expect(bot.rest.request('GET', '/channels/ghost-channel/messages/pins')).rejects.toMatchObject({
 			code: DiscordErrors.UnknownChannel.code,
 		});
@@ -277,6 +295,32 @@ describe('world-mode existence enforcement', () => {
 		});
 		await expect(bot.rest.request('GET', '/channels/ghost-channel/thread-members')).rejects.toMatchObject({
 			code: DiscordErrors.UnknownChannel.code,
+		});
+		await expect(bot.rest.request('GET', '/guilds/ghost-guild/emojis')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownGuild.code,
+		});
+		await expect(bot.rest.request('GET', '/guilds/ghost-guild/emojis/ghost-emoji')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownGuild.code,
+		});
+		await expect(bot.rest.request('GET', '/guilds/ghost-guild/auto-moderation/rules')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownGuild.code,
+		});
+		await expect(bot.rest.request('GET', '/guilds/ghost-guild/auto-moderation/rules/ghost-rule')).rejects.toMatchObject(
+			{
+				code: DiscordErrors.UnknownGuild.code,
+			},
+		);
+		await expect(bot.rest.request('GET', '/guilds/ghost-guild/stickers')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownGuild.code,
+		});
+		await expect(bot.rest.request('GET', '/guilds/ghost-guild/stickers/ghost-sticker')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownGuild.code,
+		});
+		await expect(bot.rest.request('GET', '/guilds/ghost-guild/scheduled-events')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownGuild.code,
+		});
+		await expect(bot.rest.request('GET', '/guilds/ghost-guild/scheduled-events/ghost-event')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownGuild.code,
 		});
 		await bot.close();
 	});

@@ -213,6 +213,14 @@ describe('createMockBot', () => {
 		await bot.close();
 	});
 
+	test('slash requires a subcommand when the command declares subcommands', async () => {
+		const bot = await createMockBot({ commands: [ConfigCommand, InventoryCommand] });
+
+		expect(() => bot.slash({ name: 'config' })).toThrow(/requires a subcommand/);
+		expect(() => bot.slash({ name: 'inventory', group: 'items' })).toThrow(/requires a subcommand/);
+		await bot.close();
+	});
+
 	test('dispatches a grouped subcommand and reports the group leaf', async () => {
 		const bot = await createMockBot({ commands: [InventoryCommand] });
 		const res = await bot.slash({ name: 'inventory', group: 'items', subcommand: 'add' });

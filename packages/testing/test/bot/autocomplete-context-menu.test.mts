@@ -2,6 +2,7 @@ import {
 	Command,
 	ContextMenuCommand,
 	createBooleanOption,
+	createIntegerOption,
 	createNumberOption,
 	createStringOption,
 	Declare,
@@ -83,6 +84,32 @@ describe('autocomplete and context menus', () => {
 		await bot.close();
 	});
 
+	test('autocomplete rejects duplicate option names in array payloads', async () => {
+		@Options({
+			query: createStringOption({ description: 'Search query', autocomplete: async () => {} }),
+			label: createStringOption({ description: 'Optional label' }),
+		})
+		@Declare({ name: 'dup-autocomplete', description: 'Duplicate autocomplete options' })
+		class DuplicateAutocompleteCommand extends Command {
+			async run() {}
+		}
+
+		const bot = await createMockBot({ commands: [DuplicateAutocompleteCommand] });
+
+		expect(() =>
+			bot.autocomplete({
+				name: 'dup-autocomplete',
+				focused: 'query',
+				value: 'sey',
+				options: [
+					{ name: 'label', value: 'one' },
+					{ name: 'label', value: 'two' },
+				],
+			}),
+		).toThrow(/option "label" is provided more than once/);
+		await bot.close();
+	});
+
 	test('autocomplete rejects focused values with the wrong type', async () => {
 		const bot = await createMockBot({ commands: [SearchCommand] });
 
@@ -152,6 +179,39 @@ describe('autocomplete and context menus', () => {
 		await bot.autocomplete({ name: 'numbers', focused: 'ratio', value: 1 });
 
 		expect(seenTypes).toEqual([10]);
+		await bot.close();
+	});
+
+	test('autocomplete rejects non-finite and unsafe integer focused values', async () => {
+		const options = {
+			ratio: createNumberOption({
+				description: 'Decimal ratio',
+				autocomplete: async interaction => {
+					await interaction.respond([{ name: 'ratio', value: interaction.getInput() }]);
+				},
+			}),
+			count: createIntegerOption({
+				description: 'Whole count',
+				autocomplete: async interaction => {
+					await interaction.respond([{ name: 'count', value: interaction.getInput() }]);
+				},
+			}),
+		};
+		@Declare({ name: 'invalid-numbers', description: 'Invalid numeric autocomplete values' })
+		@Options(options)
+		class InvalidNumbersCommand extends Command {}
+
+		const bot = await createMockBot({ commands: [InvalidNumbersCommand] });
+
+		expect(() => bot.autocomplete({ name: 'invalid-numbers', focused: 'ratio', value: Number.NaN })).toThrow(
+			/ratio.*finite number/i,
+		);
+		expect(() =>
+			bot.autocomplete({ name: 'invalid-numbers', focused: 'ratio', value: Number.POSITIVE_INFINITY }),
+		).toThrow(/ratio.*finite number/i);
+		expect(() =>
+			bot.autocomplete({ name: 'invalid-numbers', focused: 'count', value: Number.MAX_SAFE_INTEGER + 1 }),
+		).toThrow(/count.*safe integer/i);
 		await bot.close();
 	});
 

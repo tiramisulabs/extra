@@ -103,6 +103,92 @@ describe('virtual clock', () => {
 			await bot.close();
 		});
 
+		test('dispatch.fillModal returns replies written after async opener continuation work', async () => {
+			class AsyncAfterWaitButton extends ComponentCommand {
+				componentType = 'Button' as const;
+				filter(ctx: ComponentContext<'Button'>) {
+					return ctx.customId === 'open-async-feedback';
+				}
+				async run(ctx: ComponentContext<'Button'>) {
+					const submit = await ctx.interaction.modal(
+						new Modal()
+							.setCustomId('async-feedback-modal')
+							.setTitle('Feedback')
+							.setComponents([
+								new Label()
+									.setLabel('Rating')
+									.setComponent(new TextInput({ custom_id: 'rating', style: TextInputStyle.Short })),
+							]),
+						{ waitFor: 30_000 },
+					);
+					if (!submit) return;
+					await new Promise<void>(resolve => setImmediate(resolve));
+					await submit.write({ content: 'thanks after async work' });
+				}
+			}
+
+			const bot = await createMockBot({ components: [AsyncAfterWaitButton] });
+			const user = apiUser({ id: 'async-modal-user' });
+
+			const modal = await bot
+				.clickButton('open-async-feedback', { user, allowSyntheticSource: true })
+				.fillModal('async-feedback-modal', { rating: '5' });
+
+			expect(modal.content).toBe('thanks after async work');
+			await bot.close();
+		});
+
+		test('back-to-back same-user modal flows do not consume a stale modal entry', async () => {
+			class MultiModalButton extends ComponentCommand {
+				componentType = 'Button' as const;
+				filter(ctx: ComponentContext<'Button'>) {
+					return ctx.customId.startsWith('open:');
+				}
+				async run(ctx: ComponentContext<'Button'>) {
+					const name = ctx.customId.split(':')[1];
+					const submit = await ctx.interaction.modal(
+						new Modal()
+							.setCustomId(`modal:${name}`)
+							.setTitle(name)
+							.setComponents([
+								new Label()
+									.setLabel('Value')
+									.setComponent(new TextInput({ custom_id: 'value', style: TextInputStyle.Short })),
+							]),
+						{ waitFor: 30_000 },
+					);
+					if (submit) await submit.write({ content: `submitted:${name}` });
+				}
+			}
+
+			const bot = await createMockBot({ components: [MultiModalButton] });
+			const user = apiUser({ id: 'same-user-modal' });
+			await bot.rest.request('POST', '/channels/modal-source/messages', {
+				body: {
+					content: 'modal buttons',
+					components: [
+						{
+							type: 1,
+							components: [
+								{ type: 2, style: 1, custom_id: 'open:first', label: 'First' },
+								{ type: 2, style: 1, custom_id: 'open:second', label: 'Second' },
+							],
+						},
+					],
+				},
+			});
+			const source = bot.actions.at(-1);
+			if (!source) throw new Error('expected modal source action');
+
+			await expect(
+				bot.clickButton('open:first', { user, source }).fillModal('modal:first', { value: '1' }),
+			).resolves.toMatchObject({ content: 'submitted:first' });
+			await expect(
+				bot.clickButton('open:second', { user, source }).fillModal('modal:second', { value: '2' }),
+			).resolves.toMatchObject({ content: 'submitted:second' });
+			await bot.close();
+		});
+
 		test('timeoutModal() drives the timeout branch in one call (no fake timers, no untilModal)', async () => {
 			const outcomes: ('submitted' | 'timed-out')[] = [];
 

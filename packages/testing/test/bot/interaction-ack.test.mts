@@ -137,9 +137,23 @@ describe('interaction acknowledgement (fail loud before ack)', () => {
 		await bot.close();
 	});
 
-	test('unknown interaction webhook followup messages cannot be edited or deleted', async () => {
+	test('unknown interaction webhook tokens cannot access original or followup messages', async () => {
 		const bot = await createMockBot();
 
+		await expect(
+			bot.rest.request('GET', `/webhooks/${TEST_APPLICATION_ID}/ghost-token/messages/@original`),
+		).rejects.toMatchObject({ code: DiscordErrors.UnknownWebhook.code });
+		await expect(
+			bot.rest.request('PATCH', `/webhooks/${TEST_APPLICATION_ID}/ghost-token/messages/@original`, {
+				body: { content: 'x' },
+			}),
+		).rejects.toMatchObject({ code: DiscordErrors.UnknownWebhook.code });
+		await expect(
+			bot.rest.request('DELETE', `/webhooks/${TEST_APPLICATION_ID}/ghost-token/messages/@original`),
+		).rejects.toMatchObject({ code: DiscordErrors.UnknownWebhook.code });
+		await expect(
+			bot.rest.request('GET', `/webhooks/${TEST_APPLICATION_ID}/ghost-token/messages/followup-id`),
+		).rejects.toMatchObject({ code: DiscordErrors.UnknownWebhook.code });
 		await expect(
 			bot.rest.request('PATCH', `/webhooks/${TEST_APPLICATION_ID}/ghost-token/messages/followup-id`, {
 				body: { content: 'x' },

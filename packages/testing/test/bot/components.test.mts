@@ -71,6 +71,26 @@ describe('component flows', () => {
 		await bot.close();
 	});
 
+	test('disabled source components cannot be dispatched', async () => {
+		const bot = await createMockBot({ components: [ConfirmButton] });
+		await bot.rest.request('POST', '/channels/disabled-channel/messages', {
+			body: {
+				content: 'disabled',
+				components: [
+					{
+						type: 1,
+						components: [{ type: 2, style: 1, custom_id: 'confirm', label: 'Confirm', disabled: true }],
+					},
+				],
+			},
+		});
+		const source = bot.actions.at(-1);
+		if (!source) throw new Error('expected source message action');
+
+		expect(() => bot.clickButton('confirm', { source })).toThrow(/component "confirm".+disabled/);
+		await bot.close();
+	});
+
 	test('selectMenu without a source fails by default for ComponentCommand-only dispatch', async () => {
 		class PickComponent extends ComponentCommand {
 			componentType = 'StringSelect' as const;

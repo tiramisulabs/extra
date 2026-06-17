@@ -2,6 +2,7 @@ import {
 	Command,
 	type CommandContext,
 	createAttachmentOption,
+	createChannelOption,
 	createIntegerOption,
 	createMentionableOption,
 	createNumberOption,
@@ -12,12 +13,17 @@ import {
 	Options,
 	TextInput,
 } from 'seyfert';
-import { EntryPointCommandHandlerType, TextInputStyle } from 'seyfert/lib/types';
+import {
+	ApplicationCommandOptionType,
+	ChannelType,
+	EntryPointCommandHandlerType,
+	TextInputStyle,
+} from 'seyfert/lib/types';
 import { describe, expect, test, vi } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { TEST_USER_ID } from '../../src/bot/constants';
 import { attachmentOption, chatInputInteraction, mentionableOption } from '../../src/bot/interactions';
-import { apiAttachment, apiUser } from '../../src/bot/payloads';
+import { apiAttachment, apiChannel, apiUser } from '../../src/bot/payloads';
 import { Routes } from '../../src/bot/routes';
 import { mockWorld } from '../../src/bot/world';
 
@@ -129,6 +135,22 @@ describe('additional command surfaces', () => {
 		async run(ctx: CommandContext<typeof numericOptions>) {
 			numericPayloads.push(ctx.interaction.data.options);
 			await ctx.write({ content: `${ctx.options.count}:${ctx.options.ratio}` });
+		}
+	}
+
+	const channelOptions = {
+		room: createChannelOption({
+			description: 'Text channel',
+			required: true,
+			channel_types: [ChannelType.GuildText],
+		}),
+	};
+
+	@Declare({ name: 'channel-check', description: 'Checks channel option validation' })
+	@Options(channelOptions)
+	class ChannelCheckCommand extends Command {
+		async run(ctx: CommandContext<typeof channelOptions>) {
+			await ctx.write({ content: ctx.options.room.id });
 		}
 	}
 
@@ -313,6 +335,70 @@ describe('additional command surfaces', () => {
 		expect(() => bot.slash({ name: 'numeric-check', options: { count: 11, ratio: 1 } })).toThrow(
 			/count.*greater than 10/i,
 		);
+		await bot.close();
+	});
+
+	test('slash rejects duplicate option names in array payloads by default', async () => {
+		const bot = await createMockBot({ commands: [NumericCheckCommand] });
+
+		expect(() =>
+			bot.slash({
+				name: 'numeric-check',
+				options: [
+					{ name: 'count', value: 1 },
+					{ name: 'count', value: 2 },
+					{ name: 'ratio', value: 1 },
+				],
+			}),
+		).toThrow(/option "count" is provided more than once/);
+		await bot.close();
+	});
+
+	test('slash rejects non-finite and unsafe numeric option values by default', async () => {
+		const bot = await createMockBot({ commands: [NumericCheckCommand] });
+
+		expect(() => bot.slash({ name: 'numeric-check', options: { count: Number.NaN, ratio: 1 } })).toThrow(
+			/count.*finite number/i,
+		);
+		expect(() => bot.slash({ name: 'numeric-check', options: { count: 1, ratio: Number.POSITIVE_INFINITY } })).toThrow(
+			/ratio.*finite number/i,
+		);
+		expect(() =>
+			bot.slash({ name: 'numeric-check', options: { count: Number.MAX_SAFE_INTEGER + 1, ratio: 1 } }),
+		).toThrow(/count.*safe integer/i);
+		await bot.close();
+	});
+
+	test('channel option validation requires resolved channel payloads to include type when channel_types is declared', async () => {
+		const channel = apiChannel({ id: 'text-channel', type: ChannelType.GuildText });
+		const bot = await createMockBot({ commands: [ChannelCheckCommand] });
+
+		expect(() =>
+			bot.slash({
+				name: 'channel-check',
+				options: {
+					room: {
+						__slipherOption: true,
+						type: ApplicationCommandOptionType.Channel,
+						value: 'missing-type',
+						resolved: { channels: { 'missing-type': { id: 'missing-type' } } },
+					},
+				},
+			}),
+		).toThrow(/resolved channel is missing a numeric type/);
+		await expect(
+			bot.slash({
+				name: 'channel-check',
+				options: {
+					room: {
+						__slipherOption: true,
+						type: ApplicationCommandOptionType.Channel,
+						value: channel.id,
+						resolved: { channels: { [channel.id]: channel } },
+					},
+				},
+			}),
+		).resolves.toMatchObject({ content: channel.id });
 		await bot.close();
 	});
 

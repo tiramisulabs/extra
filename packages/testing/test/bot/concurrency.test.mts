@@ -174,6 +174,43 @@ describe('concurrent dispatch isolation', () => {
 		await bot.close();
 	});
 
+	test('source-less component dispatch fails while an implicit source owner is still running', async () => {
+		let release!: () => void;
+		const hold = new Promise<void>(resolve => {
+			release = resolve;
+		});
+
+		@Declare({ name: 'hold-source', description: 'Sends a component and keeps running' })
+		class HoldSourceCommand extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.write({
+					content: 'source',
+					components: [{ type: 1, components: [{ type: 2, style: 1, custom_id: 'claim:123', label: 'Claim' }] }],
+				});
+				await hold;
+			}
+		}
+
+		class ClaimButton extends ComponentCommand {
+			componentType = 'Button' as const;
+			filter(ctx: ComponentContext<'Button'>) {
+				return ctx.customId === 'claim:123';
+			}
+			async run(ctx: ComponentContext<'Button'>) {
+				await ctx.write({ content: 'clicked' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [HoldSourceCommand], components: [ClaimButton] });
+		const active = bot.slash({ name: 'hold-source' });
+		await active.until(Routes.interactionCallback);
+
+		expect(() => bot.clickButton('claim:123')).toThrow(/source-less component dispatch.+ambiguous/);
+		release();
+		await active;
+		await bot.close();
+	});
+
 	test('an out-of-band action whose route only contains the token as a substring is not attributed', async () => {
 		@Declare({ name: 'tokenleak', description: 'Replies; another interaction owns the near-miss action' })
 		class TokenLeakCommand extends Command {
@@ -249,9 +286,7 @@ describe('concurrent dispatch isolation', () => {
 		const parked = bot.slash({ name: 'park' });
 		void parked.until(action => action.route.includes('/never-release')).catch(() => {});
 
-		expect(() => bot.clickButton('claim:fresh')).toThrow(
-			/no source message resolved.+another dispatch is still running/s,
-		);
+		expect(() => bot.clickButton('claim:fresh')).toThrow(/source-less component dispatch.+ambiguous/s);
 		release();
 		await parked;
 		await bot.close();
