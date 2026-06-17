@@ -187,4 +187,68 @@ describe('outgoing message payload limits (fail loud)', () => {
 		);
 		await bot.close();
 	});
+
+	// Component structural validation — driven via the raw create route (the typed body would block most shapes).
+	const postBody = async (body: Record<string, unknown>) => {
+		const { world, channel } = seedGuildFixture('cmp');
+		const bot = await createMockBot({ world });
+		const send = bot.rest.request('POST', `/channels/${channel.id}/messages`, { body });
+		return { send, close: () => bot.close() };
+	};
+	const button = (extra: Record<string, unknown>) => ({ type: 2, style: 1, ...extra });
+	const row = (...children: unknown[]) => ({ type: 1, components: children });
+
+	test('a button label over 80 chars is rejected', async () => {
+		const { send, close } = await postBody({ components: [row(button({ custom_id: 'b', label: 'x'.repeat(81) }))] });
+		await expect(send).rejects.toThrow(/button label must be 80/);
+		await close();
+	});
+
+	test('a select option label over 100 chars is rejected', async () => {
+		const { send, close } = await postBody({
+			components: [row({ type: 3, custom_id: 's', options: [{ label: 'x'.repeat(101), value: 'v' }] })],
+		});
+		await expect(send).rejects.toThrow(/select option label must be between 1 and 100/);
+		await close();
+	});
+
+	test('more than 5 action rows is rejected', async () => {
+		const { send, close } = await postBody({
+			components: Array.from({ length: 6 }, (_, i) => row(button({ custom_id: `b${i}`, label: 'x' }))),
+		});
+		await expect(send).rejects.toThrow(/at most 5 action rows/);
+		await close();
+	});
+
+	test('a row mixing a button and a select is rejected', async () => {
+		const { send, close } = await postBody({
+			components: [
+				row(button({ custom_id: 'b', label: 'x' }), { type: 3, custom_id: 's', options: [{ label: 'a', value: 'a' }] }),
+			],
+		});
+		await expect(send).rejects.toThrow(/cannot mix buttons and a select/);
+		await close();
+	});
+
+	test('an interactive button with no custom_id is rejected', async () => {
+		const { send, close } = await postBody({ components: [row(button({ label: 'no id' }))] });
+		await expect(send).rejects.toThrow(/requires a non-empty custom_id/);
+		await close();
+	});
+
+	test('a link button (no custom_id, has url) is accepted', async () => {
+		const { send, close } = await postBody({
+			components: [row({ type: 2, style: 5, label: 'Open', url: 'https://example.com' })],
+		});
+		await expect(send).resolves.toBeDefined();
+		await close();
+	});
+
+	test('whitespace-only content is rejected as empty', async () => {
+		const { dispatch, close } = await botWith((ctx, channelId) =>
+			ctx.client.messages.write(channelId, { content: '   \n  ' }),
+		)();
+		await expect(dispatch).rejects.toThrow(/empty message/i);
+		await close();
+	});
 });

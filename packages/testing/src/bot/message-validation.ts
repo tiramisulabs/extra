@@ -122,12 +122,54 @@ function assertValidEmbeds(embeds: unknown[]): void {
  * min/max_values stay in 0..25 with min<=max. Throws a 50035 MockApiError, so an impossible component tree
  * fails loud instead of passing a happy-path test.
  */
-function assertValidComponents(components: unknown): void {
+const isSelectType = (type: number | undefined): boolean => type !== undefined && type >= 3 && type <= 8;
+
+function assertValidComponents(components: unknown, isV2: boolean): void {
+	// v1 action-row layout rules — at most 5 rows; per row at most 5 buttons OR 1 select, never mixed. These do
+	// not apply to a components-v2 tree (containers/sections/text-displays have their own shape).
+	if (!isV2 && Array.isArray(components)) {
+		if (components.length > 5) {
+			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: a message can have at most 5 action rows');
+		}
+		for (const row of components) {
+			const record = asRecord(row);
+			if (numberValue(record.type) !== 1) continue;
+			const children = arrayValue(record.components).map(asRecord);
+			const buttons = children.filter(child => numberValue(child.type) === 2);
+			const selects = children.filter(child => isSelectType(numberValue(child.type)));
+			if (buttons.length > 0 && selects.length > 0) {
+				apiError(
+					400,
+					ErrorCode.InvalidFormBody,
+					'Invalid Form Body: an action row cannot mix buttons and a select menu',
+				);
+			}
+			if (buttons.length > 5) {
+				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: an action row can contain at most 5 buttons');
+			}
+			if (selects.length > 1) {
+				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: an action row can contain at most 1 select menu');
+			}
+		}
+	}
+
 	const customIds = new Set<string>();
 	walkComponents(components, node => {
 		const type = numberValue(node.type);
+		const isButton = type === 2;
+		const isLinkButton = isButton && numberValue(node.style) === 5;
+		const isSelect = isSelectType(type);
 		const customId = stringValue(node.custom_id);
-		if (customId !== undefined) {
+
+		// Interactive components (buttons except Link-style, and all selects) require a non-empty custom_id.
+		if (((isButton && !isLinkButton) || isSelect) && (customId === undefined || customId.length === 0)) {
+			apiError(
+				400,
+				ErrorCode.InvalidFormBody,
+				'Invalid Form Body: an interactive component requires a non-empty custom_id',
+			);
+		}
+		if (customId !== undefined && customId.length > 0) {
 			if ([...customId].length > 100) {
 				apiError(
 					400,
@@ -135,19 +177,55 @@ function assertValidComponents(components: unknown): void {
 					'Invalid Form Body: component custom_id must be 100 or fewer in length',
 				);
 			}
-			if (customIds.has(customId))
+			if (customIds.has(customId)) {
 				apiError(400, ErrorCode.InvalidFormBody, `Invalid Form Body: duplicate component custom_id "${customId}"`);
+			}
 			customIds.add(customId);
 		}
-		if (type !== undefined && type >= 3 && type <= 8) {
+
+		if (isButton) {
+			const label = stringValue(node.label);
+			if (label !== undefined && [...label].length > 80) {
+				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: button label must be 80 or fewer in length');
+			}
+		}
+
+		if (isSelect) {
 			if (type === 3) {
-				const options = arrayValue(node.options).length;
-				if (options < 1 || options > 25) {
+				const options = arrayValue(node.options);
+				if (options.length < 1 || options.length > 25) {
 					apiError(
 						400,
 						ErrorCode.InvalidFormBody,
 						'Invalid Form Body: a string select menu must have between 1 and 25 options',
 					);
+				}
+				for (const rawOption of options) {
+					const option = asRecord(rawOption);
+					const label = stringValue(option.label);
+					const value = stringValue(option.value);
+					const description = stringValue(option.description);
+					if (label === undefined || [...label].length < 1 || [...label].length > 100) {
+						apiError(
+							400,
+							ErrorCode.InvalidFormBody,
+							'Invalid Form Body: select option label must be between 1 and 100 in length',
+						);
+					}
+					if (value === undefined || [...value].length < 1 || [...value].length > 100) {
+						apiError(
+							400,
+							ErrorCode.InvalidFormBody,
+							'Invalid Form Body: select option value must be between 1 and 100 in length',
+						);
+					}
+					if (description !== undefined && [...description].length > 100) {
+						apiError(
+							400,
+							ErrorCode.InvalidFormBody,
+							'Invalid Form Body: select option description must be 100 or fewer in length',
+						);
+					}
 				}
 			}
 			const min = numberValue(node.min_values);
@@ -181,8 +259,9 @@ export function assertSendableMessage(raw: Record<string, unknown>, mode: 'creat
 	}
 	const embeds = Array.isArray(raw.embeds) ? raw.embeds : [];
 	assertValidEmbeds(embeds);
+	const isV2 = ((numberValue(raw.flags) ?? 0) & MESSAGE_FLAG_COMPONENTS_V2) !== 0;
 	// F19: a Components-v2 body forbids top-level content/embeds and requires a non-empty components tree.
-	if (((numberValue(raw.flags) ?? 0) & MESSAGE_FLAG_COMPONENTS_V2) !== 0) {
+	if (isV2) {
 		if (content !== undefined && content !== '') {
 			apiError(
 				400,
@@ -204,7 +283,7 @@ export function assertSendableMessage(raw: Record<string, unknown>, mode: 'creat
 			);
 		}
 	}
-	if (Array.isArray(raw.components)) assertValidComponents(raw.components);
+	if (Array.isArray(raw.components)) assertValidComponents(raw.components, isV2);
 	// F20: at most 3 stickers per message.
 	if (Array.isArray(raw.sticker_ids) && raw.sticker_ids.length > 3) {
 		apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: a message can have at most 3 stickers');
@@ -232,7 +311,7 @@ export function assertSendableMessage(raw: Record<string, unknown>, mode: 'creat
 	}
 	if (mode === 'create') {
 		const empty =
-			(content === undefined || content === '') &&
+			(content === undefined || content.trim() === '') &&
 			embeds.length === 0 &&
 			(!Array.isArray(raw.components) || raw.components.length === 0) &&
 			raw.poll === undefined &&
