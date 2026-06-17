@@ -2,6 +2,7 @@ import {
 	Command,
 	ContextMenuCommand,
 	createNumberOption,
+	createStringOption,
 	Declare,
 	type MenuCommandContext,
 	Options,
@@ -27,6 +28,27 @@ describe('autocomplete and context menus', () => {
 		const bot = await createMockBot({ commands: [SearchCommand] });
 		const result = await bot.autocomplete({ name: 'search', focused: 'query', value: 'sey' });
 		expect(result.choices).toEqual([{ name: 'result:sey', value: 'sey' }]);
+		await bot.close();
+	});
+
+	test('autocomplete responding with more than 25 choices does not deliver them (rejected at the REST boundary)', async () => {
+		@Options({
+			q: createStringOption({
+				description: 'q',
+				autocomplete: async interaction => {
+					await interaction.respond(Array.from({ length: 26 }, (_, n) => ({ name: `r${n}`, value: `${n}` })));
+				},
+			}),
+		})
+		@Declare({ name: 'too-many', description: 'overflows the choice cap' })
+		class TooMany extends Command {
+			async run() {}
+		}
+		const bot = await createMockBot({ commands: [TooMany] });
+		// seyfert's autocomplete runner swallows the 400 (as it does against real Discord), so the dispatch resolves;
+		// the over-limit respond is rejected at the callback boundary and recorded as an errored action.
+		await bot.autocomplete({ name: 'too-many', focused: 'q', value: 'x' });
+		expect(bot.actions.some(action => /at most 25 choices/.test(String((action.error as Error)?.message)))).toBe(true);
 		await bot.close();
 	});
 

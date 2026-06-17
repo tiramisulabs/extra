@@ -75,6 +75,10 @@ function assertValidEmbeds(embeds: unknown[]): void {
 		}
 		const footer = asRecord(embed.footer);
 		const footerText = stringValue(footer.text);
+		// Discord requires footer.text whenever footer.icon_url is set (icon has nothing to anchor to otherwise).
+		if (footer.icon_url !== undefined && (footerText === undefined || footerText.length === 0)) {
+			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: embed footer.text is required when footer.icon_url is set');
+		}
 		if (footerText !== undefined) {
 			if (cp(footerText) > 2048) {
 				apiError(
@@ -87,6 +91,10 @@ function assertValidEmbeds(embeds: unknown[]): void {
 		}
 		const author = asRecord(embed.author);
 		const authorName = stringValue(author.name);
+		// Discord requires author.name whenever author.icon_url or author.url is set.
+		if ((author.icon_url !== undefined || author.url !== undefined) && (authorName === undefined || authorName.length === 0)) {
+			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: embed author.name is required when author.icon_url or author.url is set');
+		}
 		if (authorName !== undefined) {
 			if (cp(authorName) > 256)
 				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: embed author name must be 256 or fewer in length');
@@ -125,24 +133,23 @@ function assertValidEmbeds(embeds: unknown[]): void {
 const isSelectType = (type: number | undefined): boolean => type !== undefined && type >= 3 && type <= 8;
 
 function assertValidComponents(components: unknown, isV2: boolean): void {
-	// v1 action-row layout rules — at most 5 rows; per row at most 5 buttons OR 1 select, never mixed. These do
-	// not apply to a components-v2 tree (containers/sections/text-displays have their own shape).
-	if (!isV2 && Array.isArray(components)) {
-		if (components.length > 5) {
-			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: a message can have at most 5 action rows');
-		}
-		for (const row of components) {
-			const record = asRecord(row);
-			if (numberValue(record.type) !== 1) continue;
-			const children = arrayValue(record.components).map(asRecord);
+	// The top-level "at most 5 action rows" cap is a v1-only rule (a components-v2 tree nests rows inside
+	// containers/sections). The PER-ROW rules below — at most 5 buttons OR 1 select per row, never mixed — hold
+	// for any type-1 action row, v1 or v2, so they run inside the tree walk to also catch nested rows.
+	if (!isV2 && Array.isArray(components) && components.length > 5) {
+		apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: a message can have at most 5 action rows');
+	}
+
+	const customIds = new Set<string>();
+	walkComponents(components, node => {
+		const type = numberValue(node.type);
+		// Per-row layout caps (apply in v1 and v2): a single action row holds at most 5 buttons OR 1 select, never both.
+		if (type === 1) {
+			const children = arrayValue(node.components).map(asRecord);
 			const buttons = children.filter(child => numberValue(child.type) === 2);
 			const selects = children.filter(child => isSelectType(numberValue(child.type)));
 			if (buttons.length > 0 && selects.length > 0) {
-				apiError(
-					400,
-					ErrorCode.InvalidFormBody,
-					'Invalid Form Body: an action row cannot mix buttons and a select menu',
-				);
+				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: an action row cannot mix buttons and a select menu');
 			}
 			if (buttons.length > 5) {
 				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: an action row can contain at most 5 buttons');
@@ -151,11 +158,6 @@ function assertValidComponents(components: unknown, isV2: boolean): void {
 				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: an action row can contain at most 1 select menu');
 			}
 		}
-	}
-
-	const customIds = new Set<string>();
-	walkComponents(components, node => {
-		const type = numberValue(node.type);
 		const isButton = type === 2;
 		const isLinkButton = isButton && numberValue(node.style) === 5;
 		const isSelect = isSelectType(type);
@@ -227,6 +229,14 @@ function assertValidComponents(components: unknown, isV2: boolean): void {
 						);
 					}
 				}
+				const maxValues = numberValue(node.max_values);
+				if (maxValues !== undefined && maxValues > options.length) {
+					apiError(
+						400,
+						ErrorCode.InvalidFormBody,
+						'Invalid Form Body: select max_values cannot exceed the number of options',
+					);
+				}
 			}
 			const min = numberValue(node.min_values);
 			const max = numberValue(node.max_values);
@@ -288,14 +298,23 @@ export function assertSendableMessage(raw: Record<string, unknown>, mode: 'creat
 	if (Array.isArray(raw.sticker_ids) && raw.sticker_ids.length > 3) {
 		apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: a message can have at most 3 stickers');
 	}
-	// F21: poll create caps.
+	// F21: poll caps + required fields.
 	if (raw.poll !== undefined) {
+		// A poll is not an editable field: PATCH /messages rejects it outright.
+		if (mode === 'edit') {
+			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: a message poll cannot be edited');
+		}
 		const poll = asRecord(raw.poll);
 		const question = stringValue(asRecord(poll.question).text);
-		if (question !== undefined && [...question].length > 300) {
+		if (question === undefined || question.trim() === '') {
+			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: poll.question.text is required');
+		}
+		if ([...question].length > 300) {
 			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: poll question must be 300 or fewer in length');
 		}
 		const answers = arrayValue(poll.answers);
+		if (answers.length < 1)
+			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: a poll must have between 1 and 10 answers');
 		if (answers.length > 10)
 			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: a poll can have at most 10 answers');
 		for (const entry of answers) {

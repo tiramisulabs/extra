@@ -2,6 +2,8 @@ import { ActionRow, Button, Command, type CommandContext, Declare, MessageFlags,
 import { ButtonStyle } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
+import { TEST_BOT_ID } from '../../src/bot/constants';
+import { apiUser } from '../../src/bot/payloads';
 import { seedGuildFixture } from './_setup';
 
 function botWith(run: (ctx: CommandContext, channelId: string) => Promise<unknown>) {
@@ -250,5 +252,62 @@ describe('outgoing message payload limits (fail loud)', () => {
 		)();
 		await expect(dispatch).rejects.toThrow(/empty message/i);
 		await close();
+	});
+
+	test('a Components-V2 action row with 6 buttons is still rejected (per-row cap holds in v2)', async () => {
+		const { send, close } = await postBody({
+			flags: 32768,
+			components: [row(...Array.from({ length: 6 }, (_, i) => button({ custom_id: `b${i}`, label: 'x' })))],
+		});
+		await expect(send).rejects.toThrow(/at most 5 buttons/);
+		await close();
+	});
+
+	test('a string select whose max_values exceeds its option count is rejected', async () => {
+		const { send, close } = await postBody({
+			components: [row({ type: 3, custom_id: 's', max_values: 5, options: [{ label: 'a', value: 'a' }] })],
+		});
+		await expect(send).rejects.toThrow(/max_values cannot exceed the number of options/);
+		await close();
+	});
+
+	test('an embed footer icon with no footer text is rejected', async () => {
+		const { send, close } = await postBody({ embeds: [{ description: 'hi', footer: { icon_url: 'https://x/y.png' } }] });
+		await expect(send).rejects.toThrow(/footer\.text is required/);
+		await close();
+	});
+
+	test('an embed author icon with no author name is rejected', async () => {
+		const { send, close } = await postBody({ embeds: [{ description: 'hi', author: { icon_url: 'https://x/y.png' } }] });
+		await expect(send).rejects.toThrow(/author\.name is required/);
+		await close();
+	});
+
+	test('a poll with zero answers is rejected', async () => {
+		const { send, close } = await postBody({ poll: { question: { text: 'Best?' }, answers: [] } });
+		await expect(send).rejects.toThrow(/poll must have between 1 and 10 answers/);
+		await close();
+	});
+
+	test('a poll with no question text is rejected', async () => {
+		const { send, close } = await postBody({ poll: { question: {}, answers: [{ poll_media: { text: 'A' } }] } });
+		await expect(send).rejects.toThrow(/poll\.question\.text is required/);
+		await close();
+	});
+
+	test('editing a poll onto an existing message is rejected', async () => {
+		const { world, channel } = seedGuildFixture('poll-edit');
+		const message = world.registerMessage(channel.id, {
+			id: 'poll-edit-msg',
+			author: apiUser({ id: TEST_BOT_ID }),
+			content: 'hi',
+		});
+		const bot = await createMockBot({ world });
+		await expect(
+			bot.rest.request('PATCH', `/channels/${channel.id}/messages/${message.id}`, {
+				body: { poll: { question: { text: 'Q' }, answers: [{ poll_media: { text: 'A' } }] } },
+			}),
+		).rejects.toThrow(/poll cannot be edited/);
+		await bot.close();
 	});
 });

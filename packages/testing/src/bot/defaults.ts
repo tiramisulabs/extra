@@ -390,6 +390,19 @@ export function registerWorldDefaults(
 			if (source) hooks.state.registerOriginalResponse(params.token, source.channelId, source.messageId);
 			return {};
 		}
+		// Autocomplete result (type 8): Discord caps choices at 25 and each choice name at 1..100 chars.
+		if (body.type === 8) {
+			const choices = Array.isArray(body.data?.choices) ? (body.data?.choices as unknown[]) : [];
+			if (choices.length > 25) {
+				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: autocomplete can return at most 25 choices');
+			}
+			for (const choice of choices) {
+				const name = (choice as { name?: unknown }).name;
+				if (typeof name !== 'string' || name.length < 1 || [...name].length > 100) {
+					apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: autocomplete choice name must be between 1 and 100 in length');
+				}
+			}
+		}
 		if (body.type !== 4) return {};
 		assertAttachmentRefs(body.data ?? {}, pending.files);
 		const channelId = hooks.state.channelForToken(params.token);
