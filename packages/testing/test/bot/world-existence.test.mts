@@ -209,9 +209,121 @@ describe('world-mode existence enforcement', () => {
 	test('editing a webhook that does not exist is a 404 Unknown Webhook', async () => {
 		const { world } = seedGuildFixture('wh-missing');
 		const bot = await createMockBot({ world });
+		await expect(bot.rest.request('PATCH', '/webhooks/ghost-webhook', { body: { name: 'x' } })).rejects.toMatchObject({
+			code: DiscordErrors.UnknownWebhook.code,
+		});
+		await bot.close();
+	});
+
+	test('world-backed fetch and list routes require their parent entities', async () => {
+		const { world, guild, channel } = seedGuildFixture('parents');
+		const bot = await createMockBot({ world });
+
+		await expect(bot.rest.request('GET', `/guilds/${guild.id}/members/ghost-user`)).rejects.toMatchObject({
+			code: DiscordErrors.UnknownMember.code,
+		});
+		await expect(bot.rest.request('GET', '/guilds/ghost-guild/roles')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownGuild.code,
+		});
+		await expect(bot.rest.request('GET', '/guilds/ghost-guild/channels')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownGuild.code,
+		});
+		await expect(bot.rest.request('GET', '/guilds/ghost-guild/bans')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownGuild.code,
+		});
+		await expect(bot.rest.request('GET', '/guilds/ghost-guild/threads/active')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownGuild.code,
+		});
+		await expect(bot.rest.request('GET', '/guilds/ghost-guild/audit-logs')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownGuild.code,
+		});
+		await expect(bot.rest.request('GET', '/channels/ghost-channel/messages')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownChannel.code,
+		});
+		await expect(bot.rest.request('GET', '/channels/ghost-channel/messages/pins')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownChannel.code,
+		});
+		await expect(bot.rest.request('GET', '/channels/ghost-channel/invites')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownChannel.code,
+		});
+		await expect(bot.rest.request('GET', '/channels/ghost-channel/webhooks')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownChannel.code,
+		});
 		await expect(
-			bot.rest.request('PATCH', '/webhooks/ghost-webhook', { body: { name: 'x' } }),
-		).rejects.toMatchObject({ code: DiscordErrors.UnknownWebhook.code });
+			bot.rest.request('POST', '/channels/ghost-channel/webhooks', { body: { name: 'logs' } }),
+		).rejects.toMatchObject({
+			code: DiscordErrors.UnknownChannel.code,
+		});
+		await expect(bot.rest.request('GET', `/channels/${channel.id}/thread-members/ghost-user`)).rejects.toMatchObject({
+			code: DiscordErrors.UnknownMember.code,
+		});
+		await expect(bot.rest.request('GET', '/channels/ghost-channel/thread-members')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownChannel.code,
+		});
+		await bot.close();
+	});
+
+	test('message-scoped world routes require the target message', async () => {
+		const { world, channel } = seedGuildFixture('msg-scope');
+		const bot = await createMockBot({ world });
+
+		await expect(
+			bot.rest.request('POST', `/channels/${channel.id}/messages/ghost-message/threads`, { body: { name: 'thread' } }),
+		).rejects.toMatchObject({
+			code: DiscordErrors.UnknownMessage.code,
+		});
+		await expect(bot.rest.request('PUT', `/channels/${channel.id}/messages/pins/ghost-message`)).rejects.toMatchObject({
+			code: DiscordErrors.UnknownMessage.code,
+		});
+		await expect(
+			bot.rest.request('GET', `/channels/${channel.id}/messages/ghost-message/reactions/thumb`),
+		).rejects.toMatchObject({
+			code: DiscordErrors.UnknownMessage.code,
+		});
+		await expect(bot.rest.request('POST', `/channels/${channel.id}/polls/ghost-message/expire`)).rejects.toMatchObject({
+			code: DiscordErrors.UnknownMessage.code,
+		});
+		await expect(
+			bot.rest.request('GET', `/channels/${channel.id}/polls/ghost-message/answers/0`),
+		).rejects.toMatchObject({
+			code: DiscordErrors.UnknownMessage.code,
+		});
+		await bot.close();
+	});
+
+	test('invite, template and stage routes reject missing backing entities', async () => {
+		const { world, guild, channel } = seedGuildFixture('low-entity');
+		const bot = await createMockBot({ world });
+
+		await expect(bot.rest.request('GET', '/invites/ghost-code')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownInvite.code,
+		});
+		await expect(bot.rest.request('GET', '/guilds/templates/ghost-template')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownGuildTemplate.code,
+		});
+		await expect(bot.rest.request('GET', '/guilds/ghost-guild/templates')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownGuild.code,
+		});
+		await expect(
+			bot.rest.request('POST', '/guilds/ghost-guild/templates', { body: { name: 'template' } }),
+		).rejects.toMatchObject({
+			code: DiscordErrors.UnknownGuild.code,
+		});
+		await expect(bot.rest.request('GET', '/guilds/ghost-guild/soundboard-sounds')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownGuild.code,
+		});
+		await expect(
+			bot.rest.request('POST', '/stage-instances', { body: { channel_id: 'ghost-channel' } }),
+		).rejects.toMatchObject({
+			code: DiscordErrors.UnknownChannel.code,
+		});
+		await expect(bot.rest.request('GET', `/stage-instances/${channel.id}`)).rejects.toMatchObject({
+			code: DiscordErrors.UnknownStageInstance.code,
+		});
+		await expect(bot.rest.request('DELETE', `/stage-instances/${channel.id}`)).rejects.toMatchObject({
+			code: DiscordErrors.UnknownStageInstance.code,
+		});
+		await expect(bot.rest.request('GET', `/guilds/${guild.id}/templates`)).resolves.toEqual([]);
 		await bot.close();
 	});
 

@@ -142,6 +142,15 @@ describe('additional command surfaces', () => {
 		await bot.close();
 	});
 
+	test('attachment options require resolved attachment payloads when validation is enabled', async () => {
+		const bot = await createMockBot({ commands: [AttachmentCheckCommand], validateOptions: true });
+
+		expect(() => bot.slash({ name: 'attachment-check', options: { file: 'attachment-id' } })).toThrow(
+			/attachmentOption/,
+		);
+		await bot.close();
+	});
+
 	test('mentionable options resolve users and roles', async () => {
 		const user = apiUser({ id: 'mention-user' });
 		const role = { id: 'mention-role', name: 'mod' };
@@ -153,6 +162,15 @@ describe('additional command surfaces', () => {
 		await expect(
 			bot.slash({ name: 'mentionable-check', options: { target: mentionableOption(role) } }),
 		).resolves.toMatchObject({ content: `role:${role.id}` });
+		await bot.close();
+	});
+
+	test('mentionable options require resolved user or role payloads when validation is enabled', async () => {
+		const bot = await createMockBot({ commands: [MentionableCheckCommand], validateOptions: true });
+
+		expect(() => bot.slash({ name: 'mentionable-check', options: { target: 'mention-user' } })).toThrow(
+			/mentionableOption/,
+		);
 		await bot.close();
 	});
 
@@ -177,9 +195,15 @@ describe('additional command surfaces', () => {
 		await bot.close();
 	});
 
-	test('onUnhandledRest modes warn once, throw, or stay silent', async () => {
+	test('onUnhandledRest defaults strict, can warn once, or stay silent', async () => {
+		const strictDefault = await createMockBot();
+		await expect(strictDefault.rest.request('GET', '/applications/missing')).rejects.toThrow(
+			/no interceptor or world entity/,
+		);
+		await strictDefault.close();
+
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-		const noisy = await createMockBot();
+		const noisy = await createMockBot({ onUnhandledRest: 'warn' });
 		await noisy.rest.request('GET', '/applications/missing');
 		await noisy.rest.request('GET', '/applications/missing');
 		expect(warn).toHaveBeenCalledTimes(1);

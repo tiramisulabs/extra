@@ -1,7 +1,7 @@
 import { createEvent } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
-import { apiMember, apiUser, memberAddEvent, memberRemoveEvent } from '../../src/bot/payloads';
+import { apiMember, apiMessage, apiUser, memberAddEvent, memberRemoveEvent } from '../../src/bot/payloads';
 import { mockWorld } from '../../src/bot/world';
 
 describe('emitEvent result and factories', () => {
@@ -75,6 +75,51 @@ describe('emitEvent result and factories', () => {
 		).rejects.toThrow(/no handler ran/);
 		// guard runs BEFORE the world bridge, so the member was never added
 		expect(bot.worldMember(guild.id, 'ghost')).toBeUndefined();
+		await bot.close();
+	});
+
+	test('GUILD_MEMBER_UPDATE upserts an unseeded member into world and cache', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'member-update-guild' });
+		const bot = await createMockBot({ world });
+
+		await bot.emitEvent(
+			'GUILD_MEMBER_UPDATE',
+			{ guild_id: guild.id, user: apiUser({ id: 'ghost-member' }), roles: ['r1'], nick: 'Ghost' },
+			{ allowNoHandler: true },
+		);
+
+		expect(bot.worldMember(guild.id, 'ghost-member')).toMatchObject({ roles: ['r1'], nick: 'Ghost' });
+		await expect(Promise.resolve(bot.client.cache.members?.raw('ghost-member', guild.id))).resolves.toMatchObject({
+			roles: ['r1'],
+			nick: 'Ghost',
+		});
+		await bot.close();
+	});
+
+	test('gateway event validation fails before dirtying world when Seyfert cache would reject', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'invalid-event-guild' });
+		const channel = world.registerChannel(guild.id, { id: 'invalid-event-channel' });
+		const bot = await createMockBot({ world, onCommandError: 'capture' });
+
+		await expect(
+			bot.emitEvent(
+				'MESSAGE_CREATE',
+				{ ...apiMessage({ id: 'invalid-message', channelId: channel.id }), author: undefined },
+				{ allowNoHandler: true },
+			),
+		).rejects.toThrow(/MESSAGE_CREATE requires id, channel_id, and author\.id/);
+		expect(bot.worldMessage(channel.id, 'invalid-message')).toBeUndefined();
+
+		await expect(
+			bot.emitEvent(
+				'THREAD_CREATE',
+				{ id: 'guildless-thread', parent_id: channel.id, type: 11 },
+				{ allowNoHandler: true },
+			),
+		).rejects.toThrow(/THREAD_CREATE requires guild_id/);
+		expect(bot.worldChannel('guildless-thread')).toBeUndefined();
 		await bot.close();
 	});
 

@@ -14,6 +14,7 @@ import { ButtonStyle, TextInputStyle } from 'seyfert/lib/types';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { apiUser } from '../../src/bot/payloads';
+import { mockWorld } from '../../src/bot/world';
 
 // seyfert's collector idle/timeout and modal waitFor timers use the bare GLOBAL setTimeout, with no injection
 // seam, so the mock cannot own them. We fake only setTimeout/clearTimeout (leaving setImmediate real) so the
@@ -309,6 +310,45 @@ describe('virtual clock', () => {
 		vi.useFakeTimers(FAKE_TIMER_OPTIONS);
 		await expect(bot.rest.waitForAction({ method: 'GET', route: '/never-happens' }, 50)).rejects.toThrow(/timed out/);
 		vi.useRealTimers();
+		await bot.close();
+	});
+
+	test('advanceTime moves the harness permission clock for member timeout expiry', async () => {
+		vi.useFakeTimers(FAKE_TIMER_OPTIONS);
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'timeout-perm-guild' });
+		const muted = world.registerMember(guild.id, {
+			user: apiUser({ id: 'timeout-perm-user' }),
+			roles: [world.registerRole(guild.id, { id: 'speaker', permissions: ['SendMessages'] }).id],
+			communicationDisabledUntil: new Date(Date.now() + 60_000).toISOString(),
+		});
+		const channel = world.registerChannel(guild.id);
+
+		@Declare({ name: 'can-speak', description: 'Reads member permissions' })
+		class CanSpeak extends Command {
+			async run(ctx: CommandContext) {
+				const canSend = ctx.member?.permissions.has(['SendMessages']) ?? false;
+				await ctx.write({ content: canSend ? 'can-send' : 'timed-out' });
+			}
+		}
+
+		const bot = await createMockBot({
+			commands: [CanSpeak],
+			world,
+			timers: { advance: ms => void vi.advanceTimersByTime(ms) },
+		});
+		await expect(bot.slash({ name: 'can-speak', guildId: guild.id, channel, user: muted.user })).resolves.toMatchObject(
+			{
+				content: 'timed-out',
+			},
+		);
+
+		await bot.advanceTime(60_001);
+		await expect(bot.slash({ name: 'can-speak', guildId: guild.id, channel, user: muted.user })).resolves.toMatchObject(
+			{
+				content: 'can-send',
+			},
+		);
 		await bot.close();
 	});
 });

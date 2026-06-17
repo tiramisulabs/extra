@@ -77,9 +77,26 @@ describe('component flows', () => {
 	test('component dispatch diagnoses when no component handlers are registered at all', async () => {
 		const bot = await createMockBot({ components: [] });
 
-		await expect(bot.clickButton('poll_yes', { source: 'source-message-id' })).rejects.toThrow(
-			/no component handlers are registered/,
+		expect(() => bot.clickButton('poll_yes', { source: 'source-message-id' })).toThrow(
+			/source message "source-message-id" was not found/,
 		);
+		await bot.close();
+	});
+
+	test('explicit component source must contain the dispatched customId', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'source-guild' });
+		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'source-actor' }) });
+		const channel = world.registerChannel(guild.id, { id: 'source-channel' });
+		world.registerMessage(channel.id, {
+			id: 'source-message',
+			components: [{ type: 1, components: [{ type: 2, style: 1, custom_id: 'other-confirm', label: 'Other' }] }],
+		});
+
+		const bot = await createMockBot({ components: [ConfirmButton], world });
+		expect(() =>
+			bot.clickButton('confirm', { source: 'source-message', guildId: guild.id, channel, user: actor.user }),
+		).toThrow(/source message "source-message" does not contain a component with customId "confirm"/);
 		await bot.close();
 	});
 
@@ -131,6 +148,33 @@ describe('component flows', () => {
 		const result = await bot.selectMenu('pick', ['red']);
 		expect(selected).toEqual([['red']]);
 		expect(result.content).toBe('Picked red');
+		await bot.close();
+	});
+
+	test('selectMenu validates selected values against the source string select', async () => {
+		@Declare({ name: 'pick-strict-color', description: 'Starts a strict color picker' })
+		class PickStrictColorCommand extends Command {
+			async run(ctx: CommandContext) {
+				const row = new ActionRow().setComponents([
+					new StringSelectMenu()
+						.setCustomId('strict-pick')
+						.setOptions([
+							new StringSelectOption().setLabel('Red').setValue('red'),
+							new StringSelectOption().setLabel('Blue').setValue('blue'),
+						]),
+				]);
+				await ctx.write({ content: 'Pick one', components: [row] });
+				const message = await ctx.fetchResponse();
+				message.createComponentCollector().run<StringSelectMenuInteraction>('strict-pick', async interaction => {
+					await interaction.write({ content: `Picked ${interaction.values.join(',')}` });
+				});
+			}
+		}
+
+		const bot = await createMockBot({ commands: [PickStrictColorCommand] });
+		await bot.slash({ name: 'pick-strict-color' });
+		expect(() => bot.selectMenu('strict-pick', ['green'])).toThrow(/value "green" is not an option/);
+		expect(() => bot.selectMenu('strict-pick', ['red', 'blue'])).toThrow(/above max_values 1/);
 		await bot.close();
 	});
 
@@ -329,7 +373,9 @@ describe('component flows', () => {
 				.setCustomId('feedback-modal')
 				.setTitle('Feedback')
 				.setComponents([
-					new Label().setLabel('Rating').setComponent(new TextInput({ custom_id: 'rating', style: TextInputStyle.Short })),
+					new Label()
+						.setLabel('Rating')
+						.setComponent(new TextInput({ custom_id: 'rating', style: TextInputStyle.Short })),
 				]);
 			const submit = await ctx.interaction.modal(modal, { waitFor: 2000 });
 			if (submit) await submit.write({ content: 'thanks' });

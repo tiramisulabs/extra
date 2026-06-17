@@ -245,13 +245,17 @@ describe('stateful world defaults', () => {
 		await bot.close();
 	});
 
-	test('world-backed user fetches return seeded and synthetic users', async () => {
+	test('world-backed user fetches return seeded users and reject missing users', async () => {
 		@Declare({ name: 'fetch-users', description: 'Fetches users through REST' })
 		class FetchUsers extends Command {
 			async run(ctx: CommandContext) {
 				const seeded = await ctx.client.users.fetch('seed-user', true);
-				const synthetic = await ctx.client.users.fetch('missing-user', true);
-				await ctx.write({ content: `${seeded.username}:${synthetic.id}` });
+				try {
+					await ctx.client.users.fetch('missing-user', true);
+					await ctx.write({ content: 'missing passed' });
+				} catch (error) {
+					await ctx.write({ content: `${seeded.username}:${error instanceof MockApiError ? error.message : 'error'}` });
+				}
 			}
 		}
 
@@ -262,7 +266,7 @@ describe('stateful world defaults', () => {
 		world.registerUser({ id: 'seed-user', username: 'Seeded' });
 		const bot = await createMockBot({ commands: [FetchUsers], world });
 		const result = await bot.slash({ name: 'fetch-users', guildId: guild.id, channel, user: actor.user });
-		expect(result.content).toBe('Seeded:missing-user');
+		expect(result.content).toBe('Seeded:Unknown User');
 		await bot.close();
 	});
 });

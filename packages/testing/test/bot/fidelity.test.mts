@@ -85,7 +85,7 @@ describe('fidelity fixes', () => {
 
 		const bot = await createMockBot({ commands: [PanelCommand], components: [PanelEditButton] });
 		const sent = await bot.slash({ name: 'panel' });
-		const source = sent.actions.find(action => action.route.includes('/callback'));
+		const source = (sent.messages[0] as { id?: string } | undefined)?.id;
 		await bot.clickButton('panel/edit', { source });
 
 		expect(seenComponents).toHaveLength(1);

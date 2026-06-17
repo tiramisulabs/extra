@@ -91,13 +91,15 @@ describe('message reactions', () => {
 		await bot.close();
 	});
 
-	test('simulateGateway fires messageReactionAdd / messageReactionRemove handlers', async () => {
+	test('simulateGateway fires messageReactionAdd / messageReactionRemove handlers with reaction metadata', async () => {
 		const added: string[] = [];
 		const removed: string[] = [];
 		const onAdd = createEvent({
 			data: { name: 'messageReactionAdd' },
 			run(data) {
-				added.push(`${data.messageId}:${data.emoji.name}:${data.userId}`);
+				added.push(
+					`${data.messageId}:${data.emoji.name}:${data.userId}:${data.member?.user.id}:${data.messageAuthorId}`,
+				);
 			},
 		});
 		const onRemove = createEvent({
@@ -109,9 +111,13 @@ describe('message reactions', () => {
 
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'gateway-react-guild' });
+		world.registerBotMember(guild.id);
 		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'gateway-react-actor' }) });
 		const channel = world.registerChannel(guild.id);
-		const message = world.registerMessage(channel.id, { id: 'gateway-react-message' });
+		const message = world.registerMessage(channel.id, {
+			id: 'gateway-react-message',
+			author: apiUser({ id: 'gateway-message-author' }),
+		});
 
 		@Declare({ name: 'react-gateway', description: 'Reacts and unreacts under simulateGateway' })
 		class ReactGateway extends Command {
@@ -129,7 +135,7 @@ describe('message reactions', () => {
 			simulateGateway: true,
 		});
 		await bot.slash({ name: 'react-gateway', guildId: guild.id, channel, user: actor.user });
-		expect(added).toEqual([`${message.id}:${EMOJI}:${TEST_BOT_ID}`]);
+		expect(added).toEqual([`${message.id}:${EMOJI}:${TEST_BOT_ID}:${TEST_BOT_ID}:gateway-message-author`]);
 		expect(removed).toEqual([`${message.id}:${EMOJI}:${TEST_BOT_ID}`]);
 		await bot.close();
 	});

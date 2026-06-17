@@ -2,6 +2,7 @@ import { Command, type CommandContext, Declare } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { apiUser } from '../../src/bot/payloads';
+import { DiscordErrors } from '../../src/bot/rest';
 import { mockWorld } from '../../src/bot/world';
 
 describe('standalone webhooks', () => {
@@ -91,6 +92,32 @@ describe('standalone webhooks', () => {
 			?.messages.find(message => (message.embeds[0] as { title?: string } | undefined)?.title === 'X');
 		expect(landed?.embeds[0]).toMatchObject({ title: 'X' });
 		expect(landed?.content).toBe('edited');
+		await bot.close();
+	});
+
+	test('webhook token mismatch rejects fetch, execute, edit and delete routes', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'wh-token-guild' });
+		const channel = world.registerChannel(guild.id, { id: 'wh-token-chan' });
+		world.registerWebhook(channel.id, { id: 'token-wh', token: 'good-token' });
+
+		const bot = await createMockBot({ world });
+		await expect(bot.rest.request('GET', '/webhooks/token-wh/bad-token')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownWebhook.code,
+		});
+		await expect(
+			bot.rest.request('POST', '/webhooks/token-wh/bad-token', { body: { content: 'wrong token' } }),
+		).rejects.toMatchObject({
+			code: DiscordErrors.UnknownWebhook.code,
+		});
+		await expect(
+			bot.rest.request('PATCH', '/webhooks/token-wh/bad-token', { body: { name: 'wrong token' } }),
+		).rejects.toMatchObject({
+			code: DiscordErrors.UnknownWebhook.code,
+		});
+		await expect(bot.rest.request('DELETE', '/webhooks/token-wh/bad-token')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownWebhook.code,
+		});
 		await bot.close();
 	});
 

@@ -2,6 +2,7 @@ import { Command, type CommandContext, ComponentCommand, type ComponentContext, 
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { apiUser } from '../../src/bot/payloads';
+import { DiscordErrors } from '../../src/bot/rest';
 import { mockWorld } from '../../src/bot/world';
 import { seedGuildFixture } from './_setup';
 
@@ -58,6 +59,18 @@ describe('interaction acknowledgement (fail loud before ack)', () => {
 		await expect(bot.slash({ name: 'ed', guildId: guild.id, channel, user: actor.user })).rejects.toThrow(
 			/unknown message|404|already/i,
 		);
+		await bot.close();
+	});
+
+	test('unknown interaction webhook followup messages cannot be edited or deleted', async () => {
+		const bot = await createMockBot();
+
+		await expect(
+			bot.rest.request('PATCH', '/webhooks/app/ghost-token/messages/followup-id', { body: { content: 'x' } }),
+		).rejects.toMatchObject({ code: DiscordErrors.UnknownWebhook.code });
+		await expect(bot.rest.request('DELETE', '/webhooks/app/ghost-token/messages/followup-id')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownWebhook.code,
+		});
 		await bot.close();
 	});
 

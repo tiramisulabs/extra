@@ -1,11 +1,12 @@
 import { Command, type CommandContext, Declare } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
+import { DiscordErrors } from '../../src/bot/rest';
 import { apiUser } from '../../src/bot/payloads';
 import { mockWorld } from '../../src/bot/world';
 
 describe('single message fetch', () => {
-	test('resolves a seeded message from state instead of a synthetic fallback', async () => {
+	test('resolves a seeded message from state and rejects a missing one', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'fetch-one-guild' });
 		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'fetch-one-actor' }) });
@@ -14,7 +15,7 @@ describe('single message fetch', () => {
 
 		let seededContent: string | undefined;
 		let seededId: string | undefined;
-		let fallbackContent: string | undefined;
+		let missingCode: number | undefined;
 
 		@Declare({ name: 'fetch-one', description: 'Fetches a single message' })
 		class FetchOne extends Command {
@@ -22,8 +23,11 @@ describe('single message fetch', () => {
 				const seeded = await ctx.client.messages.fetch('seeded-message', channel.id, true);
 				seededContent = seeded.content;
 				seededId = seeded.id;
-				const fallback = await ctx.client.messages.fetch('not-seeded', channel.id, true);
-				fallbackContent = fallback.content;
+				try {
+					await ctx.client.messages.fetch('not-seeded', channel.id, true);
+				} catch (error) {
+					missingCode = (error as { code?: number }).code;
+				}
 				await ctx.write({ content: 'done' });
 			}
 		}
@@ -33,7 +37,7 @@ describe('single message fetch', () => {
 
 		expect(seededId).toBe('seeded-message');
 		expect(seededContent).toBe('real content');
-		expect(fallbackContent).not.toBe('real content');
+		expect(missingCode).toBe(DiscordErrors.UnknownMessage.code);
 		await bot.close();
 	});
 });

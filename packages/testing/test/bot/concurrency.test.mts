@@ -1,4 +1,4 @@
-import { Command, type CommandContext, ComponentCommand, type ComponentContext, Declare } from 'seyfert';
+import { Command, type CommandContext, ComponentCommand, type ComponentContext, Declare, Modal } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { chatInputInteraction } from '../../src/bot/interactions';
@@ -31,8 +31,16 @@ describe('concurrent dispatch isolation', () => {
 		}
 
 		const bot = await createMockBot({ commands: [ClaimCommand], components: [ClaimButton] });
+		await bot.rest.request('POST', '/channels/claim-channel/messages', {
+			body: {
+				content: 'claim source',
+				components: [{ type: 1, components: [{ type: 2, style: 1, custom_id: 'claim:123', label: 'Claim' }] }],
+			},
+		});
+		const source = bot.actions.at(-1);
+		if (!source) throw new Error('expected source message action');
 
-		const [a, b] = await Promise.all([bot.slash({ name: 'claim' }), bot.clickButton('claim:123')]);
+		const [a, b] = await Promise.all([bot.slash({ name: 'claim' }), bot.clickButton('claim:123', { source })]);
 
 		// (i) neither dispatch reported a spurious missing handler
 		const aContent = a.messages.map(message => message.content);
@@ -191,6 +199,108 @@ describe('concurrent dispatch isolation', () => {
 		expect(result.edits).toHaveLength(0);
 		expect(result.messages.map(message => message.content)).toEqual(['reply:tokenleak']);
 
+		await bot.close();
+	});
+
+	test('explicit RecordedAction source without a message id fails instead of falling back globally', async () => {
+		class ClaimButton extends ComponentCommand {
+			componentType = 'Button' as const;
+			filter(ctx: ComponentContext<'Button'>) {
+				return ctx.customId === 'claim:source';
+			}
+			async run(ctx: ComponentContext<'Button'>) {
+				await ctx.write({ content: 'clicked' });
+			}
+		}
+
+		const bot = await createMockBot({ components: [ClaimButton] });
+		await bot.rest.request('POST', '/interactions/no-message/no-message-token/callback', { body: { type: 6 } });
+		const action = bot.actions.at(-1)!;
+
+		expect(() => bot.clickButton('claim:source', { source: action })).toThrow(/has no message id/);
+		await bot.close();
+	});
+
+	test('source-less ComponentCommand dispatch fails loud while a sibling dispatch is unresolved', async () => {
+		let release!: () => void;
+		const barrier = new Promise<void>(resolve => {
+			release = resolve;
+		});
+
+		@Declare({ name: 'park', description: 'Parks until released' })
+		class Park extends Command {
+			async run(ctx: CommandContext) {
+				await barrier;
+				await ctx.write({ content: 'done' });
+			}
+		}
+
+		class ClaimButton extends ComponentCommand {
+			componentType = 'Button' as const;
+			filter(ctx: ComponentContext<'Button'>) {
+				return ctx.customId === 'claim:fresh';
+			}
+			async run(ctx: ComponentContext<'Button'>) {
+				await ctx.write({ content: 'clicked' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [Park], components: [ClaimButton] });
+		const parked = bot.slash({ name: 'park' });
+		void parked.until(action => action.route.includes('/never-release')).catch(() => {});
+
+		expect(() => bot.clickButton('claim:fresh')).toThrow(
+			/no source message resolved.+another dispatch is still running/s,
+		);
+		release();
+		await parked;
+		await bot.close();
+	});
+
+	test('concurrent waitFor modals from the same user fail loud instead of sharing the registry key', async () => {
+		class ModalButton extends ComponentCommand {
+			componentType = 'Button' as const;
+			filter(ctx: ComponentContext<'Button'>) {
+				return ctx.customId.startsWith('modal:');
+			}
+			async run(ctx: ComponentContext<'Button'>) {
+				await ctx.interaction.modal(new Modal().setCustomId(ctx.customId).setTitle(ctx.customId).setComponents([]), {
+					waitFor: 30_000,
+				});
+			}
+		}
+
+		const bot = await createMockBot({ components: [ModalButton] });
+		await bot.rest.request('POST', '/channels/same-modal-channel/messages', {
+			body: {
+				content: 'modal source',
+				components: [
+					{
+						type: 1,
+						components: [
+							{ type: 2, style: 1, custom_id: 'modal:first', label: 'First' },
+							{ type: 2, style: 1, custom_id: 'modal:second', label: 'Second' },
+						],
+					},
+				],
+			},
+		});
+		const source = bot.actions.at(-1);
+		if (!source) throw new Error('expected source message action');
+		const user = {
+			id: 'same-modal-user',
+			username: 'same-modal-user',
+			global_name: null,
+			discriminator: '0',
+			avatar: null,
+			bot: false,
+		};
+		const first = bot.clickButton('modal:first', { user });
+		await first.untilModal();
+
+		const second = bot.clickButton('modal:second', { user, source });
+		await expect(second.untilModal()).rejects.toThrow(/already has a pending modal owned by dispatch/);
+		await first.timeoutModal();
 		await bot.close();
 	});
 });

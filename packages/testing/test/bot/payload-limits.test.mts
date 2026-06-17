@@ -200,6 +200,12 @@ describe('outgoing message payload limits (fail loud)', () => {
 	const button = (extra: Record<string, unknown>) => ({ type: 2, style: 1, ...extra });
 	const row = (...children: unknown[]) => ({ type: 1, components: children });
 
+	test('an empty action row is rejected', async () => {
+		const { send, close } = await postBody({ components: [row()] });
+		await expect(send).rejects.toThrow(/action row must contain a component/);
+		await close();
+	});
+
 	test('a button label over 80 chars is rejected', async () => {
 		const { send, close } = await postBody({ components: [row(button({ custom_id: 'b', label: 'x'.repeat(81) }))] });
 		await expect(send).rejects.toThrow(/button label must be 80/);
@@ -272,13 +278,17 @@ describe('outgoing message payload limits (fail loud)', () => {
 	});
 
 	test('an embed footer icon with no footer text is rejected', async () => {
-		const { send, close } = await postBody({ embeds: [{ description: 'hi', footer: { icon_url: 'https://x/y.png' } }] });
+		const { send, close } = await postBody({
+			embeds: [{ description: 'hi', footer: { icon_url: 'https://x/y.png' } }],
+		});
 		await expect(send).rejects.toThrow(/footer\.text is required/);
 		await close();
 	});
 
 	test('an embed author icon with no author name is rejected', async () => {
-		const { send, close } = await postBody({ embeds: [{ description: 'hi', author: { icon_url: 'https://x/y.png' } }] });
+		const { send, close } = await postBody({
+			embeds: [{ description: 'hi', author: { icon_url: 'https://x/y.png' } }],
+		});
 		await expect(send).rejects.toThrow(/author\.name is required/);
 		await close();
 	});

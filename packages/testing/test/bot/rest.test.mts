@@ -15,7 +15,7 @@ declare module 'seyfert' {
 
 describe('MockApiHandler', () => {
 	test('records requests and answers POST with a message-shaped echo', async () => {
-		const rest = new MockApiHandler();
+		const rest = new MockApiHandler({ onUnhandledRest: 'silent' });
 		const response = await rest.request<{ id: string; content: string }>('POST', '/channels/123/messages', {
 			body: { content: 'hello' },
 			query: { wait: true },
@@ -52,7 +52,7 @@ describe('MockApiHandler', () => {
 		).toHaveLength(1);
 	});
 
-	test('a fabricated fallback fetch is stamped synthetic; a real one is not', async () => {
+	test('world-backed missing fetches fail, while explicit silent fallbacks are stamped synthetic', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'syn-guild' });
 		const channel = world.registerChannel(guild.id, { id: 'syn-channel' });
@@ -62,11 +62,16 @@ describe('MockApiHandler', () => {
 		expect(real.id).toBe(channel.id);
 		expect(bot.actions.at(-1)?.synthetic).toBeFalsy();
 
-		const ghost = await bot.rest.request<{ id: string }>('GET', '/channels/does-not-exist');
-		expect(ghost.id).toBe('does-not-exist');
-		expect(bot.actions.at(-1)?.synthetic).toBe(true);
-
+		await expect(bot.rest.request('GET', '/channels/does-not-exist')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownChannel.code,
+		});
 		await bot.close();
+
+		const synthetic = await createMockBot({ onUnhandledRest: 'silent' });
+		const ghost = await synthetic.rest.request<{ id: string }>('GET', '/channels/does-not-exist');
+		expect(ghost.id).toBe('does-not-exist');
+		expect(synthetic.actions.at(-1)?.synthetic).toBe(true);
+		await synthetic.close();
 	});
 
 	test('interceptors take precedence and expose route params', async () => {
@@ -76,6 +81,13 @@ describe('MockApiHandler', () => {
 		expect(response.name).toBe('Stubbed');
 	});
 
+	test('strict mode rejects unmodeled non-GET fallbacks', async () => {
+		const rest = new MockApiHandler();
+		await expect(rest.request('POST', '/not-modeled-route', { body: { content: 'x' } })).rejects.toThrow(
+			/no interceptor or world entity/,
+		);
+	});
+
 	test('message GET fallbacks are message-shaped', async () => {
 		const rest = new MockApiHandler({ onUnhandledRest: 'silent' });
 		const response = await rest.request<{ id: string }>('GET', '/webhooks/app/token/messages/@original');
@@ -83,7 +95,7 @@ describe('MockApiHandler', () => {
 	});
 
 	test('waitForAction resolves on matching action and rejects on timeout', async () => {
-		const rest = new MockApiHandler();
+		const rest = new MockApiHandler({ onUnhandledRest: 'silent' });
 		const pending = rest.waitForAction(Routes.followup, 1000);
 		await rest.request('POST', '/webhooks/app/token');
 		await expect(pending).resolves.toMatchObject({ method: 'POST' });
@@ -97,6 +109,28 @@ describe('MockApiHandler', () => {
 		await expect(byResponse).resolves.toMatchObject({ response: { content: 'done' }, params: { channelId: '1' } });
 
 		await expect(rest.waitForAction(action => action.route === '/never', 20)).rejects.toThrow(/timed out/);
+	});
+
+	test('waitForAction waits for an existing pending action to settle', async () => {
+		const rest = new MockApiHandler();
+		let release!: (value: unknown) => void;
+		rest.intercept(
+			'GET',
+			'/slow',
+			() =>
+				new Promise(resolve => {
+					release = resolve;
+				}),
+		);
+
+		const request = rest.request('GET', '/slow');
+		const action = rest.waitForAction({ method: 'GET', route: '/slow' });
+		await Promise.resolve();
+		expect(rest.actions[0]?.response).toBeUndefined();
+
+		release({ ok: true });
+		await expect(action).resolves.toMatchObject({ response: { ok: true } });
+		await expect(request).resolves.toEqual({ ok: true });
 	});
 
 	test('records responder errors before rethrowing them', async () => {
