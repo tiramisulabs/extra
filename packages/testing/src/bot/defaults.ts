@@ -39,6 +39,7 @@ interface WorldDefaultHooks {
 	simulateGateway: boolean;
 	state: WorldState;
 	botId: string;
+	applicationId: string;
 }
 
 function bodyRecord(body: Record<string, unknown> | undefined): Record<string, unknown> {
@@ -331,11 +332,6 @@ export function registerWorldDefaults(
 		params => apiMessage({ id: params.messageId, channelId: params.channelId }),
 		world ? { code: ErrorCode.UnknownMessage, message: 'Unknown Message' } : undefined,
 	);
-	rest.intercept(Routes.fetchOriginalResponse, (_pending, params) => {
-		if (!hooks.state.isAcknowledged(params.interactionToken))
-			apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
-		return hooks.state.messageForToken(params.interactionToken) ?? apiMessage();
-	});
 	// A webhook execute (POST /webhooks/:id/:token) and webhook-message ops share the route shape of
 	// interaction followups/webhook-messages. Disambiguate by the registry first; a known webhook id with the
 	// wrong token is a 404, not a fallback into the `wh-` sendLog encoding.
@@ -351,6 +347,10 @@ export function registerWorldDefaults(
 		requireChannel(encodedChannelId);
 		return encodedChannelId;
 	};
+	const requireInteractionWebhook = (applicationId: string, token: string): void => {
+		const expected = hooks.state.applicationIdForToken(token) ?? hooks.applicationId;
+		if (applicationId !== expected) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+	};
 	rest.intercept(Routes.fetchWebhookMessage, (_pending, params) => {
 		const channelId = resolveWebhookChannel(params.applicationId, params.interactionToken);
 		if (channelId) {
@@ -358,6 +358,7 @@ export function registerWorldDefaults(
 			if (!message) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
 			return message;
 		}
+		requireInteractionWebhook(params.applicationId, params.interactionToken);
 		const message = hooks.state.webhookMessage(params.interactionToken, params.messageId);
 		if (!message) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
 		return message;
@@ -461,7 +462,10 @@ export function registerWorldDefaults(
 				hooks.state.registerOriginalResponse(params.token, source.channelId, source.messageId);
 				// UpdateMessage (7) carries its content edit: apply it to the source NOW (synchronously) so a later
 				// editResponse in the same handler edits the already-updated message instead of overwriting it last.
-				if (body.type === 7) hooks.state.editMessage(source.channelId, source.messageId, body.data ?? {});
+				if (body.type === 7) {
+					assertAttachmentRefs(body.data ?? {}, pending.files);
+					hooks.state.editMessage(source.channelId, source.messageId, body.data ?? {});
+				}
 			}
 			return {};
 		}
@@ -492,12 +496,14 @@ export function registerWorldDefaults(
 
 	rest.intercept(Routes.createDm, pending => {
 		const recipientId = String(bodyRecord(pending.body).recipient_id ?? '');
-		const user = world?.users.find(entry => entry.id === recipientId) ?? apiUser({ id: recipientId });
+		const user = world?.users.find(entry => entry.id === recipientId);
+		if (world && !user) apiError(404, ErrorCode.UnknownUser, 'Unknown User');
+		const recipient = user ?? apiUser({ id: recipientId });
 		const channel = hooks.state.registerDm(recipientId, {
 			...apiChannel({ guildId: null, type: 1 }),
-			recipients: [user],
+			recipients: [recipient],
 		});
-		return { ...channel, recipients: [user] };
+		return { ...channel, recipients: [recipient] };
 	});
 	rest.intercept(Routes.createChannel, (pending, params) => {
 		requireGuild(params.guildId);
@@ -547,6 +553,7 @@ export function registerWorldDefaults(
 				apiError(403, ErrorCode.CannotEditAnotherUsersMessage, 'Cannot edit a message authored by another user');
 			}
 		}
+		assertAttachmentRefs(bodyRecord(pending.body), pending.files);
 		hooks.state.editMessage(params.channelId, params.messageId, bodyRecord(pending.body));
 		return (
 			hooks.state.rawMessage(params.channelId, params.messageId) ??
@@ -620,10 +627,22 @@ export function registerWorldDefaults(
 		};
 	});
 
-	rest.intercept(Routes.editOriginalResponse, (pending, params) =>
-		hooks.state.upsertOriginalResponse(params.interactionToken, bodyRecord(pending.body), hooks.botId),
-	);
+	rest.intercept(Routes.fetchOriginalResponse, (_pending, params) => {
+		requireInteractionWebhook(params.applicationId, params.interactionToken);
+		if (!hooks.state.isAcknowledged(params.interactionToken))
+			apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
+		if (hooks.state.isOriginalDeleted(params.interactionToken)) {
+			apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
+		}
+		return hooks.state.messageForToken(params.interactionToken) ?? apiMessage();
+	});
+	rest.intercept(Routes.editOriginalResponse, (pending, params) => {
+		requireInteractionWebhook(params.applicationId, params.interactionToken);
+		assertAttachmentRefs(bodyRecord(pending.body), pending.files);
+		return hooks.state.upsertOriginalResponse(params.interactionToken, bodyRecord(pending.body), hooks.botId);
+	});
 	rest.intercept(Routes.deleteOriginalResponse, (_pending, params) => {
+		requireInteractionWebhook(params.applicationId, params.interactionToken);
 		hooks.state.deleteOriginalResponse(params.interactionToken);
 		return {};
 	});
@@ -631,9 +650,12 @@ export function registerWorldDefaults(
 		const channelId = resolveWebhookChannel(params.applicationId, params.interactionToken);
 		if (channelId) {
 			requireMessage(channelId, params.messageId);
+			assertAttachmentRefs(bodyRecord(pending.body), pending.files);
 			hooks.state.editMessage(channelId, params.messageId, bodyRecord(pending.body));
 			return hooks.state.rawMessage(channelId, params.messageId);
 		}
+		requireInteractionWebhook(params.applicationId, params.interactionToken);
+		assertAttachmentRefs(bodyRecord(pending.body), pending.files);
 		return hooks.state.editWebhookMessage(
 			params.interactionToken,
 			params.messageId,
@@ -648,6 +670,7 @@ export function registerWorldDefaults(
 			hooks.state.deleteMessage(channelId, params.messageId);
 			return {};
 		}
+		requireInteractionWebhook(params.applicationId, params.interactionToken);
 		hooks.state.deleteWebhookMessage(params.interactionToken, params.messageId);
 		return {};
 	});
@@ -660,6 +683,7 @@ export function registerWorldDefaults(
 			const view = hooks.state.addMessage(webhookChannel, bodyRecord(pending.body));
 			return hooks.state.rawMessage(webhookChannel, view.id) ?? apiMessage();
 		}
+		requireInteractionWebhook(params.applicationId, params.interactionToken);
 		return hooks.state.addFollowup(params.interactionToken, bodyRecord(pending.body), hooks.botId);
 	});
 
@@ -941,6 +965,7 @@ export function registerWorldDefaults(
 	rest.intercept(Routes.kick, async (_pending, params) => {
 		requireGuild(params.guildId);
 		requirePerm(params.guildId, PermissionFlagsBits.KickMembers);
+		if (world && !findMember(params.guildId, params.userId)) apiError(404, ErrorCode.UnknownMember, 'Unknown Member');
 		requireHierarchy(params.guildId, params.userId);
 		await removeMember(params.guildId, params.userId, false);
 		return {};

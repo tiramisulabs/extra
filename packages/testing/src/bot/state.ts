@@ -645,8 +645,10 @@ export class WorldState implements WorldStateReader {
 	private readonly dmChannelByUser = new Map<string, string>();
 	private readonly messageIdByToken = new Map<string, string>();
 	private readonly channelIdByToken = new Map<string, string>();
+	private readonly applicationIdByToken = new Map<string, string>();
 	private readonly originTypeByToken = new Map<string, number>();
 	private readonly acknowledgedTokens = new Set<string>();
+	private readonly deletedOriginalTokens = new Set<string>();
 	private readonly componentSourceByToken = new Map<string, { channelId: string; messageId: string }>();
 	private readonly invitesByCode = new Map<string, ApiInvite>();
 	private readonly webhooksById = new Map<string, ApiWebhook>();
@@ -990,6 +992,7 @@ export class WorldState implements WorldStateReader {
 	}
 
 	messageForToken(token: string): RawMessage | undefined {
+		if (this.deletedOriginalTokens.has(token)) return undefined;
 		const channelId = this.channelIdByToken.get(token);
 		const messageId = this.messageIdByToken.get(token);
 		return channelId && messageId ? this.rawMessage(channelId, messageId) : undefined;
@@ -1005,9 +1008,14 @@ export class WorldState implements WorldStateReader {
 		return this.channelIdByToken.get(token);
 	}
 
-	registerInteractionToken(token: string, channelId: string, originType?: number): void {
+	applicationIdForToken(token: string): string | undefined {
+		return this.applicationIdByToken.get(token);
+	}
+
+	registerInteractionToken(token: string, channelId: string, originType?: number, applicationId?: string): void {
 		this.channelIdByToken.set(token, channelId);
 		if (originType !== undefined) this.originTypeByToken.set(token, originType);
+		if (applicationId !== undefined) this.applicationIdByToken.set(token, applicationId);
 	}
 
 	/** The originating interaction type (2 command, 3 component, 5 modal submit) for a token, if known. */
@@ -1027,6 +1035,7 @@ export class WorldState implements WorldStateReader {
 
 	/** @internal Point a token at an EXISTING message as its @original (deferUpdate on a component). */
 	registerOriginalResponse(token: string, channelId: string, messageId: string): void {
+		this.deletedOriginalTokens.delete(token);
 		this.channelIdByToken.set(token, channelId);
 		this.messageIdByToken.set(token, messageId);
 	}
@@ -1063,8 +1072,10 @@ export class WorldState implements WorldStateReader {
 	removeChannel(channelId: string): void {
 		this.world.channels = this.world.channels.filter(channel => channel.id !== channelId);
 		for (const message of this.world.messages) {
-			if (message.channelId === channelId)
+			if (message.channelId === channelId) {
 				this.reactionsByMessage.delete(this.reactionKey(channelId, message.message.id));
+				this.markMessageDeleted(message.message.id);
+			}
 		}
 		this.world.messages = this.world.messages.filter(message => message.channelId !== channelId);
 		this.pinnedByChannel.delete(channelId);
@@ -1257,8 +1268,15 @@ export class WorldState implements WorldStateReader {
 			if (next.length === 0) this.pinnedByChannel.delete(channelId);
 			else this.pinnedByChannel.set(channelId, next);
 		}
+		this.markMessageDeleted(messageId);
+	}
+
+	private markMessageDeleted(messageId: string): void {
 		for (const [token, id] of this.messageIdByToken) {
-			if (id === messageId) this.messageIdByToken.delete(token);
+			if (id === messageId) {
+				this.messageIdByToken.delete(token);
+				this.deletedOriginalTokens.add(token);
+			}
 		}
 	}
 
@@ -1879,8 +1897,10 @@ export class WorldState implements WorldStateReader {
 
 	/** @internal For an interaction's first visible reply. */
 	addOriginalResponse(token: string, channelId: string, raw: Record<string, unknown>, authorId: string): RawMessage {
+		if (this.deletedOriginalTokens.has(token)) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
 		this.registerInteractionToken(token, channelId);
 		const view = this.addMessage(channelId, { ...raw, author_id: authorId });
+		this.deletedOriginalTokens.delete(token);
 		this.messageIdByToken.set(token, view.id);
 		return this.rawMessageOr(channelId, view.id);
 	}
@@ -1892,6 +1912,7 @@ export class WorldState implements WorldStateReader {
 		authorId: string,
 	): RawMessage | Record<string, never> {
 		if (!this.acknowledgedTokens.has(token)) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
+		if (this.deletedOriginalTokens.has(token)) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
 		const channelId = this.channelIdByToken.get(token);
 		if (!channelId) return {};
 		const messageId = this.messageIdByToken.get(token);
@@ -1928,10 +1949,16 @@ export class WorldState implements WorldStateReader {
 	/** @internal For webhook deletes of @original. */
 	deleteOriginalResponse(token: string): void {
 		if (!this.acknowledgedTokens.has(token)) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
+		if (this.deletedOriginalTokens.has(token)) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
 		const channelId = this.channelIdByToken.get(token);
 		const messageId = this.messageIdByToken.get(token);
 		if (channelId && messageId) this.deleteMessage(channelId, messageId);
 		this.messageIdByToken.delete(token);
+		this.deletedOriginalTokens.add(token);
+	}
+
+	isOriginalDeleted(token: string): boolean {
+		return this.deletedOriginalTokens.has(token);
 	}
 
 	/** @internal For webhook deletes of any interaction message. */

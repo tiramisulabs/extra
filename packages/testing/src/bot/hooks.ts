@@ -42,6 +42,15 @@ export interface DispatchHookDeps {
 	onModalDisplayed?: (userId: string) => void;
 }
 
+interface DispatchHookInstallState {
+	deps: DispatchHookDeps;
+	capabilities: DispatchHookCapabilities;
+}
+
+const dispatchHookInstalls = new WeakMap<Client, DispatchHookInstallState>();
+const middlewareHookFunctions = new WeakMap<Client, WeakSet<WrappedMiddleware>>();
+const permissionHookCommands = new WeakMap<Client, WeakSet<object>>();
+
 /**
  * Install the component/middleware wrappers ONCE on the shared client singletons. Each wrapper reads the
  * active dispatch via AsyncLocalStorage (dispatchStore.getStore()) instead of closing over per-dispatch
@@ -50,11 +59,24 @@ export interface DispatchHookDeps {
  * @internal Called once by createMockBot after setup; not part of the public surface.
  */
 export function installDispatchHooks(client: Client, deps: DispatchHookDeps): DispatchHookCapabilities {
+	const existing = dispatchHookInstalls.get(client);
+	if (existing) {
+		existing.deps = deps;
+		installMiddlewareDenialHooks(client, existing);
+		installPermissionDenialHooks(client);
+		return existing.capabilities;
+	}
+
 	const componentHooks = componentInternals(client);
 	const canDetectComponentCommand = typeof componentHooks.execute === 'function';
 	const canDetectCollector =
 		typeof componentHooks.onComponent === 'function' && typeof componentHooks.hasComponent === 'function';
 	const canDetectModalCollector = typeof componentHooks.onModalSubmit === 'function';
+	const state: DispatchHookInstallState = {
+		deps,
+		capabilities: { canDetectComponentCommand, canDetectCollector, canDetectModalCollector },
+	};
+	dispatchHookInstalls.set(client, state);
 
 	if (canDetectComponentCommand) {
 		const execute = componentHooks.execute?.bind(componentHooks);
@@ -88,14 +110,14 @@ export function installDispatchHooks(client: Client, deps: DispatchHookDeps): Di
 	modals.set = (key: string, value: unknown) => {
 		const ctx = dispatchStore.getStore();
 		const ownerId = ctx?.dispatchId;
-		const existingOwner = deps.modalOwners.get(key);
+		const existingOwner = state.deps.modalOwners.get(key);
 		if (modals.has(key) && existingOwner !== undefined && existingOwner !== ownerId) {
 			throw new TypeError(
 				`A modal is already waiting for user ${key} from dispatch ${existingOwner}; ` +
 					`dispatch ${ownerId ?? '(unknown)'} would overwrite it. Same-user modal flows must be driven sequentially.`,
 			);
 		}
-		const waiters = deps.modalWaiters.get(key);
+		const waiters = state.deps.modalWaiters.get(key);
 		if (waiters) {
 			const matching = ownerId === undefined ? waiters : waiters.filter(waiter => waiter.dispatchId === ownerId);
 			if (matching.length === 0) {
@@ -105,9 +127,9 @@ export function installDispatchHooks(client: Client, deps: DispatchHookDeps): Di
 				);
 			}
 			const result = realSet(key, value);
-			if (ownerId !== undefined) deps.modalOwners.set(key, ownerId);
-			deps.onModalDisplayed?.(key);
-			deps.modalWaiters.delete(key);
+			if (ownerId !== undefined) state.deps.modalOwners.set(key, ownerId);
+			state.deps.onModalDisplayed?.(key);
+			state.deps.modalWaiters.delete(key);
 			for (const waiter of matching) waiter.resolve();
 			return result;
 		}
@@ -121,68 +143,76 @@ export function installDispatchHooks(client: Client, deps: DispatchHookDeps): Di
 				'or take its timeout branch: `await bot.clickButton(...).timeoutModal()`.',
 		);
 	};
-	// Denial detection: seyfert's __runMiddlewares only resolves on next()/stop()/pass(). A guard that
-	// replies and returns without calling any of them leaves the chain pending forever, so command.run is
-	// structurally never reached and handleCommand.interaction never settles. Wrap each middleware to notice
-	// when it terminates the chain and settle the dispatch with whatever was already captured.
-	const middlewares = client.middlewares as Record<string, WrappedMiddleware> | undefined;
-	if (middlewares) {
-		for (const key of Object.keys(middlewares)) {
-			const real = middlewares[key];
-			middlewares[key] = (controls: MiddlewareControls) => {
-				const ctx = dispatchStore.getStore();
-				// progressed is per-invocation: a middleware chain runs sequentially, so each invocation
-				// gets its own flag. It must NOT be hoisted into the shared dispatch context.
-				let progressed = false;
-				const mark =
-					(fn: MiddlewareControl): MiddlewareControl =>
-					(...args) => {
-						progressed = true;
-						return fn(...args);
-					};
-				// stop(reason) terminates the chain and routes through onMiddlewaresError: record it as a
-				// structured 'stop' denial, capturing the reason argument, before delegating.
-				const stop: MiddlewareControl = (...args) => {
-					if (ctx) ctx.denial = { kind: 'stop', reason: args[0], middleware: key };
-					progressed = true;
-					return controls.stop(...args);
-				};
-				// pass() short-circuits the chain so command.run is skipped — a distinct outcome from a normal
-				// success. Record it as a structured 'pass' denial (denied=true) so a test can assert the gate
-				// skipped the command, instead of it collapsing into the success shape.
-				const pass: MiddlewareControl = (...args) => {
-					if (ctx) ctx.denial = { kind: 'pass', middleware: key };
-					progressed = true;
-					return controls.pass(...args);
-				};
-				const result = real({
-					...controls,
-					next: mark(controls.next),
-					stop,
-					pass,
-				});
-				Promise.resolve(result).then(
-					() => {
-						if (progressed) return;
-						// The middleware denied (replied + returned without next/stop/pass). Its reply may still be
-						// recording through async REST hops, so don't settle after a single tick. Drain until this
-						// dispatch's REST surface is quiescent: action count stable across a tick AND none in flight.
-						if (ctx && !ctx.denial) ctx.denial = { kind: 'no-next', middleware: key };
-						void deps
-							.drainUntilQuiescent(ctx?.dispatchId, () => progressed)
-							.then(() => {
-								if (!progressed) ctx?.resolveDenial?.();
-							});
-					},
-					() => {},
-				);
-				return result;
-			};
-		}
-	}
+	installMiddlewareDenialHooks(client, state);
 	installPermissionDenialHooks(client);
 
-	return { canDetectComponentCommand, canDetectCollector, canDetectModalCollector };
+	return state.capabilities;
+}
+
+function installMiddlewareDenialHooks(client: Client, state: DispatchHookInstallState): void {
+	const middlewares = client.middlewares as Record<string, WrappedMiddleware> | undefined;
+	if (!middlewares) return;
+	let wrapped = middlewareHookFunctions.get(client);
+	if (!wrapped) {
+		wrapped = new WeakSet<WrappedMiddleware>();
+		middlewareHookFunctions.set(client, wrapped);
+	}
+	for (const key of Object.keys(middlewares)) {
+		const real = middlewares[key];
+		if (wrapped.has(real)) continue;
+		const wrapper: WrappedMiddleware = controls => {
+			const ctx = dispatchStore.getStore();
+			// progressed is per-invocation: a middleware chain runs sequentially, so each invocation
+			// gets its own flag. It must NOT be hoisted into the shared dispatch context.
+			let progressed = false;
+			const mark =
+				(fn: MiddlewareControl): MiddlewareControl =>
+				(...args) => {
+					progressed = true;
+					return fn(...args);
+				};
+			// stop(reason) terminates the chain and routes through onMiddlewaresError: record it as a
+			// structured 'stop' denial, capturing the reason argument, before delegating.
+			const stop: MiddlewareControl = (...args) => {
+				if (ctx) ctx.denial = { kind: 'stop', reason: args[0], middleware: key };
+				progressed = true;
+				return controls.stop(...args);
+			};
+			// pass() short-circuits the chain so command.run is skipped — a distinct outcome from a normal
+			// success. Record it as a structured 'pass' denial (denied=true) so a test can assert the gate
+			// skipped the command, instead of it collapsing into the success shape.
+			const pass: MiddlewareControl = (...args) => {
+				if (ctx) ctx.denial = { kind: 'pass', middleware: key };
+				progressed = true;
+				return controls.pass(...args);
+			};
+			const result = real({
+				...controls,
+				next: mark(controls.next),
+				stop,
+				pass,
+			});
+			Promise.resolve(result).then(
+				() => {
+					if (progressed) return;
+					// The middleware denied (replied + returned without next/stop/pass). Its reply may still be
+					// recording through async REST hops, so don't settle after a single tick. Drain until this
+					// dispatch's REST surface is quiescent: action count stable across a tick AND none in flight.
+					if (ctx && !ctx.denial) ctx.denial = { kind: 'no-next', middleware: key };
+					void state.deps
+						.drainUntilQuiescent(ctx?.dispatchId, () => progressed)
+						.then(() => {
+							if (!progressed) ctx?.resolveDenial?.();
+						});
+				},
+				() => {},
+			);
+			return result;
+		};
+		wrapped.add(real);
+		wrapped.add(wrapper);
+		middlewares[key] = wrapper;
+	}
 }
 
 /**
@@ -192,7 +222,11 @@ export function installDispatchHooks(client: Client, deps: DispatchHookDeps): Di
  * structured permissions denial. The original hook still fires, so existing copy-based assertions keep working.
  */
 function installPermissionDenialHooks(client: Client): void {
-	const wrapped = new WeakSet<object>();
+	let wrapped = permissionHookCommands.get(client);
+	if (!wrapped) {
+		wrapped = new WeakSet<object>();
+		permissionHookCommands.set(client, wrapped);
+	}
 	const wrap = (command: PermissionGuardedCommand): void => {
 		if (wrapped.has(command)) return;
 		wrapped.add(command);

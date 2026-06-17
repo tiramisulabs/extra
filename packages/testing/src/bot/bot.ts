@@ -55,7 +55,7 @@ import {
 	userCommandInteraction,
 } from './interactions';
 import { isEphemeral } from './message-flags';
-import { CommandOptionType, optionDefinitionsFor, optionTypesFor, prepareChatInputOptions } from './option-validation';
+import { CommandOptionType, prepareAutocompleteOptions, prepareChatInputOptions } from './option-validation';
 import {
 	type ApiChannel,
 	type ApiMember,
@@ -365,6 +365,11 @@ export interface ActorOptions {
 	channel?: ApiChannel;
 }
 
+type ComponentSourceOptions = {
+	source?: string | RecordedAction;
+	allowSyntheticSource?: boolean;
+};
+
 /** Bound dispatcher facade that reuses one identity across a flow. */
 export interface Actor {
 	slash<C extends SlashCommandClass>(command: C, options?: SlashClassOptions<C>): Dispatch<DispatchResult>;
@@ -552,7 +557,7 @@ export interface MockBotOptions {
 	langs?: Record<string, Record<string, unknown>>;
 	/** Fallback locale when the interaction's locale has no langs entry. */
 	defaultLang?: string;
-	/** Validate supplied slash options against registered command metadata before dispatching. */
+	/** Validate supplied slash/autocomplete options against registered command metadata before dispatching. */
 	validateOptions?: boolean;
 	/**
 	 * Load the real bot from its seyfert.config locations before plugin setup.
@@ -679,7 +684,7 @@ export class MockBot {
 		// `new WorldState(world)` here would silently create a second instance that shares the world arrays by
 		// reference but has its own bans/reactions/token Maps — a split-brain. Keep them the one instance.
 		private readonly _state: WorldState,
-		private readonly validateOptions = false,
+		private readonly validateOptions = true,
 		private readonly timers?: { advance(ms: number): void | Promise<void> },
 		private readonly onCommandError: 'throw' | 'capture' = 'throw',
 	) {}
@@ -852,11 +857,11 @@ export class MockBot {
 		return `no handler matched customId "${customId}". Registered ${kindName} handlers: ${listed}. Check the customId/filter.`;
 	}
 
-	private assertComponentHandleable(verb: string, customId: string, message?: { id: string }): void {
-		if (message || this.hasComponentCommand()) return;
+	private assertSyntheticComponentAllowed(verb: 'clickButton' | 'selectMenu', customId: string): void {
+		if (this.hasComponentCommand()) return;
 		throw new TypeError(
-			`${verb}: no source message resolved for "${customId}" and no ComponentCommand is registered. ` +
-				`Send or pass a source message for collectors, or register a ComponentCommand handler.`,
+			`${verb}: allowSyntheticSource can only dispatch to a ComponentCommand, but no component command is registered ` +
+				`for "${customId}". Send or pass the source message for collectors.`,
 		);
 	}
 
@@ -1081,8 +1086,8 @@ export class MockBot {
 		if (unsettled.length === 0) return;
 		throw new TypeError(
 			`${verb}: no source message resolved for "${customId}" while another dispatch is still running. ` +
-				`Passing no source would fabricate a fresh component message for the ComponentCommand and can race with ` +
-				`collector/source resolution. Pass source: "message-id" or a RecordedAction whose response is the message.`,
+				`Synthetic ComponentCommand dispatch can race with collector/source resolution. Pass source: "message-id" ` +
+				`or a RecordedAction whose response is the message.`,
 		);
 	}
 
@@ -1556,7 +1561,7 @@ export class MockBot {
 		const denialSettled = new Promise<void>(resolve => {
 			ctx.resolveDenial = resolve;
 		});
-		this._state.registerInteractionToken(payload.token, payload.channel_id, payload.type);
+		this._state.registerInteractionToken(payload.token, payload.channel_id, payload.type, payload.application_id);
 		if (payload.message) {
 			this._state.registerComponentSource(payload.token, payload.message.channel_id, payload.message.id);
 		}
@@ -1743,7 +1748,11 @@ export class MockBot {
 		build: (prepared: O) => ApiInteractionPayload,
 	): Dispatch<R> {
 		this.assertOpen(verb);
-		const prepared = this.applyWorldPermissions({ user: this.defaultUser, ...options });
+		const prepared = this.applyWorldPermissions({
+			user: this.defaultUser,
+			applicationId: this.client.applicationId,
+			...options,
+		});
 		return this.dispatchInteraction(build(prepared)) as Dispatch<R>;
 	}
 
@@ -1777,12 +1786,12 @@ export class MockBot {
 	autocomplete(options: AutocompleteInteractionOptions): Dispatch<AutocompleteResult> {
 		this.assertOpen('autocomplete');
 		this.assertCommandRegistered(options.name, ApplicationCommandType.ChatInput, 'autocomplete');
-		const definitions = optionDefinitionsFor(this.client.commands.values, options);
+		const prepared = prepareAutocompleteOptions(this.client.commands.values, options, this.validateOptions);
 		const payload = autocompleteInteraction(
 			this.applyWorldPermissions({
 				user: this.defaultUser,
-				...options,
-				optionTypes: { ...(options.optionTypes ?? {}), ...optionTypesFor(definitions) },
+				applicationId: this.client.applicationId,
+				...prepared,
 			}),
 		);
 		const userId = payload.member?.user.id ?? payload.user?.id;
@@ -1855,30 +1864,29 @@ export class MockBot {
 		return this.dispatchVia('entryPoint', options, entryPointInteraction);
 	}
 
-	/**
-	 * Without an explicit `source`, the target message is resolved globally from the most recent sent /
-	 * interaction-original message (the sequential collector flow). When dispatching CONCURRENTLY, pass an
-	 * explicit `source` to disambiguate which message the button is on — see {@link resolveMessageSource}.
-	 */
 	clickButton(
 		customId: string,
-		options: Omit<ButtonInteractionOptions, 'customId' | 'message'> & { source?: string | RecordedAction } = {},
+		options: Omit<ButtonInteractionOptions, 'customId' | 'message'> & ComponentSourceOptions = {},
 	): Dispatch<DispatchResult> {
-		const { source, ...rest } = options;
+		const { source, allowSyntheticSource, ...rest } = options;
 		const opts: ButtonInteractionOptions = { ...rest, customId };
 		return this.dispatchVia('clickButton', opts, prepared => {
 			const message = this.resolveMessageSource(source);
 			this.assertNoConcurrentSyntheticComponentSource('clickButton', customId, source !== undefined, message);
-			this.assertComponentHandleable('clickButton', customId, message);
-			const hydrated = message?.id
-				? this.hydrateSourceMessage(message, source !== undefined ? { verb: 'clickButton', customId } : undefined)
-				: undefined;
-			const sourceComponent = hydrated ? findComponentNode(hydrated.components, customId) : undefined;
+			if (!message && !allowSyntheticSource) {
+				throw new TypeError(
+					`clickButton: no source message resolved for "${customId}". Send the message first, pass source, ` +
+						`or set allowSyntheticSource: true for a ComponentCommand-only dispatch.`,
+				);
+			}
+			if (allowSyntheticSource && !message) this.assertSyntheticComponentAllowed('clickButton', customId);
+			const hydrated = message?.id ? this.hydrateSourceMessage(message, { verb: 'clickButton', customId }) : undefined;
 			let messageForInteraction: ApiMessage | undefined;
-			if (hydrated && (source !== undefined || sourceComponent)) {
+			if (hydrated) {
 				this.requireComponentOnMessage('clickButton', customId, hydrated);
 				messageForInteraction = hydrated;
 			}
+			if (!messageForInteraction && allowSyntheticSource) this.assertSyntheticComponentAllowed('clickButton', customId);
 			return buttonInteraction({
 				...prepared,
 				...(messageForInteraction ? { message: messageForInteraction } : {}),
@@ -1886,32 +1894,26 @@ export class MockBot {
 		});
 	}
 
-	/**
-	 * Without an explicit `source`, the target message is resolved globally from the most recent sent /
-	 * interaction-original message (the sequential collector flow). When dispatching CONCURRENTLY, pass an
-	 * explicit `source` to disambiguate which message the select menu is on — see {@link resolveMessageSource}.
-	 */
 	selectMenu(
 		customId: string,
 		values: string[],
-		options: Omit<SelectMenuInteractionOptions, 'customId' | 'values' | 'message'> & {
-			source?: string | RecordedAction;
-		} = {},
+		options: Omit<SelectMenuInteractionOptions, 'customId' | 'values' | 'message'> & ComponentSourceOptions = {},
 	): Dispatch<DispatchResult> {
-		const { source, ...rest } = options;
+		const { source, allowSyntheticSource, ...rest } = options;
 		const opts: SelectMenuInteractionOptions = { ...rest, customId, values };
 		return this.dispatchVia('selectMenu', opts, prepared => {
 			const message = this.resolveMessageSource(source);
 			this.assertNoConcurrentSyntheticComponentSource('selectMenu', customId, source !== undefined, message);
-			this.assertComponentHandleable('selectMenu', customId, message);
-			const hydrated = message?.id
-				? this.hydrateSourceMessage(message, source !== undefined ? { verb: 'selectMenu', customId } : undefined)
-				: undefined;
-			const foundComponent = hydrated ? findComponentNode(hydrated.components, customId) : undefined;
-			const sourceComponent =
-				hydrated && (source !== undefined || foundComponent)
-					? this.requireComponentOnMessage('selectMenu', customId, hydrated)
-					: undefined;
+			if (!message && !allowSyntheticSource) {
+				throw new TypeError(
+					`selectMenu: no source message resolved for "${customId}". Send the message first, pass source, ` +
+						`or set allowSyntheticSource: true for a ComponentCommand-only dispatch.`,
+				);
+			}
+			if (allowSyntheticSource && !message) this.assertSyntheticComponentAllowed('selectMenu', customId);
+			const hydrated = message?.id ? this.hydrateSourceMessage(message, { verb: 'selectMenu', customId }) : undefined;
+			const sourceComponent = hydrated ? this.requireComponentOnMessage('selectMenu', customId, hydrated) : undefined;
+			if (!sourceComponent && allowSyntheticSource) this.assertSyntheticComponentAllowed('selectMenu', customId);
 			if (sourceComponent) this.assertSelectValuesMatchSource(customId, values, sourceComponent);
 			const sourceType = selectTypeForInteraction(numberValue(sourceComponent?.type));
 			const preparedWithSourceType = sourceType ? { ...prepared, componentType: sourceType } : prepared;
@@ -2303,6 +2305,7 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 		simulateGateway: options.simulateGateway ?? true,
 		state,
 		botId: client.botId,
+		applicationId: client.applicationId,
 	});
 	rest.markDefaultsBaseline();
 
@@ -2312,7 +2315,7 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 		gateway,
 		world,
 		state,
-		options.validateOptions ?? false,
+		options.validateOptions ?? true,
 		options.timers,
 		options.onCommandError ?? 'throw',
 	);

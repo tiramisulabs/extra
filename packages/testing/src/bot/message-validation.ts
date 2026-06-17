@@ -218,6 +218,17 @@ function assertValidComponents(components: unknown, isV2: boolean): void {
 
 		if (isButton) {
 			const label = stringValue(node.label);
+			const url = stringValue(node.url);
+			if (isLinkButton) {
+				if (url === undefined || url.length === 0) {
+					apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: a link button requires a url');
+				}
+				if (customId !== undefined) {
+					apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: a link button cannot have custom_id');
+				}
+			} else if (url !== undefined) {
+				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: non-link buttons cannot have url');
+			}
 			if (label !== undefined && [...label].length > 80) {
 				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: button label must be 80 or fewer in length');
 			}
@@ -266,6 +277,14 @@ function assertValidComponents(components: unknown, isV2: boolean): void {
 						400,
 						ErrorCode.InvalidFormBody,
 						'Invalid Form Body: select max_values cannot exceed the number of options',
+					);
+				}
+				const minValues = numberValue(node.min_values);
+				if (minValues !== undefined && minValues > options.length) {
+					apiError(
+						400,
+						ErrorCode.InvalidFormBody,
+						'Invalid Form Body: select min_values cannot exceed the number of options',
 					);
 				}
 			}
