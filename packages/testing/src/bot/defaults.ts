@@ -83,12 +83,20 @@ interface GuildCrudConfig {
 	patch?: (guildId: string, id: string, body: Record<string, unknown>) => unknown;
 	drop?: (guildId: string, id: string) => void;
 	fallback: (guildId: string, id: string) => unknown;
+	/** Guild-existence guard (world-gated requireGuild); runs before every create/edit/delete. */
+	guard?: (guildId: string) => void;
+	/** When set (world mode), an edit/delete of a missing entity is this 404 code instead of a fabrication. */
+	unknownCode?: number;
+	unknownMessage?: string;
 }
 
 function registerGuildCrud(rest: MockApiHandler, config: GuildCrudConfig): void {
 	const { idParam } = config;
 	if (config.create) {
-		rest.intercept(config.create, (pending, params) => config.add(params.guildId, bodyRecord(pending.body)));
+		rest.intercept(config.create, (pending, params) => {
+			config.guard?.(params.guildId);
+			return config.add(params.guildId, bodyRecord(pending.body));
+		});
 	}
 	if (config.list) rest.intercept(config.list, (_pending, params) => config.all(params.guildId));
 	if (config.fetch) {
@@ -101,16 +109,21 @@ function registerGuildCrud(rest: MockApiHandler, config: GuildCrudConfig): void 
 	}
 	if (config.edit && config.patch) {
 		const patch = config.patch;
-		rest.intercept(
-			config.edit,
-			(pending, params) =>
-				patch(params.guildId, params[idParam], bodyRecord(pending.body)) ??
-				rest.markSynthetic(config.fallback(params.guildId, params[idParam])),
-		);
+		rest.intercept(config.edit, (pending, params) => {
+			config.guard?.(params.guildId);
+			const patched = patch(params.guildId, params[idParam], bodyRecord(pending.body));
+			if (patched !== undefined) return patched;
+			if (config.unknownCode !== undefined) apiError(404, config.unknownCode, config.unknownMessage ?? 'Unknown');
+			return rest.markSynthetic(config.fallback(params.guildId, params[idParam]));
+		});
 	}
 	if (config.remove && config.drop) {
 		const drop = config.drop;
 		rest.intercept(config.remove, (_pending, params) => {
+			config.guard?.(params.guildId);
+			if (config.unknownCode !== undefined && config.one(params.guildId, params[idParam]) === undefined) {
+				apiError(404, config.unknownCode, config.unknownMessage ?? 'Unknown');
+			}
 			drop(params.guildId, params[idParam]);
 			return {};
 		});
@@ -317,22 +330,24 @@ export function registerWorldDefaults(
 		(_pending, params) =>
 			hooks.state.webhookById(params.webhookId) ?? apiWebhook({ id: params.webhookId, token: params.webhookToken }),
 	);
-	rest.intercept(
-		Routes.editWebhook,
-		(pending, params) =>
-			hooks.state.editWebhook(params.webhookId, bodyRecord(pending.body)) ?? apiWebhook({ id: params.webhookId }),
-	);
-	rest.intercept(
-		Routes.editWebhookToken,
-		(pending, params) =>
+	rest.intercept(Routes.editWebhook, (pending, params) => {
+		if (world && !hooks.state.webhookById(params.webhookId)) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+		return hooks.state.editWebhook(params.webhookId, bodyRecord(pending.body)) ?? apiWebhook({ id: params.webhookId });
+	});
+	rest.intercept(Routes.editWebhookToken, (pending, params) => {
+		if (world && !hooks.state.webhookById(params.webhookId)) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+		return (
 			hooks.state.editWebhook(params.webhookId, bodyRecord(pending.body)) ??
-			apiWebhook({ id: params.webhookId, token: params.webhookToken }),
-	);
+			apiWebhook({ id: params.webhookId, token: params.webhookToken })
+		);
+	});
 	rest.intercept(Routes.deleteWebhook, (_pending, params) => {
+		if (world && !hooks.state.webhookById(params.webhookId)) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
 		hooks.state.removeWebhook(params.webhookId);
 		return {};
 	});
 	rest.intercept(Routes.deleteWebhookToken, (_pending, params) => {
+		if (world && !hooks.state.webhookById(params.webhookId)) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
 		hooks.state.removeWebhook(params.webhookId);
 		return {};
 	});
@@ -538,11 +553,17 @@ export function registerWorldDefaults(
 	});
 	rest.intercept(Routes.editRole, (pending, params) => {
 		requireGuild(params.guildId);
+		if (world && !guildRolesOf(params.guildId).some(role => role.id === params.roleId)) {
+			apiError(404, ErrorCode.UnknownRole, 'Unknown Role');
+		}
 		const updated = hooks.state.editRole(params.guildId, params.roleId, bodyRecord(pending.body));
 		return updated ?? apiRole({ id: params.roleId, ...bodyRecord(pending.body) });
 	});
 	rest.intercept(Routes.deleteRole, (_pending, params) => {
 		requireGuild(params.guildId);
+		if (world && !guildRolesOf(params.guildId).some(role => role.id === params.roleId)) {
+			apiError(404, ErrorCode.UnknownRole, 'Unknown Role');
+		}
 		hooks.state.removeRole(params.guildId, params.roleId);
 		return {};
 	});
@@ -559,6 +580,9 @@ export function registerWorldDefaults(
 		patch: (guildId, id, body) => hooks.state.editEmoji(guildId, id, body),
 		drop: (guildId, id) => hooks.state.removeEmoji(guildId, id),
 		fallback: (guildId, id) => apiEmoji({ id, guildId }),
+		guard: requireGuild,
+		unknownCode: world ? ErrorCode.UnknownEmoji : undefined,
+		unknownMessage: 'Unknown Emoji',
 	});
 	rest.intercept(Routes.createInvite, (pending, params) => {
 		requireChannel(params.channelId);
@@ -570,10 +594,10 @@ export function registerWorldDefaults(
 		Routes.fetchInvite,
 		(_pending, params) => hooks.state.invite(params.code) ?? apiInvite({ code: params.code }),
 	);
-	rest.intercept(
-		Routes.deleteInvite,
-		(_pending, params) => hooks.state.removeInvite(params.code) ?? apiInvite({ code: params.code }),
-	);
+	rest.intercept(Routes.deleteInvite, (_pending, params) => {
+		if (world && !hooks.state.invite(params.code)) apiError(404, ErrorCode.UnknownInvite, 'Unknown Invite');
+		return hooks.state.removeInvite(params.code) ?? apiInvite({ code: params.code });
+	});
 	rest.intercept(Routes.bulkBan, async (pending, params) => {
 		requireGuild(params.guildId);
 		requirePerm(params.guildId, PermissionFlagsBits.BanMembers);
@@ -610,6 +634,7 @@ export function registerWorldDefaults(
 		patch: (guildId, id, body) => hooks.state.editAutoModRule(guildId, id, body),
 		drop: (guildId, id) => hooks.state.removeAutoModRule(guildId, id),
 		fallback: (guildId, id) => apiAutoModRule({ id, guildId }),
+		guard: requireGuild,
 	});
 	const resolveThreadUser = (userId: string) => (userId === '@me' ? hooks.botId : userId);
 	rest.intercept(Routes.addThreadMember, (_pending, params) => {
@@ -646,6 +671,9 @@ export function registerWorldDefaults(
 		patch: (guildId, id, body) => hooks.state.editSticker(guildId, id, body),
 		drop: (guildId, id) => hooks.state.removeSticker(guildId, id),
 		fallback: (guildId, id) => apiSticker({ id, guildId }),
+		guard: requireGuild,
+		unknownCode: world ? ErrorCode.UnknownSticker : undefined,
+		unknownMessage: 'Unknown Sticker',
 	});
 	registerGuildCrud(rest, {
 		idParam: 'eventId',
@@ -658,6 +686,9 @@ export function registerWorldDefaults(
 		one: (guildId, id) => hooks.state.scheduledEvent(guildId, id),
 		drop: (guildId, id) => hooks.state.removeScheduledEvent(guildId, id),
 		fallback: (guildId, id) => apiScheduledEvent({ id, guildId }),
+		guard: requireGuild,
+		unknownCode: world ? ErrorCode.UnknownScheduledEvent : undefined,
+		unknownMessage: 'Unknown Guild Scheduled Event',
 	});
 	rest.intercept(Routes.listGuildTemplates, (_pending, params) => hooks.state.guildTemplates(params.guildId));
 	rest.intercept(Routes.createGuildTemplate, (pending, params) =>
@@ -719,6 +750,9 @@ export function registerWorldDefaults(
 	});
 	rest.intercept(Routes.unban, (_pending, params) => {
 		requireGuild(params.guildId);
+		if (world && !hooks.state.isBanned(params.guildId, params.userId)) {
+			apiError(404, ErrorCode.UnknownBan, 'Unknown Ban');
+		}
 		hooks.state.unban(params.guildId, params.userId);
 		return {};
 	});
@@ -829,8 +863,12 @@ export function registerWorldDefaults(
 				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: the @everyone role cannot be added or removed');
 			}
 			requirePerm(params.guildId, PermissionFlagsBits.ManageRoles);
+			if (world && !guildRolesOf(params.guildId).some(role => role.id === params.roleId)) {
+				apiError(404, ErrorCode.UnknownRole, 'Unknown Role');
+			}
 			requireManageableRole(params.guildId, params.roleId);
 			const entry = findMember(params.guildId, params.userId);
+			if (world && !entry) apiError(404, ErrorCode.UnknownMember, 'Unknown Member');
 			const roles = entry && mutate(entry.member, params.roleId);
 			if (entry && roles) {
 				entry.member.roles = roles;
@@ -846,7 +884,10 @@ export function registerWorldDefaults(
 	rest.intercept(Routes.editMember, async (pending, params) => {
 		requireGuild(params.guildId);
 		const entry = findMember(params.guildId, params.userId);
-		if (!entry) return apiMember({ user: apiUser({ id: params.userId }) });
+		if (!entry) {
+			if (world) apiError(404, ErrorCode.UnknownMember, 'Unknown Member');
+			return apiMember({ user: apiUser({ id: params.userId }) });
+		}
 		const body = bodyRecord(pending.body) as {
 			nick?: string | null;
 			roles?: string[];

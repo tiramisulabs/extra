@@ -138,6 +138,83 @@ describe('world-mode existence enforcement', () => {
 		await bot.close();
 	});
 
+	test('editMember against a member that is not in the guild is a 404 Unknown Member', async () => {
+		const { world, guild } = seedGuildFixture('em-missing');
+		const bot = await createMockBot({ world });
+		await expect(
+			bot.rest.request('PATCH', `/guilds/${guild.id}/members/ghost-user`, { body: { nick: 'x' } }),
+		).rejects.toMatchObject({ code: DiscordErrors.UnknownMember.code });
+		await bot.close();
+	});
+
+	test('adding a role that does not exist writes no phantom role — 404 Unknown Role', async () => {
+		const { world, guild, actor } = seedGuildFixture('ar-role');
+		const bot = await createMockBot({ world });
+		await expect(
+			bot.rest.request('PUT', `/guilds/${guild.id}/members/${actor.user.id}/roles/ghost-role`),
+		).rejects.toMatchObject({ code: DiscordErrors.UnknownRole.code });
+		expect(bot.worldMember(guild.id, actor.user.id)?.roles ?? []).not.toContain('ghost-role');
+		await bot.close();
+	});
+
+	test('adding a real role to a member that is not in the guild is a 404 Unknown Member', async () => {
+		const { world, guild } = seedGuildFixture('ar-member');
+		const role = world.registerRole(guild.id, { id: 'real-role' });
+		const bot = await createMockBot({ world });
+		await expect(
+			bot.rest.request('PUT', `/guilds/${guild.id}/members/ghost-user/roles/${role.id}`),
+		).rejects.toMatchObject({ code: DiscordErrors.UnknownMember.code });
+		await bot.close();
+	});
+
+	test('editing/deleting a role that does not exist is a 404 Unknown Role', async () => {
+		const { world, guild } = seedGuildFixture('role-missing');
+		const bot = await createMockBot({ world });
+		await expect(
+			bot.rest.request('PATCH', `/guilds/${guild.id}/roles/ghost-role`, { body: { name: 'x' } }),
+		).rejects.toMatchObject({ code: DiscordErrors.UnknownRole.code });
+		await expect(bot.rest.request('DELETE', `/guilds/${guild.id}/roles/ghost-role`)).rejects.toMatchObject({
+			code: DiscordErrors.UnknownRole.code,
+		});
+		await bot.close();
+	});
+
+	test('unbanning a user who is not banned is a 404 Unknown Ban', async () => {
+		const { world, guild } = seedGuildFixture('unban-missing');
+		const bot = await createMockBot({ world });
+		await expect(bot.rest.request('DELETE', `/guilds/${guild.id}/bans/never-banned`)).rejects.toMatchObject({
+			code: DiscordErrors.UnknownBan.code,
+		});
+		await bot.close();
+	});
+
+	test('deleting an invite that does not exist is a 404 Unknown Invite', async () => {
+		const { world } = seedGuildFixture('inv-missing');
+		const bot = await createMockBot({ world });
+		await expect(bot.rest.request('DELETE', '/invites/ghost-code')).rejects.toMatchObject({
+			code: DiscordErrors.UnknownInvite.code,
+		});
+		await bot.close();
+	});
+
+	test('editing a guild emoji that does not exist is a 404 Unknown Emoji', async () => {
+		const { world, guild } = seedGuildFixture('emoji-missing');
+		const bot = await createMockBot({ world });
+		await expect(
+			bot.rest.request('PATCH', `/guilds/${guild.id}/emojis/ghost-emoji`, { body: { name: 'x' } }),
+		).rejects.toMatchObject({ code: DiscordErrors.UnknownEmoji.code });
+		await bot.close();
+	});
+
+	test('editing a webhook that does not exist is a 404 Unknown Webhook', async () => {
+		const { world } = seedGuildFixture('wh-missing');
+		const bot = await createMockBot({ world });
+		await expect(
+			bot.rest.request('PATCH', '/webhooks/ghost-webhook', { body: { name: 'x' } }),
+		).rejects.toMatchObject({ code: DiscordErrors.UnknownWebhook.code });
+		await bot.close();
+	});
+
 	test('worldless mode stays lenient: a ban in any guild succeeds', async () => {
 		@Declare({ name: 'ban-anywhere', description: 'bans with no world seeded' })
 		class BanAnywhere extends Command {
