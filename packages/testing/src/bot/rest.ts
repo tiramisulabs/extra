@@ -53,6 +53,7 @@ export const ErrorCode = {
 	CannotExecuteOnChannelType: 50024,
 	InvalidFormBody: 50035,
 	ThreadArchived: 50083,
+	AlreadyAcknowledged: 40060,
 } as const;
 
 export function apiError(status: number, code: number, message: string): never {

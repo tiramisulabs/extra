@@ -362,6 +362,11 @@ export function registerWorldDefaults(
 				);
 			}
 		}
+		// A token can be acknowledged exactly once. A second callback on it is Discord's 40060, not a duplicate
+		// message — the silent double-reply footgun.
+		if (hooks.state.isAcknowledged(params.token)) {
+			apiError(400, ErrorCode.AlreadyAcknowledged, 'Interaction has already been acknowledged.');
+		}
 		hooks.state.acknowledgeToken(params.token);
 		if (body.type === 6) {
 			// DeferredMessageUpdate: point @original at the component's source message NOW (synchronously), so a

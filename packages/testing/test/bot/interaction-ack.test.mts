@@ -21,6 +21,31 @@ describe('interaction acknowledgement (fail loud before ack)', () => {
 		await bot.close();
 	});
 
+	test('a second callback on an already-acknowledged token is 40060 (not a duplicate message)', async () => {
+		const { world, guild, actor, channel } = seedGuildFixture('dbl');
+		@Declare({ name: 'dbl', description: 'acks twice via the raw callback route' })
+		class DoubleAck extends Command {
+			async run(ctx: CommandContext) {
+				const id = ctx.interaction.id;
+				const token = ctx.interaction.token;
+				await ctx.client.proxy
+					.interactions(id)(token)
+					.callback.post({ body: { type: 4, data: { content: 'one' } } });
+				await ctx.client.proxy
+					.interactions(id)(token)
+					.callback.post({ body: { type: 4, data: { content: 'two' } } });
+			}
+		}
+		const bot = await createMockBot({ commands: [DoubleAck], world });
+		await expect(bot.slash({ name: 'dbl', guildId: guild.id, channel, user: actor.user })).rejects.toMatchObject({
+			status: 400,
+			code: 40060,
+		});
+		// only the first reply materialized — no phantom second message
+		expect(bot.worldChannel(channel.id)?.messages.map(m => m.content)).toEqual(['one']);
+		await bot.close();
+	});
+
 	test('editResponse() before any reply/defer is rejected', async () => {
 		const { world, guild, actor, channel } = seedGuildFixture('ed');
 		@Declare({ name: 'ed', description: 'edit @original with no prior reply' })
