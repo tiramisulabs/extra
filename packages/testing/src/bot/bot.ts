@@ -88,7 +88,14 @@ import {
 } from './rest';
 import { FOLLOWUP_ROUTE, WEBHOOK_MESSAGE_ROUTE } from './routes';
 import { resolveSelectResolved } from './select-resolved';
-import { asUsingClient, clientLifecycle, eventsInternals, modalRegistry, pluginEventNames } from './seyfert-internals';
+import {
+	asUsingClient,
+	clientLifecycle,
+	eventsInternals,
+	modalRegistry,
+	normalizeGatewayEventName,
+	pluginEventNames,
+} from './seyfert-internals';
 import {
 	arrayValue,
 	asRecord,
@@ -171,6 +178,33 @@ export interface OutgoingMessage {
 	poll?: unknown;
 }
 
+type ComponentSourceOptions = {
+	source?: string | RecordedAction;
+	allowSyntheticSource?: boolean;
+};
+
+type MessageSource = { id: string; channel_id?: string };
+type MessagePart = { body: OutgoingMessage; source?: MessageSource };
+type BindComponentView = (view: ButtonView, source?: MessageSource) => ComponentActionView;
+
+export interface ComponentSourceView {
+	messageId: string;
+	channelId?: string;
+}
+
+export type ComponentClickOptions = Omit<ButtonInteractionOptions, 'customId' | 'message'> &
+	Omit<ComponentSourceOptions, 'source'>;
+
+export type ComponentSelectOptions = Omit<SelectMenuInteractionOptions, 'customId' | 'values' | 'message'> &
+	Omit<ComponentSourceOptions, 'source'>;
+
+/** Interactive component harvested from a dispatch result, bound to the message that rendered it. */
+export interface ComponentActionView extends ButtonView {
+	source?: ComponentSourceView;
+	click(options?: ComponentClickOptions): Dispatch<DispatchResult>;
+	select(values: string[], options?: ComponentSelectOptions): Dispatch<DispatchResult>;
+}
+
 /** Semantic result produced by interaction dispatchers. */
 export interface DispatchResult {
 	/** Immediate interaction callback replies, in order. */
@@ -201,10 +235,10 @@ export interface DispatchResult {
 	embedViews: EmbedView[];
 	/** First parsed embed view, for the common single-embed assertion. */
 	embedView?: EmbedView;
-	/** Interactive buttons collected from `messages[].components` (recursively, incl. v2 sections). */
-	buttons: ButtonView[];
+	/** Interactive components collected from `messages[].components` (recursively, incl. v2 sections). */
+	buttons: ComponentActionView[];
 	/** A button by its label or customId, or undefined. */
-	button(labelOrCustomId: string): ButtonView | undefined;
+	button(labelOrCustomId: string): ComponentActionView | undefined;
 	/** Components-v2 TextDisplay (type 10) contents, in dispatch order. */
 	textDisplays: string[];
 	/** Files flattened from `messages`, in dispatch order. */
@@ -273,10 +307,10 @@ export interface MessageResultBase {
 	embedViews: EmbedView[];
 	/** First parsed embed view, for the common single-embed assertion. */
 	embedView?: EmbedView;
-	/** Interactive buttons collected from `messages[].components` (recursively, incl. v2 sections). */
-	buttons: ButtonView[];
+	/** Interactive components collected from `messages[].components` (recursively, incl. v2 sections). */
+	buttons: ComponentActionView[];
 	/** A button by its label or customId, or undefined. */
-	button(labelOrCustomId: string): ButtonView | undefined;
+	button(labelOrCustomId: string): ComponentActionView | undefined;
 	/** Components-v2 TextDisplay (type 10) contents, in dispatch order. */
 	textDisplays: string[];
 }
@@ -348,15 +382,20 @@ export interface BotDiagnostics {
 	recentActions: RecordedAction[];
 }
 
-function messageParts(actions: RecordedAction[], messages: OutgoingMessage[]): MessageResultBase {
+function buildMessageResult(
+	actions: RecordedAction[],
+	parts: MessagePart[],
+	bindComponentView: BindComponentView,
+): MessageResultBase {
+	const messages = parts.map(part => part.body);
 	const embeds = messages.flatMap(message => message.embeds ?? []);
 	const files = messages.flatMap(message => message.files ?? []);
 	const embedViews = embeds.map(normalizeEmbed);
-	const buttons: ButtonView[] = [];
+	const buttons: ComponentActionView[] = [];
 	const textDisplays: string[] = [];
-	for (const message of messages) {
-		const harvested = harvestComponents((message as { components?: unknown }).components);
-		buttons.push(...harvested.buttons);
+	for (const part of parts) {
+		const harvested = harvestComponents((part.body as { components?: unknown }).components);
+		buttons.push(...harvested.buttons.map(button => bindComponentView(button, part.source)));
 		textDisplays.push(...harvested.textDisplays);
 	}
 	return {
@@ -392,11 +431,6 @@ export interface ActorOptions {
 	channel?: ApiChannel;
 }
 
-type ComponentSourceOptions = {
-	source?: string | RecordedAction;
-	allowSyntheticSource?: boolean;
-};
-
 /** Bound dispatcher facade that reuses one identity across a flow. */
 export interface Actor {
 	slash<C extends SlashCommandClass>(command: C, options?: SlashClassOptions<C>): Dispatch<DispatchResult>;
@@ -418,6 +452,12 @@ export interface Actor {
 		options?: Parameters<MockBot['selectMenu']>[2],
 	): Dispatch<DispatchResult>;
 	say(content: string, options?: DispatchMessageOptions): Dispatch<SayResult>;
+	emit<TName extends GatewayDispatchPayload['t']>(
+		name: TName,
+		payload?: Partial<Extract<GatewayDispatchPayload, { t: TName }>['d']>,
+		options?: EmitEventOptions,
+	): Dispatch<EventDispatchResult>;
+	emit(name: string, payload?: object | readonly unknown[], options?: EmitEventOptions): Dispatch<EventDispatchResult>;
 	emitEvent<TName extends GatewayDispatchPayload['t']>(
 		name: TName,
 		payload?: Partial<Extract<GatewayDispatchPayload, { t: TName }>['d']>,
@@ -733,6 +773,62 @@ export class MockBot {
 	private track<T>(dispatch: Dispatch<T>): Dispatch<T> {
 		this.dispatches.push(dispatch as Dispatch<unknown>);
 		return dispatch;
+	}
+
+	private bindComponentView(view: ButtonView, source?: MessageSource): ComponentActionView {
+		const sourceView: ComponentSourceView | undefined = source
+			? { messageId: source.id, ...(source.channel_id ? { channelId: source.channel_id } : {}) }
+			: undefined;
+		const sourceOption = source ? { source: source.id } : {};
+		const requireCustomId = (verb: 'click' | 'select'): string => {
+			if (!view.customId) {
+				throw new TypeError(`component.${verb}: component has no customId and cannot be dispatched.`);
+			}
+			if (view.disabled) {
+				throw new TypeError(`component.${verb}: component "${view.customId}" is disabled.`);
+			}
+			return view.customId;
+		};
+
+		return {
+			...view,
+			...(sourceView ? { source: sourceView } : {}),
+			click: (options = {}) => {
+				const customId = requireCustomId('click');
+				if (view.type !== 2) {
+					throw new TypeError(
+						`component.click: component "${customId}" is type ${view.type}, not a button. ` +
+							'Use component.select(values) for select menus.',
+					);
+				}
+				return this.clickButton(customId, { ...options, ...sourceOption });
+			},
+			select: (values, options = {}) => {
+				const customId = requireCustomId('select');
+				const isSelect = view.type === 3 || (view.type >= 5 && view.type <= 8);
+				if (!isSelect) {
+					throw new TypeError(
+						`component.select: component "${customId}" is type ${view.type}, not a select menu. ` +
+							'Use component.click() for buttons.',
+					);
+				}
+				return this.selectMenu(customId, values, { ...options, ...sourceOption });
+			},
+		};
+	}
+
+	private messageParts(actions: RecordedAction[], parts: MessagePart[]): MessageResultBase {
+		return buildMessageResult(actions, parts, (view, source) => this.bindComponentView(view, source));
+	}
+
+	private outgoingMessagePart(action: RecordedAction): MessagePart {
+		return {
+			body: {
+				...((action.body ?? {}) as OutgoingMessage),
+				...(action.files ? { files: action.files } : {}),
+			},
+			source: this.messageSourceFrom(action.response),
+		};
 	}
 
 	private applyWorldPermissions<T extends BaseInteractionOptions>(options: T): T {
@@ -1436,24 +1532,28 @@ export class MockBot {
 		);
 	}
 
-	private prepareGatewayEventPayload(name: string, d: Record<string, unknown>): Record<string, unknown> {
+	private prepareGatewayEventPayload(
+		name: string,
+		d: Record<string, unknown>,
+		verb: 'emit' | 'emitEvent' = 'emitEvent',
+	): Record<string, unknown> {
 		if (name === 'GUILD_MEMBER_UPDATE') {
 			const user = d.user as { id?: unknown } | undefined;
 			if (typeof d.guild_id !== 'string' || typeof user?.id !== 'string') {
-				throw new TypeError('emitEvent GUILD_MEMBER_UPDATE requires guild_id and user.id before world/cache mutation.');
+				throw new TypeError(`${verb} GUILD_MEMBER_UPDATE requires guild_id and user.id before world/cache mutation.`);
 			}
 		}
 		if (name === 'THREAD_CREATE' && typeof d.guild_id !== 'string') {
-			throw new TypeError('emitEvent THREAD_CREATE requires guild_id; Seyfert cache ignores guildless threads.');
+			throw new TypeError(`${verb} THREAD_CREATE requires guild_id; Seyfert cache ignores guildless threads.`);
 		}
 		if (name === 'CHANNEL_CREATE' && d.type !== 1 && typeof d.guild_id !== 'string') {
-			throw new TypeError('emitEvent CHANNEL_CREATE requires guild_id for non-DM channels; Seyfert cache ignores it.');
+			throw new TypeError(`${verb} CHANNEL_CREATE requires guild_id for non-DM channels; Seyfert cache ignores it.`);
 		}
 		if (name === 'MESSAGE_CREATE') {
 			const author = d.author as { id?: unknown } | undefined;
 			if (typeof d.channel_id !== 'string' || typeof d.id !== 'string' || typeof author?.id !== 'string') {
 				throw new TypeError(
-					'emitEvent MESSAGE_CREATE requires id, channel_id, and author.id before world/cache mutation.',
+					`${verb} MESSAGE_CREATE requires id, channel_id, and author.id before world/cache mutation.`,
 				);
 			}
 		}
@@ -1667,15 +1767,12 @@ export class MockBot {
 				this.materializeInteractionResponse(payload, reply.body);
 			}
 		}
-		const toOutgoingMessage = (action: RecordedAction): OutgoingMessage => ({
-			...((action.body ?? {}) as OutgoingMessage),
-			...(action.files ? { files: action.files } : {}),
-		});
+		const toOutgoingMessage = (action: RecordedAction): OutgoingMessage => this.outgoingMessagePart(action).body;
 		const normalizeFiles = (files: unknown): unknown[] | undefined => {
 			if (files === undefined) return undefined;
 			return Array.isArray(files) ? files : [files];
 		};
-		const replyToMessage = (reply: CapturedReply): OutgoingMessage | undefined => {
+		const replyToMessagePart = (reply: CapturedReply): MessagePart | undefined => {
 			const body = reply.body;
 			if (
 				body.type !== InteractionResponseType.ChannelMessageWithSource &&
@@ -1685,8 +1782,14 @@ export class MockBot {
 			}
 			const data = 'data' in body ? ((body.data ?? {}) as OutgoingMessage) : {};
 			return {
-				...data,
-				...(reply.files ? { files: normalizeFiles(reply.files) } : {}),
+				body: {
+					...data,
+					...(reply.files ? { files: normalizeFiles(reply.files) } : {}),
+				},
+				source:
+					body.type === InteractionResponseType.UpdateMessage
+						? this.messageSourceFrom(payload.message)
+						: this.messageSourceFrom(this._state.messageForToken(payload.token)),
 			};
 		};
 		const isWebhookMessageEdit = (action: RecordedAction) =>
@@ -1695,40 +1798,25 @@ export class MockBot {
 			action.route.split('/').includes(payload.token);
 		const isFollowup = (action: RecordedAction) =>
 			action.method === 'POST' && FOLLOWUP_ROUTE.test(action.route) && action.route.split('/').includes(payload.token);
-		const edits = actions.filter(isWebhookMessageEdit).map(toOutgoingMessage);
-		const followups = actions.filter(isFollowup).map(toOutgoingMessage);
-		const messages = [
-			...replies.map(replyToMessage).filter((message): message is OutgoingMessage => message !== undefined),
-			...actions.filter(action => isWebhookMessageEdit(action) || isFollowup(action)).map(toOutgoingMessage),
+		const editActions = actions.filter(isWebhookMessageEdit);
+		const followupActions = actions.filter(isFollowup);
+		const messageActions = actions.filter(action => isWebhookMessageEdit(action) || isFollowup(action));
+		const edits = editActions.map(toOutgoingMessage);
+		const followups = followupActions.map(toOutgoingMessage);
+		const parts = [
+			...replies.map(replyToMessagePart).filter((part): part is MessagePart => part !== undefined),
+			...messageActions.map(action => this.outgoingMessagePart(action)),
 		];
-		const embeds = messages.flatMap(message => message.embeds ?? []);
-		const files = messages.flatMap(message => message.files ?? []);
-		const embedViews = embeds.map(normalizeEmbed);
-		const buttons: ButtonView[] = [];
-		const textDisplays: string[] = [];
-		for (const message of messages) {
-			const harvested = harvestComponents((message as { components?: unknown }).components);
-			buttons.push(...harvested.buttons);
-			textDisplays.push(...harvested.textDisplays);
-		}
+		const messageResult = this.messageParts(actions, parts);
 		const command = this.commandLeaf(payload);
 		const target = this.commandTarget(payload);
 		const denial = ctx.denial;
 
 		return {
+			...messageResult,
 			replies,
 			edits,
 			followups,
-			messages,
-			embeds,
-			files,
-			embedViews,
-			buttons,
-			textDisplays,
-			button(labelOrCustomId: string) {
-				return buttons.find(view => view.customId === labelOrCustomId || view.label === labelOrCustomId);
-			},
-			actions,
 			command,
 			target,
 			denied: denial !== undefined,
@@ -1754,10 +1842,10 @@ export class MockBot {
 				return isEphemeral(data ?? {});
 			},
 			get embed() {
-				return embeds[0];
+				return messageResult.embed;
 			},
 			get embedView() {
-				return embedViews[0];
+				return messageResult.embedView;
 			},
 			get modal() {
 				const body = replies[0]?.body;
@@ -1766,7 +1854,7 @@ export class MockBot {
 				return { customId: data?.custom_id, title: data?.title };
 			},
 			get content() {
-				return [...messages].reverse().find(message => typeof message.content === 'string')?.content;
+				return [...messageResult.messages].reverse().find(message => typeof message.content === 'string')?.content;
 			},
 		};
 	}
@@ -2015,8 +2103,8 @@ export class MockBot {
 						() => this.client.handleCommand.message(raw as Parameters<HandleCommand['message']>[0], -1),
 					);
 					const actions = this.rest.actions.filter(action => action.dispatchId === dispatchId);
-					const messages = actions.filter(isOutgoingMessagePost).map(action => (action.body ?? {}) as OutgoingMessage);
-					return messageParts(actions, messages);
+					const parts = actions.filter(isOutgoingMessagePost).map(action => this.outgoingMessagePart(action));
+					return this.messageParts(actions, parts);
 				},
 				(id, ownerDispatchId) => this.onModalRegistered(id, ownerDispatchId),
 				dispatchId,
@@ -2034,6 +2122,14 @@ export class MockBot {
 			options.channel ??
 			(entry ? this._world?.channels.find(candidate => candidate.guild_id === entry.guildId) : undefined);
 		const base = { user, guildId, channel };
+		const mergeEventPayload = (payload: object | readonly unknown[] = {}): object | readonly unknown[] => {
+			if (Array.isArray(payload)) return payload;
+			return {
+				...(guildId ? { guild_id: guildId } : {}),
+				...(user ? { user } : {}),
+				...(payload as Record<string, unknown>),
+			};
+		};
 
 		return {
 			slash: (
@@ -2052,29 +2148,52 @@ export class MockBot {
 			clickButton: (customId, options = {}) => this.clickButton(customId, { ...base, ...options }),
 			selectMenu: (customId, values, options = {}) => this.selectMenu(customId, values, { ...base, ...options }),
 			say: (content, options = {}) => this.say(content, { ...base, ...options }),
+			emit: (name: string, payload: object | readonly unknown[] = {}, options?: EmitEventOptions) =>
+				this.emit(name, mergeEventPayload(payload), options),
 			emitEvent: (name: string, payload: Record<string, unknown> = {}, options?: EmitEventOptions) => {
-				const merged: Record<string, unknown> = {
-					...(guildId ? { guild_id: guildId } : {}),
-					...(user ? { user } : {}),
-					...payload,
-				};
-				return this.emitEvent(name as GatewayDispatchPayload['t'], merged, options);
+				return this.emitEvent(name as GatewayDispatchPayload['t'], mergeEventPayload(payload) as object, options);
 			},
 		};
 	}
 
-	emitEvent<TName extends GatewayDispatchPayload['t']>(
+	emit<TName extends GatewayDispatchPayload['t']>(
 		name: TName,
-		payload: Partial<Extract<GatewayDispatchPayload, { t: TName }>['d']>,
+		payload?: Partial<Extract<GatewayDispatchPayload, { t: TName }>['d']>,
 		options?: EmitEventOptions,
 	): Dispatch<EventDispatchResult>;
-	emitEvent(name: string, payload: object, options?: EmitEventOptions): Dispatch<EventDispatchResult>;
-	emitEvent(
+	emit(name: string, payload?: object | readonly unknown[], options?: EmitEventOptions): Dispatch<EventDispatchResult>;
+	emit(
 		name: string,
-		payload: object,
-		{ updateCache = true, allowNoHandler = false }: EmitEventOptions = {},
+		payload: object | readonly unknown[] = {},
+		options: EmitEventOptions = {},
 	): Dispatch<EventDispatchResult> {
-		this.assertOpen('emitEvent');
+		const gatewayName = normalizeGatewayEventName(name);
+		if (gatewayName) {
+			if (Array.isArray(payload)) {
+				throw new TypeError('emit: gateway events require an object payload, not positional arguments.');
+			}
+			return this.emitGatewayEvent(gatewayName as GatewayDispatchPayload['t'], payload, options, 'emit');
+		}
+		return this.emitCustom(name, payload, options);
+	}
+
+	emitEvent<TName extends GatewayDispatchPayload['t']>(
+		name: TName,
+		payload?: Partial<Extract<GatewayDispatchPayload, { t: TName }>['d']>,
+		options?: EmitEventOptions,
+	): Dispatch<EventDispatchResult>;
+	emitEvent(name: string, payload?: object, options?: EmitEventOptions): Dispatch<EventDispatchResult>;
+	emitEvent(name: string, payload: object = {}, options: EmitEventOptions = {}): Dispatch<EventDispatchResult> {
+		return this.emitGatewayEvent(name as GatewayDispatchPayload['t'], payload, options, 'emitEvent');
+	}
+
+	private emitGatewayEvent(
+		name: GatewayDispatchPayload['t'],
+		payload: object,
+		{ updateCache = true, allowNoHandler = false }: EmitEventOptions,
+		verb: 'emit' | 'emitEvent',
+	): Dispatch<EventDispatchResult> {
+		this.assertOpen(verb);
 		const d = payload as Record<string, unknown>;
 		const dispatchId = nextDispatchId();
 		return this.track(
@@ -2085,11 +2204,11 @@ export class MockBot {
 				async () => {
 					// Guard BEFORE mutating the world, so a rejected emit is a true no-op (no dirtied world state,
 					// and seyfert's cache — updated later inside runEvent — stays consistent with the world).
-					const prepared = this.prepareGatewayEventPayload(name, d);
+					const prepared = this.prepareGatewayEventPayload(name, d, verb);
 					const handlerRan = this.eventHandlerRan(name);
 					if (!handlerRan && !allowNoHandler) {
 						throw new Error(
-							`emitEvent: no handler ran for "${name}". Gateway names are UPPER_SNAKE_CASE ` +
+							`${verb}: no handler ran for "${name}". Gateway names are UPPER_SNAKE_CASE ` +
 								`(e.g. 'GUILD_MEMBER_ADD', not 'guildMemberAdd'). Register an Event via events:[...], or pass ` +
 								`{ allowNoHandler: true } if you are emitting only to seed world state. ` +
 								`Registered events: ${this.registeredEvents().join(', ') || '(none)'}.`,
@@ -2099,7 +2218,7 @@ export class MockBot {
 					// bridged world event does literally nothing — almost always a mis-cased/typo'd gateway name.
 					if (!handlerRan && allowNoHandler && !WORLD_EVENT_NAMES.includes(name)) {
 						throw new Error(
-							`emitEvent: "${name}" had no effect — no handler ran and it is not a world-bridge event. ` +
+							`${verb}: "${name}" had no effect — no handler ran and it is not a world-bridge event. ` +
 								`Check the gateway name is UPPER_SNAKE_CASE (e.g. 'GUILD_MEMBER_ADD'). ` +
 								`Bridged events: ${[...WORLD_EVENT_NAMES].join(', ')}.`,
 						);
@@ -2122,8 +2241,52 @@ export class MockBot {
 					);
 					if (ctx.error !== undefined && this.onCommandError === 'throw') throw ctx.error;
 					const actions = this.rest.actions.filter(action => action.dispatchId === dispatchId);
-					const messages = actions.filter(isOutgoingMessagePost).map(action => (action.body ?? {}) as OutgoingMessage);
-					const result = messageParts(actions, messages);
+					const parts = actions.filter(isOutgoingMessagePost).map(action => this.outgoingMessagePart(action));
+					const result = this.messageParts(actions, parts);
+					return ctx.error === undefined ? result : { ...result, error: ctx.error };
+				},
+				undefined,
+				dispatchId,
+			),
+		);
+	}
+
+	private emitCustom(
+		name: string,
+		payload: object | readonly unknown[] = {},
+		{ allowNoHandler = false }: EmitEventOptions = {},
+	): Dispatch<EventDispatchResult> {
+		this.assertOpen('emit');
+		const dispatchId = nextDispatchId();
+		return this.track(
+			new Dispatch<EventDispatchResult>(
+				this.rest,
+				this.client,
+				undefined,
+				async () => {
+					const handlerRan = this.eventHandlerRan(name);
+					if (!handlerRan && !allowNoHandler) {
+						throw new Error(
+							`emit: no custom handler ran for "${name}". Register a custom Event or plugin listener, ` +
+								`or pass { allowNoHandler: true } if no-op emission is intentional. ` +
+								`Registered events: ${this.registeredEvents().join(', ') || '(none)'}.`,
+						);
+					}
+					const ctx: DispatchContext = {
+						dispatchId,
+						componentCommandExecuted: false,
+						collectorMatched: false,
+						modalMatched: false,
+					};
+					const args = Array.isArray(payload) ? [...payload] : [payload];
+					const events = this.client.events as typeof this.client.events & {
+						runCustom(name: string, ...args: unknown[]): Promise<void>;
+					};
+					await dispatchStore.run(ctx, () => events.runCustom(name, ...args));
+					if (ctx.error !== undefined && this.onCommandError === 'throw') throw ctx.error;
+					const actions = this.rest.actions.filter(action => action.dispatchId === dispatchId);
+					const parts = actions.filter(isOutgoingMessagePost).map(action => this.outgoingMessagePart(action));
+					const result = this.messageParts(actions, parts);
 					return ctx.error === undefined ? result : { ...result, error: ctx.error };
 				},
 				undefined,

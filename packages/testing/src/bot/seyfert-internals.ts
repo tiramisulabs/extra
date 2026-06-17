@@ -1,5 +1,5 @@
 import type { Client, UsingClient } from 'seyfert';
-import { normalizeEventName } from 'seyfert/lib/events/utils';
+import { isGatewayEventName, normalizeEventName } from 'seyfert/lib/events/utils';
 
 /*
  * The mock bot drives a REAL seyfert Client, which means it reaches into a handful of seyfert internals that are
@@ -69,6 +69,10 @@ export function pluginEventNames(client: Client): string[] {
 	return (registry?.events ?? [])
 		.filter(listener => listener.active)
 		.map(listener => normalizeEventName(listener.name));
+}
+
+export function normalizeGatewayEventName(name: string): string | undefined {
+	return isGatewayEventName(name) ? normalizeEventName(name) : undefined;
 }
 
 export function clientLifecycle(client: Client): ClientLifecycleInternals {

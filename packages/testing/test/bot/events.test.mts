@@ -1,8 +1,14 @@
-import { createEvent } from 'seyfert';
+import { createEvent, createPlugin } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { apiMember, apiMessage, apiUser, memberAddEvent, memberRemoveEvent } from '../../src/bot/payloads';
 import { mockWorld } from '../../src/bot/world';
+
+declare module 'seyfert/lib/events/event' {
+	interface CustomEvents {
+		'di:ready': (payload: { id: string }) => void;
+	}
+}
 
 describe('emitEvent result and factories', () => {
 	test('returns the channel messages the handler wrote', async () => {
@@ -24,6 +30,51 @@ describe('emitEvent result and factories', () => {
 		await bot.close();
 	});
 
+	test('emit dispatches camelCase gateway events', async () => {
+		const onJoin = createEvent({
+			data: { name: 'guildMemberAdd' },
+			async run(member, client) {
+				await client.messages.write(member.id, { content: `Welcome ${member.user.username}` });
+			},
+		});
+		const bot = await createMockBot({ events: [onJoin] });
+
+		const result = await bot.emit(
+			'guildMemberAdd',
+			memberAddEvent(apiMember({ user: apiUser({ username: 'newbie' }) }), { guildId: '123' }),
+		);
+
+		expect(result.content).toBe('Welcome newbie');
+		await bot.close();
+	});
+
+	test('emit dispatches custom plugin events through runCustom', async () => {
+		const seen: string[] = [];
+		const plugin = createPlugin({
+			name: 'custom-event-plugin',
+			register(api) {
+				api.events.on('di:ready', async (payload, client) => {
+					seen.push(payload.id);
+					await client.messages.write('custom-event-channel', { content: `custom:${payload.id}` });
+				});
+			},
+		});
+		const bot = await createMockBot({ plugins: [plugin] });
+
+		const result = await bot.emit('di:ready', { id: 'container' });
+
+		expect(seen).toEqual(['container']);
+		expect(result.content).toBe('custom:container');
+		await bot.close();
+	});
+
+	test('emit fails loud when a custom event has no handler', async () => {
+		const bot = await createMockBot({});
+
+		await expect(bot.emit('custom:missing')).rejects.toThrow(/no custom handler ran/);
+		await bot.close();
+	});
+
 	test('actor.emitEvent auto-fills guild_id and the bound user', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'evt-guild' });
@@ -35,6 +86,24 @@ describe('emitEvent result and factories', () => {
 			.emitEvent('GUILD_MEMBER_UPDATE', { roles: ['r1'] }, { allowNoHandler: true });
 
 		expect(bot.worldMember(guild.id, 'alice')?.roles).toEqual(['r1']);
+		await bot.close();
+	});
+
+	test('actor.emit auto-fills guild_id and the bound user for gateway events', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'actor-emit-guild' });
+		const alice = world.registerMember(guild.id, { user: apiUser({ id: 'actor-emit-alice' }), roles: [] });
+		const bot = await createMockBot({ world });
+
+		await bot.actor({ member: alice, guildId: guild.id }).emit(
+			'guildMemberUpdate',
+			{ roles: ['r2'] },
+			{
+				allowNoHandler: true,
+			},
+		);
+
+		expect(bot.worldMember(guild.id, 'actor-emit-alice')?.roles).toEqual(['r2']);
 		await bot.close();
 	});
 

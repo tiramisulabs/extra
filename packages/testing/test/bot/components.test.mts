@@ -58,6 +58,36 @@ describe('component flows', () => {
 		await bot.close();
 	});
 
+	test('rendered button views can click themselves with their source message', async () => {
+		const clicked: string[] = [];
+
+		@Declare({ name: 'self-click-panel', description: 'Posts a clickable panel' })
+		class SelfClickPanelCommand extends Command {
+			async run(ctx: CommandContext) {
+				const row = new ActionRow().setComponents([
+					new Button().setCustomId('self-click').setLabel('Self Click').setStyle(ButtonStyle.Primary),
+				]);
+				await ctx.write({ content: 'Panel', components: [row] });
+				const message = await ctx.fetchResponse();
+				message.createComponentCollector().run('self-click', async interaction => {
+					clicked.push(interaction.customId);
+					await interaction.write({ content: 'clicked via view' });
+				});
+			}
+		}
+
+		const bot = await createMockBot({ commands: [SelfClickPanelCommand] });
+		const panel = await bot.slash({ name: 'self-click-panel' });
+		const button = panel.button('Self Click');
+		expect(button?.source?.messageId).toBeTypeOf('string');
+
+		const result = await button?.click();
+
+		expect(clicked).toEqual(['self-click']);
+		expect(result?.content).toBe('clicked via view');
+		await bot.close();
+	});
+
 	test('clickButton without a source fails by default for ComponentCommand-only dispatch', async () => {
 		const bot = await createMockBot({ components: [ConfirmButton] });
 		expect(() => bot.clickButton('confirm')).toThrow(/no source message resolved/);
@@ -219,10 +249,12 @@ describe('component flows', () => {
 		}
 
 		const bot = await createMockBot({ commands: [PickColorCommand] });
-		await bot.slash({ name: 'pick-color' });
-		const result = await bot.selectMenu('pick', ['red']);
+		const panel = await bot.slash({ name: 'pick-color' });
+		const picker = panel.button('pick');
+		expect(picker?.source?.messageId).toBeTypeOf('string');
+		const result = await picker?.select(['red']);
 		expect(selected).toEqual([['red']]);
-		expect(result.content).toBe('Picked red');
+		expect(result?.content).toBe('Picked red');
 		await bot.close();
 	});
 
