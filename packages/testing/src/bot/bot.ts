@@ -2103,6 +2103,14 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 		setCachedMember: async (guildId, userId, member) => {
 			await client.cache.members?.set(CacheFrom.Test, userId, guildId, member);
 		},
+		cacheSet: async (resource, id, guildId, data) => {
+			const store = (client.cache as unknown as Record<string, { set?: (...a: unknown[]) => unknown }>)[resource];
+			await store?.set?.(CacheFrom.Test, id, guildId, data);
+		},
+		cacheRemove: async (resource, id, guildId) => {
+			const store = (client.cache as unknown as Record<string, { remove?: (...a: unknown[]) => unknown }>)[resource];
+			await store?.remove?.(id, guildId);
+		},
 		simulateGateway: options.simulateGateway ?? true,
 		state,
 		botId: client.botId,

@@ -35,4 +35,33 @@ describe('seeded world data reaches seyfert cache reads', () => {
 		expect(seen.overwrites).toBeTruthy();
 		await bot.close();
 	});
+
+	test('a REST mutation converges seyfert cache: create an emoji / ban a user, then read it back from cache', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'conv-guild' });
+		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'conv-actor' }) });
+		world.registerMember(guild.id, { user: apiUser({ id: 'conv-target' }) });
+		const channel = world.registerChannel(guild.id, { id: 'conv-chan' });
+
+		const seen: { emojis?: (string | null)[]; banned?: boolean } = {};
+		@Declare({ name: 'mutate-then-read', description: 'creates an emoji and a ban, then reads cache' })
+		class MutateThenRead extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.client.proxy.guilds(guild.id).emojis.post({ body: { name: 'live', image: '' } });
+				await ctx.client.members.ban(guild.id, 'conv-target');
+				seen.emojis = (await ctx.client.cache.emojis?.values(guild.id))?.map(emoji => emoji.name);
+				// seyfert keys cached bans by the user id (and strips the user from the stored value), so a present
+				// entry for that id is the convergence signal.
+				seen.banned = Boolean(await ctx.client.cache.bans?.get('conv-target', guild.id));
+				await ctx.write({ content: 'ok' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [MutateThenRead], world });
+		await bot.slash({ name: 'mutate-then-read', guildId: guild.id, channel, user: actor.user });
+
+		expect(seen.emojis).toContain('live');
+		expect(seen.banned).toBe(true);
+		await bot.close();
+	});
 });
