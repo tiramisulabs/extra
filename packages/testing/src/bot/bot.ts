@@ -7,7 +7,6 @@ import {
 	type EntryPointCommand,
 	ModalCommand,
 	type OptionsRecord,
-	type UsingClient,
 } from 'seyfert';
 import { CacheFrom } from 'seyfert/lib/cache';
 import type { AnySeyfertPlugin, PluginDiagnostics, ResolvedPluginList } from 'seyfert/lib/client/plugins';
@@ -84,6 +83,7 @@ import {
 } from './rest';
 import { FOLLOWUP_ROUTE, WEBHOOK_MESSAGE_ROUTE } from './routes';
 import { resolveSelectResolved } from './select-resolved';
+import { asUsingClient, clientLifecycle, eventsInternals } from './seyfert-internals';
 import {
 	type ButtonView,
 	type ChannelView,
@@ -1782,23 +1782,15 @@ export class MockBot {
 	 * way the gateway delivers them. Use it to assert wiring, or to debug an `emitEvent` that found no handler.
 	 */
 	registeredEvents(): string[] {
-		return Object.keys(this.eventsHandler.values);
+		return Object.keys(eventsInternals(this.client).values);
 	}
 
 	/** Whether emitting `name` now would reach a handler: a live (not once-fired) Event, or a plugin listener. */
 	private eventHandlerRan(name: string): boolean {
-		const events = this.eventsHandler;
+		const events = eventsInternals(this.client);
 		const event = events.values[name];
 		if (event && !(event.data.once && event.fired)) return true;
 		return events.getPluginListeners(name).length > 0 || events.getPluginAnyListeners().length > 0;
-	}
-
-	private get eventsHandler(): {
-		values: Record<string, { data: { once?: boolean }; fired?: boolean } | undefined>;
-		getPluginListeners(name: string): unknown[];
-		getPluginAnyListeners(): unknown[];
-	} {
-		return this.client.events as unknown as MockBot['eventsHandler'];
 	}
 
 	reset(): void {
@@ -1899,7 +1891,7 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	installRunErrorCapture('modals');
 	// Events use a different seam (reportEventFailure, not an options hook). Wrap it to capture a thrown event
 	// handler error into the active dispatch context so emitEvent fails loud too, instead of seyfert swallowing it.
-	const eventsHandler = client.events as unknown as { reportEventFailure?: (name: string, error: unknown) => unknown };
+	const eventsHandler = eventsInternals(client);
 	if (typeof eventsHandler.reportEventFailure === 'function') {
 		eventsHandler.reportEventFailure = (_name: string, error: unknown) => {
 			const ctx = dispatchStore.getStore();
@@ -1931,9 +1923,7 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 			),
 		);
 		client.langs.defaultLang = options.defaultLang ?? (localeNames.includes('en-US') ? 'en-US' : localeNames[0]);
-		(client as unknown as { langBaseValues: typeof client.langs.values }).langBaseValues = structuredClone(
-			client.langs.values,
-		);
+		clientLifecycle(client).langBaseValues = structuredClone(client.langs.values);
 	}
 	if (options.defaultLang) {
 		client.langs.defaultLang = options.defaultLang;
@@ -1958,10 +1948,10 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	if (loadFromConfig || options.langsDir) await client.loadLangs(options.langsDir);
 
 	// Plugin setup/contribution refresh are intentionally not public on Client, but production start() calls them.
-	await (client as unknown as { setupPlugins(): Promise<void> }).setupPlugins();
-	await (client as unknown as { reloadPluginContributions(): Promise<void> }).reloadPluginContributions();
+	await clientLifecycle(client).setupPlugins();
+	await clientLifecycle(client).reloadPluginContributions();
 	// seedWorld only needs the UsingClient cache/rest surface already installed above.
-	if (world) await seedWorld(client as unknown as UsingClient, world);
+	if (world) await seedWorld(asUsingClient(client), world);
 	const state = new WorldState(world);
 	registerWorldDefaults(rest, world, {
 		emit: (name, payload) => client.events.runEvent(name, client, payload, -1, true) as Promise<void>,

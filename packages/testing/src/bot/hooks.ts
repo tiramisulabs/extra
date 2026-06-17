@@ -1,5 +1,6 @@
 import type { Client } from 'seyfert';
 import { dispatchStore } from './dispatch-context';
+import { componentInternals, modalRegistry } from './seyfert-internals';
 
 type MiddlewareControl = (...args: never[]) => unknown;
 interface MiddlewareControls {
@@ -44,12 +45,7 @@ export interface DispatchHookDeps {
  * @internal Called once by createMockBot after setup; not part of the public surface.
  */
 export function installDispatchHooks(client: Client, deps: DispatchHookDeps): DispatchHookCapabilities {
-	const componentHooks = client.components as unknown as {
-		execute?: (...args: unknown[]) => Promise<unknown>;
-		onComponent?: (id: string, interaction: { customId: string }) => Promise<unknown>;
-		hasComponent?: (id: string, customId: string) => boolean | undefined;
-		onModalSubmit?: (interaction: { user: { id: string } }) => unknown;
-	};
+	const componentHooks = componentInternals(client);
 	const canDetectComponentCommand = typeof componentHooks.execute === 'function';
 	const canDetectCollector =
 		typeof componentHooks.onComponent === 'function' && typeof componentHooks.hasComponent === 'function';
@@ -82,9 +78,7 @@ export function installDispatchHooks(client: Client, deps: DispatchHookDeps): Di
 	// Modal registration signal: seyfert's ctx.interaction.modal() calls components.modals.set(userId, exec)
 	// synchronously while replying. Wrap set() ONCE so any pending untilModal() waiter for that user resolves
 	// the instant the modal is registered — event-driven, no wall-clock poll.
-	const modals = client.components.modals as unknown as {
-		set: (key: string, value: unknown) => unknown;
-	};
+	const modals = modalRegistry(client);
 	const realSet = modals.set.bind(modals);
 	modals.set = (key: string, value: unknown) => {
 		const waiters = deps.modalWaiters.get(key);

@@ -1,6 +1,7 @@
 import type { Client } from 'seyfert';
 import type { DispatchResult } from './bot';
 import type { MockApiHandler, RecordedAction, RouteMatcher } from './rest';
+import { modalRegistry } from './seyfert-internals';
 
 /** Lazy, step-able handle returned by every user-action dispatcher. */
 export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
@@ -121,10 +122,7 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		}
 		await this.untilModal();
 		const userId = this.userId;
-		const modals = this.clientRef.components.modals as unknown as {
-			get(key: string): ((interaction: unknown) => unknown) | undefined;
-			delete(key: string): unknown;
-		};
+		const modals = modalRegistry(this.clientRef);
 		const exec = modals.get(userId);
 		modals.delete(userId);
 		exec?.(null); // resolves modal({ waitFor }) with null -> the handler takes its timeout branch
