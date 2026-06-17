@@ -52,3 +52,75 @@ describe('permission enforcement (opt-in via seeded bot member)', () => {
 		await bot.close();
 	});
 });
+
+describe('role-assignment & bulk-ban edge enforcement', () => {
+	const seedRoles = () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'role-guild', ownerId: 'owner-id' });
+		const channel = world.registerChannel(guild.id);
+		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'role-actor' }) });
+		const botRole = world.registerRole(guild.id, {
+			id: 'bot-role',
+			permissions: ['ManageRoles', 'BanMembers'],
+			position: 5,
+		});
+		const highRole = world.registerRole(guild.id, { id: 'high-role', position: 10 });
+		world.registerBotMember(guild.id, { roles: [botRole.id] });
+		world.registerMember(guild.id, { user: apiUser({ id: 'subject' }), roles: [] });
+		return { world, guild, channel, actor, highRole };
+	};
+
+	test('editMember assigning a role above the bot is rejected', async () => {
+		const { world, guild, channel, actor, highRole } = seedRoles();
+		@Declare({ name: 'promote', description: 'assigns a high role via editMember' })
+		class Promote extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.client.members.edit(ctx.guildId ?? '', 'subject', { roles: [highRole.id] });
+				await ctx.write({ content: 'promoted' });
+			}
+		}
+		const bot = await createMockBot({ commands: [Promote], world });
+		await expect(bot.slash({ name: 'promote', guildId: guild.id, channel, user: actor.user })).rejects.toThrow(
+			/Missing Permissions/,
+		);
+		await bot.close();
+	});
+
+	test('adding the @everyone role to a member is a 400', async () => {
+		const { world, guild, channel, actor } = seedRoles();
+		@Declare({ name: 'add-everyone', description: 'adds @everyone via addRole' })
+		class AddEveryone extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.client.members.addRole(ctx.guildId ?? '', 'subject', guild.id); // roleId === guildId == @everyone
+				await ctx.write({ content: 'added' });
+			}
+		}
+		const bot = await createMockBot({ commands: [AddEveryone], world });
+		await expect(bot.slash({ name: 'add-everyone', guildId: guild.id, channel, user: actor.user })).rejects.toThrow(
+			/@everyone role cannot be added/,
+		);
+		await bot.close();
+	});
+
+	test('bulkBan is partial: bannable users banned, un-outrankable owner reported in failed_users', async () => {
+		const { world, guild, channel, actor } = seedRoles();
+		world.registerMember(guild.id, { user: apiUser({ id: 'bannable' }), roles: [] });
+		let result: { banned_users: string[]; failed_users: string[] } | undefined;
+		@Declare({ name: 'bulk', description: 'bulk-bans two users incl. the owner' })
+		class Bulk extends Command {
+			async run(ctx: CommandContext) {
+				result = (await ctx.client.bans.bulkCreate(ctx.guildId ?? '', {
+					user_ids: ['bannable', 'owner-id'],
+				})) as typeof result;
+				await ctx.write({ content: 'done' });
+			}
+		}
+		const bot = await createMockBot({ commands: [Bulk], world });
+		await bot.slash({ name: 'bulk', guildId: guild.id, channel, user: actor.user });
+		expect(result?.banned_users).toEqual(['bannable']);
+		expect(result?.failed_users).toEqual(['owner-id']);
+		expect(bot.world.isBanned(guild.id, 'bannable')).toBe(true);
+		expect(bot.world.isBanned(guild.id, 'owner-id')).toBe(false);
+		await bot.close();
+	});
+});

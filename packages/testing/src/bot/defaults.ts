@@ -20,7 +20,7 @@ import {
 	apiWebhook,
 } from './payloads';
 import { computeChannelPermissions } from './permissions';
-import { apiError, ErrorCode, type MockApiHandler, type RouteMatcher, type RouteResponder } from './rest';
+import { apiError, ErrorCode, MockApiError, type MockApiHandler, type RouteMatcher, type RouteResponder } from './rest';
 import { Routes } from './routes';
 import type { MessageQuery, WorldState } from './state';
 import type { MockWorld } from './world';
@@ -578,9 +578,23 @@ export function registerWorldDefaults(
 		requirePerm(params.guildId, PermissionFlagsBits.BanMembers);
 		const rawIds = bodyRecord(pending.body).user_ids;
 		const userIds = (Array.isArray(rawIds) ? rawIds : []).map(String);
-		for (const userId of userIds) requireHierarchy(params.guildId, userId);
-		for (const userId of userIds) await removeMember(params.guildId, userId, true);
-		return { banned_users: userIds, failed_users: [] };
+		// Bulk-ban is partial-success, not atomic: targets the bot can't outrank go to failed_users, the rest ban.
+		const banned: string[] = [];
+		const failed: string[] = [];
+		for (const userId of userIds) {
+			try {
+				requireHierarchy(params.guildId, userId);
+			} catch (error) {
+				if (error instanceof MockApiError) {
+					failed.push(userId);
+					continue;
+				}
+				throw error;
+			}
+			await removeMember(params.guildId, userId, true);
+			banned.push(userId);
+		}
+		return { banned_users: banned, failed_users: failed };
 	});
 	registerGuildCrud(rest, {
 		idParam: 'ruleId',
@@ -794,6 +808,9 @@ export function registerWorldDefaults(
 	) =>
 		rest.intercept(route, async (_pending, params) => {
 			requireGuild(params.guildId);
+			if (params.roleId === params.guildId) {
+				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: the @everyone role cannot be added or removed');
+			}
 			requirePerm(params.guildId, PermissionFlagsBits.ManageRoles);
 			requireManageableRole(params.guildId, params.roleId);
 			const entry = findMember(params.guildId, params.userId);
@@ -822,6 +839,18 @@ export function registerWorldDefaults(
 		if (body.roles) requirePerm(params.guildId, PermissionFlagsBits.ManageRoles);
 		if ('communication_disabled_until' in body) requirePerm(params.guildId, PermissionFlagsBits.ModerateMembers);
 		requireHierarchy(params.guildId, params.userId);
+		// Every role being added OR removed must be manageable (below the bot's top role); @everyone can't be set.
+		if (body.roles) {
+			const next = new Set(body.roles);
+			const current = new Set(entry.member.roles);
+			for (const roleId of new Set([...next, ...current])) {
+				if (next.has(roleId) === current.has(roleId)) continue; // unchanged
+				if (roleId === params.guildId) {
+					apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: the @everyone role cannot be assigned');
+				}
+				requireManageableRole(params.guildId, roleId);
+			}
+		}
 		hooks.state.patchMember(params.guildId, params.userId, body);
 		if ('nick' in body) entry.member.nick = body.nick ?? null;
 		if (body.roles) entry.member.roles = [...body.roles];
