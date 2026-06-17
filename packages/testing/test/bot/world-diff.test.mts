@@ -105,6 +105,10 @@ describe('world snapshot and diff', () => {
 			diff.scheduledEvents,
 			diff.webhooks,
 			diff.pins,
+			diff.reactions,
+			diff.voiceStates,
+			diff.threadMembers,
+			diff.pollVoters,
 		]) {
 			expect(entity.added).toEqual([]);
 			expect(entity.removed).toEqual([]);
@@ -139,6 +143,40 @@ describe('world snapshot and diff', () => {
 		expect(diff.emojis.added.map(entry => entry.name)).toContain('sparkle');
 		expect(diff.invites.removed.map(entry => entry.code)).toContain('revoke-me');
 		expect(diff.pins.added).toContainEqual({ channelId: channel.id, messageId: message.id });
+		await bot.close();
+	});
+
+	test('diff captures reactions and message component/flag edits (previously invisible side effects)', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'cov-guild' });
+		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'cov-actor' }) });
+		const channel = world.registerChannel(guild.id, { id: 'cov-channel' });
+		// a bot-authored message with an enabled button, so the command can edit it
+		const message = world.registerMessage(channel.id, {
+			id: 'cov-msg',
+			author: apiUser({ id: '900000000000000001' }),
+			content: 'panel',
+			components: [{ type: 1, components: [{ type: 2, style: 1, custom_id: 'go', label: 'Go', disabled: false }] }],
+		});
+
+		@Declare({ name: 'cov', description: 'reacts and disables a button' })
+		class Cov extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.client.reactions.add(message.id, channel.id, '👍');
+				await ctx.client.messages.edit(message.id, channel.id, {
+					components: [{ type: 1, components: [{ type: 2, style: 1, custom_id: 'go', label: 'Go', disabled: true }] }],
+				});
+				await ctx.write({ content: 'done' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [Cov], world });
+		const before = bot.worldSnapshot();
+		await bot.slash({ name: 'cov', guildId: guild.id, channel, user: actor.user });
+		const diff = bot.worldDiff(before);
+
+		expect(diff.reactions.added.map(r => r.emoji)).toContain('👍');
+		expect(diff.messages.changed.some(c => c.fields.includes('components'))).toBe(true);
 		await bot.close();
 	});
 });

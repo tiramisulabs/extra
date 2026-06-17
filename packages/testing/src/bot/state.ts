@@ -186,6 +186,12 @@ export interface ChannelSnapshot {
 	type: number;
 	parentId?: string;
 	overwrites: { id: string; type: number; allow: string; deny: string }[];
+	topic?: string | null;
+	nsfw?: boolean;
+	position?: number;
+	rateLimitPerUser?: number;
+	archived?: boolean;
+	locked?: boolean;
 }
 
 /** One message captured in a {@link WorldSnapshot}, identified by `id`. */
@@ -194,6 +200,39 @@ export interface MessageSnapshot {
 	channelId: string;
 	authorId: string;
 	content: string;
+	embeds: unknown[];
+	components: unknown[];
+	flags: number;
+	pinned: boolean;
+}
+
+/** One reaction-user captured in a {@link WorldSnapshot}, identified by channel+message+emoji+user. */
+export interface ReactionSnapshot {
+	channelId: string;
+	messageId: string;
+	emoji: string;
+	userId: string;
+}
+
+/** One voice state captured in a {@link WorldSnapshot}, identified by `guildId` + `userId`. */
+export interface VoiceStateSnapshot {
+	guildId: string;
+	userId: string;
+	channelId: string | null;
+}
+
+/** One thread membership captured in a {@link WorldSnapshot}, identified by `channelId` + `userId`. */
+export interface ThreadMemberSnapshot {
+	channelId: string;
+	userId: string;
+}
+
+/** One poll vote captured in a {@link WorldSnapshot}, identified by channel+message+answer+user. */
+export interface PollVoterSnapshot {
+	channelId: string;
+	messageId: string;
+	answerId: number;
+	userId: string;
 }
 
 /** One role captured in a {@link WorldSnapshot}, identified by `id`. */
@@ -280,6 +319,10 @@ export interface WorldSnapshot {
 	scheduledEvents: ScheduledEventSnapshot[];
 	webhooks: WebhookSnapshot[];
 	pins: PinSnapshot[];
+	reactions: ReactionSnapshot[];
+	voiceStates: VoiceStateSnapshot[];
+	threadMembers: ThreadMemberSnapshot[];
+	pollVoters: PollVoterSnapshot[];
 }
 
 /** A single entity that changed between two snapshots, with the names of the differing fields. */
@@ -314,6 +357,10 @@ export interface WorldDiff {
 	scheduledEvents: EntityDiff<ScheduledEventSnapshot>;
 	webhooks: EntityDiff<WebhookSnapshot>;
 	pins: EntityDiff<PinSnapshot>;
+	reactions: EntityDiff<ReactionSnapshot>;
+	voiceStates: EntityDiff<VoiceStateSnapshot>;
+	threadMembers: EntityDiff<ThreadMemberSnapshot>;
+	pollVoters: EntityDiff<PollVoterSnapshot>;
 }
 
 /**
@@ -633,12 +680,23 @@ export class WorldState implements WorldStateReader {
 			type: channel.type,
 			...(channel.parent_id === undefined ? {} : { parentId: channel.parent_id }),
 			overwrites: channel.permission_overwrites.map(overwrite => ({ ...overwrite })),
+			...(channel.topic === undefined ? {} : { topic: channel.topic }),
+			...(channel.nsfw === undefined ? {} : { nsfw: channel.nsfw }),
+			...(channel.position === undefined ? {} : { position: channel.position }),
+			...(channel.rate_limit_per_user === undefined ? {} : { rateLimitPerUser: channel.rate_limit_per_user }),
+			...(channel.thread_metadata === undefined
+				? {}
+				: { archived: channel.thread_metadata.archived, locked: channel.thread_metadata.locked }),
 		}));
 		const messages: MessageSnapshot[] = this.world.messages.map(entry => ({
 			id: entry.message.id,
 			channelId: entry.channelId,
 			authorId: entry.message.author.id,
 			content: entry.message.content,
+			embeds: entry.message.embeds ?? [],
+			components: entry.message.components ?? [],
+			flags: entry.message.flags ?? 0,
+			pinned: entry.message.pinned ?? false,
 		}));
 		const roles: RoleSnapshot[] = this.world.roles.map(entry => ({
 			guildId: entry.guildId,
@@ -687,6 +745,26 @@ export class WorldState implements WorldStateReader {
 		const pins: PinSnapshot[] = [...this.pinnedByChannel].flatMap(([channelId, messageIds]) =>
 			messageIds.map(messageId => ({ channelId, messageId })),
 		);
+		const reactions: ReactionSnapshot[] = [...this.reactionsByMessage].flatMap(([key, byEmoji]) => {
+			const [channelId, messageId] = key.split(':');
+			return [...byEmoji].flatMap(([emoji, userIds]) =>
+				[...userIds].map(userId => ({ channelId, messageId, emoji, userId })),
+			);
+		});
+		const voiceStates: VoiceStateSnapshot[] = (this.world.voiceStates ?? []).map(entry => ({
+			guildId: entry.guildId,
+			userId: entry.voiceState.user_id,
+			channelId: entry.voiceState.channel_id,
+		}));
+		const threadMembers: ThreadMemberSnapshot[] = [...this.threadMembersByChannel].flatMap(([channelId, userIds]) =>
+			[...userIds].map(userId => ({ channelId, userId })),
+		);
+		const pollVoters: PollVoterSnapshot[] = [...this.pollVotersByMessage].flatMap(([key, byAnswer]) => {
+			const [channelId, messageId] = key.split(':');
+			return [...byAnswer].flatMap(([answerId, userIds]) =>
+				[...userIds].map(userId => ({ channelId, messageId, answerId, userId })),
+			);
+		});
 		return deepFreeze({
 			members,
 			channels,
@@ -700,6 +778,10 @@ export class WorldState implements WorldStateReader {
 			scheduledEvents,
 			webhooks,
 			pins,
+			reactions,
+			voiceStates,
+			threadMembers,
+			pollVoters,
 		});
 	}
 
@@ -727,6 +809,22 @@ export class WorldState implements WorldStateReader {
 			),
 			webhooks: diffEntities(before.webhooks, after.webhooks, entity => entity.id),
 			pins: diffEntities(before.pins, after.pins, entity => `${entity.channelId}:${entity.messageId}`),
+			reactions: diffEntities(
+				before.reactions,
+				after.reactions,
+				entity => `${entity.channelId}:${entity.messageId}:${entity.emoji}:${entity.userId}`,
+			),
+			voiceStates: diffEntities(before.voiceStates, after.voiceStates, entity => `${entity.guildId}:${entity.userId}`),
+			threadMembers: diffEntities(
+				before.threadMembers,
+				after.threadMembers,
+				entity => `${entity.channelId}:${entity.userId}`,
+			),
+			pollVoters: diffEntities(
+				before.pollVoters,
+				after.pollVoters,
+				entity => `${entity.channelId}:${entity.messageId}:${entity.answerId}:${entity.userId}`,
+			),
 		};
 	}
 
