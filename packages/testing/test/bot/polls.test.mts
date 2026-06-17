@@ -24,7 +24,7 @@ describe('polls', () => {
 		const bot = await createMockBot({ commands: [MakePoll], world });
 		const res = await bot.slash({ name: 'make-poll', guildId: guild.id, channel, user: actor.user });
 		const view = bot
-			.cachedGuild(guild.id)
+			.worldGuild(guild.id)
 			?.channel('poll-chan')
 			?.messages.find(message => message.id === res.content);
 		expect(view?.poll?.question).toBe('Best color?');
@@ -51,7 +51,7 @@ describe('polls', () => {
 
 		const bot = await createMockBot({ commands: [Voters], world });
 		bot.seedPollVote(channel.id, 'poll-msg', 1, 'voter-a');
-		expect(bot.state.pollVoters(channel.id, 'poll-msg', 1)).toEqual(['voter-a']);
+		expect(bot.world.pollVoters(channel.id, 'poll-msg', 1)).toEqual(['voter-a']);
 		const res = await bot.slash({ name: 'voters', guildId: guild.id, channel, user: actor.user });
 		expect(res.content).toBe('voter-a');
 		await bot.close();
@@ -75,7 +75,7 @@ describe('polls', () => {
 		const bot = await createMockBot({ commands: [Finish], world });
 		await bot.slash({ name: 'finish', guildId: guild.id, channel, user: actor.user });
 		const view = bot
-			.cachedGuild(guild.id)
+			.worldGuild(guild.id)
 			?.channel('end-chan')
 			?.messages.find(message => message.id === 'end-poll-msg');
 		expect(view?.poll?.isFinalized).toBe(true);

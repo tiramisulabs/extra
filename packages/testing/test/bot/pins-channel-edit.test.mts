@@ -24,10 +24,10 @@ describe('pins (regression: stale legacy route)', () => {
 		const bot = await createMockBot({ commands: [Pin], world });
 		const res = await bot.slash({ name: 'pin', guildId: guild.id, channel, user: actor.user });
 		expect(res.content).toBe('1:pin me');
-		const view = bot.cachedGuild(guild.id)?.channel('pin-chan');
+		const view = bot.worldGuild(guild.id)?.channel('pin-chan');
 		expect(view?.pins).toHaveLength(1);
 		expect(view?.pins[0]?.content).toBe('pin me');
-		expect(bot.state.pins(channel.id)).toHaveLength(1);
+		expect(bot.world.pins(channel.id)).toHaveLength(1);
 		await bot.close();
 	});
 
@@ -51,7 +51,7 @@ describe('pins (regression: stale legacy route)', () => {
 		const bot = await createMockBot({ commands: [Unpin], world });
 		const res = await bot.slash({ name: 'unpin', guildId: guild.id, channel, user: actor.user });
 		expect(res.content).toBe('0');
-		expect(bot.state.pins(channel.id)).toHaveLength(0);
+		expect(bot.world.pins(channel.id)).toHaveLength(0);
 		await bot.close();
 	});
 });
@@ -73,7 +73,7 @@ describe('editChannel persists topic/nsfw/slow-mode (regression: dropped fields)
 
 		const bot = await createMockBot({ commands: [Cfg], world });
 		await bot.slash({ name: 'cfg', guildId: guild.id, channel, user: actor.user });
-		const view = bot.cachedGuild(guild.id)?.channel('edit-chan');
+		const view = bot.worldGuild(guild.id)?.channel('edit-chan');
 		expect(view?.topic).toBe('the rules');
 		expect(view?.nsfw).toBe(true);
 		expect(view?.rateLimitPerUser).toBe(10);
@@ -97,7 +97,7 @@ describe('editChannel persists topic/nsfw/slow-mode (regression: dropped fields)
 
 		const bot = await createMockBot({ commands: [Archive], world });
 		await bot.slash({ name: 'archive', guildId: guild.id, channel, user: actor.user });
-		const view = bot.cachedGuild(guild.id)?.thread('thr-edit-1');
+		const view = bot.worldGuild(guild.id)?.thread('thr-edit-1');
 		expect(view?.archived).toBe(true);
 		expect(view?.locked).toBe(true);
 		await bot.close();
@@ -124,7 +124,7 @@ describe('archived thread listing', () => {
 		const bot = await createMockBot({ commands: [ListArch], world });
 		const res = await bot.slash({ name: 'list-arch', guildId: guild.id, channel, user: actor.user });
 		expect(res.content).toBe('arch-1');
-		expect(bot.state.archivedThreads(channel.id, 'public')).toHaveLength(1);
+		expect(bot.world.archivedThreads(channel.id, 'public')).toHaveLength(1);
 		await bot.close();
 	});
 });

@@ -75,7 +75,7 @@ describe('F43 assertion helpers (runner-agnostic)', () => {
 });
 
 describe('F37 symmetric readers', () => {
-	test('cachedChannel/cachedRole resolve by id alone and the role view keeps permissions/color', async () => {
+	test('worldChannel/worldRole resolve by id alone and the role view keeps permissions/color', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'dx-guild' });
 		const channel = world.registerChannel(guild.id, { name: 'general' });
@@ -88,19 +88,19 @@ describe('F37 symmetric readers', () => {
 		world.registerMember(guild.id, { user: apiUser({ id: 'dx-user' }) });
 		const bot = await createMockBot({ commands: [GreetCommand], world });
 
-		expect(bot.cachedChannel(channel.id)?.name).toBe('general');
-		expect(bot.cachedChannel('missing')).toBeUndefined();
+		expect(bot.worldChannel(channel.id)?.name).toBe('general');
+		expect(bot.worldChannel('missing')).toBeUndefined();
 
-		const view = bot.cachedRole(role.id);
+		const view = bot.worldRole(role.id);
 		expect(view?.name).toBe('mods');
 		expect(view?.position).toBe(3);
 		expect(BigInt(view?.permissions ?? '0') & 4n).toBe(4n);
 
-		expect(bot.cachedGuild(guild.id)?.role(role.id)?.permissions).toBe(view?.permissions);
+		expect(bot.worldGuild(guild.id)?.role(role.id)?.permissions).toBe(view?.permissions);
 		await bot.close();
 	});
 
-	test('cachedVoiceState delegates to the state reader', async () => {
+	test('worldVoiceState delegates to the state reader', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'dx-vc-guild' });
 		const channel = world.registerChannel(guild.id, { type: 2 });
@@ -108,9 +108,9 @@ describe('F37 symmetric readers', () => {
 		world.registerVoiceState(guild.id, { userId: 'dx-vc-user', channelId: channel.id });
 		const bot = await createMockBot({ commands: [GreetCommand], world });
 
-		expect(bot.cachedVoiceState(guild.id, 'dx-vc-user')?.channel_id).toBe(channel.id);
-		expect(bot.state.voiceState(guild.id, 'dx-vc-user')?.channel_id).toBe(channel.id);
-		expect(bot.cachedVoiceState(guild.id, 'absent')).toBeUndefined();
+		expect(bot.worldVoiceState(guild.id, 'dx-vc-user')?.channel_id).toBe(channel.id);
+		expect(bot.world.voiceState(guild.id, 'dx-vc-user')?.channel_id).toBe(channel.id);
+		expect(bot.worldVoiceState(guild.id, 'absent')).toBeUndefined();
 		await bot.close();
 	});
 });

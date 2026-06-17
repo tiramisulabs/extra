@@ -32,7 +32,7 @@ describe('fidelity fixes', () => {
 			{ allowNoHandler: true },
 		);
 
-		const raw = bot.state.rawMessage(channel.id, 'mention-msg');
+		const raw = bot.world.rawMessage(channel.id, 'mention-msg');
 		expect(raw).toBeDefined();
 		const mentions = raw?.mentions as { id: string; username: string }[];
 		expect(mentions.map(user => user.id)).toContain('123');
@@ -52,7 +52,7 @@ describe('fidelity fixes', () => {
 			},
 			{ allowNoHandler: true },
 		);
-		const limited = bot.state.rawMessage(channel.id, 'limited-msg');
+		const limited = bot.world.rawMessage(channel.id, 'limited-msg');
 		expect((limited?.mentions as { id: string }[]).map(user => user.id)).toEqual(['123']);
 		expect(limited?.mention_roles).toEqual([]);
 		expect(limited?.mention_everyone).toBe(false);

@@ -26,7 +26,7 @@ describe('components v2 surfacing', () => {
 
 		const bot = await createMockBot({ commands: [Panel], world });
 		await bot.slash({ name: 'panel', guildId: guild.id, channel, user: actor.user });
-		const view = bot.cachedGuild(guild.id)?.channel('cv2-chan')?.lastMessage;
+		const view = bot.worldGuild(guild.id)?.channel('cv2-chan')?.lastMessage;
 		expect(view?.isComponentsV2).toBe(true);
 		expect(view?.textDisplays).toContain('Welcome!');
 		expect(view?.componentTypes).toEqual(expect.arrayContaining([17, 10, 1, 2]));
@@ -49,7 +49,7 @@ describe('components v2 surfacing', () => {
 
 		const bot = await createMockBot({ commands: [Say], world });
 		await bot.slash({ name: 'say', guildId: guild.id, channel, user: actor.user });
-		const view = bot.cachedGuild(guild.id)?.channel('classic-chan')?.lastMessage;
+		const view = bot.worldGuild(guild.id)?.channel('classic-chan')?.lastMessage;
 		expect(view?.isComponentsV2).toBe(false);
 		expect(view?.textDisplays).toEqual([]);
 		await bot.close();

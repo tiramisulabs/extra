@@ -30,7 +30,7 @@ describe('non-interaction channel webhooks (sendLog)', () => {
 		const res = await bot.slash({ name: 'report', guildId: guild.id, channel: dispatch, user: actor.user });
 
 		expect(res.content).toBe('done');
-		const log = bot.cachedGuild(guild.id)?.channel('mod-log')?.lastMessage;
+		const log = bot.worldGuild(guild.id)?.channel('mod-log')?.lastMessage;
 		expect(log?.embeds[0]).toMatchObject({ title: 'Report', description: 'spammer reported' });
 		await bot.close();
 	});
@@ -59,7 +59,7 @@ describe('non-interaction channel webhooks (sendLog)', () => {
 		});
 
 		expect(res.embeds[0]).toMatchObject({ title: 'Joined', description: 'newbie' });
-		expect(bot.cachedGuild(guild.id)?.channel('join-log')?.lastMessage?.embeds[0]).toMatchObject({ title: 'Joined' });
+		expect(bot.worldGuild(guild.id)?.channel('join-log')?.lastMessage?.embeds[0]).toMatchObject({ title: 'Joined' });
 		await bot.close();
 	});
 });

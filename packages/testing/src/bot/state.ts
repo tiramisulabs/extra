@@ -610,7 +610,7 @@ export interface WorldDiff {
 }
 
 /**
- * The read-only view of {@link WorldState} exposed publicly as `bot.state`. Exposes only the query
+ * The read-only view of {@link WorldState} exposed publicly as `bot.world`. Exposes only the query
  * methods test authors call to assert on world state; the `@internal` mutators that the mock drives
  * in response to Discord traffic are intentionally absent so an internal refactor of them is not a
  * breaking change. The concrete {@link WorldState} class implements this and is used internally.
@@ -619,9 +619,9 @@ export interface WorldStateReader {
 	snapshot(): WorldSnapshot;
 	diff(before: WorldSnapshot): WorldDiff;
 	guild(guildId: string): GuildView | undefined;
-	/** A channel view by id alone (Discord keys channels globally) — the symmetric partner of cachedGuild(g).channel(id). */
+	/** A channel view by id alone (Discord keys channels globally) — the symmetric partner of worldGuild(g).channel(id). */
 	channelById(channelId: string): ChannelView | undefined;
-	/** A role view by id alone, carrying permissions/color — the symmetric partner of cachedGuild(g).role(id). */
+	/** A role view by id alone, carrying permissions/color — the symmetric partner of worldGuild(g).role(id). */
 	roleById(roleId: string): RoleView | undefined;
 	/** The stored voice state for a member, or undefined. */
 	voiceState(guildId: string, userId: string): ApiVoiceState | undefined;

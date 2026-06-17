@@ -631,7 +631,7 @@ export class MockBot {
 		readonly client: Client,
 		readonly rest: MockApiHandler,
 		readonly gateway: MockGateway,
-		protected readonly world: MockWorld | undefined,
+		protected readonly _world: MockWorld | undefined,
 		// Required (no default): createMockBot passes the SAME WorldState it gives registerWorldDefaults. A default
 		// `new WorldState(world)` here would silently create a second instance that shares the world arrays by
 		// reference but has its own bans/reactions/token Maps — a split-brain. Keep them the one instance.
@@ -642,11 +642,12 @@ export class MockBot {
 	) {}
 
 	/**
-	 * Read-only view of the simulated world for assertions. Exposes only query methods; the
-	 * `@internal` mutators that the mock drives in response to Discord traffic are not part of this
-	 * public type. Use the {@link MockBot} verbs (or REST routes) to change world state.
+	 * Read-only view of the simulated world for assertions — the full entity-query surface behind the
+	 * `world*` accessors. Exposes only query methods; the `@internal` mutators that the mock drives in
+	 * response to Discord traffic are not part of this public type. Use the {@link MockBot} verbs (or REST
+	 * routes) to change world state.
 	 */
-	get state(): WorldStateReader {
+	get world(): WorldStateReader {
 		return this._state;
 	}
 
@@ -661,7 +662,7 @@ export class MockBot {
 
 	private applyWorldPermissions<T extends BaseInteractionOptions>(options: T): T {
 		if (
-			!this.world ||
+			!this._world ||
 			options.guildId === null ||
 			options.guildId === undefined ||
 			options.permissions !== undefined ||
@@ -671,23 +672,23 @@ export class MockBot {
 			return options;
 		}
 
-		const guild = this.world.guilds.find(entry => entry.id === options.guildId);
+		const guild = this._world.guilds.find(entry => entry.id === options.guildId);
 		if (!guild) {
-			const seeded = this.world.guilds.map(entry => entry.id).join(', ') || '(none)';
+			const seeded = this._world.guilds.map(entry => entry.id).join(', ') || '(none)';
 			throw new TypeError(
 				`applyWorldPermissions: guild "${options.guildId}" is not in the world. Seeded guilds: ${seeded}.`,
 			);
 		}
 
 		const user = options.user ?? this.defaultUser;
-		const memberEntry = this.world.members.find(
+		const memberEntry = this._world.members.find(
 			entry => entry.guildId === guild.id && entry.member.user.id === user.id,
 		);
 		if (!memberEntry) {
 			const key = `${guild.id}:${user.id}`;
 			if (!this.unregisteredMemberWarnings.has(key)) {
 				this.unregisteredMemberWarnings.add(key);
-				const memberIds = this.world.members
+				const memberIds = this._world.members
 					.filter(entry => entry.guildId === guild.id)
 					.map(entry => entry.member.user.id)
 					.join(', ');
@@ -700,9 +701,9 @@ export class MockBot {
 			return options;
 		}
 
-		const guildRoles = this.world.roles.filter(entry => entry.guildId === guild.id).map(entry => entry.role);
+		const guildRoles = this._world.roles.filter(entry => entry.guildId === guild.id).map(entry => entry.role);
 		const seededChannel = options.channel
-			? this.world.channels.find(channel => channel.id === options.channel?.id)
+			? this._world.channels.find(channel => channel.id === options.channel?.id)
 			: undefined;
 		const channel = seededChannel ?? options.channel;
 		const memberPermissions = computeChannelPermissions({
@@ -726,7 +727,7 @@ export class MockBot {
 			memberPermissions,
 		};
 
-		const botEntry = this.world.members.find(
+		const botEntry = this._world.members.find(
 			entry => entry.guildId === guild.id && entry.member.user.id === this.client.botId,
 		);
 		if (botEntry) {
@@ -876,8 +877,8 @@ export class MockBot {
 	}
 
 	private worldMemberFor(guildId: string | null | undefined, user: ApiUser | undefined): ApiMember | undefined {
-		if (!this.world || !guildId || !user) return undefined;
-		return this.world.members.find(entry => entry.guildId === guildId && entry.member.user.id === user.id)?.member;
+		if (!this._world || !guildId || !user) return undefined;
+		return this._world.members.find(entry => entry.guildId === guildId && entry.member.user.id === user.id)?.member;
 	}
 
 	get actions(): readonly RecordedAction[] {
@@ -1025,36 +1026,36 @@ export class MockBot {
 		return this.rest.findAction(matcher, paramsOrFilter);
 	}
 
-	cachedGuild(guildId: string): GuildView | undefined {
+	worldGuild(guildId: string): GuildView | undefined {
 		return this._state.guild(guildId);
 	}
 
 	/**
 	 * The current world member for a guild/user as a {@link GuildMemberView}, or undefined when absent (e.g.
 	 * after a kick) or the guild is not in the world. Returns the SAME camelCase View that
-	 * `cachedGuild(guildId)?.member(userId)` returns, so switching between the two accessors reads identical
+	 * `worldGuild(guildId)?.member(userId)` returns, so switching between the two accessors reads identical
 	 * field names (`communicationDisabledUntil`, not the raw `communication_disabled_until`).
 	 */
-	cachedMember(guildId: string, userId: string): GuildMemberView | undefined {
+	worldMember(guildId: string, userId: string): GuildMemberView | undefined {
 		return this._state.guild(guildId)?.member(userId);
 	}
 
-	cachedDm(userId: string): ChannelView | undefined {
+	worldDm(userId: string): ChannelView | undefined {
 		return this._state.dm(userId);
 	}
 
-	/** A channel view by id alone — the symmetric partner of `cachedGuild(guildId)?.channel(id)`, no guildId needed. */
-	cachedChannel(channelId: string): ChannelView | undefined {
+	/** A channel view by id alone — the symmetric partner of `worldGuild(guildId)?.channel(id)`, no guildId needed. */
+	worldChannel(channelId: string): ChannelView | undefined {
 		return this._state.channelById(channelId);
 	}
 
-	/** A role view by id alone (carries permissions/color) — the partner of `cachedGuild(guildId)?.role(id)`. */
-	cachedRole(roleId: string): RoleView | undefined {
+	/** A role view by id alone (carries permissions/color) — the partner of `worldGuild(guildId)?.role(id)`. */
+	worldRole(roleId: string): RoleView | undefined {
 		return this._state.roleById(roleId);
 	}
 
-	/** The view of a stored message by channel + id — collapses the cachedGuild→channel→find chain. */
-	cachedMessage(channelId: string, messageId: string): MessageView | undefined {
+	/** The view of a stored message by channel + id — collapses the worldGuild→channel→find chain. */
+	worldMessage(channelId: string, messageId: string): MessageView | undefined {
 		return this._state.messageView(channelId, messageId);
 	}
 
@@ -1064,7 +1065,7 @@ export class MockBot {
 	}
 
 	/** The seeded voice state for a guild/user, or undefined when the user is not in voice. */
-	cachedVoiceState(guildId: string, userId: string): ApiVoiceState | undefined {
+	worldVoiceState(guildId: string, userId: string): ApiVoiceState | undefined {
 		return this._state.voiceState(guildId, userId);
 	}
 
@@ -1074,7 +1075,7 @@ export class MockBot {
 	 * never interpreting it. Returns `undefined` when the key was never set.
 	 */
 	worldData<T = unknown>(key: string): T | undefined {
-		return this.world?.data?.[key] as T | undefined;
+		return this._world?.data?.[key] as T | undefined;
 	}
 
 	/**
@@ -1625,7 +1626,7 @@ export class MockBot {
 		return this.dispatchVia('selectMenu', opts, prepared => {
 			const message = this.resolveMessageSource(source);
 			this.assertComponentHandleable('selectMenu', customId, message);
-			const resolved = resolveSelectResolved(this.world, customId, values, prepared);
+			const resolved = resolveSelectResolved(this._world, customId, values, prepared);
 			return selectMenuInteraction({
 				...prepared,
 				...(resolved ? { resolved } : {}),
@@ -1686,13 +1687,13 @@ export class MockBot {
 
 	actor(options: ActorOptions): Actor {
 		const entry = options.member
-			? this.world?.members.find(candidate => candidate.member.user.id === options.member?.user.id)
+			? this._world?.members.find(candidate => candidate.member.user.id === options.member?.user.id)
 			: undefined;
 		const user = options.user ?? options.member?.user;
 		const guildId = options.guildId ?? entry?.guildId ?? options.channel?.guild_id ?? TEST_GUILD_ID;
 		const channel =
 			options.channel ??
-			(entry ? this.world?.channels.find(candidate => candidate.guild_id === entry.guildId) : undefined);
+			(entry ? this._world?.channels.find(candidate => candidate.guild_id === entry.guildId) : undefined);
 		const base = { user, guildId, channel };
 
 		return {

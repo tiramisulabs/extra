@@ -70,7 +70,7 @@ describe('world snapshot and diff', () => {
 		expect(Object.isFrozen(before)).toBe(true);
 		expect(Object.isFrozen(targetBefore)).toBe(true);
 		expect(targetBefore?.roles).toEqual([]);
-		expect(bot.cachedMember(guild.id, 'immutable-target')?.roles).toContain(role.id);
+		expect(bot.worldMember(guild.id, 'immutable-target')?.roles).toContain(role.id);
 		await bot.close();
 	});
 

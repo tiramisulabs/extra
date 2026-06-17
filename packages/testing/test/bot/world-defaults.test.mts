@@ -91,8 +91,8 @@ describe('stateful world defaults', () => {
 		).resolves.toMatchObject({
 			content: 'banned',
 		});
-		expect(bot.cachedGuild(guild.id)?.member(target.user.id)).toBeUndefined();
-		expect(bot.cachedGuild(guild.id)?.bans).toContain(target.user.id);
+		expect(bot.worldGuild(guild.id)?.member(target.user.id)).toBeUndefined();
+		expect(bot.worldGuild(guild.id)?.bans).toContain(target.user.id);
 		await expect(Promise.resolve(bot.client.cache.members?.get(target.user.id, guild.id))).resolves.toBeUndefined();
 		await expect(
 			bot.slash({ name: 'fetch-banned', guildId: guild.id, channel, user: actor.user }),
@@ -134,8 +134,8 @@ describe('stateful world defaults', () => {
 		const bot = await createMockBot({ commands: [MutateMember], events: [onUpdate], world, simulateGateway: false });
 		const result = await bot.slash({ name: 'mutate-member', guildId: guild.id, channel, user: actor.user });
 		expect(result.content).toBe(`${role.id}:${timeoutAt}`);
-		expect(bot.cachedGuild(guild.id)?.member(target.user.id)?.roles).toEqual([role.id]);
-		expect(bot.cachedGuild(guild.id)?.member(target.user.id)?.communicationDisabledUntil).toBe(timeoutAt);
+		expect(bot.worldGuild(guild.id)?.member(target.user.id)?.roles).toEqual([role.id]);
+		expect(bot.worldGuild(guild.id)?.member(target.user.id)?.communicationDisabledUntil).toBe(timeoutAt);
 		expect(updates).toEqual([]);
 		await bot.close();
 	});
@@ -190,11 +190,11 @@ describe('stateful world defaults', () => {
 		await expect(
 			bot.slash({ name: 'ban-then-list', guildId: guild.id, channel, user: actor.user }),
 		).resolves.toMatchObject({ content: target.user.id });
-		expect(bot.cachedGuild(guild.id)?.bans).toContain(target.user.id);
+		expect(bot.worldGuild(guild.id)?.bans).toContain(target.user.id);
 		await expect(
 			bot.slash({ name: 'unban-then-list', guildId: guild.id, channel, user: actor.user }),
 		).resolves.toMatchObject({ content: 'none' });
-		expect(bot.cachedGuild(guild.id)?.bans).not.toContain(target.user.id);
+		expect(bot.worldGuild(guild.id)?.bans).not.toContain(target.user.id);
 		await bot.close();
 	});
 
@@ -216,7 +216,7 @@ describe('stateful world defaults', () => {
 		await expect(
 			bot.slash({ name: 'rename-channel', guildId: guild.id, channel, user: actor.user }),
 		).resolves.toMatchObject({ content: 'after' });
-		expect(bot.cachedGuild(guild.id)?.channel(channel.id)?.name).toBe('after');
+		expect(bot.worldGuild(guild.id)?.channel(channel.id)?.name).toBe('after');
 		await bot.close();
 	});
 

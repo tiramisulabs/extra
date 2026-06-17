@@ -25,7 +25,7 @@ describe('message attachments', () => {
 		const bot = await createMockBot({ commands: [Upload], world });
 		await bot.slash({ name: 'upload', guildId: guild.id, channel, user: actor.user });
 		const sent = bot
-			.cachedGuild(guild.id)
+			.worldGuild(guild.id)
 			?.channel('att-chan')
 			?.messages.find(message => message.content === 'see file');
 		expect(sent?.attachments).toHaveLength(1);
@@ -53,7 +53,7 @@ describe('message attachments', () => {
 
 		const bot = await createMockBot({ commands: [Reupload], world });
 		await bot.slash({ name: 'reupload', guildId: guild.id, channel, user: actor.user });
-		const messages = bot.cachedGuild(guild.id)?.channel('att-edit-chan')?.messages ?? [];
+		const messages = bot.worldGuild(guild.id)?.channel('att-edit-chan')?.messages ?? [];
 		const edited = messages.find(message => message.attachments.length === 0 && message.content === '');
 		expect(edited).toBeDefined();
 		await bot.close();
@@ -82,7 +82,7 @@ describe('message references (replies and forwards)', () => {
 		const bot = await createMockBot({ commands: [Reply], world });
 		await bot.slash({ name: 'reply', guildId: guild.id, channel, user: actor.user });
 		const reply = bot
-			.cachedGuild(guild.id)
+			.worldGuild(guild.id)
 			?.channel('ref-chan')
 			?.messages.find(message => message.content === 'replying');
 		expect(reply?.reference?.messageId).toBe('target-msg');
@@ -110,7 +110,7 @@ describe('message references (replies and forwards)', () => {
 		const bot = await createMockBot({ commands: [Forward], world });
 		const res = await bot.slash({ name: 'forward', guildId: guild.id, channel, user: actor.user });
 		const view = bot
-			.cachedGuild(guild.id)
+			.worldGuild(guild.id)
 			?.channel('fwd-chan')
 			?.messages.find(message => message.id === res.content);
 		expect(view?.reference?.type).toBe(1);

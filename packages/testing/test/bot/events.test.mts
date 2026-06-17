@@ -34,7 +34,7 @@ describe('emitEvent result and factories', () => {
 			.actor({ member: alice, guildId: guild.id })
 			.emitEvent('GUILD_MEMBER_UPDATE', { roles: ['r1'] }, { allowNoHandler: true });
 
-		expect(bot.cachedMember(guild.id, 'alice')?.roles).toEqual(['r1']);
+		expect(bot.worldMember(guild.id, 'alice')?.roles).toEqual(['r1']);
 		await bot.close();
 	});
 

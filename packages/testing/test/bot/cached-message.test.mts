@@ -3,7 +3,7 @@ import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { seedGuildFixture } from './_setup';
 
-describe('cachedMessage', () => {
+describe('worldMessage', () => {
 	test('resolves a stored message view by channel and id', async () => {
 		const { world, guild, actor, channel } = seedGuildFixture('cm');
 
@@ -17,9 +17,9 @@ describe('cachedMessage', () => {
 
 		const bot = await createMockBot({ commands: [Post], world });
 		const res = await bot.slash({ name: 'post', guildId: guild.id, channel, user: actor.user });
-		const view = bot.cachedMessage(channel.id, res.content ?? '');
+		const view = bot.worldMessage(channel.id, res.content ?? '');
 		expect(view?.content).toBe('hello');
-		expect(bot.cachedMessage(channel.id, 'missing')).toBeUndefined();
+		expect(bot.worldMessage(channel.id, 'missing')).toBeUndefined();
 		await bot.close();
 	});
 });

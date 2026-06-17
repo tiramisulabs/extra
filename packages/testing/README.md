@@ -612,7 +612,7 @@ error classes should test that real parse path separately.
 Recorded actions prove calls happened. World state proves what the bot built:
 
 ```ts
-const channel = bot.cachedGuild(guild.id)?.channel('acme-s1');
+const channel = bot.worldGuild(guild.id)?.channel('acme-s1');
 
 expect(channel?.lastMessage?.content).toContain('Welcome');
 expect(channel?.lastMessage?.button('Approve')).toMatchObject({ customId: 'approve' });
@@ -627,15 +627,15 @@ channels/threads, messages, interaction replies, edits, followups, DMs, bans,
 role changes, timeouts, and channel overwrites. DMs are queryable by user:
 
 ```ts
-expect(bot.cachedDm(user.id)?.lastMessage?.content).toBe('Check your inbox');
+expect(bot.worldDm(user.id)?.lastMessage?.content).toBe('Check your inbox');
 ```
 
 Channels and roles also resolve by id alone — no guild id needed — mirroring how
 Discord keys them. The role view carries `permissions` and `color`, not just identity:
 
 ```ts
-expect(bot.cachedChannel(channel.id)?.name).toBe('general');
-expect(bot.cachedRole(role.id)?.permissions).toBe('4'); // BanMembers
+expect(bot.worldChannel(channel.id)?.name).toBe('general');
+expect(bot.worldRole(role.id)?.permissions).toBe('4'); // BanMembers
 ```
 
 Seed message history with `registerMessage`; `bot.client.channels.fetchMessages()`
@@ -799,7 +799,7 @@ Stable across minor versions: the single default user (`TEST_USER_ID`),
 newest-first message lists. An unhandled error inside a command/component/modal/
 event handler **rejects the `Dispatch` by default** (`onCommandError: 'throw'`);
 pass `onCommandError: 'capture'` to surface it on `result.error` instead. The
-read-only `bot.state` (`WorldStateReader`) is the supported way to assert on the
+read-only `bot.world` (`WorldStateReader`) is the supported way to assert on the
 ~20 entity types the views don't surface (pins, reactions, bans, webhooks,
 emojis, invites, automod rules, scheduled events, poll voters, …).
 

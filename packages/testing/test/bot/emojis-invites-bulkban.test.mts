@@ -26,9 +26,9 @@ describe('guild emojis', () => {
 		const res = await bot.slash({ name: 'make-emoji', guildId: guild.id, channel, user: actor.user });
 		const [id] = (res.content ?? '').split(':');
 		expect(res.content).toBe(`${id}:party2`);
-		expect(bot.cachedGuild(guild.id)?.emoji(id)).toMatchObject({ id, name: 'party2' });
-		expect(bot.cachedGuild(guild.id)?.emoji('party2')).toBeDefined();
-		expect(bot.state.emojis(guild.id).map(emoji => emoji.id)).toContain(id);
+		expect(bot.worldGuild(guild.id)?.emoji(id)).toMatchObject({ id, name: 'party2' });
+		expect(bot.worldGuild(guild.id)?.emoji('party2')).toBeDefined();
+		expect(bot.world.emojis(guild.id).map(emoji => emoji.id)).toContain(id);
 		await bot.close();
 	});
 
@@ -48,9 +48,9 @@ describe('guild emojis', () => {
 		}
 
 		const bot = await createMockBot({ commands: [DropEmoji], world });
-		expect(bot.cachedGuild(guild.id)?.emoji('del-emoji')).toBeDefined();
+		expect(bot.worldGuild(guild.id)?.emoji('del-emoji')).toBeDefined();
 		await bot.slash({ name: 'drop-emoji', guildId: guild.id, channel, user: actor.user });
-		expect(bot.cachedGuild(guild.id)?.emoji('del-emoji')).toBeUndefined();
+		expect(bot.worldGuild(guild.id)?.emoji('del-emoji')).toBeUndefined();
 		await bot.close();
 	});
 });
@@ -75,9 +75,9 @@ describe('invites', () => {
 		const res = await bot.slash({ name: 'make-invite', guildId: guild.id, channel, user: actor.user });
 		const [code] = (res.content ?? '').split(':');
 		expect(res.content).toBe(`${code}:${code}`);
-		expect(bot.state.invites().map(invite => invite.code)).toContain(code);
-		expect(bot.state.invite(code)).toMatchObject({ channel_id: 'invite-chan', guild_id: guild.id });
-		expect(bot.cachedGuild(guild.id)?.invites.map(invite => invite.code)).toContain(code);
+		expect(bot.world.invites().map(invite => invite.code)).toContain(code);
+		expect(bot.world.invite(code)).toMatchObject({ channel_id: 'invite-chan', guild_id: guild.id });
+		expect(bot.worldGuild(guild.id)?.invites.map(invite => invite.code)).toContain(code);
 		await bot.close();
 	});
 
@@ -97,9 +97,9 @@ describe('invites', () => {
 		}
 
 		const bot = await createMockBot({ commands: [Revoke], world });
-		expect(bot.state.invite('revoke-me')).toBeDefined();
+		expect(bot.world.invite('revoke-me')).toBeDefined();
 		await bot.slash({ name: 'revoke', guildId: guild.id, channel, user: actor.user });
-		expect(bot.state.invite('revoke-me')).toBeUndefined();
+		expect(bot.world.invite('revoke-me')).toBeUndefined();
 		await bot.close();
 	});
 });
@@ -124,9 +124,9 @@ describe('bulk ban', () => {
 		const bot = await createMockBot({ commands: [BulkBan], world });
 		const res = await bot.slash({ name: 'bulk-ban', guildId: guild.id, channel, user: actor.user });
 		expect(res.content).toBe(`${t1.user.id},${t2.user.id}`);
-		expect(bot.state.isBanned(guild.id, t1.user.id)).toBe(true);
-		expect(bot.state.isBanned(guild.id, t2.user.id)).toBe(true);
-		expect(bot.cachedGuild(guild.id)?.member(t1.user.id)).toBeUndefined();
+		expect(bot.world.isBanned(guild.id, t1.user.id)).toBe(true);
+		expect(bot.world.isBanned(guild.id, t2.user.id)).toBe(true);
+		expect(bot.worldGuild(guild.id)?.member(t1.user.id)).toBeUndefined();
 		await bot.close();
 	});
 });

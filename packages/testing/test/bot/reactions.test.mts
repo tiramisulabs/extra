@@ -29,13 +29,13 @@ describe('message reactions', () => {
 		});
 
 		const reacted = bot
-			.cachedGuild(guild.id)
+			.worldGuild(guild.id)
 			?.channel(channel.id)
 			?.messages.find(entry => entry.id === message.id);
 		const view = reacted?.reaction(EMOJI);
 		expect(view).toMatchObject({ emoji: EMOJI, count: 1, me: true });
 		expect(view?.users).toEqual([TEST_BOT_ID]);
-		expect(bot.state.reactionUsers(channel.id, message.id, EMOJI)).toEqual([TEST_BOT_ID]);
+		expect(bot.world.reactionUsers(channel.id, message.id, EMOJI)).toEqual([TEST_BOT_ID]);
 		await bot.close();
 	});
 
@@ -61,11 +61,11 @@ describe('message reactions', () => {
 		});
 
 		const reacted = bot
-			.cachedGuild(guild.id)
+			.worldGuild(guild.id)
 			?.channel(channel.id)
 			?.messages.find(entry => entry.id === message.id);
 		expect(reacted?.reactions).toEqual([]);
-		expect(bot.state.reactionUsers(channel.id, message.id, EMOJI)).toEqual([]);
+		expect(bot.world.reactionUsers(channel.id, message.id, EMOJI)).toEqual([]);
 		await bot.close();
 	});
 
@@ -87,7 +87,7 @@ describe('message reactions', () => {
 
 		const bot = await createMockBot({ commands: [PurgeReactions], world });
 		await bot.slash({ name: 'purge-reactions', guildId: guild.id, channel, user: actor.user });
-		expect(bot.state.reactionUsers(channel.id, message.id, EMOJI)).toEqual([]);
+		expect(bot.world.reactionUsers(channel.id, message.id, EMOJI)).toEqual([]);
 		await bot.close();
 	});
 

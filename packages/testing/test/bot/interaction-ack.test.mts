@@ -59,11 +59,11 @@ describe('interaction acknowledgement (fail loud before ack)', () => {
 		}
 
 		const bot = await createMockBot({ components: [NextButton], world });
-		const before = bot.cachedGuild(guild.id)?.channel('du-chan')?.messages.length ?? 0;
+		const before = bot.worldGuild(guild.id)?.channel('du-chan')?.messages.length ?? 0;
 		await bot.clickButton('next', { source: 'src-msg', user: actor.user });
-		const after = bot.cachedGuild(guild.id)?.channel('du-chan')?.messages ?? [];
+		const after = bot.worldGuild(guild.id)?.channel('du-chan')?.messages ?? [];
 		expect(after).toHaveLength(before); // edited in place, no new message minted
-		expect(bot.cachedMessage(channel.id, 'src-msg')?.content).toBe('page 2');
+		expect(bot.worldMessage(channel.id, 'src-msg')?.content).toBe('page 2');
 		await bot.close();
 	});
 });
