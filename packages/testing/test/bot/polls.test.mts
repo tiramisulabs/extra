@@ -34,7 +34,7 @@ describe('polls', () => {
 		await bot.close();
 	});
 
-	test('castPollVote seeds voters that getAnswerVoters reads back', async () => {
+	test('seedPollVote seeds voters that getAnswerVoters reads back', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'vote-guild' });
 		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'vote-actor' }) });
@@ -50,7 +50,7 @@ describe('polls', () => {
 		}
 
 		const bot = await createMockBot({ commands: [Voters], world });
-		bot.castPollVote(channel.id, 'poll-msg', 1, 'voter-a');
+		bot.seedPollVote(channel.id, 'poll-msg', 1, 'voter-a');
 		expect(bot.state.pollVoters(channel.id, 'poll-msg', 1)).toEqual(['voter-a']);
 		const res = await bot.slash({ name: 'voters', guildId: guild.id, channel, user: actor.user });
 		expect(res.content).toBe('voter-a');

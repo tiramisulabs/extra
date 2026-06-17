@@ -1576,7 +1576,7 @@ export class WorldState implements WorldStateReader {
 			.map(channel => ({ ...channel }));
 	}
 
-	/** @internal Records a vote on a poll answer; the mock exposes this via `bot.castPollVote`. */
+	/** @internal Records a vote on a poll answer; the mock exposes this via `bot.seedPollVote`. */
 	addPollVoter(channelId: string, messageId: string, answerId: number, userId: string): void {
 		const key = this.reactionKey(channelId, messageId);
 		const byAnswer = this.pollVotersByMessage.get(key) ?? new Map<number, Set<string>>();

@@ -984,45 +984,45 @@ export class MockBot {
 		return this.rest.waitForAction<TBody, TResponse>(matcherOrPredicate as RouteMatcher, timeoutMs);
 	}
 
-	findCalls<TBody = Record<string, unknown>, TResponse = unknown>(
+	findActions<TBody = Record<string, unknown>, TResponse = unknown>(
 		matcher: RouteMatcher | ActionPredicate,
 		params?: Record<string, string>,
 	): TypedMatchedAction<TBody, TResponse>[];
-	findCalls<TBody = Record<string, unknown>, TResponse = unknown>(
+	findActions<TBody = Record<string, unknown>, TResponse = unknown>(
 		matcher: RouteMatcher,
 		filter: RouteActionFilter,
 	): TypedMatchedAction<TBody, TResponse>[];
-	findCalls<TBody = Record<string, unknown>, TResponse = unknown>(
+	findActions<TBody = Record<string, unknown>, TResponse = unknown>(
 		matcher: ActionFilter | ActionPredicate,
 	): TypedMatchedAction<TBody, TResponse>[];
-	findCalls<TBody = Record<string, unknown>, TResponse = unknown>(
+	findActions<TBody = Record<string, unknown>, TResponse = unknown>(
 		matcher: ActionMatcher,
 		paramsOrFilter?: Record<string, string> | RouteActionFilter,
 	): TypedMatchedAction<TBody, TResponse>[];
-	findCalls(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction[] {
-		return this.rest.findCalls(matcher, paramsOrFilter);
+	findActions(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction[] {
+		return this.rest.findActions(matcher, paramsOrFilter);
 	}
 
-	findCall<TBody = Record<string, unknown>, TResponse = unknown>(
+	findAction<TBody = Record<string, unknown>, TResponse = unknown>(
 		matcher: RouteMatcher | ActionPredicate,
 		params?: Record<string, string>,
 	): TypedMatchedAction<TBody, TResponse> | undefined;
-	findCall<TBody = Record<string, unknown>, TResponse = unknown>(
+	findAction<TBody = Record<string, unknown>, TResponse = unknown>(
 		matcher: RouteMatcher,
 		filter: RouteActionFilter,
 	): TypedMatchedAction<TBody, TResponse> | undefined;
-	findCall<TBody = Record<string, unknown>, TResponse = unknown>(
+	findAction<TBody = Record<string, unknown>, TResponse = unknown>(
 		matcher: ActionFilter | ActionPredicate,
 	): TypedMatchedAction<TBody, TResponse> | undefined;
-	findCall<TBody = Record<string, unknown>, TResponse = unknown>(
+	findAction<TBody = Record<string, unknown>, TResponse = unknown>(
 		matcher: ActionMatcher,
 		paramsOrFilter?: Record<string, string> | RouteActionFilter,
 	): TypedMatchedAction<TBody, TResponse> | undefined;
-	findCall(
+	findAction(
 		matcher: ActionMatcher,
 		paramsOrFilter?: Record<string, string> | RouteActionFilter,
 	): MatchedAction | undefined {
-		return this.rest.findCall(matcher, paramsOrFilter);
+		return this.rest.findAction(matcher, paramsOrFilter);
 	}
 
 	cachedGuild(guildId: string): GuildView | undefined {
@@ -1059,7 +1059,7 @@ export class MockBot {
 	}
 
 	/** Seed a vote on a poll answer (poll voters are not part of the message body), then read it via getAnswerVoters. */
-	castPollVote(channelId: string, messageId: string, answerId: number, userId: string): void {
+	seedPollVote(channelId: string, messageId: string, answerId: number, userId: string): void {
 		this._state.addPollVoter(channelId, messageId, answerId, userId);
 	}
 

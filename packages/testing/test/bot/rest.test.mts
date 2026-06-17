@@ -31,10 +31,10 @@ describe('MockApiHandler', () => {
 			reason: 'cleanup',
 		});
 		expect(
-			rest.findCalls({ method: 'POST', route: /\/channels\/123\/messages$/, body: { content: 'hello' } }),
+			rest.findActions({ method: 'POST', route: /\/channels\/123\/messages$/, body: { content: 'hello' } }),
 		).toHaveLength(1);
 		expect(
-			rest.findCalls(Routes.createMessage, {
+			rest.findActions(Routes.createMessage, {
 				params: { channelId: '123' },
 				body: { content: 'hello' },
 				query: { wait: true },
@@ -42,7 +42,7 @@ describe('MockApiHandler', () => {
 			}),
 		).toHaveLength(1);
 		expect(
-			rest.findCalls({
+			rest.findActions({
 				method: 'POST',
 				route: '/channels/:channelId/messages',
 				params: { channelId: '123' },
@@ -92,9 +92,9 @@ describe('MockApiHandler', () => {
 		await expect(byError).resolves.toMatchObject({ error: expect.any(Error) });
 		expect(rest.actions[0]?.error).toBeInstanceOf(Error);
 		expect(
-			rest.findCalls({ method: 'GET', route: '/explode', error: (error: unknown) => error instanceof Error }),
+			rest.findActions({ method: 'GET', route: '/explode', error: (error: unknown) => error instanceof Error }),
 		).toHaveLength(1);
-		expect(rest.findCalls({ method: 'GET', route: '/explode', error: 'stub failed' })).toHaveLength(1);
+		expect(rest.findActions({ method: 'GET', route: '/explode', error: 'stub failed' })).toHaveLength(1);
 	});
 
 	test('reset drops user interceptors but keeps world defaults answering', async () => {
@@ -143,7 +143,7 @@ describe('MockApiHandler.fail', () => {
 		expect(metadata.status).toBe(403);
 		expect(metadata.statusText).toBe('Forbidden');
 		expect(metadata.response.code).toBe(50013);
-		expect(rest.findCalls(Routes.ban)).toHaveLength(1);
+		expect(rest.findActions(Routes.ban)).toHaveLength(1);
 	});
 
 	test('synthesizes statusText for a raw shape and passes retryAfter through', async () => {

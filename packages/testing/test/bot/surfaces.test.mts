@@ -249,7 +249,7 @@ describe('additional command surfaces', () => {
 
 		const result = await bot.slash({ name: 'route-fetch-guild', guildId: '9' });
 		expect(result.content).toBe('Stubbed');
-		expect(bot.findCall(Routes.fetchGuild)?.params).toMatchObject({ guildId: '9' });
+		expect(bot.findAction(Routes.fetchGuild)?.params).toMatchObject({ guildId: '9' });
 		await bot.close();
 	});
 

@@ -81,7 +81,7 @@ describe('introspection helpers (DX-2)', () => {
 	});
 });
 
-describe('typed findCall (S19)', () => {
+describe('typed findAction (S19)', () => {
 	@Declare({ name: 'say-hi', description: 'Writes a channel message' })
 	class SayHiCommand extends Command {
 		async run(ctx: CommandContext) {
@@ -90,11 +90,11 @@ describe('typed findCall (S19)', () => {
 		}
 	}
 
-	test('findCall<TBody> exposes a typed body without a cast', async () => {
+	test('findAction<TBody> exposes a typed body without a cast', async () => {
 		const bot = await createMockBot({ commands: [SayHiCommand] });
 		await bot.slash({ name: 'say-hi' });
 
-		const call = bot.findCall<{ content: string }>(Routes.createMessage);
+		const call = bot.findAction<{ content: string }>(Routes.createMessage);
 		const content: string | undefined = call?.body?.content;
 		expect(content).toBe('hello world');
 
@@ -104,11 +104,11 @@ describe('typed findCall (S19)', () => {
 		await bot.close();
 	});
 
-	test('findCalls<TBody> and waitForAction<TBody> are likewise typed', async () => {
+	test('findActions<TBody> and waitForAction<TBody> are likewise typed', async () => {
 		const bot = await createMockBot({ commands: [SayHiCommand] });
 		await bot.slash({ name: 'say-hi' });
 
-		const calls = bot.findCalls<{ content: string }>(Routes.createMessage);
+		const calls = bot.findActions<{ content: string }>(Routes.createMessage);
 		const first: string | undefined = calls[0]?.body?.content;
 		expect(first).toBe('hello world');
 

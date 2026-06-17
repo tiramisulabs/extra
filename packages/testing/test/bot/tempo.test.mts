@@ -114,8 +114,8 @@ describe('actors and dispatch tempo', () => {
 
 		const inFlight = await dispatch.until(Routes.ban);
 		expect(inFlight.response).toBeUndefined();
-		expect(bot.findCalls(Routes.ban)).toHaveLength(1);
-		expect(bot.findCall(Routes.ban)?.params).toMatchObject({ guildId: '1', userId: '42' });
+		expect(bot.findActions(Routes.ban)).toHaveLength(1);
+		expect(bot.findAction(Routes.ban)?.params).toMatchObject({ guildId: '1', userId: '42' });
 
 		const result = await dispatch;
 		expect(result.content).toBe('logged');

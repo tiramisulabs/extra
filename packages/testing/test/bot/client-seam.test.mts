@@ -26,7 +26,7 @@ describe('createMockBot({ client })', () => {
 		expect(res.content).toBe('sent');
 
 		// REST issued through the singleton (not ctx) was captured by the mock
-		const call = bot.findCall({ method: 'POST', route: '/channels/:channelId/messages' });
+		const call = bot.findAction({ method: 'POST', route: '/channels/:channelId/messages' });
 		expect(call).toBeTruthy();
 		expect(call?.body).toMatchObject({ content: 'broadcast' });
 

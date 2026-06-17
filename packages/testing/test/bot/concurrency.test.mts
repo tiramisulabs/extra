@@ -145,7 +145,7 @@ describe('concurrent dispatch isolation', () => {
 		// Run B to completion: its ban (userId 222) records with seq >= A's startSeq. A global gate would grab it.
 		const resultB = await bot.slash({ name: 'ban-b' });
 		expect(resultB.content).toBe('b-done');
-		const bBan = bot.findCall(Routes.ban, { userId: '222' });
+		const bBan = bot.findAction(Routes.ban, { userId: '222' });
 		expect(bBan).toBeDefined();
 		// A's gate is still parked: B's ban did NOT resolve it (A hasn't banned yet).
 		expect(bBan?.dispatchId).not.toBe(dispatchA.dispatchId);
@@ -156,7 +156,7 @@ describe('concurrent dispatch isolation', () => {
 
 		// The gate resolved with A's dispatch and A's own ban action (userId 111), not B's (222).
 		expect(hit.dispatchId).toBe(dispatchA.dispatchId);
-		const aBan = bot.findCall(Routes.ban, { userId: '111' });
+		const aBan = bot.findAction(Routes.ban, { userId: '111' });
 		expect(aBan).toBeDefined();
 		expect(hit.seq).toBe(aBan?.seq);
 

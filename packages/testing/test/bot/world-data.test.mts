@@ -30,8 +30,8 @@ describe('worldData passthrough store', () => {
 	test('worldData returns the live stored reference, so a write through it is observed by later reads', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ name: 'Lab' });
-		world.set('featureFlags', { economy: true, beta: false });
-		world.set('seedGuildId', guild.id);
+		world.setData('featureFlags', { economy: true, beta: false });
+		world.setData('seedGuildId', guild.id);
 
 		await using bot = await createMockBot({ world });
 
@@ -46,11 +46,11 @@ describe('worldData passthrough store', () => {
 		expect(bot.worldData<Record<string, boolean>>('featureFlags')?.beta).toBe(true);
 	});
 
-	test('worldData option deep-merges over world.set() data, overriding only the colliding key', async () => {
+	test('worldData option deep-merges over world.setData() data, overriding only the colliding key', async () => {
 		const world = mockWorld();
-		world.set('a', 1);
-		world.set('b', 2);
-		world.set('nested', { keep: 'me' });
+		world.setData('a', 1);
+		world.setData('b', 2);
+		world.setData('nested', { keep: 'me' });
 
 		await using bot = await createMockBot({ world, worldData: { b: 20, c: 30 } });
 

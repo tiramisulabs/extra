@@ -306,7 +306,7 @@ export class WorldBuilder {
 	 * Attach an app-specific value under `key` in the world's passthrough data store, read back via
 	 * {@link MockBot.worldData}. The mock never interprets it. Returns `this` for chaining.
 	 */
-	set(key: string, value: unknown): this {
+	setData(key: string, value: unknown): this {
 		(this.world.data ??= {})[key] = value;
 		return this;
 	}

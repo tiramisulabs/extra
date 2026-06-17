@@ -442,22 +442,22 @@ export class MockApiHandler extends ApiHandler {
 		return this.matchParams({ method: filter.method ?? action.method, route: filter.route }, action) ?? {};
 	}
 
-	findCalls<TBody = Record<string, unknown>, TResponse = unknown>(
+	findActions<TBody = Record<string, unknown>, TResponse = unknown>(
 		matcher: RouteMatcher | ActionPredicate,
 		params?: Record<string, string>,
 	): TypedMatchedAction<TBody, TResponse>[];
-	findCalls<TBody = Record<string, unknown>, TResponse = unknown>(
+	findActions<TBody = Record<string, unknown>, TResponse = unknown>(
 		matcher: RouteMatcher,
 		filter: RouteActionFilter,
 	): TypedMatchedAction<TBody, TResponse>[];
-	findCalls<TBody = Record<string, unknown>, TResponse = unknown>(
+	findActions<TBody = Record<string, unknown>, TResponse = unknown>(
 		matcher: ActionFilter | ActionPredicate,
 	): TypedMatchedAction<TBody, TResponse>[];
-	findCalls<TBody = Record<string, unknown>, TResponse = unknown>(
+	findActions<TBody = Record<string, unknown>, TResponse = unknown>(
 		matcher: ActionMatcher,
 		paramsOrFilter?: Record<string, string> | RouteActionFilter,
 	): TypedMatchedAction<TBody, TResponse>[];
-	findCalls(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction[] {
+	findActions(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction[] {
 		const out: MatchedAction[] = [];
 		for (const action of this.actions) {
 			if (typeof matcher === 'function') {
@@ -479,26 +479,26 @@ export class MockApiHandler extends ApiHandler {
 		return out;
 	}
 
-	findCall<TBody = Record<string, unknown>, TResponse = unknown>(
+	findAction<TBody = Record<string, unknown>, TResponse = unknown>(
 		matcher: RouteMatcher | ActionPredicate,
 		params?: Record<string, string>,
 	): TypedMatchedAction<TBody, TResponse> | undefined;
-	findCall<TBody = Record<string, unknown>, TResponse = unknown>(
+	findAction<TBody = Record<string, unknown>, TResponse = unknown>(
 		matcher: RouteMatcher,
 		filter: RouteActionFilter,
 	): TypedMatchedAction<TBody, TResponse> | undefined;
-	findCall<TBody = Record<string, unknown>, TResponse = unknown>(
+	findAction<TBody = Record<string, unknown>, TResponse = unknown>(
 		matcher: ActionFilter | ActionPredicate,
 	): TypedMatchedAction<TBody, TResponse> | undefined;
-	findCall<TBody = Record<string, unknown>, TResponse = unknown>(
+	findAction<TBody = Record<string, unknown>, TResponse = unknown>(
 		matcher: ActionMatcher,
 		paramsOrFilter?: Record<string, string> | RouteActionFilter,
 	): TypedMatchedAction<TBody, TResponse> | undefined;
-	findCall(
+	findAction(
 		matcher: ActionMatcher,
 		paramsOrFilter?: Record<string, string> | RouteActionFilter,
 	): MatchedAction | undefined {
-		return this.findCalls(matcher, paramsOrFilter)[0];
+		return this.findActions(matcher, paramsOrFilter)[0];
 	}
 
 	waitForAction<TBody = Record<string, unknown>, TResponse = unknown>(
