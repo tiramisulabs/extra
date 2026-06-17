@@ -124,3 +124,53 @@ describe('role-assignment & bulk-ban edge enforcement', () => {
 		await bot.close();
 	});
 });
+
+describe('expanded management-route enforcement (+ channel overwrites)', () => {
+	const seedManage = (rolePerms: ('ManageChannels' | 'ManageMessages')[], overwriteDeny?: 'ManageChannels') => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'mgmt-guild', ownerId: 'mgmt-owner' });
+		const role = world.registerRole(guild.id, { id: 'mgmt-role', permissions: rolePerms, position: 5 });
+		const channel = world.registerChannel(guild.id, {
+			id: 'mgmt-chan',
+			...(overwriteDeny ? { overwrites: [{ id: 'mgmt-role', type: 'role' as const, deny: [overwriteDeny] }] } : {}),
+		});
+		world.registerBotMember(guild.id, { roles: [role.id] });
+		return { world, guild, channel };
+	};
+
+	test('editChannel without ManageChannels is denied', async () => {
+		const { world, channel } = seedManage([]);
+		const bot = await createMockBot({ world });
+		await expect(bot.rest.request('PATCH', `/channels/${channel.id}`, { body: { name: 'renamed' } })).rejects.toThrow(
+			/Missing Permissions/,
+		);
+		await bot.close();
+	});
+
+	test('editChannel with ManageChannels succeeds', async () => {
+		const { world, channel } = seedManage(['ManageChannels']);
+		const bot = await createMockBot({ world });
+		await expect(
+			bot.rest.request('PATCH', `/channels/${channel.id}`, { body: { name: 'renamed' } }),
+		).resolves.toBeDefined();
+		await bot.close();
+	});
+
+	test('a channel deny-overwrite beats a guild-wide grant (channel-level permissions are honored)', async () => {
+		const { world, channel } = seedManage(['ManageChannels'], 'ManageChannels');
+		const bot = await createMockBot({ world });
+		await expect(bot.rest.request('PATCH', `/channels/${channel.id}`, { body: { name: 'renamed' } })).rejects.toThrow(
+			/Missing Permissions/,
+		);
+		await bot.close();
+	});
+
+	test('creating a guild emoji without ManageGuildExpressions is denied', async () => {
+		const { world, guild } = seedManage([]);
+		const bot = await createMockBot({ world });
+		await expect(
+			bot.rest.request('POST', `/guilds/${guild.id}/emojis`, { body: { name: 'sparkle', image: '' } }),
+		).rejects.toThrow(/Missing Permissions/);
+		await bot.close();
+	});
+});

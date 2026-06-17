@@ -201,24 +201,30 @@ export function registerWorldDefaults(
 		world?.roles.filter(entry => entry.guildId === guildId).map(e => e.role) ?? [];
 	const botMemberOf = (guildId: string) =>
 		world?.members.find(entry => entry.guildId === guildId && entry.member.user.id === hooks.botId);
-	const botGuildPerms = (guildId: string): bigint | undefined => {
+	// channelId, when given, folds that channel's allow/deny overwrites into the computation so a permission
+	// denied (or granted) at the channel level is honored — not just the guild-wide base.
+	const botGuildPerms = (guildId: string, channelId?: string): bigint | undefined => {
 		const bot = botMemberOf(guildId);
 		const guild = world?.guilds.find(entry => entry.id === guildId);
 		if (!world || !bot || !guild) return undefined;
+		const channel = channelId ? world.channels.find(entry => entry.id === channelId) : undefined;
 		return BigInt(
 			computeChannelPermissions({
 				guild: { id: guild.id, owner_id: guild.owner_id },
 				roles: guildRolesOf(guildId).map(role => ({ id: role.id, permissions: role.permissions })),
 				member: { userId: hooks.botId, roles: bot.member.roles },
+				...(channel ? { channel: { permission_overwrites: channel.permission_overwrites } } : {}),
 			}),
 		);
 	};
-	const requirePerm = (guildId: string, bit: bigint) => {
-		const perms = botGuildPerms(guildId);
+	const requirePerm = (guildId: string, bit: bigint, channelId?: string) => {
+		const perms = botGuildPerms(guildId, channelId);
 		if (perms === undefined) return; // enforcement off (no seeded bot member)
 		if (perms & PermissionFlagsBits.Administrator) return;
 		if (!(perms & bit)) apiError(403, ErrorCode.MissingPermissions, 'Missing Permissions');
 	};
+	// Channel-scoped permission guard: resolves the channel's guild and folds its overwrites into the check.
+	const requireChannelPerm = (channelId: string, bit: bigint) => requirePerm(guildOfChannel(channelId) ?? '', bit, channelId);
 	const topRole = (roleIds: string[], roles: { id: string; position: number }[]) =>
 		Math.max(0, ...roleIds.map(id => roles.find(role => role.id === id)?.position ?? 0));
 	const requireHierarchy = (guildId: string, targetUserId: string) => {
@@ -310,6 +316,7 @@ export function registerWorldDefaults(
 	// back a webhook whose id encodes the channel AND registers it, so the later execute resolves it.
 	rest.intercept(Routes.listChannelWebhooks, () => []);
 	rest.intercept(Routes.createWebhook, (pending, params) => {
+		requireChannelPerm(params.channelId, PermissionFlagsBits.ManageWebhooks);
 		const raw = bodyRecord(pending.body);
 		const guildId = guildOfChannel(params.channelId);
 		return hooks.state.registerWebhook({
@@ -425,9 +432,11 @@ export function registerWorldDefaults(
 		});
 		return { ...channel, recipients: [user] };
 	});
-	rest.intercept(Routes.createChannel, (pending, params) =>
-		hooks.state.addChannel(params.guildId, { ...bodyRecord(pending.body), guild_id: params.guildId }),
-	);
+	rest.intercept(Routes.createChannel, (pending, params) => {
+		requireGuild(params.guildId);
+		requirePerm(params.guildId, PermissionFlagsBits.ManageChannels);
+		return hooks.state.addChannel(params.guildId, { ...bodyRecord(pending.body), guild_id: params.guildId });
+	});
 	const threadResponder: RouteResponder = (pending, params) =>
 		hooks.state.addChannel(undefined, {
 			...bodyRecord(pending.body),
@@ -438,6 +447,7 @@ export function registerWorldDefaults(
 	rest.intercept(Routes.createThread, threadResponder);
 	rest.intercept(Routes.startThreadFromMessage, threadResponder);
 	rest.intercept(Routes.deleteChannel, (_pending, params) => {
+		requireChannelPerm(params.channelId, PermissionFlagsBits.ManageChannels);
 		const existing = world?.channels.find(channel => channel.id === params.channelId);
 		hooks.state.removeChannel(params.channelId);
 		return existing ?? apiChannel({ id: params.channelId });
@@ -481,6 +491,7 @@ export function registerWorldDefaults(
 	});
 	rest.intercept(Routes.bulkDeleteMessages, (pending, params) => {
 		requireChannel(params.channelId);
+		requireChannelPerm(params.channelId, PermissionFlagsBits.ManageMessages);
 		const messages = bodyRecord(pending.body).messages;
 		const ids = Array.isArray(messages) ? messages : [];
 		if (ids.length < 2 || ids.length > 100) {
@@ -495,6 +506,7 @@ export function registerWorldDefaults(
 	}));
 	rest.intercept(Routes.pinMessage, (_pending, params) => {
 		requireChannel(params.channelId);
+		requireChannelPerm(params.channelId, PermissionFlagsBits.ManageMessages);
 		const pins = hooks.state.pins(params.channelId);
 		if (pins.length >= 50 && !pins.some(message => message.id === params.messageId)) {
 			apiError(400, ErrorCode.MaxPinnedMessages, 'Maximum number of pinned messages reached (50)');
@@ -504,6 +516,7 @@ export function registerWorldDefaults(
 	});
 	rest.intercept(Routes.unpinMessage, (_pending, params) => {
 		requireChannel(params.channelId);
+		requireChannelPerm(params.channelId, PermissionFlagsBits.ManageMessages);
 		hooks.state.unpinMessage(params.channelId, params.messageId);
 		return {};
 	});
@@ -567,10 +580,12 @@ export function registerWorldDefaults(
 
 	rest.intercept(Routes.createRole, (pending, params) => {
 		requireGuild(params.guildId);
+		requirePerm(params.guildId, PermissionFlagsBits.ManageRoles);
 		return hooks.state.addRole(params.guildId, bodyRecord(pending.body));
 	});
 	rest.intercept(Routes.editRole, (pending, params) => {
 		requireGuild(params.guildId);
+		requirePerm(params.guildId, PermissionFlagsBits.ManageRoles);
 		if (world && !guildRolesOf(params.guildId).some(role => role.id === params.roleId)) {
 			apiError(404, ErrorCode.UnknownRole, 'Unknown Role');
 		}
@@ -579,6 +594,7 @@ export function registerWorldDefaults(
 	});
 	rest.intercept(Routes.deleteRole, (_pending, params) => {
 		requireGuild(params.guildId);
+		requirePerm(params.guildId, PermissionFlagsBits.ManageRoles);
 		if (world && !guildRolesOf(params.guildId).some(role => role.id === params.roleId)) {
 			apiError(404, ErrorCode.UnknownRole, 'Unknown Role');
 		}
@@ -598,12 +614,13 @@ export function registerWorldDefaults(
 		patch: (guildId, id, body) => hooks.state.editEmoji(guildId, id, body),
 		drop: (guildId, id) => hooks.state.removeEmoji(guildId, id),
 		fallback: (guildId, id) => apiEmoji({ id, guildId }),
-		guard: requireGuild,
+		guard: (guildId: string) => { requireGuild(guildId); requirePerm(guildId, PermissionFlagsBits.ManageGuildExpressions); },
 		unknownCode: world ? ErrorCode.UnknownEmoji : undefined,
 		unknownMessage: 'Unknown Emoji',
 	});
 	rest.intercept(Routes.createInvite, (pending, params) => {
 		requireChannel(params.channelId);
+		requireChannelPerm(params.channelId, PermissionFlagsBits.CreateInstantInvite);
 		return hooks.state.addInvite(params.channelId, guildOfChannel(params.channelId), bodyRecord(pending.body));
 	});
 	rest.intercept(Routes.listChannelInvites, (_pending, params) => hooks.state.channelInvites(params.channelId));
@@ -652,7 +669,7 @@ export function registerWorldDefaults(
 		patch: (guildId, id, body) => hooks.state.editAutoModRule(guildId, id, body),
 		drop: (guildId, id) => hooks.state.removeAutoModRule(guildId, id),
 		fallback: (guildId, id) => apiAutoModRule({ id, guildId }),
-		guard: requireGuild,
+		guard: (guildId: string) => { requireGuild(guildId); requirePerm(guildId, PermissionFlagsBits.ManageGuild); },
 	});
 	const resolveThreadUser = (userId: string) => (userId === '@me' ? hooks.botId : userId);
 	rest.intercept(Routes.addThreadMember, (_pending, params) => {
@@ -689,7 +706,7 @@ export function registerWorldDefaults(
 		patch: (guildId, id, body) => hooks.state.editSticker(guildId, id, body),
 		drop: (guildId, id) => hooks.state.removeSticker(guildId, id),
 		fallback: (guildId, id) => apiSticker({ id, guildId }),
-		guard: requireGuild,
+		guard: (guildId: string) => { requireGuild(guildId); requirePerm(guildId, PermissionFlagsBits.ManageGuildExpressions); },
 		unknownCode: world ? ErrorCode.UnknownSticker : undefined,
 		unknownMessage: 'Unknown Sticker',
 	});
@@ -704,7 +721,7 @@ export function registerWorldDefaults(
 		one: (guildId, id) => hooks.state.scheduledEvent(guildId, id),
 		drop: (guildId, id) => hooks.state.removeScheduledEvent(guildId, id),
 		fallback: (guildId, id) => apiScheduledEvent({ id, guildId }),
-		guard: requireGuild,
+		guard: (guildId: string) => { requireGuild(guildId); requirePerm(guildId, PermissionFlagsBits.ManageEvents); },
 		unknownCode: world ? ErrorCode.UnknownScheduledEvent : undefined,
 		unknownMessage: 'Unknown Guild Scheduled Event',
 	});
@@ -720,7 +737,11 @@ export function registerWorldDefaults(
 		items: hooks.state.soundboardSounds(params.guildId),
 	}));
 	rest.intercept(Routes.listDefaultSoundboardSounds, () => []);
-	rest.intercept(Routes.createStageInstance, pending => hooks.state.addStageInstance(bodyRecord(pending.body)));
+	rest.intercept(Routes.createStageInstance, pending => {
+		const stageBody = bodyRecord(pending.body);
+		requireChannelPerm(String(stageBody.channel_id ?? ''), PermissionFlagsBits.ManageChannels);
+		return hooks.state.addStageInstance(stageBody);
+	});
 	interceptFetchOne(
 		rest,
 		Routes.fetchStageInstance,
@@ -742,6 +763,7 @@ export function registerWorldDefaults(
 	}));
 	rest.intercept(Routes.editGuild, (pending, params) => {
 		requireGuild(params.guildId);
+		requirePerm(params.guildId, PermissionFlagsBits.ManageGuild);
 		const updated = hooks.state.editGuild(params.guildId, bodyRecord(pending.body));
 		return updated ?? { ...apiGuild({ id: params.guildId }), ...bodyRecord(pending.body) };
 	});
@@ -781,16 +803,19 @@ export function registerWorldDefaults(
 	);
 	rest.intercept(Routes.editChannel, (pending, params) => {
 		requireChannel(params.channelId);
+		requireChannelPerm(params.channelId, PermissionFlagsBits.ManageChannels);
 		const updated = hooks.state.editChannel(params.channelId, bodyRecord(pending.body));
 		return updated ?? { ...apiChannel({ id: params.channelId }), ...bodyRecord(pending.body) };
 	});
 	rest.intercept(Routes.editChannelPermissions, (pending, params) => {
 		requireChannel(params.channelId);
+		requireChannelPerm(params.channelId, PermissionFlagsBits.ManageRoles);
 		hooks.state.setChannelOverwrite(params.channelId, params.overwriteId, bodyRecord(pending.body));
 		return {};
 	});
 	rest.intercept(Routes.deleteChannelPermission, (_pending, params) => {
 		requireChannel(params.channelId);
+		requireChannelPerm(params.channelId, PermissionFlagsBits.ManageRoles);
 		hooks.state.removeChannelOverwrite(params.channelId, params.overwriteId);
 		return {};
 	});
