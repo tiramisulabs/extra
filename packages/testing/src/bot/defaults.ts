@@ -1,5 +1,6 @@
 import { PermissionFlagsBits } from 'seyfert/lib/types';
 import { emojiPayload } from './emoji';
+import { assertAttachmentRefs } from './message-validation';
 import {
 	type ApiMember,
 	apiAutoModRule,
@@ -21,7 +22,7 @@ import {
 import { computeChannelPermissions } from './permissions';
 import { apiError, ErrorCode, type MockApiHandler, type RouteMatcher, type RouteResponder } from './rest';
 import { Routes } from './routes';
-import { assertAttachmentRefs, type MessageQuery, type WorldState } from './state';
+import type { MessageQuery, WorldState } from './state';
 import type { MockWorld } from './world';
 import type { WorldEmitEvent } from './world-events';
 
