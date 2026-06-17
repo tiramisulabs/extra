@@ -91,4 +91,35 @@ describe('interaction acknowledgement (fail loud before ack)', () => {
 		expect(bot.worldMessage(channel.id, 'src-msg')?.content).toBe('page 2');
 		await bot.close();
 	});
+
+	test('update() then editResponse edits the source message in place (no phantom message)', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'up-guild' });
+		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'up-actor' }) });
+		const channel = world.registerChannel(guild.id, { id: 'up-chan' });
+		world.registerMessage(channel.id, {
+			id: 'up-src',
+			content: 'page 1',
+			components: [{ type: 1, components: [{ type: 2, style: 1, label: 'Next', custom_id: 'go' }] }],
+		});
+
+		class GoButton extends ComponentCommand {
+			componentType = 'Button' as const;
+			filter(ctx: ComponentContext<'Button'>) {
+				return ctx.customId === 'go';
+			}
+			async run(ctx: ComponentContext<'Button'>) {
+				await ctx.update({ content: 'page 2' });
+				await ctx.editResponse({ content: 'page 3' });
+			}
+		}
+
+		const bot = await createMockBot({ components: [GoButton], world });
+		const before = bot.worldChannel('up-chan')?.messages.length ?? 0;
+		await bot.clickButton('go', { source: 'up-src', user: actor.user });
+		const after = bot.worldChannel('up-chan')?.messages ?? [];
+		expect(after).toHaveLength(before); // no phantom message minted by the trailing editResponse
+		expect(bot.worldMessage(channel.id, 'up-src')?.content).toBe('page 3');
+		await bot.close();
+	});
 });

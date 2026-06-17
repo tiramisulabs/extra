@@ -383,11 +383,16 @@ export function registerWorldDefaults(
 			apiError(400, ErrorCode.AlreadyAcknowledged, 'Interaction has already been acknowledged.');
 		}
 		hooks.state.acknowledgeToken(params.token);
-		if (body.type === 6) {
-			// DeferredMessageUpdate: point @original at the component's source message NOW (synchronously), so a
-			// later editResponse in the same handler edits it in place instead of minting a new message.
+		if (body.type === 6 || body.type === 7) {
+			// DeferredMessageUpdate (6) and UpdateMessage (7) both act on the component's source message: point
+			// @original there NOW so a later editResponse edits it in place instead of minting a new message.
 			const source = hooks.state.componentSource(params.token);
-			if (source) hooks.state.registerOriginalResponse(params.token, source.channelId, source.messageId);
+			if (source) {
+				hooks.state.registerOriginalResponse(params.token, source.channelId, source.messageId);
+				// UpdateMessage (7) carries its content edit: apply it to the source NOW (synchronously) so a later
+				// editResponse in the same handler edits the already-updated message instead of overwriting it last.
+				if (body.type === 7) hooks.state.editMessage(source.channelId, source.messageId, body.data ?? {});
+			}
 			return {};
 		}
 		// Autocomplete result (type 8): Discord caps choices at 25 and each choice name at 1..100 chars.

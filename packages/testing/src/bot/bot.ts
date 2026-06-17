@@ -1282,8 +1282,8 @@ export class MockBot {
 			return;
 		}
 		if (body.type === 7 && payload.message) {
-			const data = 'data' in body ? ((body.data ?? {}) as Record<string, unknown>) : {};
-			this._state.editMessage(payload.message.channel_id, payload.message.id, data);
+			// UpdateMessage: the content edit was applied synchronously by the callback interceptor (so it lands
+			// before any later editResponse in the same handler); here we only track the pointer for collectors.
 			this.lastInteractionMessage = { id: payload.message.id, channel_id: payload.message.channel_id };
 		}
 	}
@@ -1528,11 +1528,11 @@ export class MockBot {
 				return replies[0]?.body.type === 6;
 			},
 			get ephemeral() {
-				const replyEphemeral = replies.some(reply => {
-					const data = 'data' in reply.body ? (reply.body.data as { flags?: number } | undefined) : undefined;
-					return isEphemeral(data ?? {});
-				});
-				return replyEphemeral || messages.some(message => isEphemeral(message));
+				// The IMMEDIATE response only (replies[0]) — per the documented contract. A public initial reply with
+				// an ephemeral FOLLOWUP is not "ephemeral"; folding followups/edits in here misreported that.
+				const first = replies[0];
+				const data = first && 'data' in first.body ? (first.body.data as { flags?: number } | undefined) : undefined;
+				return isEphemeral(data ?? {});
 			},
 			get embed() {
 				return embeds[0];

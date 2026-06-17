@@ -124,7 +124,10 @@ describe('createMockBot', () => {
 		expect(result.embed).toEqual(editEmbed);
 		expect(result.files).toMatchObject([{ filename: 'edited.txt' }, { filename: 'followup.txt' }]);
 		expect(result.content).toBe('followup');
-		expect(result.ephemeral).toBe(true);
+		// The immediate response is a PUBLIC defer, so result.ephemeral is false even though a later followup is
+		// ephemeral — that followup's flag stays observable on its own message.
+		expect(result.ephemeral).toBe(false);
+		expect(result.messages.at(-1)?.flags).toBe(64);
 		await bot.close();
 	});
 
