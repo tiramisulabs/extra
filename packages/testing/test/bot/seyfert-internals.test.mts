@@ -28,7 +28,7 @@ describe('seyfert internals contract', () => {
 		}
 
 		const events = eventsInternals(client);
-		expect(typeof events.values, 'client.events.values (emitEvent handler lookup)').toBe('object');
+		expect(typeof events.values, 'client.events.values (emit handler lookup)').toBe('object');
 		expect(typeof events.getPluginListeners, 'client.events.getPluginListeners').toBe('function');
 		expect(typeof events.getPluginAnyListeners, 'client.events.getPluginAnyListeners').toBe('function');
 		expect(typeof events.reportEventFailure, 'client.events.reportEventFailure (event-error capture)').toBe('function');
@@ -51,7 +51,7 @@ describe('seyfert internals contract', () => {
 		expect(['object', 'undefined'], 'client.middlewares (denial detection wrapping)').toContain(
 			typeof client.middlewares,
 		);
-		expect(typeof client.events.runEvent, 'client.events.runEvent (emitEvent dispatch)').toBe('function');
+		expect(typeof client.events.runEvent, 'client.events.runEvent (emit dispatch)').toBe('function');
 		expect(typeof client.handleCommand?.interaction, 'client.handleCommand.interaction (dispatch entry)').toBe(
 			'function',
 		);

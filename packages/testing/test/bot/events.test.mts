@@ -10,7 +10,7 @@ declare module 'seyfert/lib/events/event' {
 	}
 }
 
-describe('emitEvent result and factories', () => {
+describe('emit result and factories', () => {
 	test('returns the channel messages the handler wrote', async () => {
 		const onJoin = createEvent({
 			data: { name: 'guildMemberAdd' },
@@ -20,7 +20,7 @@ describe('emitEvent result and factories', () => {
 		});
 		const bot = await createMockBot({ events: [onJoin] });
 
-		const result = await bot.emitEvent(
+		const result = await bot.emit(
 			'GUILD_MEMBER_ADD',
 			memberAddEvent(apiMember({ user: apiUser({ username: 'newbie' }) }), { guildId: '123' }),
 		);
@@ -75,7 +75,7 @@ describe('emitEvent result and factories', () => {
 		await bot.close();
 	});
 
-	test('actor.emitEvent auto-fills guild_id and the bound user', async () => {
+	test('actor.emit auto-fills guild_id and the bound user', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'evt-guild' });
 		const alice = world.registerMember(guild.id, { user: apiUser({ id: 'alice' }), roles: [] });
@@ -83,7 +83,7 @@ describe('emitEvent result and factories', () => {
 
 		await bot
 			.actor({ member: alice, guildId: guild.id })
-			.emitEvent('GUILD_MEMBER_UPDATE', { roles: ['r1'] }, { allowNoHandler: true });
+			.emit('GUILD_MEMBER_UPDATE', { roles: ['r1'] }, { allowNoHandler: true });
 
 		expect(bot.worldMember(guild.id, 'alice')?.roles).toEqual(['r1']);
 		await bot.close();
@@ -107,7 +107,7 @@ describe('emitEvent result and factories', () => {
 		await bot.close();
 	});
 
-	test('emitEvent fails loud when no handler ran, unless allowNoHandler is set', async () => {
+	test('emit fails loud when no handler ran, unless allowNoHandler is set', async () => {
 		const onJoin = createEvent({
 			data: { name: 'guildMemberAdd' },
 			run() {},
@@ -116,19 +116,14 @@ describe('emitEvent result and factories', () => {
 
 		expect(bot.registeredEvents()).toContain('GUILD_MEMBER_ADD');
 
-		// Mis-cased gateway name: seyfert finds no handler and silently no-ops — now it throws.
-		await expect(bot.emitEvent('guildMemberAdd' as 'GUILD_MEMBER_ADD', { guild_id: '1' })).rejects.toThrow(
-			/no handler ran/,
-		);
+		await expect(bot.emit('GUILD_MEMBER_REMOVE', { guild_id: '1', user: apiUser() })).rejects.toThrow(/no handler ran/);
 
-		// A correct name with a registered handler runs fine.
 		await expect(
-			bot.emitEvent('GUILD_MEMBER_ADD', { guild_id: '1', ...apiMember({ user: apiUser() }) }),
+			bot.emit('GUILD_MEMBER_ADD', { guild_id: '1', ...apiMember({ user: apiUser() }) }),
 		).resolves.toBeDefined();
 
-		// An unregistered event used purely to seed world state opts out explicitly.
 		await expect(
-			bot.emitEvent('CHANNEL_CREATE', { id: 'c', guild_id: '1', name: 'x', type: 0 }, { allowNoHandler: true }),
+			bot.emit('CHANNEL_CREATE', { id: 'c', guild_id: '1', name: 'x', type: 0 }, { allowNoHandler: true }),
 		).resolves.toBeDefined();
 
 		await bot.close();
@@ -140,7 +135,7 @@ describe('emitEvent result and factories', () => {
 		const bot = await createMockBot({ world });
 
 		await expect(
-			bot.emitEvent('GUILD_MEMBER_ADD', { guild_id: guild.id, ...apiMember({ user: apiUser({ id: 'ghost' }) }) }),
+			bot.emit('GUILD_MEMBER_ADD', { guild_id: guild.id, ...apiMember({ user: apiUser({ id: 'ghost' }) }) }),
 		).rejects.toThrow(/no handler ran/);
 		// guard runs BEFORE the world bridge, so the member was never added
 		expect(bot.worldMember(guild.id, 'ghost')).toBeUndefined();
@@ -152,7 +147,7 @@ describe('emitEvent result and factories', () => {
 		const guild = world.registerGuild({ id: 'member-update-guild' });
 		const bot = await createMockBot({ world });
 
-		await bot.emitEvent(
+		await bot.emit(
 			'GUILD_MEMBER_UPDATE',
 			{ guild_id: guild.id, user: apiUser({ id: 'ghost-member' }), roles: ['r1'], nick: 'Ghost' },
 			{ allowNoHandler: true },
@@ -173,7 +168,7 @@ describe('emitEvent result and factories', () => {
 		const bot = await createMockBot({ world, onCommandError: 'capture' });
 
 		await expect(
-			bot.emitEvent(
+			bot.emit(
 				'MESSAGE_CREATE',
 				{ ...apiMessage({ id: 'invalid-message', channelId: channel.id }), author: undefined },
 				{ allowNoHandler: true },
@@ -182,21 +177,15 @@ describe('emitEvent result and factories', () => {
 		expect(bot.worldMessage(channel.id, 'invalid-message')).toBeUndefined();
 
 		await expect(
-			bot.emitEvent(
-				'THREAD_CREATE',
-				{ id: 'guildless-thread', parent_id: channel.id, type: 11 },
-				{ allowNoHandler: true },
-			),
+			bot.emit('THREAD_CREATE', { id: 'guildless-thread', parent_id: channel.id, type: 11 }, { allowNoHandler: true }),
 		).rejects.toThrow(/THREAD_CREATE requires guild_id/);
 		expect(bot.worldChannel('guildless-thread')).toBeUndefined();
 		await bot.close();
 	});
 
-	test('allowNoHandler on a non-bridged / typo name fails loud (it would do nothing)', async () => {
+	test('unknown event names are custom events and fail loud without a listener', async () => {
 		const bot = await createMockBot({});
-		await expect(
-			bot.emitEvent('GUILD_MEMBER_ADDD' as 'GUILD_MEMBER_ADD', { guild_id: '1' }, { allowNoHandler: true }),
-		).rejects.toThrow(/had no effect/);
+		await expect(bot.emit('GUILD_MEMBER_ADDD', { guild_id: '1' })).rejects.toThrow(/no custom handler ran/);
 		await bot.close();
 	});
 
@@ -210,7 +199,7 @@ describe('emitEvent result and factories', () => {
 		});
 		const bot = await createMockBot({ events: [onLeave] });
 
-		await bot.emitEvent('GUILD_MEMBER_REMOVE', memberRemoveEvent(apiUser({ username: 'gone' }), { guildId: '123' }));
+		await bot.emit('GUILD_MEMBER_REMOVE', memberRemoveEvent(apiUser({ username: 'gone' }), { guildId: '123' }));
 
 		expect(left).toEqual(['gone']);
 		await bot.close();

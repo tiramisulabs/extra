@@ -317,7 +317,7 @@ export interface MessageResultBase {
 
 export interface SayResult extends MessageResultBase {}
 
-/** Result of emitEvent: REST the event handler produced, derived from channel-message writes. */
+/** Result of emit: REST the event handler produced, derived from channel-message writes. */
 export interface EventDispatchResult extends MessageResultBase {
 	/**
 	 * An unhandled error thrown inside an emitted event's handler. Present only under
@@ -326,14 +326,13 @@ export interface EventDispatchResult extends MessageResultBase {
 	error?: unknown;
 }
 
-/** Options for {@link MockBot.emitEvent}. */
+/** Options for {@link MockBot.emit}. */
 export interface EmitEventOptions {
 	/** Apply the event to world state via the world bridge (default `true`). */
 	updateCache?: boolean;
 	/**
-	 * Permit an emit that no registered `Event`/listener handled. By default emitEvent fails loud when nothing
-	 * ran — the typo (`'guildMemberAdd'` for `'GUILD_MEMBER_ADD'`) and forgot-to-register cases. Set `true` when
-	 * intentionally emitting only to seed world state with no handler (default `false`).
+	 * Permit an emit that no registered `Event`/listener handled. By default emit fails loud when nothing ran.
+	 * Set `true` when intentionally emitting only to seed world state with no handler (default `false`).
 	 */
 	allowNoHandler?: boolean;
 }
@@ -458,12 +457,6 @@ export interface Actor {
 		options?: EmitEventOptions,
 	): Dispatch<EventDispatchResult>;
 	emit(name: string, payload?: object | readonly unknown[], options?: EmitEventOptions): Dispatch<EventDispatchResult>;
-	emitEvent<TName extends GatewayDispatchPayload['t']>(
-		name: TName,
-		payload?: Partial<Extract<GatewayDispatchPayload, { t: TName }>['d']>,
-		options?: EmitEventOptions,
-	): Dispatch<EventDispatchResult>;
-	emitEvent(name: string, payload?: object, options?: EmitEventOptions): Dispatch<EventDispatchResult>;
 }
 
 /** Autocomplete dispatch result with the responded choices lifted out semantically. */
@@ -1532,29 +1525,23 @@ export class MockBot {
 		);
 	}
 
-	private prepareGatewayEventPayload(
-		name: string,
-		d: Record<string, unknown>,
-		verb: 'emit' | 'emitEvent' = 'emitEvent',
-	): Record<string, unknown> {
+	private prepareGatewayEventPayload(name: string, d: Record<string, unknown>): Record<string, unknown> {
 		if (name === 'GUILD_MEMBER_UPDATE') {
 			const user = d.user as { id?: unknown } | undefined;
 			if (typeof d.guild_id !== 'string' || typeof user?.id !== 'string') {
-				throw new TypeError(`${verb} GUILD_MEMBER_UPDATE requires guild_id and user.id before world/cache mutation.`);
+				throw new TypeError('emit GUILD_MEMBER_UPDATE requires guild_id and user.id before world/cache mutation.');
 			}
 		}
 		if (name === 'THREAD_CREATE' && typeof d.guild_id !== 'string') {
-			throw new TypeError(`${verb} THREAD_CREATE requires guild_id; Seyfert cache ignores guildless threads.`);
+			throw new TypeError('emit THREAD_CREATE requires guild_id; Seyfert cache ignores guildless threads.');
 		}
 		if (name === 'CHANNEL_CREATE' && d.type !== 1 && typeof d.guild_id !== 'string') {
-			throw new TypeError(`${verb} CHANNEL_CREATE requires guild_id for non-DM channels; Seyfert cache ignores it.`);
+			throw new TypeError('emit CHANNEL_CREATE requires guild_id for non-DM channels; Seyfert cache ignores it.');
 		}
 		if (name === 'MESSAGE_CREATE') {
 			const author = d.author as { id?: unknown } | undefined;
 			if (typeof d.channel_id !== 'string' || typeof d.id !== 'string' || typeof author?.id !== 'string') {
-				throw new TypeError(
-					`${verb} MESSAGE_CREATE requires id, channel_id, and author.id before world/cache mutation.`,
-				);
+				throw new TypeError('emit MESSAGE_CREATE requires id, channel_id, and author.id before world/cache mutation.');
 			}
 		}
 		return d;
@@ -2150,9 +2137,6 @@ export class MockBot {
 			say: (content, options = {}) => this.say(content, { ...base, ...options }),
 			emit: (name: string, payload: object | readonly unknown[] = {}, options?: EmitEventOptions) =>
 				this.emit(name, mergeEventPayload(payload), options),
-			emitEvent: (name: string, payload: Record<string, unknown> = {}, options?: EmitEventOptions) => {
-				return this.emitEvent(name as GatewayDispatchPayload['t'], mergeEventPayload(payload) as object, options);
-			},
 		};
 	}
 
@@ -2172,28 +2156,17 @@ export class MockBot {
 			if (Array.isArray(payload)) {
 				throw new TypeError('emit: gateway events require an object payload, not positional arguments.');
 			}
-			return this.emitGatewayEvent(gatewayName as GatewayDispatchPayload['t'], payload, options, 'emit');
+			return this.emitGatewayEvent(gatewayName as GatewayDispatchPayload['t'], payload, options);
 		}
 		return this.emitCustom(name, payload, options);
-	}
-
-	emitEvent<TName extends GatewayDispatchPayload['t']>(
-		name: TName,
-		payload?: Partial<Extract<GatewayDispatchPayload, { t: TName }>['d']>,
-		options?: EmitEventOptions,
-	): Dispatch<EventDispatchResult>;
-	emitEvent(name: string, payload?: object, options?: EmitEventOptions): Dispatch<EventDispatchResult>;
-	emitEvent(name: string, payload: object = {}, options: EmitEventOptions = {}): Dispatch<EventDispatchResult> {
-		return this.emitGatewayEvent(name as GatewayDispatchPayload['t'], payload, options, 'emitEvent');
 	}
 
 	private emitGatewayEvent(
 		name: GatewayDispatchPayload['t'],
 		payload: object,
 		{ updateCache = true, allowNoHandler = false }: EmitEventOptions,
-		verb: 'emit' | 'emitEvent',
 	): Dispatch<EventDispatchResult> {
-		this.assertOpen(verb);
+		this.assertOpen('emit');
 		const d = payload as Record<string, unknown>;
 		const dispatchId = nextDispatchId();
 		return this.track(
@@ -2204,12 +2177,11 @@ export class MockBot {
 				async () => {
 					// Guard BEFORE mutating the world, so a rejected emit is a true no-op (no dirtied world state,
 					// and seyfert's cache — updated later inside runEvent — stays consistent with the world).
-					const prepared = this.prepareGatewayEventPayload(name, d, verb);
+					const prepared = this.prepareGatewayEventPayload(name, d);
 					const handlerRan = this.eventHandlerRan(name);
 					if (!handlerRan && !allowNoHandler) {
 						throw new Error(
-							`${verb}: no handler ran for "${name}". Gateway names are UPPER_SNAKE_CASE ` +
-								`(e.g. 'GUILD_MEMBER_ADD', not 'guildMemberAdd'). Register an Event via events:[...], or pass ` +
+							`emit: no handler ran for "${name}". Register an Event via events:[...], or pass ` +
 								`{ allowNoHandler: true } if you are emitting only to seed world state. ` +
 								`Registered events: ${this.registeredEvents().join(', ') || '(none)'}.`,
 						);
@@ -2218,7 +2190,7 @@ export class MockBot {
 					// bridged world event does literally nothing — almost always a mis-cased/typo'd gateway name.
 					if (!handlerRan && allowNoHandler && !WORLD_EVENT_NAMES.includes(name)) {
 						throw new Error(
-							`${verb}: "${name}" had no effect — no handler ran and it is not a world-bridge event. ` +
+							`emit: "${name}" had no effect — no handler ran and it is not a world-bridge event. ` +
 								`Check the gateway name is UPPER_SNAKE_CASE (e.g. 'GUILD_MEMBER_ADD'). ` +
 								`Bridged events: ${[...WORLD_EVENT_NAMES].join(', ')}.`,
 						);
@@ -2301,7 +2273,7 @@ export class MockBot {
 
 	/**
 	 * The gateway event names with a registered handler (`Event` from `events:[...]`), keyed UPPER_SNAKE_CASE the
-	 * way the gateway delivers them. Use it to assert wiring, or to debug an `emitEvent` that found no handler.
+	 * way the gateway delivers them. Use it to assert wiring, or to debug an `emit` that found no handler.
 	 */
 	registeredEvents(): string[] {
 		const names = new Set(Object.keys(eventsInternals(this.client).values));
@@ -2439,7 +2411,7 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	installRunErrorCapture('components');
 	installRunErrorCapture('modals');
 	// Events use a different seam (reportEventFailure, not an options hook). Wrap it to capture a thrown event
-	// handler error into the active dispatch context so emitEvent fails loud too, instead of seyfert swallowing it.
+	// handler error into the active dispatch context so emit fails loud too, instead of seyfert swallowing it.
 	const eventsHandler = eventsInternals(client);
 	if (typeof eventsHandler.reportEventFailure === 'function') {
 		eventsHandler.reportEventFailure = (_name: string, error: unknown) => {

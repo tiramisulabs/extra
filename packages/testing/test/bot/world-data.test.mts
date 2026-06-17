@@ -69,7 +69,7 @@ describe('worldData passthrough store', () => {
 
 		await using bot = await createMockBot({ world, worldData: { custom: payload } });
 
-		await bot.emitEvent(
+		await bot.emit(
 			'GUILD_MEMBER_UPDATE',
 			{ guild_id: guild.id, user: member.user, roles: ['r1'] },
 			{ allowNoHandler: true },

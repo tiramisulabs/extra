@@ -32,7 +32,7 @@ export interface ComponentInternals {
 	modals: ModalRegistry;
 }
 
-/** The events handler internals the mock reads for emitEvent fail-loud + event-error capture. */
+/** The events handler internals the mock reads for emit fail-loud + event-error capture. */
 export interface EventsInternals {
 	values: Record<string, { data: { once?: boolean }; fired?: boolean } | undefined>;
 	getPluginListeners(name: string): unknown[];

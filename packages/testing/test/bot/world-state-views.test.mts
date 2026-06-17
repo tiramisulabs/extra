@@ -143,13 +143,13 @@ describe('world state views', () => {
 	});
 });
 
-describe('emitEvent bridges into world views', () => {
+describe('emit bridges into world views', () => {
 	test('member add, update, and remove flow through guild views', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'bridge-guild' });
 		const bot = await createMockBot({ world });
 
-		await bot.emitEvent(
+		await bot.emit(
 			'GUILD_MEMBER_ADD',
 			{
 				guild_id: guild.id,
@@ -159,7 +159,7 @@ describe('emitEvent bridges into world views', () => {
 		);
 		expect(bot.worldGuild(guild.id)?.member('joiner')?.roles).toEqual(['r1']);
 
-		await bot.emitEvent(
+		await bot.emit(
 			'GUILD_MEMBER_UPDATE',
 			{
 				guild_id: guild.id,
@@ -172,7 +172,7 @@ describe('emitEvent bridges into world views', () => {
 		expect(bot.worldGuild(guild.id)?.member('joiner')?.roles).toEqual(['r1', 'r2']);
 		expect(bot.worldGuild(guild.id)?.member('joiner')?.nick).toBe('Joey');
 
-		await bot.emitEvent(
+		await bot.emit(
 			'GUILD_MEMBER_REMOVE',
 			{ guild_id: guild.id, user: apiUser({ id: 'joiner' }) },
 			{ allowNoHandler: true },
@@ -188,24 +188,24 @@ describe('emitEvent bridges into world views', () => {
 		const guild = world.registerGuild({ id: 'cm-guild' });
 		const bot = await createMockBot({ world });
 
-		await bot.emitEvent(
+		await bot.emit(
 			'CHANNEL_CREATE',
 			{ id: 'c1', guild_id: guild.id, name: 'new-chan', type: 0 },
 			{ allowNoHandler: true },
 		);
 		expect(bot.worldGuild(guild.id)?.channel('new-chan')?.id).toBe('c1');
 
-		await bot.emitEvent(
+		await bot.emit(
 			'MESSAGE_CREATE',
 			{ id: 'm1', channel_id: 'c1', author: apiUser({ id: 'u1' }), content: 'hi' },
 			{ allowNoHandler: true },
 		);
 		expect(bot.worldGuild(guild.id)?.channel('c1')?.lastMessage?.content).toBe('hi');
 
-		await bot.emitEvent('MESSAGE_DELETE', { id: 'm1', channel_id: 'c1' }, { allowNoHandler: true });
+		await bot.emit('MESSAGE_DELETE', { id: 'm1', channel_id: 'c1' }, { allowNoHandler: true });
 		expect(bot.worldGuild(guild.id)?.channel('c1')?.messages).toEqual([]);
 
-		await bot.emitEvent('CHANNEL_DELETE', { id: 'c1', guild_id: guild.id }, { allowNoHandler: true });
+		await bot.emit('CHANNEL_DELETE', { id: 'c1', guild_id: guild.id }, { allowNoHandler: true });
 		expect(bot.worldGuild(guild.id)?.channel('new-chan')).toBeUndefined();
 		await bot.close();
 	});
@@ -215,7 +215,7 @@ describe('emitEvent bridges into world views', () => {
 		const guild = world.registerGuild({ id: 'nocache-guild' });
 		const bot = await createMockBot({ world });
 
-		await bot.emitEvent(
+		await bot.emit(
 			'GUILD_MEMBER_ADD',
 			{ guild_id: guild.id, ...apiMember({ user: apiUser({ id: 'ghost' }) }) },
 			{ updateCache: false, allowNoHandler: true },
@@ -272,14 +272,14 @@ describe('emitEvent bridges into world views', () => {
 		);
 	});
 
-	test('emitEvent MESSAGE_REACTION_ADD updates reaction state through the event path', async () => {
+	test('emit MESSAGE_REACTION_ADD updates reaction state through the event path', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'event-react-guild' });
 		const channel = world.registerChannel(guild.id, { id: 'event-react-channel' });
 		const message = world.registerMessage(channel.id, { id: 'event-react-message' });
 
 		const bot = await createMockBot({ world });
-		await bot.emitEvent(
+		await bot.emit(
 			'MESSAGE_REACTION_ADD',
 			{
 				channel_id: channel.id,
@@ -301,7 +301,7 @@ describe('emitEvent bridges into world views', () => {
 		await bot.close();
 	});
 
-	test('emitEvent MESSAGE_REACTION_ADD agrees with the REST path on the emoji key', async () => {
+	test('emit MESSAGE_REACTION_ADD agrees with the REST path on the emoji key', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'agree-react-guild' });
 		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'agree-react-actor' }) });
@@ -318,7 +318,7 @@ describe('emitEvent bridges into world views', () => {
 
 		const bot = await createMockBot({ commands: [React], world });
 		await bot.slash({ name: 'react', guildId: guild.id, channel, user: actor.user });
-		await bot.emitEvent(
+		await bot.emit(
 			'MESSAGE_REACTION_ADD',
 			{
 				channel_id: channel.id,
@@ -334,20 +334,20 @@ describe('emitEvent bridges into world views', () => {
 		await bot.close();
 	});
 
-	test('emitEvent VOICE_STATE_UPDATE upserts then disconnect removes the voice state', async () => {
+	test('emit VOICE_STATE_UPDATE upserts then disconnect removes the voice state', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'voice-guild' });
 		const channel = world.registerChannel(guild.id, { id: 'voice-channel' });
 
 		const bot = await createMockBot({ world });
-		await bot.emitEvent(
+		await bot.emit(
 			'VOICE_STATE_UPDATE',
 			{ guild_id: guild.id, user_id: 'speaker', channel_id: channel.id },
 			{ updateCache: true, allowNoHandler: true },
 		);
 		expect(bot.worldVoiceState(guild.id, 'speaker')?.channel_id).toBe(channel.id);
 
-		await bot.emitEvent(
+		await bot.emit(
 			'VOICE_STATE_UPDATE',
 			{ guild_id: guild.id, user_id: 'speaker', channel_id: null },
 			{ updateCache: true, allowNoHandler: true },
@@ -356,13 +356,13 @@ describe('emitEvent bridges into world views', () => {
 		await bot.close();
 	});
 
-	test('emitEvent THREAD_CREATE materializes a thread and THREAD_DELETE removes it', async () => {
+	test('emit THREAD_CREATE materializes a thread and THREAD_DELETE removes it', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'thread-event-guild' });
 		const parent = world.registerChannel(guild.id, { id: 'thread-event-parent' });
 
 		const bot = await createMockBot({ world });
-		await bot.emitEvent(
+		await bot.emit(
 			'THREAD_CREATE',
 			{
 				id: 'event-thread',
@@ -377,7 +377,7 @@ describe('emitEvent bridges into world views', () => {
 		expect(thread?.id).toBe('event-thread');
 		expect(thread?.parentId).toBe(parent.id);
 
-		await bot.emitEvent('THREAD_DELETE', { id: 'event-thread', guild_id: guild.id }, { allowNoHandler: true });
+		await bot.emit('THREAD_DELETE', { id: 'event-thread', guild_id: guild.id }, { allowNoHandler: true });
 		expect(bot.worldGuild(guild.id)?.thread('event-thread')).toBeUndefined();
 		await bot.close();
 	});

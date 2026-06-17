@@ -275,7 +275,7 @@ describe('createMockBot', () => {
 		});
 
 		const bot = await createMockBot({ events: [onJoin] });
-		await bot.emitEvent('GUILD_MEMBER_ADD', {
+		await bot.emit('GUILD_MEMBER_ADD', {
 			...apiMember({ user: apiUser({ username: 'newbie' }) }),
 			guild_id: '123',
 		});

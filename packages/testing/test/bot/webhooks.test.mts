@@ -35,7 +35,7 @@ describe('non-interaction channel webhooks (sendLog)', () => {
 		await bot.close();
 	});
 
-	test('an event logging via webhook is harvested into the emitEvent result and the channel view', async () => {
+	test('an event logging via webhook is harvested into the emit result and the channel view', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'wh-evt-guild' });
 		world.registerChannel(guild.id, { id: 'join-log', name: 'join-log' });
@@ -53,7 +53,7 @@ describe('non-interaction channel webhooks (sendLog)', () => {
 		});
 
 		const bot = await createMockBot({ events: [onJoin], world });
-		const res = await bot.emitEvent('GUILD_MEMBER_ADD', {
+		const res = await bot.emit('GUILD_MEMBER_ADD', {
 			guild_id: guild.id,
 			...apiMember({ user: apiUser({ username: 'newbie' }) }),
 		});

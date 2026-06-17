@@ -44,7 +44,7 @@ describe('unhandled command errors', () => {
 		const guild = world.registerGuild({ id: 'ev-guild' });
 		const bot = await createMockBot({ events: [onJoin], world });
 		await expect(
-			bot.emitEvent('GUILD_MEMBER_ADD', { guild_id: guild.id, ...apiMember({ user: apiUser() }) }),
+			bot.emit('GUILD_MEMBER_ADD', { guild_id: guild.id, ...apiMember({ user: apiUser() }) }),
 		).rejects.toThrow(/event boom/);
 		await bot.close();
 	});

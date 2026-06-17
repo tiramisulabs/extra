@@ -21,7 +21,7 @@ describe('fidelity fixes', () => {
 		const mentioned = world.registerUser({ id: '123', username: 'mentioned' });
 		const bot = await createMockBot({ world });
 
-		await bot.emitEvent(
+		await bot.emit(
 			'MESSAGE_CREATE',
 			{
 				id: 'mention-msg',
@@ -41,7 +41,7 @@ describe('fidelity fixes', () => {
 		expect(raw?.mention_everyone).toBe(true);
 
 		// allowed_mentions.parse suppresses categories absent from the allowlist.
-		await bot.emitEvent(
+		await bot.emit(
 			'MESSAGE_CREATE',
 			{
 				id: 'limited-msg',
