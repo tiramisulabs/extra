@@ -179,4 +179,31 @@ describe('world snapshot and diff', () => {
 		expect(diff.messages.changed.some(c => c.fields.includes('components'))).toBe(true);
 		await bot.close();
 	});
+
+	test('diff captures channel bitrate and role color edits (previously invisible)', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'extra-fields-guild' });
+		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'ef-actor' }) });
+		const channel = world.registerChannel(guild.id, { id: 'ef-text' });
+		const voice = world.registerChannel(guild.id, { id: 'ef-voice', type: ChannelType.GuildVoice });
+		const role = world.registerRole(guild.id, { id: 'ef-role' });
+
+		@Declare({ name: 'tune', description: 'edits a voice bitrate and a role color' })
+		class Tune extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.client.channels.edit(voice.id, { bitrate: 96000 });
+				await ctx.client.roles.edit(ctx.guildId ?? '', role.id, { color: 0xff00ff });
+				await ctx.write({ content: 'done' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [Tune], world });
+		const before = bot.worldSnapshot();
+		await bot.slash({ name: 'tune', guildId: guild.id, channel, user: actor.user });
+		const diff = bot.worldDiff(before);
+
+		expect(diff.channels.changed.some(c => c.fields.includes('bitrate'))).toBe(true);
+		expect(diff.roles.changed.some(c => c.fields.includes('color'))).toBe(true);
+		await bot.close();
+	});
 });

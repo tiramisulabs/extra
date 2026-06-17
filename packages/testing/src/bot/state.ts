@@ -192,6 +192,9 @@ export interface ChannelSnapshot {
 	rateLimitPerUser?: number;
 	archived?: boolean;
 	locked?: boolean;
+	bitrate?: number;
+	userLimit?: number;
+	autoArchiveDuration?: number;
 }
 
 /** One message captured in a {@link WorldSnapshot}, identified by `id`. */
@@ -242,6 +245,7 @@ export interface RoleSnapshot {
 	name: string;
 	permissions: string;
 	position: number;
+	color?: number;
 }
 
 /** One ban captured in a {@link WorldSnapshot}, identified by `guildId` + `userId`. */
@@ -255,6 +259,7 @@ export interface EmojiSnapshot {
 	guildId: string;
 	id: string;
 	name: string | null;
+	roles?: string[];
 }
 
 /** One invite captured in a {@link WorldSnapshot}, identified by `code`. */
@@ -270,6 +275,9 @@ export interface AutoModRuleSnapshot {
 	id: string;
 	name: string;
 	enabled: boolean;
+	triggerType?: number;
+	eventType?: number;
+	actions?: unknown[];
 }
 
 /** One sticker captured in a {@link WorldSnapshot}, identified by `guildId` + `id`. */
@@ -684,9 +692,15 @@ export class WorldState implements WorldStateReader {
 			...(channel.nsfw === undefined ? {} : { nsfw: channel.nsfw }),
 			...(channel.position === undefined ? {} : { position: channel.position }),
 			...(channel.rate_limit_per_user === undefined ? {} : { rateLimitPerUser: channel.rate_limit_per_user }),
+			...(channel.bitrate === undefined ? {} : { bitrate: channel.bitrate }),
+			...(channel.user_limit === undefined ? {} : { userLimit: channel.user_limit }),
 			...(channel.thread_metadata === undefined
 				? {}
-				: { archived: channel.thread_metadata.archived, locked: channel.thread_metadata.locked }),
+				: {
+						archived: channel.thread_metadata.archived,
+						locked: channel.thread_metadata.locked,
+						autoArchiveDuration: channel.thread_metadata.auto_archive_duration,
+					}),
 		}));
 		const messages: MessageSnapshot[] = this.world.messages.map(entry => ({
 			id: entry.message.id,
@@ -704,6 +718,7 @@ export class WorldState implements WorldStateReader {
 			name: entry.role.name,
 			permissions: entry.role.permissions,
 			position: entry.role.position,
+			...(entry.role.color === undefined ? {} : { color: entry.role.color }),
 		}));
 		const bans: BanSnapshot[] = [...this.bansByGuild].flatMap(([guildId, userIds]) =>
 			[...userIds].map(userId => ({ guildId, userId })),
@@ -712,6 +727,7 @@ export class WorldState implements WorldStateReader {
 			guildId: entry.guildId,
 			id: entry.emoji.id,
 			name: entry.emoji.name,
+			...(entry.emoji.roles === undefined ? {} : { roles: [...entry.emoji.roles] }),
 		}));
 		const invites: InviteSnapshot[] = [...this.invitesByCode.values()].map(invite => ({
 			code: invite.code,
@@ -723,6 +739,9 @@ export class WorldState implements WorldStateReader {
 			id: entry.rule.id,
 			name: entry.rule.name,
 			enabled: entry.rule.enabled,
+			...(entry.rule.trigger_type === undefined ? {} : { triggerType: entry.rule.trigger_type }),
+			...(entry.rule.event_type === undefined ? {} : { eventType: entry.rule.event_type }),
+			...(entry.rule.actions === undefined ? {} : { actions: entry.rule.actions }),
 		}));
 		const stickers: StickerSnapshot[] = (this.world.guildStickers ?? []).map(entry => ({
 			guildId: entry.guildId,
