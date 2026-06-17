@@ -342,12 +342,7 @@ export async function seedWorld(client: UsingClient, world: MockWorld): Promise<
 			// seyfert's channel cache strips permission_overwrites into the separate `overwrites` resource, so a
 			// seeded channel's overwrites are invisible to cache reads unless seeded there directly.
 			if (channel.permission_overwrites?.length) {
-				await client.cache.overwrites?.set(
-					CacheFrom.Test,
-					channel.id,
-					channel.guild_id,
-					channel.permission_overwrites,
-				);
+				await client.cache.overwrites?.set(CacheFrom.Test, channel.id, channel.guild_id, channel.permission_overwrites);
 			}
 		}
 	}

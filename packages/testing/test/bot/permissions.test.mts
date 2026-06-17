@@ -228,7 +228,8 @@ describe('permission emulation', () => {
 			bot.slash({ name: 'world-member-ban', guildId: guild.id, channel: denied, user: owner.user }),
 		).resolves.toMatchObject({ content: 'member ok' });
 		await expect(
-			bot.slash({ name: 'world-member-ban',
+			bot.slash({
+				name: 'world-member-ban',
 				guildId: guild.id,
 				channel: denied,
 				user: member.user,
