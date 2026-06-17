@@ -1,5 +1,5 @@
-import { Client, Command, type CommandContext, Declare } from 'seyfert';
-import { describe, expect, test } from 'vitest';
+import { Client, Command, type CommandContext, createPlugin, Declare } from 'seyfert';
+import { describe, expect, test, vi } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 
 // Mirrors a production bot's module-level `export let client` singleton (e.g. Clippy's start.ts):
@@ -31,5 +31,39 @@ describe('createMockBot({ client })', () => {
 		expect(call?.body).toMatchObject({ content: 'broadcast' });
 
 		await bot.close();
+	});
+
+	test('uses plugins already resolved on a provided client without warning', async () => {
+		const state = { setupRan: false };
+		const plugin = createPlugin({
+			name: 'client-owned-plugin',
+			setup() {
+				state.setupRan = true;
+			},
+		});
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		client = new Client({ plugins: [plugin] });
+
+		const bot = await createMockBot({ client });
+
+		expect(state.setupRan).toBe(true);
+		expect(warn.mock.calls.flat().some(message => String(message).includes('createMockBot({ client, plugins })'))).toBe(
+			false,
+		);
+		await bot.close();
+		warn.mockRestore();
+	});
+
+	test('warns when plugins are passed alongside an already-constructed client', async () => {
+		const plugin = createPlugin({ name: 'ignored-client-plugin' });
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		client = new Client();
+
+		const bot = await createMockBot({ client, plugins: [plugin] });
+
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining('createMockBot({ client, plugins }) ignores'));
+		expect(bot.plugins.map(info => info.name)).not.toContain('ignored-client-plugin');
+		await bot.close();
+		warn.mockRestore();
 	});
 });

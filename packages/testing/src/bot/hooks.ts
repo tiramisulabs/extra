@@ -212,6 +212,13 @@ function installMiddlewareDenialHooks(client: Client, state: DispatchHookInstall
 		wrapped.add(real);
 		wrapped.add(wrapper);
 		middlewares[key] = wrapper;
+		const installed = (
+			client as unknown as {
+				pluginRegistry?: { installedMiddlewares?: Map<string, { middleware: WrappedMiddleware }> };
+			}
+		).pluginRegistry?.installedMiddlewares;
+		const entry = installed?.get(key);
+		if (entry?.middleware === real) entry.middleware = wrapper;
 	}
 }
 

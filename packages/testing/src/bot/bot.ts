@@ -2225,6 +2225,13 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	// keeps working. Plugins must reach the Client constructor — seyfert resolves `client.plugins` there and
 	// `setupPlugins()`/teardown read that resolved list; setting plugins post-construction would not register them.
 	const mergedPlugins = options.plugins ?? options.clientOptions?.plugins;
+	if (options.client && mergedPlugins?.length) {
+		console.warn(
+			'[@slipher/testing] createMockBot({ client, plugins }) ignores the passed plugins because Seyfert ' +
+				'resolves plugins in the Client constructor. Construct the Client with plugins instead: ' +
+				'new Client({ plugins }).',
+		);
+	}
 	const clientOptions: ClientConstructorOptions =
 		prefixList.length || options.globalMiddlewares || options.plugins
 			? {
