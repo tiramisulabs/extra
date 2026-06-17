@@ -318,4 +318,43 @@ describe('component flows', () => {
 		expect(modal.reply?.body).toMatchObject({ data: { content: 'thanks' } });
 		await bot.close();
 	});
+
+	class FeedbackModalButton extends ComponentCommand {
+		componentType = 'Button' as const;
+		filter(ctx: ComponentContext<'Button'>) {
+			return ctx.customId === 'open-feedback';
+		}
+		async run(ctx: ComponentContext<'Button'>) {
+			const modal = new Modal()
+				.setCustomId('feedback-modal')
+				.setTitle('Feedback')
+				.setComponents([
+					new Label().setLabel('Rating').setComponent(new TextInput({ custom_id: 'rating', style: TextInputStyle.Short })),
+				]);
+			const submit = await ctx.interaction.modal(modal, { waitFor: 2000 });
+			if (submit) await submit.write({ content: 'thanks' });
+		}
+	}
+
+	test('fillModal aimed at the wrong customId fails loud against the displayed modal', async () => {
+		const bot = await createMockBot({ components: [FeedbackModalButton] });
+		const user = apiUser({ id: '778' });
+		const dispatch = bot.clickButton('open-feedback', { user });
+		await expect(dispatch.fillModal('wrong-modal', { rating: '5' })).rejects.toThrow(
+			/displayed modal's customId is "feedback-modal", not "wrong-modal"/,
+		);
+		await dispatch.timeoutModal();
+		await bot.close();
+	});
+
+	test('fillModal with a field key no input declares fails loud (ghost field)', async () => {
+		const bot = await createMockBot({ components: [FeedbackModalButton] });
+		const user = apiUser({ id: '779' });
+		const dispatch = bot.clickButton('open-feedback', { user });
+		await expect(dispatch.fillModal('feedback-modal', { bogus: 'x' })).rejects.toThrow(
+			/field\(s\) "bogus" are not inputs on the displayed modal.+Known inputs: rating/s,
+		);
+		await dispatch.timeoutModal();
+		await bot.close();
+	});
 });

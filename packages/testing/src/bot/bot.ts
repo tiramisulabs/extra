@@ -603,6 +603,18 @@ function findComponentType(components: unknown, customId: string): number | unde
 	return undefined;
 }
 
+/** Collect every nested custom_id in a modal's component tree (text inputs, possibly wrapped in Label rows). */
+function collectComponentCustomIds(components: unknown, into: Set<string>): void {
+	if (!Array.isArray(components)) return;
+	for (const node of components) {
+		if (!node || typeof node !== 'object') continue;
+		const entry = node as { custom_id?: string; component?: unknown; components?: unknown };
+		if (typeof entry.custom_id === 'string') into.add(entry.custom_id);
+		collectComponentCustomIds(entry.components, into);
+		if (entry.component) collectComponentCustomIds([entry.component], into);
+	}
+}
+
 /**
  * Yield once so pending async (REST hops, collector onStop continuations) can settle. Uses the real
  * setImmediate captured at load — so it advances even when the user faked global timers — and otherwise a
@@ -635,6 +647,8 @@ export class MockBot {
 	private readonly dispatches: Dispatch<unknown>[] = [];
 	/** Pending modal waiters keyed by userId; resolved when seyfert registers a modal via components.modals.set. */
 	private readonly modalWaiters = new Map<string, (() => void)[]>();
+	/** Modal definition displayed to a user (customId + input customIds), captured when seyfert registers it. */
+	private readonly displayedModals = new Map<string, { customId?: string; inputIds: Set<string> }>();
 	private closed = false;
 	/** The most recent interaction-original message, used to resolve a collector source for an immediate reply. */
 	private lastInteractionMessage?: { id: string; channel_id?: string };
@@ -864,6 +878,50 @@ export class MockBot {
 		throw new TypeError(
 			`fillModal: no modal "${customId}" is waiting for user "${userId}" and no ModalCommand is registered. ${hint}`,
 		);
+	}
+
+	/**
+	 * Snapshot the modal definition seyfert just displayed to `userId` (custom_id + the set of input customIds),
+	 * read from the most recent type-9 interaction callback. Lets {@link assertModalMatchesDisplayed} reject a
+	 * fillModal aimed at the wrong customId or carrying field keys that no input on the modal accepts.
+	 */
+	private captureDisplayedModal(userId: string): void {
+		for (let i = this.rest.actions.length - 1; i >= 0; i--) {
+			const action = this.rest.actions[i];
+			if (!action.route.includes('/callback')) continue;
+			const body = action.body as { type?: number; data?: Record<string, unknown> } | undefined;
+			if (body?.type !== 9) continue;
+			const data = body.data ?? {};
+			const inputIds = new Set<string>();
+			collectComponentCustomIds(data.components, inputIds);
+			this.displayedModals.set(userId, { customId: data.custom_id as string | undefined, inputIds });
+			return;
+		}
+	}
+
+	/**
+	 * Cross-check a fillModal against the modal that was actually displayed: the customId must match, and every
+	 * field key must correspond to a real input on the modal. Skipped when no displayed modal was captured (e.g. a
+	 * ModalCommand-only flow), so it never blocks the registry path that {@link assertModalHandleable} already guards.
+	 */
+	private assertModalMatchesDisplayed(customId: string, fields: Record<string, string>, userId: string): void {
+		const displayed = this.displayedModals.get(userId);
+		if (!displayed) return;
+		if (displayed.customId !== undefined && displayed.customId !== customId) {
+			throw new TypeError(
+				`fillModal: the displayed modal's customId is "${displayed.customId}", not "${customId}". ` +
+					`Pass the customId the command opened the modal with.`,
+			);
+		}
+		const ghost = Object.keys(fields).filter(key => !displayed.inputIds.has(key));
+		if (ghost.length > 0) {
+			const known = [...displayed.inputIds].join(', ') || '(none)';
+			throw new TypeError(
+				`fillModal: field(s) ${ghost.map(key => `"${key}"`).join(', ')} are not inputs on the displayed modal. ` +
+					`Known inputs: ${known}.`,
+			);
+		}
+		this.displayedModals.delete(userId);
 	}
 
 	/** Read a `{ id, channel_id? }` message source out of a recorded REST response, or undefined if it has no id. */
@@ -1310,6 +1368,7 @@ export class MockBot {
 		const capabilities = installDispatchHooksImpl(this.client, {
 			modalWaiters: this.modalWaiters,
 			drainUntilQuiescent: (dispatchId, aborted) => this.drainUntilQuiescent(dispatchId, aborted),
+			onModalDisplayed: userId => this.captureDisplayedModal(userId),
 		});
 		this.canDetectComponentCommand = capabilities.canDetectComponentCommand;
 		this.canDetectCollector = capabilities.canDetectCollector;
@@ -1686,7 +1745,9 @@ export class MockBot {
 	): Dispatch<DispatchResult> {
 		const opts: ModalSubmitInteractionOptions = { ...extra, customId, fields };
 		return this.dispatchVia('fillModal', opts, prepared => {
-			this.assertModalHandleable(customId, prepared.user?.id ?? this.defaultUser.id);
+			const userId = prepared.user?.id ?? this.defaultUser.id;
+			this.assertModalHandleable(customId, userId);
+			this.assertModalMatchesDisplayed(customId, fields, userId);
 			return modalSubmitInteraction(prepared);
 		});
 	}
@@ -1877,6 +1938,8 @@ export class MockBot {
 		this.client.components.modals.clear();
 		this.client.components.values.clear();
 		this.modalWaiters.clear();
+		this.displayedModals.clear();
+		this.unregisteredMemberWarnings.clear();
 		this.lastInteractionMessage = undefined;
 	}
 
