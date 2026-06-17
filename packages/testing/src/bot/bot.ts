@@ -588,6 +588,22 @@ const realSetImmediate: typeof setImmediate | undefined = capturedSetImmediate
 	: undefined;
 
 /**
+ * Walk a message's component tree (action rows plus V2 nesting containers) for a node whose custom_id matches,
+ * returning its numeric `type`. Used to cross-check a component dispatch verb against the declared component.
+ */
+function findComponentType(components: unknown, customId: string): number | undefined {
+	if (!Array.isArray(components)) return undefined;
+	for (const node of components) {
+		if (!node || typeof node !== 'object') continue;
+		const entry = node as { type?: number; custom_id?: string; components?: unknown };
+		if (entry.custom_id === customId && typeof entry.type === 'number') return entry.type;
+		const nested = findComponentType(entry.components, customId);
+		if (nested !== undefined) return nested;
+	}
+	return undefined;
+}
+
+/**
  * Yield once so pending async (REST hops, collector onStop continuations) can settle. Uses the real
  * setImmediate captured at load — so it advances even when the user faked global timers — and otherwise a
  * microtask. Robust to faked timers: never schedules through the faked global, so it cannot hang.
@@ -809,6 +825,30 @@ export class MockBot {
 			`${verb}: no source message resolved for "${customId}" and no ComponentCommand is registered. ` +
 				`Send or pass a source message for collectors, or register a ComponentCommand handler.`,
 		);
+	}
+
+	/**
+	 * Structural cross-check: seyfert collectors route purely by customId (no type filter), so clicking a button
+	 * on a customId that the source message actually declares as a select menu (or vice versa) would silently
+	 * fire the wrong handler — a false green where the handler reads `.values` off a button interaction. When the
+	 * resolved message carries the component definition, assert the dispatch verb matches the declared type.
+	 */
+	private assertComponentVerbType(verb: 'clickButton' | 'selectMenu', customId: string, message: ApiMessage): void {
+		const type = findComponentType(message.components, customId);
+		if (type === undefined) return;
+		const isSelect = type === 3 || (type >= 5 && type <= 8);
+		if (verb === 'clickButton' && isSelect) {
+			throw new TypeError(
+				`clickButton: customId "${customId}" on this message is a select menu (type ${type}), not a button. ` +
+					`Use bot.selectMenu("${customId}", [values]) instead.`,
+			);
+		}
+		if (verb === 'selectMenu' && type === 2) {
+			throw new TypeError(
+				`selectMenu: customId "${customId}" on this message is a button (type 2), not a select menu. ` +
+					`Use bot.clickButton("${customId}") instead.`,
+			);
+		}
 	}
 
 	private assertModalHandleable(customId: string, userId: string): void {
@@ -1602,9 +1642,11 @@ export class MockBot {
 		return this.dispatchVia('clickButton', opts, prepared => {
 			const message = this.resolveMessageSource(source);
 			this.assertComponentHandleable('clickButton', customId, message);
+			const hydrated = message?.id ? this.hydrateSourceMessage(message) : undefined;
+			if (hydrated) this.assertComponentVerbType('clickButton', customId, hydrated);
 			return buttonInteraction({
 				...prepared,
-				...(message?.id ? { message: this.hydrateSourceMessage(message) } : {}),
+				...(hydrated ? { message: hydrated } : {}),
 			});
 		});
 	}
@@ -1626,11 +1668,13 @@ export class MockBot {
 		return this.dispatchVia('selectMenu', opts, prepared => {
 			const message = this.resolveMessageSource(source);
 			this.assertComponentHandleable('selectMenu', customId, message);
+			const hydrated = message?.id ? this.hydrateSourceMessage(message) : undefined;
+			if (hydrated) this.assertComponentVerbType('selectMenu', customId, hydrated);
 			const resolved = resolveSelectResolved(this._world, customId, values, prepared);
 			return selectMenuInteraction({
 				...prepared,
 				...(resolved ? { resolved } : {}),
-				...(message?.id ? { message: this.hydrateSourceMessage(message) } : {}),
+				...(hydrated ? { message: hydrated } : {}),
 			});
 		});
 	}

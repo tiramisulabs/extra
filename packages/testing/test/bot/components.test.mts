@@ -134,6 +134,46 @@ describe('component flows', () => {
 		await bot.close();
 	});
 
+	test('clickButton on a customId the message declares as a select fails loud (wrong verb)', async () => {
+		@Declare({ name: 'menu', description: 'Posts a select menu' })
+		class MenuCommand extends Command {
+			async run(ctx: CommandContext) {
+				const row = new ActionRow().setComponents([
+					new StringSelectMenu()
+						.setCustomId('pick')
+						.setOptions([new StringSelectOption().setLabel('Red').setValue('red')]),
+				]);
+				await ctx.write({ content: 'Pick one', components: [row] });
+				const message = await ctx.fetchResponse();
+				message.createComponentCollector().run<StringSelectMenuInteraction>('pick', async () => {});
+			}
+		}
+
+		const bot = await createMockBot({ commands: [MenuCommand] });
+		await bot.slash({ name: 'menu' });
+		expect(() => bot.clickButton('pick')).toThrow(/is a select menu \(type 3\), not a button.+selectMenu/s);
+		await bot.close();
+	});
+
+	test('selectMenu on a customId the message declares as a button fails loud (wrong verb)', async () => {
+		@Declare({ name: 'confirm-panel', description: 'Posts a button' })
+		class ConfirmPanel extends Command {
+			async run(ctx: CommandContext) {
+				const row = new ActionRow().setComponents([
+					new Button().setCustomId('go').setLabel('Go').setStyle(ButtonStyle.Primary),
+				]);
+				await ctx.write({ content: 'Press it', components: [row] });
+				const message = await ctx.fetchResponse();
+				message.createComponentCollector().run('go', async () => {});
+			}
+		}
+
+		const bot = await createMockBot({ commands: [ConfirmPanel] });
+		await bot.slash({ name: 'confirm-panel' });
+		expect(() => bot.selectMenu('go', ['x'])).toThrow(/is a button \(type 2\), not a select menu.+clickButton/s);
+		await bot.close();
+	});
+
 	test('selectMenu auto-resolves seeded entity select values', async () => {
 		const seen: string[][] = [];
 		const world = mockWorld();
