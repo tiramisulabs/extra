@@ -65,6 +65,27 @@ describe('emitEvent result and factories', () => {
 		await bot.close();
 	});
 
+	test('a rejected emit (no handler) does not dirty the world', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'g' });
+		const bot = await createMockBot({ world });
+
+		await expect(
+			bot.emitEvent('GUILD_MEMBER_ADD', { guild_id: guild.id, ...apiMember({ user: apiUser({ id: 'ghost' }) }) }),
+		).rejects.toThrow(/no handler ran/);
+		// guard runs BEFORE the world bridge, so the member was never added
+		expect(bot.worldMember(guild.id, 'ghost')).toBeUndefined();
+		await bot.close();
+	});
+
+	test('allowNoHandler on a non-bridged / typo name fails loud (it would do nothing)', async () => {
+		const bot = await createMockBot({});
+		await expect(
+			bot.emitEvent('GUILD_MEMBER_ADDD' as 'GUILD_MEMBER_ADD', { guild_id: '1' }, { allowNoHandler: true }),
+		).rejects.toThrow(/had no effect/);
+		await bot.close();
+	});
+
 	test('memberRemoveEvent builds the removal payload', async () => {
 		const left: string[] = [];
 		const onLeave = createEvent({

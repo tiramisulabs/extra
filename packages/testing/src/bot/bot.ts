@@ -100,7 +100,7 @@ import {
 	type WorldStateReader,
 } from './state';
 import { type MockWorld, seedWorld, type WorldBuilder } from './world';
-import { applyWorldEvent } from './world-events';
+import { applyWorldEvent, WORLD_EVENT_NAMES } from './world-events';
 
 export { Dispatch } from './dispatch';
 export { WORLD_EVENT_NAMES } from './world-events';
@@ -1744,8 +1744,10 @@ export class MockBot {
 				this.client,
 				undefined,
 				async () => {
-					if (updateCache) this.applyWorldEvent(name, d);
-					if (!allowNoHandler && !this.eventHandlerRan(name)) {
+					// Guard BEFORE mutating the world, so a rejected emit is a true no-op (no dirtied world state,
+					// and seyfert's cache — updated later inside runEvent — stays consistent with the world).
+					const handlerRan = this.eventHandlerRan(name);
+					if (!handlerRan && !allowNoHandler) {
 						throw new Error(
 							`emitEvent: no handler ran for "${name}". Gateway names are UPPER_SNAKE_CASE ` +
 								`(e.g. 'GUILD_MEMBER_ADD', not 'guildMemberAdd'). Register an Event via events:[...], or pass ` +
@@ -1753,6 +1755,16 @@ export class MockBot {
 								`Registered events: ${this.registeredEvents().join(', ') || '(none)'}.`,
 						);
 					}
+					// allowNoHandler is for seeding world state via the bridge; a name that is neither handled nor a
+					// bridged world event does literally nothing — almost always a mis-cased/typo'd gateway name.
+					if (!handlerRan && allowNoHandler && !WORLD_EVENT_NAMES.includes(name)) {
+						throw new Error(
+							`emitEvent: "${name}" had no effect — no handler ran and it is not a world-bridge event. ` +
+								`Check the gateway name is UPPER_SNAKE_CASE (e.g. 'GUILD_MEMBER_ADD'). ` +
+								`Bridged events: ${[...WORLD_EVENT_NAMES].join(', ')}.`,
+						);
+					}
+					if (updateCache) this.applyWorldEvent(name, d);
 					const ctx: DispatchContext = {
 						dispatchId,
 						componentCommandExecuted: false,
