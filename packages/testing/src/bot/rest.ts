@@ -2,7 +2,7 @@ import { ApiHandler } from 'seyfert';
 import type { ApiRequestOptions, HttpMethods } from 'seyfert/lib/api/shared';
 import { dispatchStore } from './dispatch-context';
 import { apiMessage } from './payloads';
-import { CHANNEL_MESSAGE_POST, Routes, WEBHOOK_EXECUTE_POST } from './routes';
+import { CHANNEL_MESSAGE_POST, WEBHOOK_EXECUTE_POST } from './routes';
 
 // Capture the real setTimeout/clearTimeout at module load so the internal waitForAction/gate control timeout
 // runs on the wall clock even when a test fakes global timers (vi.useFakeTimers replaces globalThis.setTimeout).
@@ -50,14 +50,17 @@ export class MockApiError extends Error {
 export const ErrorCode = {
 	UnknownChannel: 10003,
 	UnknownGuild: 10004,
+	UnknownUser: 10013,
 	UnknownMember: 10007,
 	UnknownMessage: 10008,
 	UnknownWebhook: 10015,
 	UnknownBan: 10026,
 	UnknownInvite: 10006,
+	UnknownGuildTemplate: 10057,
 	UnknownRole: 10011,
 	UnknownEmoji: 10014,
 	UnknownSticker: 10060,
+	UnknownStageInstance: 10067,
 	UnknownScheduledEvent: 180000,
 	MaxPinnedMessages: 30003,
 	CannotEditAnotherUsersMessage: 50005,
@@ -101,13 +104,16 @@ export const DiscordErrors = {
 	UnknownGuild: { status: 404, code: 10004, message: 'Unknown Guild' },
 	UnknownChannel: { status: 404, code: 10003, message: 'Unknown Channel' },
 	UnknownMessage: { status: 404, code: 10008, message: 'Unknown Message' },
+	UnknownUser: { status: 404, code: 10013, message: 'Unknown User' },
 	UnknownMember: { status: 404, code: 10007, message: 'Unknown Member' },
 	UnknownBan: { status: 404, code: 10026, message: 'Unknown Ban' },
 	UnknownWebhook: { status: 404, code: 10015, message: 'Unknown Webhook' },
 	UnknownInvite: { status: 404, code: 10006, message: 'Unknown Invite' },
+	UnknownGuildTemplate: { status: 404, code: 10057, message: 'Unknown Guild Template' },
 	UnknownRole: { status: 404, code: 10011, message: 'Unknown Role' },
 	UnknownEmoji: { status: 404, code: 10014, message: 'Unknown Emoji' },
 	UnknownSticker: { status: 404, code: 10060, message: 'Unknown Sticker' },
+	UnknownStageInstance: { status: 404, code: 10067, message: 'Unknown Stage Instance' },
 	UnknownScheduledEvent: { status: 404, code: 180000, message: 'Unknown Guild Scheduled Event' },
 	CannotEditAnotherUsersMessage: {
 		status: 403,
@@ -201,26 +207,15 @@ function compileRoute(route: string): { pattern: RegExp; names: string[] } {
 	return { pattern: new RegExp(`^/${source}$`), names };
 }
 
-const MODELED_ROUTES: { method: HttpMethods; pattern: RegExp }[] = Object.values(Routes).map(route => ({
-	method: route.method,
-	pattern: compileRoute(route.route).pattern,
-}));
-
-function matchesModeledRoute(method: HttpMethods, route: string): boolean {
-	return MODELED_ROUTES.some(entry => entry.method === method && entry.pattern.test(route));
-}
-
 /**
  * Declarative shapes for synthetic GET fallbacks (an unhandled GET that matches no interceptor). First
- * matching row wins; routes with no row default to `{}`. `webhookExempt` rows do NOT report-unhandled for
- * `/webhooks/` routes (interaction-response reads legitimately fall through to a synthetic) — the default
- * (no row) is also webhook-exempt. Collection reads warn unconditionally.
+ * matching row wins; routes with no row default to `{}`.
  */
-const SYNTHETIC_GET_SHAPES: { pattern: RegExp; shape: () => unknown; webhookExempt?: boolean }[] = [
+const SYNTHETIC_GET_SHAPES: { pattern: RegExp; shape: () => unknown }[] = [
 	{ pattern: /\/(messages|bans|roles|channels|pins|invites|emojis|stickers|members)(\?|$)/, shape: () => [] },
 	{ pattern: /\/reactions\//, shape: () => [] },
 	{ pattern: /\/threads\/(archived|active)/, shape: () => ({ threads: [], members: [] }) },
-	{ pattern: /\/messages\/[^/]+$/, shape: () => apiMessage(), webhookExempt: true },
+	{ pattern: /\/messages\/[^/]+$/, shape: () => apiMessage() },
 ];
 
 function definedBody(body: Record<string, unknown> | undefined): Record<string, unknown> {
@@ -316,7 +311,7 @@ export class MockApiHandler extends ApiHandler {
 
 	constructor(options: { onUnhandledRest?: 'warn' | 'error' | 'silent' } = {}) {
 		super({ token: 'slipher-mock-token' });
-		this.unhandled = options.onUnhandledRest ?? 'warn';
+		this.unhandled = options.onUnhandledRest ?? 'error';
 	}
 
 	private reportUnhandled(pending: PendingAction): void {
@@ -567,7 +562,10 @@ export class MockApiHandler extends ApiHandler {
 					? (action: RecordedAction) => this.matches(matcherOrPredicate, action)
 					: (action: RecordedAction) => this.filterMatches(action, matcherOrPredicate, {});
 
-		const existing = this.actions.find(predicate);
+		const existing = this.actions.find(
+			action =>
+				predicate(action) && (resolveOn === 'pending' || action.response !== undefined || action.error !== undefined),
+		);
 		if (existing) return Promise.resolve(enrich(existing));
 
 		return new Promise((resolve, reject) => {
@@ -697,21 +695,16 @@ export class MockApiHandler extends ApiHandler {
 			return interceptor.responder(pending, params);
 		}
 
-		// No interceptor handled a request that matches a modeled Route: surface the gap
-		// (respecting onUnhandledRest) instead of silently answering with a synthetic.
-		if (matchesModeledRoute(pending.method, pending.route)) {
-			this.reportUnhandled(pending);
-			return this.markSynthetic(this.syntheticResponse(pending));
-		}
-
+		// No interceptor handled this request. Surface the gap (respecting onUnhandledRest) before answering with
+		// a synthetic, regardless of whether the route is already modeled; otherwise strict mode misses typos and
+		// newly introduced non-GET endpoints.
+		this.reportUnhandled(pending);
 		return this.markSynthetic(this.syntheticResponse(pending));
 	}
 
 	private syntheticResponse(pending: PendingAction): unknown {
 		if (pending.method === 'GET') {
 			const entry = SYNTHETIC_GET_SHAPES.find(row => row.pattern.test(pending.route));
-			const webhookExempt = entry?.webhookExempt ?? true;
-			if (!webhookExempt || !/\/webhooks\//.test(pending.route)) this.reportUnhandled(pending);
 			return entry ? entry.shape() : {};
 		}
 

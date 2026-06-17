@@ -32,6 +32,10 @@ interface EncodedOptionLike {
 	value: string | number | boolean;
 	resolved?: {
 		channels?: Record<string, { type?: number }>;
+		users?: Record<string, unknown>;
+		members?: Record<string, unknown>;
+		roles?: Record<string, unknown>;
+		attachments?: Record<string, unknown>;
 	};
 }
 
@@ -98,6 +102,29 @@ export function optionTypesFor(definitions: CommandOptionDefinition[]): Record<s
 	return Object.fromEntries(definitions.map(option => [option.name, option.type]));
 }
 
+function requireEncodedOption(
+	name: string,
+	input: OptionInput,
+	expectedType: number,
+	helper: string,
+): EncodedOptionLike {
+	if (!isEncodedOption(input) || input.type !== expectedType) {
+		throw new TypeError(`slash: option "${name}" must be provided with ${helper} when validateOptions is enabled.`);
+	}
+	return input;
+}
+
+function requireResolvedEntry(
+	name: string,
+	input: EncodedOptionLike,
+	key: 'users' | 'members' | 'channels' | 'roles' | 'attachments',
+): void {
+	const value = String(input.value);
+	if (!input.resolved?.[key]?.[value]) {
+		throw new TypeError(`slash: option "${name}" is missing resolved.${key}["${value}"].`);
+	}
+}
+
 function validateChatInputOptions(options: ChatInputInteractionOptions, definitions: CommandOptionDefinition[]): void {
 	const entries = new Map(optionEntries(options.options));
 	const declared = new Set(definitions.map(definition => definition.name));
@@ -151,14 +178,53 @@ function validateChatInputOptions(options: ChatInputInteractionOptions, definiti
 			continue;
 		}
 
-		if (definition.type === CommandOptionType.Channel && definition.channel_types?.length && isEncodedOption(input)) {
-			const channel = input.resolved?.channels?.[String(input.value)];
-			if (channel?.type !== undefined && !definition.channel_types.includes(channel.type)) {
+		if (definition.type === CommandOptionType.Boolean) {
+			if (typeof value !== 'boolean') throw new TypeError(`slash: option "${definition.name}" must be a boolean.`);
+			continue;
+		}
+
+		if (definition.type === CommandOptionType.User) {
+			const encoded = requireEncodedOption(definition.name, input, definition.type, 'userOption(...)');
+			requireResolvedEntry(definition.name, encoded, 'users');
+			continue;
+		}
+
+		if (definition.type === CommandOptionType.Role) {
+			const encoded = requireEncodedOption(definition.name, input, definition.type, 'roleOption(...)');
+			requireResolvedEntry(definition.name, encoded, 'roles');
+			continue;
+		}
+
+		if (definition.type === CommandOptionType.Mentionable) {
+			const encoded = requireEncodedOption(definition.name, input, definition.type, 'mentionableOption(...)');
+			const valueKey = String(encoded.value);
+			if (!encoded.resolved?.users?.[valueKey] && !encoded.resolved?.roles?.[valueKey]) {
+				throw new TypeError(`slash: option "${definition.name}" is missing resolved user or role "${valueKey}".`);
+			}
+			continue;
+		}
+
+		if (definition.type === CommandOptionType.Channel) {
+			const encoded = requireEncodedOption(definition.name, input, definition.type, 'channelOption(...)');
+			requireResolvedEntry(definition.name, encoded, 'channels');
+			const channel = encoded.resolved?.channels?.[String(encoded.value)];
+			if (
+				definition.channel_types?.length &&
+				channel?.type !== undefined &&
+				!definition.channel_types.includes(channel.type)
+			) {
 				throw new TypeError(
 					`slash: option "${definition.name}" channel type ${channel.type} is not allowed. ` +
 						`Allowed: ${definition.channel_types.join(', ')}.`,
 				);
 			}
+			continue;
+		}
+
+		if (definition.type === CommandOptionType.Attachment) {
+			const encoded = requireEncodedOption(definition.name, input, definition.type, 'attachmentOption(...)');
+			requireResolvedEntry(definition.name, encoded, 'attachments');
+			continue;
 		}
 	}
 }

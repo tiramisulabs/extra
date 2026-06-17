@@ -24,7 +24,7 @@ import {
 import { resetMockIds } from '../id';
 import { TEST_APPLICATION_ID, TEST_BOT_ID, TEST_CHANNEL_ID, TEST_GUILD_ID, TEST_USER_ID } from './constants';
 import { registerWorldDefaults } from './defaults';
-import { Dispatch } from './dispatch';
+import { Dispatch, type ModalWaiter } from './dispatch';
 import {
 	type DispatchContext,
 	type DispatchDenial,
@@ -90,10 +90,15 @@ import {
 	type EmbedView,
 	type GuildMemberView,
 	type GuildView,
+	arrayValue,
+	asRecord,
 	harvestComponents,
 	type MessageView,
 	normalizeEmbed,
+	numberValue,
 	type RoleView,
+	stringValue,
+	walkComponents,
 	type WorldDiff,
 	type WorldSnapshot,
 	WorldState,
@@ -591,16 +596,21 @@ const realSetImmediate: typeof setImmediate | undefined = capturedSetImmediate
  * Walk a message's component tree (action rows plus V2 nesting containers) for a node whose custom_id matches,
  * returning its numeric `type`. Used to cross-check a component dispatch verb against the declared component.
  */
+function findComponentNode(components: unknown, customId: string): Record<string, unknown> | undefined {
+	let found: Record<string, unknown> | undefined;
+	walkComponents(components, node => {
+		if (!found && node.custom_id === customId) found = node;
+	});
+	return found;
+}
+
 function findComponentType(components: unknown, customId: string): number | undefined {
-	if (!Array.isArray(components)) return undefined;
-	for (const node of components) {
-		if (!node || typeof node !== 'object') continue;
-		const entry = node as { type?: number; custom_id?: string; components?: unknown };
-		if (entry.custom_id === customId && typeof entry.type === 'number') return entry.type;
-		const nested = findComponentType(entry.components, customId);
-		if (nested !== undefined) return nested;
-	}
-	return undefined;
+	return numberValue(findComponentNode(components, customId)?.type);
+}
+
+function selectTypeForInteraction(type: number | undefined): SelectMenuInteractionOptions['componentType'] | undefined {
+	if (type === undefined) return undefined;
+	return type === 3 || (type >= 5 && type <= 8) ? (type as 3 | 5 | 6 | 7 | 8) : undefined;
 }
 
 /** Collect every nested custom_id in a modal's component tree (text inputs, possibly wrapped in Label rows). */
@@ -646,9 +656,12 @@ export class MockBot {
 	private readonly unregisteredMemberWarnings = new Set<string>();
 	private readonly dispatches: Dispatch<unknown>[] = [];
 	/** Pending modal waiters keyed by userId; resolved when seyfert registers a modal via components.modals.set. */
-	private readonly modalWaiters = new Map<string, (() => void)[]>();
+	private readonly modalWaiters = new Map<string, ModalWaiter[]>();
+	/** The dispatch that owns the currently registered waitFor modal for a user. */
+	private readonly modalOwners = new Map<string, number>();
 	/** Modal definition displayed to a user (customId + input customIds), captured when seyfert registers it. */
 	private readonly displayedModals = new Map<string, { customId?: string; inputIds: Set<string> }>();
+	private virtualNowMs = Date.now();
 	private closed = false;
 	/** The most recent interaction-original message, used to resolve a collector source for an immediate reply. */
 	private lastInteractionMessage?: { id: string; channel_id?: string };
@@ -736,16 +749,19 @@ export class MockBot {
 			? this._world.channels.find(channel => channel.id === options.channel?.id)
 			: undefined;
 		const channel = seededChannel ?? options.channel;
-		const memberPermissions = computeChannelPermissions({
-			guild,
-			roles: guildRoles,
-			member: {
-				userId: memberEntry.member.user.id,
-				roles: memberEntry.member.roles,
-				communicationDisabledUntil: memberEntry.member.communication_disabled_until,
+		const memberPermissions = computeChannelPermissions(
+			{
+				guild,
+				roles: guildRoles,
+				member: {
+					userId: memberEntry.member.user.id,
+					roles: memberEntry.member.roles,
+					communicationDisabledUntil: memberEntry.member.communication_disabled_until,
+				},
+				channel,
 			},
-			channel,
-		});
+			this.nowMs(),
+		);
 		const next: T = {
 			...options,
 			user: memberEntry.member.user,
@@ -761,16 +777,19 @@ export class MockBot {
 			entry => entry.guildId === guild.id && entry.member.user.id === this.client.botId,
 		);
 		if (botEntry) {
-			next.permissions = computeChannelPermissions({
-				guild,
-				roles: guildRoles,
-				member: {
-					userId: botEntry.member.user.id,
-					roles: botEntry.member.roles,
-					communicationDisabledUntil: botEntry.member.communication_disabled_until,
+			next.permissions = computeChannelPermissions(
+				{
+					guild,
+					roles: guildRoles,
+					member: {
+						userId: botEntry.member.user.id,
+						roles: botEntry.member.roles,
+						communicationDisabledUntil: botEntry.member.communication_disabled_until,
+					},
+					channel,
 				},
-				channel,
-			});
+				this.nowMs(),
+			);
 		}
 
 		return next;
@@ -862,6 +881,47 @@ export class MockBot {
 				`selectMenu: customId "${customId}" on this message is a button (type 2), not a select menu. ` +
 					`Use bot.clickButton("${customId}") instead.`,
 			);
+		}
+	}
+
+	private requireComponentOnMessage(
+		verb: 'clickButton' | 'selectMenu',
+		customId: string,
+		message: ApiMessage,
+	): Record<string, unknown> {
+		const component = findComponentNode(message.components, customId);
+		if (!component) {
+			throw new TypeError(
+				`${verb}: source message "${message.id}" does not contain a component with customId "${customId}". ` +
+					`Pass the message that actually rendered the component.`,
+			);
+		}
+		this.assertComponentVerbType(verb, customId, message);
+		return component;
+	}
+
+	private assertSelectValuesMatchSource(customId: string, values: string[], component: Record<string, unknown>): void {
+		const type = numberValue(component.type);
+		if (type !== 3 && !(type !== undefined && type >= 5 && type <= 8)) return;
+		const min = numberValue(component.min_values) ?? 1;
+		const max = numberValue(component.max_values) ?? 1;
+		if (values.length < min) {
+			throw new TypeError(`selectMenu: "${customId}" selected ${values.length} value(s), below min_values ${min}.`);
+		}
+		if (values.length > max) {
+			throw new TypeError(`selectMenu: "${customId}" selected ${values.length} value(s), above max_values ${max}.`);
+		}
+		if (type !== 3) return;
+		const allowed = new Set(
+			arrayValue(component.options)
+				.map(option => stringValue(asRecord(option).value))
+				.filter((value): value is string => value !== undefined),
+		);
+		for (const value of values) {
+			if (!allowed.has(value)) {
+				const known = [...allowed].join(', ') || '(none)';
+				throw new TypeError(`selectMenu: value "${value}" is not an option for "${customId}". Known values: ${known}.`);
+			}
 		}
 	}
 
@@ -960,23 +1020,70 @@ export class MockBot {
 		if (source) {
 			const resolved = this.messageSourceFrom(source.response);
 			if (resolved) return resolved;
+			throw new TypeError(
+				`component source: explicit RecordedAction ${source.method} ${source.route} has no message id in its response. ` +
+					`Use the action that created/fetched the component message, or pass source: "message-id" explicitly.`,
+			);
 		}
 		// Fall back to the most recent interaction-original message so a collector attached to an immediate
 		// reply (which produces no channel-message REST action) still has a resolvable source.
 		return this.lastSentMessage() ?? this.lastInteractionMessage;
 	}
 
-	private hydrateSourceMessage(source: { id: string; channel_id?: string }): ApiMessage {
+	private hydrateSourceMessage(
+		source: { id: string; channel_id?: string },
+		strict?: { verb: 'clickButton' | 'selectMenu'; customId: string },
+	): ApiMessage {
 		const stored = source.channel_id
 			? this._state.rawMessage(source.channel_id, source.id)
 			: this._state.rawMessageById(source.id);
 		if (stored) return stored;
+		if (strict) {
+			throw new TypeError(
+				`${strict.verb}: source message "${source.id}" was not found for customId "${strict.customId}". ` +
+					`Send the message first or pass a RecordedAction whose response is the component message.`,
+			);
+		}
 		return apiMessage({ id: source.id, channelId: source.channel_id });
 	}
 
 	private worldMemberFor(guildId: string | null | undefined, user: ApiUser | undefined): ApiMember | undefined {
 		if (!this._world || !guildId || !user) return undefined;
 		return this._world.members.find(entry => entry.guildId === guildId && entry.member.user.id === user.id)?.member;
+	}
+
+	private nowMs(): number {
+		return this.timers ? this.virtualNowMs : Date.now();
+	}
+
+	private inferDrainDispatchId(scope?: Dispatch<unknown> | number): number | undefined {
+		if (typeof scope === 'number') return scope;
+		if (scope) return scope.dispatchId;
+		const active = this.dispatches.filter(dispatch => dispatch.started && !dispatch.isCompleted);
+		if (active.length > 1) {
+			throw new TypeError(
+				`advanceTime/flushPending: ${active.length} dispatches are currently running. ` +
+					`Pass the dispatch to scope the drain, e.g. bot.advanceTime(ms, dispatch).`,
+			);
+		}
+		return active[0]?.dispatchId;
+	}
+
+	private assertNoConcurrentSyntheticComponentSource(
+		verb: 'clickButton' | 'selectMenu',
+		customId: string,
+		sourceProvided: boolean,
+		message: { id: string; channel_id?: string } | undefined,
+	): void {
+		if (message || sourceProvided) return;
+		if (!this.hasComponentCommand()) return;
+		const unsettled = this.dispatches.filter(dispatch => !dispatch.isCompleted);
+		if (unsettled.length === 0) return;
+		throw new TypeError(
+			`${verb}: no source message resolved for "${customId}" while another dispatch is still running. ` +
+				`Passing no source would fabricate a fresh component message for the ComponentCommand and can race with ` +
+				`collector/source resolution. Pass source: "message-id" or a RecordedAction whose response is the message.`,
+		);
 	}
 
 	get actions(): readonly RecordedAction[] {
@@ -1200,12 +1307,35 @@ export class MockBot {
 	 * opener command calls synchronously while replying). Used by {@link Dispatch.untilModal} to await
 	 * registration event-driven instead of polling a wall clock. Resolves immediately if already registered.
 	 */
-	private onModalRegistered(userId: string): Promise<void> {
-		if (this.client.components.modals.has(userId)) return Promise.resolve();
-		return new Promise<void>(resolve => {
+	private onModalRegistered(userId: string, dispatchId: number | undefined): Promise<void> {
+		if (dispatchId === undefined) {
+			return Promise.reject(new TypeError('untilModal: this dispatch has no dispatch id; cannot own a modal.'));
+		}
+		if (this.client.components.modals.has(userId)) {
+			const owner = this.modalOwners.get(userId);
+			if (owner === undefined || owner === dispatchId) return Promise.resolve();
+			return Promise.reject(
+				new TypeError(
+					`untilModal: user ${userId} already has a pending modal owned by dispatch ${owner}. ` +
+						`Same-user modal flows must be driven sequentially.`,
+				),
+			);
+		}
+		const existing = this.modalWaiters.get(userId);
+		const other = existing?.find(waiter => waiter.dispatchId !== dispatchId);
+		if (other) {
+			return Promise.reject(
+				new TypeError(
+					`untilModal: dispatch ${other.dispatchId} is already waiting for user ${userId}'s next modal. ` +
+						`Same-user modal flows must be driven sequentially.`,
+				),
+			);
+		}
+		return new Promise<void>((resolve, reject) => {
 			const waiters = this.modalWaiters.get(userId);
-			if (waiters) waiters.push(resolve);
-			else this.modalWaiters.set(userId, [resolve]);
+			const waiter = { dispatchId, resolve, reject };
+			if (waiters) waiters.push(waiter);
+			else this.modalWaiters.set(userId, [waiter]);
 		});
 	}
 
@@ -1215,15 +1345,19 @@ export class MockBot {
 	 * Iteration-bounded so it terminates even when the user's fake timers froze Date.now()/setImmediate; the
 	 * drain tick yields through the REAL setImmediate captured at module load, so faking globals cannot hang it.
 	 */
-	async flushPending(): Promise<void> {
+	async flushPending(scope?: Dispatch<unknown> | number): Promise<void> {
 		assertRealSetImmediate();
+		const dispatchId = this.inferDrainDispatchId(scope);
 		let iterations = 0;
 		// Yield until the REST surface stops changing AND nothing is in flight, bounded by iteration count.
 		let lastCount = -1;
 		while (true) {
 			await drainTick();
-			const count = this.rest.actions.length;
-			const quiet = count === lastCount && !this.rest.hasPendingRequests();
+			const count =
+				dispatchId === undefined
+					? this.rest.actions.length
+					: this.rest.actions.filter(action => action.dispatchId === dispatchId).length;
+			const quiet = count === lastCount && !this.rest.hasPendingRequests(dispatchId);
 			if (quiet) return;
 			lastCount = count;
 			if (++iterations > DRAIN_MAX_ITERATIONS) return;
@@ -1236,7 +1370,7 @@ export class MockBot {
 	 * before assertions. Delegates the actual clock advance to the runner-supplied `timers.advance` callback —
 	 * the package source imports no vitest/jest. Throws clearly if no fake timers were configured.
 	 */
-	async advanceTime(ms: number): Promise<void> {
+	async advanceTime(ms: number, scope?: Dispatch<unknown> | number): Promise<void> {
 		if (!this.timers) {
 			throw new Error(
 				"advanceTime: no fake timers configured. Call vi.useFakeTimers() (or your runner's equivalent) " +
@@ -1244,8 +1378,10 @@ export class MockBot {
 			);
 		}
 		assertRealSetImmediate();
+		const dispatchId = this.inferDrainDispatchId(scope);
 		await this.timers.advance(ms);
-		await this.flushPending();
+		this.virtualNowMs += ms;
+		await this.flushPending(dispatchId);
 	}
 
 	dispatchInteraction(payload: ApiInteractionPayload): Dispatch<DispatchResult> {
@@ -1259,11 +1395,36 @@ export class MockBot {
 				this.client,
 				userId,
 				() => this.runInteraction(payload, dispatchId),
-				id => this.onModalRegistered(id),
+				(id, ownerDispatchId) => this.onModalRegistered(id, ownerDispatchId),
 				dispatchId,
 				user ? (customId, fields) => this.fillModal(customId, fields, { user }) : undefined,
+				id => this.modalOwners.delete(id),
 			),
 		);
+	}
+
+	private prepareGatewayEventPayload(name: string, d: Record<string, unknown>): Record<string, unknown> {
+		if (name === 'GUILD_MEMBER_UPDATE') {
+			const user = d.user as { id?: unknown } | undefined;
+			if (typeof d.guild_id !== 'string' || typeof user?.id !== 'string') {
+				throw new TypeError('emitEvent GUILD_MEMBER_UPDATE requires guild_id and user.id before world/cache mutation.');
+			}
+		}
+		if (name === 'THREAD_CREATE' && typeof d.guild_id !== 'string') {
+			throw new TypeError('emitEvent THREAD_CREATE requires guild_id; Seyfert cache ignores guildless threads.');
+		}
+		if (name === 'CHANNEL_CREATE' && d.type !== 1 && typeof d.guild_id !== 'string') {
+			throw new TypeError('emitEvent CHANNEL_CREATE requires guild_id for non-DM channels; Seyfert cache ignores it.');
+		}
+		if (name === 'MESSAGE_CREATE') {
+			const author = d.author as { id?: unknown } | undefined;
+			if (typeof d.channel_id !== 'string' || typeof d.id !== 'string' || typeof author?.id !== 'string') {
+				throw new TypeError(
+					'emitEvent MESSAGE_CREATE requires id, channel_id, and author.id before world/cache mutation.',
+				);
+			}
+		}
+		return d;
 	}
 
 	private materializeInteractionResponse(payload: ApiInteractionPayload, body: APIInteractionResponse): void {
@@ -1367,6 +1528,7 @@ export class MockBot {
 	installDispatchHooks(): void {
 		const capabilities = installDispatchHooksImpl(this.client, {
 			modalWaiters: this.modalWaiters,
+			modalOwners: this.modalOwners,
 			drainUntilQuiescent: (dispatchId, aborted) => this.drainUntilQuiescent(dispatchId, aborted),
 			onModalDisplayed: userId => this.captureDisplayedModal(userId),
 		});
@@ -1379,6 +1541,8 @@ export class MockBot {
 		const replies: CapturedReply[] = [];
 		const isComponentPayload = payload.type === InteractionType.MessageComponent;
 		const isModalPayload = payload.type === InteractionType.ModalSubmit;
+		const user = payload.member?.user ?? payload.user;
+		const userId = user?.id;
 		const ctx: DispatchContext = {
 			dispatchId,
 			componentCommandExecuted: false,
@@ -1397,15 +1561,19 @@ export class MockBot {
 			this._state.registerComponentSource(payload.token, payload.message.channel_id, payload.message.id);
 		}
 		// The builders preserve Discord's payload shape while exposing a wider test input type.
-		await dispatchStore.run(ctx, async () => {
-			await Promise.race([
-				// No __reply callback: seyfert takes its gateway reply branch and posts the interaction callback
-				// through the mock REST (intercepted in defaults), so it returns a real message for with_response
-				// exactly like a gateway bot. Replies are captured from that recorded callback action below.
-				this.client.handleCommand.interaction(payload as unknown as APIInteraction, -1),
-				denialSettled,
-			]);
-		});
+		try {
+			await dispatchStore.run(ctx, async () => {
+				await Promise.race([
+					// No __reply callback: seyfert takes its gateway reply branch and posts the interaction callback
+					// through the mock REST (intercepted in defaults), so it returns a real message for with_response
+					// exactly like a gateway bot. Replies are captured from that recorded callback action below.
+					this.client.handleCommand.interaction(payload as unknown as APIInteraction, -1),
+					denialSettled,
+				]);
+			});
+		} finally {
+			if (isModalPayload && userId) this.modalOwners.delete(userId);
+		}
 		const { componentCommandExecuted, collectorMatched, modalMatched } = ctx;
 		// An unhandled error inside the command/component/modal run was captured by the onRunError hook. Fail loud
 		// by default so a happy-path test surfaces the bug; 'capture' exposes it on result.error instead.
@@ -1629,7 +1797,7 @@ export class MockBot {
 					const body = result.reply?.body;
 					return { ...result, choices: body?.type === 8 ? body.data?.choices : undefined };
 				},
-				id => this.onModalRegistered(id),
+				(id, ownerDispatchId) => this.onModalRegistered(id, ownerDispatchId),
 				dispatchId,
 			),
 		);
@@ -1700,12 +1868,20 @@ export class MockBot {
 		const opts: ButtonInteractionOptions = { ...rest, customId };
 		return this.dispatchVia('clickButton', opts, prepared => {
 			const message = this.resolveMessageSource(source);
+			this.assertNoConcurrentSyntheticComponentSource('clickButton', customId, source !== undefined, message);
 			this.assertComponentHandleable('clickButton', customId, message);
-			const hydrated = message?.id ? this.hydrateSourceMessage(message) : undefined;
-			if (hydrated) this.assertComponentVerbType('clickButton', customId, hydrated);
+			const hydrated = message?.id
+				? this.hydrateSourceMessage(message, source !== undefined ? { verb: 'clickButton', customId } : undefined)
+				: undefined;
+			const sourceComponent = hydrated ? findComponentNode(hydrated.components, customId) : undefined;
+			let messageForInteraction: ApiMessage | undefined;
+			if (hydrated && (source !== undefined || sourceComponent)) {
+				this.requireComponentOnMessage('clickButton', customId, hydrated);
+				messageForInteraction = hydrated;
+			}
 			return buttonInteraction({
 				...prepared,
-				...(hydrated ? { message: hydrated } : {}),
+				...(messageForInteraction ? { message: messageForInteraction } : {}),
 			});
 		});
 	}
@@ -1726,14 +1902,24 @@ export class MockBot {
 		const opts: SelectMenuInteractionOptions = { ...rest, customId, values };
 		return this.dispatchVia('selectMenu', opts, prepared => {
 			const message = this.resolveMessageSource(source);
+			this.assertNoConcurrentSyntheticComponentSource('selectMenu', customId, source !== undefined, message);
 			this.assertComponentHandleable('selectMenu', customId, message);
-			const hydrated = message?.id ? this.hydrateSourceMessage(message) : undefined;
-			if (hydrated) this.assertComponentVerbType('selectMenu', customId, hydrated);
-			const resolved = resolveSelectResolved(this._world, customId, values, prepared);
+			const hydrated = message?.id
+				? this.hydrateSourceMessage(message, source !== undefined ? { verb: 'selectMenu', customId } : undefined)
+				: undefined;
+			const foundComponent = hydrated ? findComponentNode(hydrated.components, customId) : undefined;
+			const sourceComponent =
+				hydrated && (source !== undefined || foundComponent)
+					? this.requireComponentOnMessage('selectMenu', customId, hydrated)
+					: undefined;
+			if (sourceComponent) this.assertSelectValuesMatchSource(customId, values, sourceComponent);
+			const sourceType = selectTypeForInteraction(numberValue(sourceComponent?.type));
+			const preparedWithSourceType = sourceType ? { ...prepared, componentType: sourceType } : prepared;
+			const resolved = resolveSelectResolved(this._world, customId, values, preparedWithSourceType);
 			return selectMenuInteraction({
-				...prepared,
+				...preparedWithSourceType,
 				...(resolved ? { resolved } : {}),
-				...(hydrated ? { message: hydrated } : {}),
+				...(sourceComponent && hydrated ? { message: hydrated } : {}),
 			});
 		});
 	}
@@ -1784,7 +1970,7 @@ export class MockBot {
 					const messages = actions.filter(isOutgoingMessagePost).map(action => (action.body ?? {}) as OutgoingMessage);
 					return messageParts(actions, messages);
 				},
-				id => this.onModalRegistered(id),
+				(id, ownerDispatchId) => this.onModalRegistered(id, ownerDispatchId),
 				dispatchId,
 			),
 		);
@@ -1851,6 +2037,7 @@ export class MockBot {
 				async () => {
 					// Guard BEFORE mutating the world, so a rejected emit is a true no-op (no dirtied world state,
 					// and seyfert's cache — updated later inside runEvent — stays consistent with the world).
+					const prepared = this.prepareGatewayEventPayload(name, d);
 					const handlerRan = this.eventHandlerRan(name);
 					if (!handlerRan && !allowNoHandler) {
 						throw new Error(
@@ -1869,7 +2056,7 @@ export class MockBot {
 								`Bridged events: ${[...WORLD_EVENT_NAMES].join(', ')}.`,
 						);
 					}
-					if (updateCache) this.applyWorldEvent(name, d);
+					if (updateCache) this.applyWorldEvent(name, prepared);
 					const ctx: DispatchContext = {
 						dispatchId,
 						componentCommandExecuted: false,
@@ -1880,7 +2067,7 @@ export class MockBot {
 						this.client.events.runEvent(
 							name as Parameters<Client['events']['runEvent']>[0],
 							this.client,
-							d,
+							prepared,
 							-1,
 							updateCache,
 						),
@@ -1940,6 +2127,7 @@ export class MockBot {
 		this.client.components.modals.clear();
 		this.client.components.values.clear();
 		this.modalWaiters.clear();
+		this.modalOwners.clear();
 		this.displayedModals.clear();
 		this.unregisteredMemberWarnings.clear();
 		this.lastInteractionMessage = undefined;
@@ -1956,6 +2144,7 @@ export class MockBot {
 		// still-registered modal: that would run the handler's timeout branch (side effects) after the bot is shut.
 		this.client.components.modals.clear();
 		this.modalWaiters.clear();
+		this.modalOwners.clear();
 		this.displayedModals.clear();
 		this.rest.releasePending();
 		// client.close() is seyfert's plugin lifecycle close: it awaits in-flight setup and runs each plugin's

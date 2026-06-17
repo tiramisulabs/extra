@@ -39,13 +39,7 @@ const WORLD_EVENT_MUTATORS: Record<WorldEmitEvent, WorldEventMutator> = {
 		const guildId = typeof d.guild_id === 'string' ? d.guild_id : undefined;
 		const user = d.user as { id?: string } | undefined;
 		if (guildId && user?.id) {
-			state.patchMember(guildId, user.id, {
-				...('nick' in d ? { nick: d.nick as string | null } : {}),
-				...(Array.isArray(d.roles) ? { roles: d.roles.map(String) } : {}),
-				...('communication_disabled_until' in d
-					? { communication_disabled_until: d.communication_disabled_until as string | null }
-					: {}),
-			});
+			state.addMember(guildId, d);
 		}
 	},
 	CHANNEL_CREATE: (state, d) => state.addChannel(typeof d.guild_id === 'string' ? d.guild_id : undefined, d),

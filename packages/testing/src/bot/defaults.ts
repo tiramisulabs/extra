@@ -18,6 +18,7 @@ import {
 	apiThreadMember,
 	apiUser,
 	apiWebhook,
+	messageReactionAddEvent,
 } from './payloads';
 import { computeChannelPermissions } from './permissions';
 import { apiError, ErrorCode, MockApiError, type MockApiHandler, type RouteMatcher, type RouteResponder } from './rest';
@@ -66,8 +67,14 @@ function interceptFetchOne<T>(
 	route: RouteMatcher,
 	find: (params: Record<string, string>) => T | undefined,
 	fallback: (params: Record<string, string>) => T,
+	unknown?: { code: number; message: string },
 ): void {
-	rest.intercept(route, (_pending, params) => find(params) ?? rest.markSynthetic(fallback(params)));
+	rest.intercept(route, (_pending, params) => {
+		const found = find(params);
+		if (found !== undefined) return found;
+		if (unknown) apiError(404, unknown.code, unknown.message);
+		return rest.markSynthetic(fallback(params));
+	});
 }
 
 /**
@@ -110,6 +117,9 @@ function registerGuildCrud(rest: MockApiHandler, config: GuildCrudConfig): void 
 			config.fetch,
 			params => config.one(params.guildId, params[idParam]),
 			params => config.fallback(params.guildId, params[idParam]),
+			config.unknownCode === undefined
+				? undefined
+				: { code: config.unknownCode, message: config.unknownMessage ?? 'Unknown' },
 		);
 	}
 	if (config.edit && config.patch) {
@@ -179,7 +189,8 @@ export function registerWorldDefaults(
 	const syncOverwriteCache = (channelId: string) => {
 		const channel = world?.channels.find(entry => entry.id === channelId);
 		if (!channel?.guild_id) return;
-		if (channel.permission_overwrites.length) void hooks.cacheSet('overwrites', channelId, channel.guild_id, channel.permission_overwrites);
+		if (channel.permission_overwrites.length)
+			void hooks.cacheSet('overwrites', channelId, channel.guild_id, channel.permission_overwrites);
 		else void hooks.cacheRemove('overwrites', channelId, channel.guild_id);
 	};
 
@@ -204,6 +215,10 @@ export function registerWorldDefaults(
 		) {
 			apiError(404, ErrorCode.UnknownChannel, 'Unknown Channel');
 		}
+	};
+	const requireMessage = (channelId: string, messageId: string) => {
+		requireChannel(channelId);
+		if (!hooks.state.rawMessage(channelId, messageId)) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
 	};
 
 	// Permission/hierarchy enforcement is OPT-IN: it only activates once a bot member is seeded
@@ -236,7 +251,8 @@ export function registerWorldDefaults(
 		if (!(perms & bit)) apiError(403, ErrorCode.MissingPermissions, 'Missing Permissions');
 	};
 	// Channel-scoped permission guard: resolves the channel's guild and folds its overwrites into the check.
-	const requireChannelPerm = (channelId: string, bit: bigint) => requirePerm(guildOfChannel(channelId) ?? '', bit, channelId);
+	const requireChannelPerm = (channelId: string, bit: bigint) =>
+		requirePerm(guildOfChannel(channelId) ?? '', bit, channelId);
 	const topRole = (roleIds: string[], roles: { id: string; position: number }[]) =>
 		Math.max(0, ...roleIds.map(id => roles.find(role => role.id === id)?.position ?? 0));
 	const requireHierarchy = (guildId: string, targetUserId: string) => {
@@ -268,18 +284,22 @@ export function registerWorldDefaults(
 		Routes.fetchGuild,
 		params => world?.guilds.find(guild => guild.id === params.guildId),
 		params => apiGuild({ id: params.guildId }),
+		world ? { code: ErrorCode.UnknownGuild, message: 'Unknown Guild' } : undefined,
 	);
 	interceptFetchOne(
 		rest,
 		Routes.fetchChannel,
 		params => world?.channels.find(channel => channel.id === params.channelId),
 		params => apiChannel({ id: params.channelId }),
+		world ? { code: ErrorCode.UnknownChannel, message: 'Unknown Channel' } : undefined,
 	);
 	rest.intercept(Routes.fetchMember, (_pending, params) => {
+		requireGuild(params.guildId);
 		if (removed.has(key(params.guildId, params.userId))) {
 			return apiError(404, ErrorCode.UnknownMember, 'Unknown Member');
 		}
 		const entry = findMember(params.guildId, params.userId);
+		if (world && !entry) apiError(404, ErrorCode.UnknownMember, 'Unknown Member');
 		return entry?.member ?? apiMember({ user: apiUser({ id: params.userId }) });
 	});
 	interceptFetchOne(
@@ -287,23 +307,29 @@ export function registerWorldDefaults(
 		Routes.fetchUser,
 		params => world?.users.find(user => user.id === params.userId),
 		params => apiUser({ id: params.userId }),
+		world ? { code: ErrorCode.UnknownUser, message: 'Unknown User' } : undefined,
 	);
-	rest.intercept(
-		Routes.fetchRoles,
-		(_pending, params) => world?.roles.filter(entry => entry.guildId === params.guildId).map(entry => entry.role) ?? [],
-	);
-	rest.intercept(
-		Routes.fetchChannels,
-		(_pending, params) => world?.channels.filter(channel => channel.guild_id === params.guildId) ?? [],
-	);
-	rest.intercept(Routes.fetchMessages, (pending, params) =>
-		hooks.state.channelMessages(params.channelId, messageQuery(pending.query)),
-	);
+	rest.intercept(Routes.fetchRoles, (_pending, params) => {
+		requireGuild(params.guildId);
+		return world?.roles.filter(entry => entry.guildId === params.guildId).map(entry => entry.role) ?? [];
+	});
+	rest.intercept(Routes.fetchChannels, (_pending, params) => {
+		requireGuild(params.guildId);
+		return world?.channels.filter(channel => channel.guild_id === params.guildId) ?? [];
+	});
+	rest.intercept(Routes.fetchMessages, (pending, params) => {
+		requireChannel(params.channelId);
+		return hooks.state.channelMessages(params.channelId, messageQuery(pending.query));
+	});
 	interceptFetchOne(
 		rest,
 		Routes.fetchMessage,
-		params => hooks.state.rawMessage(params.channelId, params.messageId),
+		params => {
+			requireChannel(params.channelId);
+			return hooks.state.rawMessage(params.channelId, params.messageId);
+		},
 		params => apiMessage({ id: params.messageId, channelId: params.channelId }),
+		world ? { code: ErrorCode.UnknownMessage, message: 'Unknown Message' } : undefined,
 	);
 	rest.intercept(Routes.fetchOriginalResponse, (_pending, params) => {
 		if (!hooks.state.isAcknowledged(params.interactionToken))
@@ -311,23 +337,39 @@ export function registerWorldDefaults(
 		return hooks.state.messageForToken(params.interactionToken) ?? apiMessage();
 	});
 	// A webhook execute (POST /webhooks/:id/:token) and webhook-message ops share the route shape of
-	// interaction followups/webhook-messages. Disambiguate by the registry: a known webhook id whose
-	// token matches resolves to its channel; otherwise the `wh-` sendLog encoding; otherwise it is an
-	// interaction token. Returns undefined for interaction tokens so they fall to the interaction path.
+	// interaction followups/webhook-messages. Disambiguate by the registry first; a known webhook id with the
+	// wrong token is a 404, not a fallback into the `wh-` sendLog encoding.
 	const resolveWebhookChannel = (id: string, token: string): string | undefined => {
 		const entry = hooks.state.webhookById(id);
-		if (entry && entry.token === token) return entry.channel_id;
-		return webhookChannelOf(id);
+		if (entry) {
+			if (entry.token !== token) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+			return entry.channel_id;
+		}
+		const encodedChannelId = webhookChannelOf(id);
+		if (!encodedChannelId) return undefined;
+		if (token !== 'mock-webhook-token') apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+		requireChannel(encodedChannelId);
+		return encodedChannelId;
 	};
 	rest.intercept(Routes.fetchWebhookMessage, (_pending, params) => {
 		const channelId = resolveWebhookChannel(params.applicationId, params.interactionToken);
-		if (channelId) return hooks.state.rawMessage(channelId, params.messageId) ?? apiMessage();
-		return hooks.state.webhookMessage(params.interactionToken, params.messageId) ?? apiMessage();
+		if (channelId) {
+			const message = hooks.state.rawMessage(channelId, params.messageId);
+			if (!message) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
+			return message;
+		}
+		const message = hooks.state.webhookMessage(params.interactionToken, params.messageId);
+		if (!message) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
+		return message;
 	});
 	// Channel webhooks (sendLog-style). list returns [] so the bot takes the create path; create hands
 	// back a webhook whose id encodes the channel AND registers it, so the later execute resolves it.
-	rest.intercept(Routes.listChannelWebhooks, () => []);
+	rest.intercept(Routes.listChannelWebhooks, (_pending, params) => {
+		requireChannel(params.channelId);
+		return [];
+	});
 	rest.intercept(Routes.createWebhook, (pending, params) => {
+		requireChannel(params.channelId);
 		requireChannelPerm(params.channelId, PermissionFlagsBits.ManageWebhooks);
 		const raw = bodyRecord(pending.body);
 		const guildId = guildOfChannel(params.channelId);
@@ -340,21 +382,25 @@ export function registerWorldDefaults(
 			applicationId: hooks.botId,
 		});
 	});
-	rest.intercept(
-		Routes.fetchWebhook,
-		(_pending, params) => hooks.state.webhookById(params.webhookId) ?? apiWebhook({ id: params.webhookId }),
-	);
-	rest.intercept(
-		Routes.fetchWebhookToken,
-		(_pending, params) =>
-			hooks.state.webhookById(params.webhookId) ?? apiWebhook({ id: params.webhookId, token: params.webhookToken }),
-	);
+	rest.intercept(Routes.fetchWebhook, (_pending, params) => {
+		const webhook = hooks.state.webhookById(params.webhookId);
+		if (!webhook && world) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+		return webhook ?? apiWebhook({ id: params.webhookId });
+	});
+	rest.intercept(Routes.fetchWebhookToken, (_pending, params) => {
+		const webhook = hooks.state.webhookById(params.webhookId);
+		if (webhook && webhook.token !== params.webhookToken) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+		if (!webhook && world) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+		return webhook ?? apiWebhook({ id: params.webhookId, token: params.webhookToken });
+	});
 	rest.intercept(Routes.editWebhook, (pending, params) => {
 		if (world && !hooks.state.webhookById(params.webhookId)) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
 		return hooks.state.editWebhook(params.webhookId, bodyRecord(pending.body)) ?? apiWebhook({ id: params.webhookId });
 	});
 	rest.intercept(Routes.editWebhookToken, (pending, params) => {
-		if (world && !hooks.state.webhookById(params.webhookId)) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+		const webhook = hooks.state.webhookById(params.webhookId);
+		if (webhook && webhook.token !== params.webhookToken) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+		if (world && !webhook) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
 		return (
 			hooks.state.editWebhook(params.webhookId, bodyRecord(pending.body)) ??
 			apiWebhook({ id: params.webhookId, token: params.webhookToken })
@@ -366,11 +412,16 @@ export function registerWorldDefaults(
 		return {};
 	});
 	rest.intercept(Routes.deleteWebhookToken, (_pending, params) => {
-		if (world && !hooks.state.webhookById(params.webhookId)) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+		const webhook = hooks.state.webhookById(params.webhookId);
+		if (webhook && webhook.token !== params.webhookToken) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+		if (world && !webhook) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
 		hooks.state.removeWebhook(params.webhookId);
 		return {};
 	});
-	rest.intercept(Routes.listGuildWebhooks, (_pending, params) => hooks.state.webhooksForGuild(params.guildId));
+	rest.intercept(Routes.listGuildWebhooks, (_pending, params) => {
+		requireGuild(params.guildId);
+		return hooks.state.webhooksForGuild(params.guildId);
+	});
 	// Gateway reply transport: seyfert posts the interaction callback here. Materialize the original
 	// message synchronously (so an in-run fetchResponse sees it) and, when the caller asked for
 	// with_response, return the resource so editOrReply(body, true) resolves to a real message.
@@ -423,7 +474,11 @@ export function registerWorldDefaults(
 			for (const choice of choices) {
 				const name = (choice as { name?: unknown }).name;
 				if (typeof name !== 'string' || name.length < 1 || [...name].length > 100) {
-					apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: autocomplete choice name must be between 1 and 100 in length');
+					apiError(
+						400,
+						ErrorCode.InvalidFormBody,
+						'Invalid Form Body: autocomplete choice name must be between 1 and 100 in length',
+					);
 				}
 			}
 		}
@@ -449,15 +504,20 @@ export function registerWorldDefaults(
 		requirePerm(params.guildId, PermissionFlagsBits.ManageChannels);
 		return hooks.state.addChannel(params.guildId, { ...bodyRecord(pending.body), guild_id: params.guildId });
 	});
-	const threadResponder: RouteResponder = (pending, params) =>
-		hooks.state.addChannel(undefined, {
+	const threadResponder: RouteResponder = (pending, params) => {
+		requireChannel(params.channelId);
+		return hooks.state.addChannel(undefined, {
 			...bodyRecord(pending.body),
 			parent_id: params.channelId,
 			guild_id: guildOfChannel(params.channelId),
 			type: bodyRecord(pending.body).type ?? 11,
 		});
+	};
 	rest.intercept(Routes.createThread, threadResponder);
-	rest.intercept(Routes.startThreadFromMessage, threadResponder);
+	rest.intercept(Routes.startThreadFromMessage, (pending, params) => {
+		requireMessage(params.channelId, params.messageId);
+		return threadResponder(pending, params);
+	});
 	rest.intercept(Routes.deleteChannel, (_pending, params) => {
 		requireChannelPerm(params.channelId, PermissionFlagsBits.ManageChannels);
 		const existing = world?.channels.find(channel => channel.id === params.channelId);
@@ -512,12 +572,15 @@ export function registerWorldDefaults(
 		for (const messageId of ids) hooks.state.deleteMessage(params.channelId, String(messageId));
 		return {};
 	});
-	rest.intercept(Routes.fetchPins, (_pending, params) => ({
-		has_more: false,
-		items: hooks.state.pins(params.channelId).map(message => ({ pinned_at: message.timestamp, message })),
-	}));
-	rest.intercept(Routes.pinMessage, (_pending, params) => {
+	rest.intercept(Routes.fetchPins, (_pending, params) => {
 		requireChannel(params.channelId);
+		return {
+			has_more: false,
+			items: hooks.state.pins(params.channelId).map(message => ({ pinned_at: message.timestamp, message })),
+		};
+	});
+	rest.intercept(Routes.pinMessage, (_pending, params) => {
+		requireMessage(params.channelId, params.messageId);
 		requireChannelPerm(params.channelId, PermissionFlagsBits.ManageMessages);
 		const pins = hooks.state.pins(params.channelId);
 		if (pins.length >= 50 && !pins.some(message => message.id === params.messageId)) {
@@ -527,27 +590,35 @@ export function registerWorldDefaults(
 		return {};
 	});
 	rest.intercept(Routes.unpinMessage, (_pending, params) => {
-		requireChannel(params.channelId);
+		requireMessage(params.channelId, params.messageId);
 		requireChannelPerm(params.channelId, PermissionFlagsBits.ManageMessages);
 		hooks.state.unpinMessage(params.channelId, params.messageId);
 		return {};
 	});
-	rest.intercept(Routes.fetchArchivedThreads, (_pending, params) => ({
-		threads: hooks.state.archivedThreads(params.channelId, params.type === 'private' ? 'private' : 'public'),
-		members: [],
-		has_more: false,
-	}));
-	rest.intercept(
-		Routes.endPoll,
-		(_pending, params) =>
+	rest.intercept(Routes.fetchArchivedThreads, (_pending, params) => {
+		requireChannel(params.channelId);
+		return {
+			threads: hooks.state.archivedThreads(params.channelId, params.type === 'private' ? 'private' : 'public'),
+			members: [],
+			has_more: false,
+		};
+	});
+	rest.intercept(Routes.endPoll, (_pending, params) => {
+		requireMessage(params.channelId, params.messageId);
+		return (
 			hooks.state.finalizePoll(params.channelId, params.messageId) ??
-			apiMessage({ id: params.messageId, channelId: params.channelId }),
-	);
-	rest.intercept(Routes.getPollAnswerVoters, (_pending, params) => ({
-		users: hooks.state
-			.pollVoters(params.channelId, params.messageId, Number(params.answerId))
-			.map(userId => resolveUser(userId)),
-	}));
+			hooks.state.rawMessage(params.channelId, params.messageId) ??
+			apiMessage({ id: params.messageId, channelId: params.channelId })
+		);
+	});
+	rest.intercept(Routes.getPollAnswerVoters, (_pending, params) => {
+		requireMessage(params.channelId, params.messageId);
+		return {
+			users: hooks.state
+				.pollVoters(params.channelId, params.messageId, Number(params.answerId))
+				.map(userId => resolveUser(userId)),
+		};
+	});
 
 	rest.intercept(Routes.editOriginalResponse, (pending, params) =>
 		hooks.state.upsertOriginalResponse(params.interactionToken, bodyRecord(pending.body), hooks.botId),
@@ -559,8 +630,9 @@ export function registerWorldDefaults(
 	rest.intercept(Routes.editWebhookMessage, (pending, params) => {
 		const channelId = resolveWebhookChannel(params.applicationId, params.interactionToken);
 		if (channelId) {
+			requireMessage(channelId, params.messageId);
 			hooks.state.editMessage(channelId, params.messageId, bodyRecord(pending.body));
-			return hooks.state.rawMessage(channelId, params.messageId) ?? apiMessage({ id: params.messageId, channelId });
+			return hooks.state.rawMessage(channelId, params.messageId);
 		}
 		return hooks.state.editWebhookMessage(
 			params.interactionToken,
@@ -572,6 +644,7 @@ export function registerWorldDefaults(
 	rest.intercept(Routes.deleteWebhookMessage, (_pending, params) => {
 		const channelId = resolveWebhookChannel(params.applicationId, params.interactionToken);
 		if (channelId) {
+			requireMessage(channelId, params.messageId);
 			hooks.state.deleteMessage(channelId, params.messageId);
 			return {};
 		}
@@ -637,7 +710,10 @@ export function registerWorldDefaults(
 			void hooks.cacheRemove('emojis', id, guildId);
 		},
 		fallback: (guildId, id) => apiEmoji({ id, guildId }),
-		guard: (guildId: string) => { requireGuild(guildId); requirePerm(guildId, PermissionFlagsBits.ManageGuildExpressions); },
+		guard: (guildId: string) => {
+			requireGuild(guildId);
+			requirePerm(guildId, PermissionFlagsBits.ManageGuildExpressions);
+		},
 		unknownCode: world ? ErrorCode.UnknownEmoji : undefined,
 		unknownMessage: 'Unknown Emoji',
 	});
@@ -646,12 +722,19 @@ export function registerWorldDefaults(
 		requireChannelPerm(params.channelId, PermissionFlagsBits.CreateInstantInvite);
 		return hooks.state.addInvite(params.channelId, guildOfChannel(params.channelId), bodyRecord(pending.body));
 	});
-	rest.intercept(Routes.listChannelInvites, (_pending, params) => hooks.state.channelInvites(params.channelId));
-	rest.intercept(Routes.listGuildInvites, (_pending, params) => hooks.state.guildInvites(params.guildId));
-	rest.intercept(
-		Routes.fetchInvite,
-		(_pending, params) => hooks.state.invite(params.code) ?? apiInvite({ code: params.code }),
-	);
+	rest.intercept(Routes.listChannelInvites, (_pending, params) => {
+		requireChannel(params.channelId);
+		return hooks.state.channelInvites(params.channelId);
+	});
+	rest.intercept(Routes.listGuildInvites, (_pending, params) => {
+		requireGuild(params.guildId);
+		return hooks.state.guildInvites(params.guildId);
+	});
+	rest.intercept(Routes.fetchInvite, (_pending, params) => {
+		const invite = hooks.state.invite(params.code);
+		if (!invite && world) apiError(404, ErrorCode.UnknownInvite, 'Unknown Invite');
+		return invite ?? apiInvite({ code: params.code });
+	});
 	rest.intercept(Routes.deleteInvite, (_pending, params) => {
 		if (world && !hooks.state.invite(params.code)) apiError(404, ErrorCode.UnknownInvite, 'Unknown Invite');
 		return hooks.state.removeInvite(params.code) ?? apiInvite({ code: params.code });
@@ -693,7 +776,10 @@ export function registerWorldDefaults(
 		patch: (guildId, id, body) => hooks.state.editAutoModRule(guildId, id, body),
 		drop: (guildId, id) => hooks.state.removeAutoModRule(guildId, id),
 		fallback: (guildId, id) => apiAutoModRule({ id, guildId }),
-		guard: (guildId: string) => { requireGuild(guildId); requirePerm(guildId, PermissionFlagsBits.ManageGuild); },
+		guard: (guildId: string) => {
+			requireGuild(guildId);
+			requirePerm(guildId, PermissionFlagsBits.ManageGuild);
+		},
 	});
 	const resolveThreadUser = (userId: string) => (userId === '@me' ? hooks.botId : userId);
 	rest.intercept(Routes.addThreadMember, (_pending, params) => {
@@ -706,17 +792,27 @@ export function registerWorldDefaults(
 		hooks.state.removeThreadMember(params.channelId, resolveThreadUser(params.userId));
 		return {};
 	});
-	rest.intercept(Routes.listThreadMembers, (_pending, params) =>
-		hooks.state.threadMembers(params.channelId).map(userId => apiThreadMember({ threadId: params.channelId, userId })),
-	);
-	rest.intercept(Routes.fetchThreadMember, (_pending, params) =>
-		apiThreadMember({ threadId: params.channelId, userId: resolveThreadUser(params.userId) }),
-	);
-	rest.intercept(Routes.fetchActiveThreads, (_pending, params) => ({
-		threads: hooks.state.activeThreads(params.guildId),
-		members: [],
-		has_more: false,
-	}));
+	rest.intercept(Routes.listThreadMembers, (_pending, params) => {
+		requireChannel(params.channelId);
+		return hooks.state
+			.threadMembers(params.channelId)
+			.map(userId => apiThreadMember({ threadId: params.channelId, userId }));
+	});
+	rest.intercept(Routes.fetchThreadMember, (_pending, params) => {
+		requireChannel(params.channelId);
+		const userId = resolveThreadUser(params.userId);
+		const members = hooks.state.threadMembers(params.channelId);
+		if (world && !members.includes(userId)) apiError(404, ErrorCode.UnknownMember, 'Unknown Member');
+		return apiThreadMember({ threadId: params.channelId, userId });
+	});
+	rest.intercept(Routes.fetchActiveThreads, (_pending, params) => {
+		requireGuild(params.guildId);
+		return {
+			threads: hooks.state.activeThreads(params.guildId),
+			members: [],
+			has_more: false,
+		};
+	});
 	registerGuildCrud(rest, {
 		idParam: 'stickerId',
 		create: Routes.createSticker,
@@ -741,7 +837,10 @@ export function registerWorldDefaults(
 			void hooks.cacheRemove('stickers', id, guildId);
 		},
 		fallback: (guildId, id) => apiSticker({ id, guildId }),
-		guard: (guildId: string) => { requireGuild(guildId); requirePerm(guildId, PermissionFlagsBits.ManageGuildExpressions); },
+		guard: (guildId: string) => {
+			requireGuild(guildId);
+			requirePerm(guildId, PermissionFlagsBits.ManageGuildExpressions);
+		},
 		unknownCode: world ? ErrorCode.UnknownSticker : undefined,
 		unknownMessage: 'Unknown Sticker',
 	});
@@ -756,46 +855,68 @@ export function registerWorldDefaults(
 		one: (guildId, id) => hooks.state.scheduledEvent(guildId, id),
 		drop: (guildId, id) => hooks.state.removeScheduledEvent(guildId, id),
 		fallback: (guildId, id) => apiScheduledEvent({ id, guildId }),
-		guard: (guildId: string) => { requireGuild(guildId); requirePerm(guildId, PermissionFlagsBits.ManageEvents); },
+		guard: (guildId: string) => {
+			requireGuild(guildId);
+			requirePerm(guildId, PermissionFlagsBits.ManageEvents);
+		},
 		unknownCode: world ? ErrorCode.UnknownScheduledEvent : undefined,
 		unknownMessage: 'Unknown Guild Scheduled Event',
 	});
-	rest.intercept(Routes.listGuildTemplates, (_pending, params) => hooks.state.guildTemplates(params.guildId));
-	rest.intercept(Routes.createGuildTemplate, (pending, params) =>
-		hooks.state.addGuildTemplate(params.guildId, bodyRecord(pending.body)),
-	);
-	rest.intercept(
-		Routes.fetchGuildTemplate,
-		(_pending, params) => hooks.state.guildTemplate(params.code) ?? apiGuildTemplate({ code: params.code }),
-	);
-	rest.intercept(Routes.listGuildSoundboardSounds, (_pending, params) => ({
-		items: hooks.state.soundboardSounds(params.guildId),
-	}));
+	rest.intercept(Routes.listGuildTemplates, (_pending, params) => {
+		requireGuild(params.guildId);
+		return hooks.state.guildTemplates(params.guildId);
+	});
+	rest.intercept(Routes.createGuildTemplate, (pending, params) => {
+		requireGuild(params.guildId);
+		return hooks.state.addGuildTemplate(params.guildId, bodyRecord(pending.body));
+	});
+	rest.intercept(Routes.fetchGuildTemplate, (_pending, params) => {
+		const template = hooks.state.guildTemplate(params.code);
+		if (!template && world) apiError(404, ErrorCode.UnknownGuildTemplate, 'Unknown Guild Template');
+		return template ?? apiGuildTemplate({ code: params.code });
+	});
+	rest.intercept(Routes.listGuildSoundboardSounds, (_pending, params) => {
+		requireGuild(params.guildId);
+		return { items: hooks.state.soundboardSounds(params.guildId) };
+	});
 	rest.intercept(Routes.listDefaultSoundboardSounds, () => []);
 	rest.intercept(Routes.createStageInstance, pending => {
 		const stageBody = bodyRecord(pending.body);
-		requireChannelPerm(String(stageBody.channel_id ?? ''), PermissionFlagsBits.ManageChannels);
+		const channelId = String(stageBody.channel_id ?? '');
+		requireChannel(channelId);
+		requireChannelPerm(channelId, PermissionFlagsBits.ManageChannels);
 		return hooks.state.addStageInstance(stageBody);
 	});
 	interceptFetchOne(
 		rest,
 		Routes.fetchStageInstance,
-		params => hooks.state.stageInstance(params.channelId),
+		params => {
+			requireChannel(params.channelId);
+			return hooks.state.stageInstance(params.channelId);
+		},
 		params => apiStageInstance({ channelId: params.channelId }),
+		world ? { code: ErrorCode.UnknownStageInstance, message: 'Unknown Stage Instance' } : undefined,
 	);
 	rest.intercept(Routes.deleteStageInstance, (_pending, params) => {
+		requireChannel(params.channelId);
+		if (world && !hooks.state.stageInstance(params.channelId)) {
+			apiError(404, ErrorCode.UnknownStageInstance, 'Unknown Stage Instance');
+		}
 		hooks.state.removeStageInstance(params.channelId);
 		return {};
 	});
-	rest.intercept(Routes.fetchAuditLogs, (_pending, params) => ({
-		audit_log_entries: hooks.state.auditLogEntries(params.guildId),
-		users: [],
-		auto_moderation_rules: [],
-		guild_scheduled_events: [],
-		integrations: [],
-		threads: [],
-		webhooks: [],
-	}));
+	rest.intercept(Routes.fetchAuditLogs, (_pending, params) => {
+		requireGuild(params.guildId);
+		return {
+			audit_log_entries: hooks.state.auditLogEntries(params.guildId),
+			users: [],
+			auto_moderation_rules: [],
+			guild_scheduled_events: [],
+			integrations: [],
+			threads: [],
+			webhooks: [],
+		};
+	});
 	rest.intercept(Routes.editGuild, (pending, params) => {
 		requireGuild(params.guildId);
 		requirePerm(params.guildId, PermissionFlagsBits.ManageGuild);
@@ -833,11 +954,12 @@ export function registerWorldDefaults(
 		void hooks.cacheRemove('bans', params.userId, params.guildId);
 		return {};
 	});
-	rest.intercept(Routes.fetchBans, (_pending, params) =>
-		hooks.state.bans(params.guildId).map(userId => ({
+	rest.intercept(Routes.fetchBans, (_pending, params) => {
+		requireGuild(params.guildId);
+		return hooks.state.bans(params.guildId).map(userId => ({
 			user: resolveUser(userId),
-		})),
-	);
+		}));
+	});
 	rest.intercept(Routes.editChannel, (pending, params) => {
 		requireChannel(params.channelId);
 		requireChannelPerm(params.channelId, PermissionFlagsBits.ManageChannels);
@@ -865,11 +987,13 @@ export function registerWorldDefaults(
 	});
 
 	const reactionEventBase = (channelId: string, messageId: string) => {
-		const guildId = world?.channels.find(channel => channel.id === channelId)?.guild_id;
+		const message = hooks.state.rawMessage(channelId, messageId);
+		const guildId = world?.channels.find(channel => channel.id === channelId)?.guild_id ?? message?.guild_id;
 		return {
 			channel_id: channelId,
 			message_id: messageId,
 			...(guildId === undefined ? {} : { guild_id: guildId }),
+			...(message?.author?.id === undefined ? {} : { message_author_id: message.author.id }),
 		};
 	};
 	const emitReaction = async (
@@ -880,10 +1004,24 @@ export function registerWorldDefaults(
 		userId: string,
 	) => {
 		if (!hooks.simulateGateway) return;
+		const base = reactionEventBase(channelId, messageId);
+		const guildId = typeof base.guild_id === 'string' ? base.guild_id : undefined;
+		const member = guildId ? findMember(guildId, userId)?.member : undefined;
 		await hooks.emit(name, {
-			...reactionEventBase(channelId, messageId),
-			user_id: userId,
-			emoji: emojiPayload(emoji),
+			...(name === 'MESSAGE_REACTION_ADD'
+				? messageReactionAddEvent(
+						{ channelId, messageId, userId, emoji },
+						{
+							...(guildId === undefined ? {} : { guildId }),
+							...(member === undefined ? {} : { member }),
+							...(typeof base.message_author_id === 'string' ? { messageAuthorId: base.message_author_id } : {}),
+						},
+					)
+				: {
+						...base,
+						user_id: userId,
+						emoji: emojiPayload(emoji),
+					}),
 		});
 	};
 
@@ -897,9 +1035,6 @@ export function registerWorldDefaults(
 	// Reaction REMOVAL parity with addReaction: a reaction op against a message that does not exist is a 404,
 	// not a silent no-op. Only the message's existence is gated (removing an absent reaction from a real
 	// message is a legit no-op), mirroring Discord.
-	const requireMessage = (channelId: string, messageId: string) => {
-		if (!hooks.state.rawMessage(channelId, messageId)) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
-	};
 	rest.intercept(Routes.removeOwnReaction, async (_pending, params) => {
 		requireMessage(params.channelId, params.messageId);
 		hooks.state.removeReaction(params.channelId, params.messageId, params.emoji, hooks.botId);
@@ -933,9 +1068,12 @@ export function registerWorldDefaults(
 		}
 		return {};
 	});
-	rest.intercept(Routes.listReactions, (_pending, params) =>
-		hooks.state.reactionUsers(params.channelId, params.messageId, params.emoji).map(userId => resolveUser(userId)),
-	);
+	rest.intercept(Routes.listReactions, (_pending, params) => {
+		requireMessage(params.channelId, params.messageId);
+		return hooks.state
+			.reactionUsers(params.channelId, params.messageId, params.emoji)
+			.map(userId => resolveUser(userId));
+	});
 	const interceptRoleMutation = (
 		route: RouteMatcher,
 		mutate: (member: ApiMember, roleId: string) => string[] | undefined,

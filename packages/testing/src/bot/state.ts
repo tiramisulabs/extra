@@ -1320,12 +1320,13 @@ export class WorldState implements WorldStateReader {
 		const rawUser = asRecord(raw.user);
 		const userId = stringValue(rawUser.id);
 		if (!userId) return;
-		const disabledUntil = stringValue(raw.communication_disabled_until);
+		const disabledUntil =
+			raw.communication_disabled_until === null ? null : stringValue(raw.communication_disabled_until);
 		const member = apiMember({
 			user: { ...apiUser({ id: userId }), ...rawUser } as ApiUser,
 			roles: arrayValue(raw.roles).map(String),
 			nick: stringValue(raw.nick) ?? null,
-			...(disabledUntil === undefined ? {} : { communicationDisabledUntil: disabledUntil }),
+			...('communication_disabled_until' in raw ? { communicationDisabledUntil: disabledUntil ?? null } : {}),
 		});
 		const existing = this.world.members.find(entry => entry.guildId === guildId && entry.member.user.id === userId);
 		if (existing) existing.member = member;
@@ -1907,8 +1908,10 @@ export class WorldState implements WorldStateReader {
 		authorId: string,
 	): RawMessage | Record<string, never> {
 		if (messageId === '@original') return this.upsertOriginalResponse(token, raw, authorId);
+		if (!this.acknowledgedTokens.has(token)) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
 		const channelId = this.channelIdByToken.get(token);
-		if (!channelId) return {};
+		if (!channelId) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+		if (!this.rawMessage(channelId, messageId)) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
 		this.editMessage(channelId, messageId, raw);
 		return this.rawMessageOr(channelId, messageId);
 	}
@@ -1937,8 +1940,11 @@ export class WorldState implements WorldStateReader {
 			this.deleteOriginalResponse(token);
 			return;
 		}
+		if (!this.acknowledgedTokens.has(token)) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
 		const channelId = this.channelIdByToken.get(token);
-		if (channelId) this.deleteMessage(channelId, messageId);
+		if (!channelId) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+		if (!this.rawMessage(channelId, messageId)) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
+		this.deleteMessage(channelId, messageId);
 	}
 
 	private channelView(channel: ApiChannel): ChannelView {

@@ -169,10 +169,12 @@ export {
 	type MemberEventOptions,
 	type MemberInput,
 	type MemberUpdateEventOptions,
+	type MessageReactionAddEventOptions,
 	memberAddEvent,
 	memberOptionsFrom,
 	memberRemoveEvent,
 	memberUpdateEvent,
+	messageReactionAddEvent,
 	type RawMessage,
 	type ThreadMetadata,
 } from './payloads';

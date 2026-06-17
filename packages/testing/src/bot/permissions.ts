@@ -63,7 +63,7 @@ export interface ComputePermissionsInput {
 	channel?: { permission_overwrites?: ChannelOverwriteLike[] };
 }
 
-export function computeChannelPermissions(input: ComputePermissionsInput): string {
+export function computeChannelPermissions(input: ComputePermissionsInput, nowMs = Date.now()): string {
 	if (input.guild.owner_id === input.member.userId) return ALL_PERMISSIONS.toString();
 
 	const roleById = new Map(input.roles.map(role => [role.id, role]));
@@ -107,7 +107,7 @@ export function computeChannelPermissions(input: ComputePermissionsInput): strin
 		bits |= ow(memberOverwrite.allow);
 	}
 
-	if (input.member.communicationDisabledUntil && Date.parse(input.member.communicationDisabledUntil) > Date.now()) {
+	if (input.member.communicationDisabledUntil && Date.parse(input.member.communicationDisabledUntil) > nowMs) {
 		bits &= PermissionFlagsBits.ViewChannel | PermissionFlagsBits.ReadMessageHistory;
 	}
 

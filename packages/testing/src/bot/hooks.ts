@@ -1,4 +1,5 @@
 import type { Client } from 'seyfert';
+import type { ModalWaiter } from './dispatch';
 import { dispatchStore } from './dispatch-context';
 import { componentInternals, modalRegistry } from './seyfert-internals';
 
@@ -32,7 +33,9 @@ export interface DispatchHookCapabilities {
 
 export interface DispatchHookDeps {
 	/** Pending modal waiters keyed by userId; resolved when seyfert registers a modal via components.modals.set. */
-	modalWaiters: Map<string, (() => void)[]>;
+	modalWaiters: Map<string, ModalWaiter[]>;
+	/** Dispatch that owns the currently registered waitFor modal for a user. */
+	modalOwners: Map<string, number>;
 	/** Drain the given dispatch's REST surface until quiescent or aborted. */
 	drainUntilQuiescent: (dispatchId: number | undefined, aborted: () => boolean) => Promise<void>;
 	/** Snapshot the modal definition just displayed to userId, so fillModal can validate customId/fields. */
@@ -83,12 +86,29 @@ export function installDispatchHooks(client: Client, deps: DispatchHookDeps): Di
 	const modals = modalRegistry(client);
 	const realSet = modals.set.bind(modals);
 	modals.set = (key: string, value: unknown) => {
+		const ctx = dispatchStore.getStore();
+		const ownerId = ctx?.dispatchId;
+		const existingOwner = deps.modalOwners.get(key);
+		if (modals.has(key) && existingOwner !== undefined && existingOwner !== ownerId) {
+			throw new TypeError(
+				`A modal is already waiting for user ${key} from dispatch ${existingOwner}; ` +
+					`dispatch ${ownerId ?? '(unknown)'} would overwrite it. Same-user modal flows must be driven sequentially.`,
+			);
+		}
 		const waiters = deps.modalWaiters.get(key);
 		if (waiters) {
+			const matching = ownerId === undefined ? waiters : waiters.filter(waiter => waiter.dispatchId === ownerId);
+			if (matching.length === 0) {
+				throw new TypeError(
+					`A modal was opened for user ${key} by dispatch ${ownerId ?? '(unknown)'}, but another dispatch is ` +
+						`already waiting for that user's modal. Same-user modal flows must be driven sequentially.`,
+				);
+			}
 			const result = realSet(key, value);
+			if (ownerId !== undefined) deps.modalOwners.set(key, ownerId);
 			deps.onModalDisplayed?.(key);
 			deps.modalWaiters.delete(key);
-			for (const resolve of waiters) resolve();
+			for (const waiter of matching) waiter.resolve();
 			return result;
 		}
 		// F27: a `waitFor` modal was opened but nothing is waiting to fill it — the opener dispatch was awaited

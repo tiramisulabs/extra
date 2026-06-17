@@ -1,4 +1,5 @@
 import { mockId, mockTimestamp } from '../id';
+import { emojiPayload } from './emoji';
 import type { ChannelOverwriteLike } from './permissions';
 
 /** Spread an optional snake_case field: `...opt('guild_id', options.guildId)` adds the key only when set. */
@@ -695,6 +696,45 @@ export function memberUpdateEvent(
 /** Raw `d` for GUILD_MEMBER_REMOVE: the removed user plus guild_id. */
 export function memberRemoveEvent(user: ApiUser, options: MemberEventOptions): { user: ApiUser; guild_id: string } {
 	return { user, guild_id: options.guildId };
+}
+
+export interface MessageReactionAddEventOptions {
+	guildId?: string;
+	member?: ApiMember;
+	messageAuthorId?: string;
+	burst?: boolean;
+	burstColors?: string[];
+	type?: number;
+}
+
+/** Raw `d` for MESSAGE_REACTION_ADD, including Discord's guild-only member/message-author fields when known. */
+export function messageReactionAddEvent(
+	input: { channelId: string; messageId: string; userId: string; emoji: string },
+	options: MessageReactionAddEventOptions = {},
+): {
+	user_id: string;
+	channel_id: string;
+	message_id: string;
+	guild_id?: string;
+	member?: ApiMember;
+	emoji: ReturnType<typeof emojiPayload>;
+	message_author_id?: string;
+	burst: boolean;
+	burst_colors: string[];
+	type: number;
+} {
+	return {
+		user_id: input.userId,
+		channel_id: input.channelId,
+		message_id: input.messageId,
+		...(options.guildId === undefined ? {} : { guild_id: options.guildId }),
+		...(options.member === undefined ? {} : { member: options.member }),
+		emoji: emojiPayload(input.emoji),
+		...(options.messageAuthorId === undefined ? {} : { message_author_id: options.messageAuthorId }),
+		burst: options.burst ?? false,
+		burst_colors: options.burstColors ?? [],
+		type: options.type ?? 0,
+	};
 }
 
 export interface ApiMessageOptions {

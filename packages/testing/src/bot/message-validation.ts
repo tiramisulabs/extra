@@ -77,7 +77,11 @@ function assertValidEmbeds(embeds: unknown[]): void {
 		const footerText = stringValue(footer.text);
 		// Discord requires footer.text whenever footer.icon_url is set (icon has nothing to anchor to otherwise).
 		if (footer.icon_url !== undefined && (footerText === undefined || footerText.length === 0)) {
-			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: embed footer.text is required when footer.icon_url is set');
+			apiError(
+				400,
+				ErrorCode.InvalidFormBody,
+				'Invalid Form Body: embed footer.text is required when footer.icon_url is set',
+			);
 		}
 		if (footerText !== undefined) {
 			if (cp(footerText) > 2048) {
@@ -92,8 +96,15 @@ function assertValidEmbeds(embeds: unknown[]): void {
 		const author = asRecord(embed.author);
 		const authorName = stringValue(author.name);
 		// Discord requires author.name whenever author.icon_url or author.url is set.
-		if ((author.icon_url !== undefined || author.url !== undefined) && (authorName === undefined || authorName.length === 0)) {
-			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: embed author.name is required when author.icon_url or author.url is set');
+		if (
+			(author.icon_url !== undefined || author.url !== undefined) &&
+			(authorName === undefined || authorName.length === 0)
+		) {
+			apiError(
+				400,
+				ErrorCode.InvalidFormBody,
+				'Invalid Form Body: embed author.name is required when author.icon_url or author.url is set',
+			);
 		}
 		if (authorName !== undefined) {
 			if (cp(authorName) > 256)
@@ -146,10 +157,17 @@ function assertValidComponents(components: unknown, isV2: boolean): void {
 		// Per-row layout caps (apply in v1 and v2): a single action row holds at most 5 buttons OR 1 select, never both.
 		if (type === 1) {
 			const children = arrayValue(node.components).map(asRecord);
+			if (children.length === 0) {
+				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: an action row must contain a component');
+			}
 			const buttons = children.filter(child => numberValue(child.type) === 2);
 			const selects = children.filter(child => isSelectType(numberValue(child.type)));
 			if (buttons.length > 0 && selects.length > 0) {
-				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: an action row cannot mix buttons and a select menu');
+				apiError(
+					400,
+					ErrorCode.InvalidFormBody,
+					'Invalid Form Body: an action row cannot mix buttons and a select menu',
+				);
 			}
 			if (buttons.length > 5) {
 				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: an action row can contain at most 5 buttons');
@@ -157,6 +175,19 @@ function assertValidComponents(components: unknown, isV2: boolean): void {
 			if (selects.length > 1) {
 				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: an action row can contain at most 1 select menu');
 			}
+		}
+		if (type === 9) {
+			const children = arrayValue(node.components);
+			if (children.length < 1 || children.length > 3) {
+				apiError(
+					400,
+					ErrorCode.InvalidFormBody,
+					'Invalid Form Body: a section must contain between 1 and 3 components',
+				);
+			}
+		}
+		if (type === 17 && arrayValue(node.components).length === 0) {
+			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: a container must contain at least 1 component');
 		}
 		const isButton = type === 2;
 		const isLinkButton = isButton && numberValue(node.style) === 5;

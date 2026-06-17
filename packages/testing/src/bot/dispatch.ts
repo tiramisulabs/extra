@@ -3,11 +3,18 @@ import type { DispatchResult } from './bot';
 import type { MockApiHandler, RecordedAction, RouteMatcher } from './rest';
 import { modalRegistry } from './seyfert-internals';
 
+export interface ModalWaiter {
+	dispatchId: number;
+	resolve: () => void;
+	reject: (error: unknown) => void;
+}
+
 /** Lazy, step-able handle returned by every user-action dispatcher. */
 export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 	private execution?: Promise<T>;
 	private releasePending?: () => void;
 	private settled = false;
+	private completed = false;
 
 	constructor(
 		private readonly rest: MockApiHandler,
@@ -15,7 +22,7 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		readonly userId: string | undefined,
 		private readonly executor: () => Promise<T>,
 		/** Resolves when seyfert registers a modal for the given userId; supplied by MockBot. */
-		private readonly modalWaiter?: (userId: string) => Promise<void>,
+		private readonly modalWaiter?: (userId: string, dispatchId: number | undefined) => Promise<void>,
 		/**
 		 * This dispatch's id, so {@link until} can scope its gate to only this dispatch's recorded actions.
 		 * Optional: a gate created without an id stays unscoped (matches any dispatch's actions).
@@ -23,10 +30,14 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		readonly dispatchId?: number,
 		/** Submits a modal as this dispatch's user; supplied by MockBot so {@link fillModal} needs no bot handle. */
 		private readonly modalFiller?: (customId: string, fields: Record<string, string>) => Dispatch<DispatchResult>,
+		/** Clears same-user modal ownership after timeoutModal consumes the registry entry. */
+		private readonly modalCleaner?: (userId: string) => void,
 	) {}
 
 	private start(): Promise<T> {
-		this.execution ??= this.executor();
+		this.execution ??= this.executor().finally(() => {
+			this.completed = true;
+		});
 		return this.execution;
 	}
 
@@ -36,6 +47,10 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 
 	get isSettled(): boolean {
 		return this.settled;
+	}
+
+	get isCompleted(): boolean {
+		return this.completed;
 	}
 
 	private releaseCheckpoint(): void {
@@ -78,11 +93,12 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		const userId = this.userId;
 		this.releaseCheckpoint();
 		this.start();
-		if (this.clientRef.components.modals.has(userId)) return;
 		const registered = this.modalWaiter
-			? this.modalWaiter(userId)
-			: // Fallback when no waiter hook was threaded: resolve only via the completion guard below.
-				new Promise<void>(() => {});
+			? this.modalWaiter(userId, this.dispatchId)
+			: this.clientRef.components.modals.has(userId)
+				? Promise.resolve()
+				: // Fallback when no waiter hook was threaded: resolve only via the completion guard below.
+					new Promise<void>(() => {});
 		// Swallow late rejection if `registered` wins the race; the awaiting test owns the dispatch promise.
 		this.execution!.catch(() => {});
 		await Promise.race([
@@ -125,6 +141,7 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		const modals = modalRegistry(this.clientRef);
 		const exec = modals.get(userId);
 		modals.delete(userId);
+		this.modalCleaner?.(userId);
 		exec?.(null); // resolves modal({ waitFor }) with null -> the handler takes its timeout branch
 		return await this;
 	}
