@@ -427,6 +427,30 @@ export function arrayValue(value: unknown): unknown[] {
 	return Array.isArray(value) ? value : [];
 }
 
+// Guild-scoped entity collections (emoji/sticker/automod/scheduled-event/...) are all stored as
+// `{ guildId, <entity> }[]` on the world. These three helpers collapse the otherwise-identical list/one/remove
+// boilerplate; `pick` selects the entity out of its wrapper.
+function listByGuild<W extends { guildId: string }, E>(list: W[] | undefined, guildId: string, pick: (w: W) => E): E[] {
+	return (list ?? []).filter(entry => entry.guildId === guildId).map(pick);
+}
+function oneByGuild<W extends { guildId: string }, E extends { id: string }>(
+	list: W[] | undefined,
+	guildId: string,
+	id: string,
+	pick: (w: W) => E,
+): E | undefined {
+	const entry = (list ?? []).find(wrapper => wrapper.guildId === guildId && pick(wrapper).id === id);
+	return entry ? pick(entry) : undefined;
+}
+function removeByGuild<W extends { guildId: string }, E extends { id: string }>(
+	list: W[] | undefined,
+	guildId: string,
+	id: string,
+	pick: (w: W) => E,
+): W[] {
+	return (list ?? []).filter(entry => entry.guildId !== guildId || pick(entry).id !== id);
+}
+
 function normalizeOverwrites(value: unknown): ChannelOverwriteLike[] {
 	return arrayValue(value).map(overwrite => {
 		const raw = asRecord(overwrite);
@@ -1402,19 +1426,17 @@ export class WorldState implements WorldStateReader {
 
 	/** @internal When Discord deletes an emoji. */
 	removeEmoji(guildId: string, emojiId: string): void {
-		this.world.guildEmojis = (this.world.guildEmojis ?? []).filter(
-			e => e.guildId !== guildId || e.emoji.id !== emojiId,
-		);
+		this.world.guildEmojis = removeByGuild(this.world.guildEmojis, guildId, emojiId, e => e.emoji);
 	}
 
 	/** The custom emojis of a guild. */
 	emojis(guildId: string): ApiEmoji[] {
-		return (this.world.guildEmojis ?? []).filter(e => e.guildId === guildId).map(e => e.emoji);
+		return listByGuild(this.world.guildEmojis, guildId, e => e.emoji);
 	}
 
 	/** A single guild emoji by id. */
 	emoji(guildId: string, emojiId: string): ApiEmoji | undefined {
-		return (this.world.guildEmojis ?? []).find(e => e.guildId === guildId && e.emoji.id === emojiId)?.emoji;
+		return oneByGuild(this.world.guildEmojis, guildId, emojiId, e => e.emoji);
 	}
 
 	/** @internal When Discord creates an invite. */
@@ -1489,19 +1511,17 @@ export class WorldState implements WorldStateReader {
 
 	/** @internal When Discord deletes an automod rule. */
 	removeAutoModRule(guildId: string, ruleId: string): void {
-		this.world.autoModRules = (this.world.autoModRules ?? []).filter(
-			r => r.guildId !== guildId || r.rule.id !== ruleId,
-		);
+		this.world.autoModRules = removeByGuild(this.world.autoModRules, guildId, ruleId, r => r.rule);
 	}
 
 	/** The automod rules of a guild. */
 	autoModRules(guildId: string): ApiAutoModRule[] {
-		return (this.world.autoModRules ?? []).filter(r => r.guildId === guildId).map(r => r.rule);
+		return listByGuild(this.world.autoModRules, guildId, r => r.rule);
 	}
 
 	/** A single automod rule by id. */
 	autoModRule(guildId: string, ruleId: string): ApiAutoModRule | undefined {
-		return (this.world.autoModRules ?? []).find(r => r.guildId === guildId && r.rule.id === ruleId)?.rule;
+		return oneByGuild(this.world.autoModRules, guildId, ruleId, r => r.rule);
 	}
 
 	/** @internal When a user joins a thread. Idempotent. */
@@ -1599,19 +1619,17 @@ export class WorldState implements WorldStateReader {
 
 	/** @internal When Discord deletes a sticker. */
 	removeSticker(guildId: string, stickerId: string): void {
-		this.world.guildStickers = (this.world.guildStickers ?? []).filter(
-			s => s.guildId !== guildId || s.sticker.id !== stickerId,
-		);
+		this.world.guildStickers = removeByGuild(this.world.guildStickers, guildId, stickerId, s => s.sticker);
 	}
 
 	/** The custom stickers of a guild. */
 	stickers(guildId: string): ApiSticker[] {
-		return (this.world.guildStickers ?? []).filter(s => s.guildId === guildId).map(s => s.sticker);
+		return listByGuild(this.world.guildStickers, guildId, s => s.sticker);
 	}
 
 	/** A single guild sticker by id. */
 	sticker(guildId: string, stickerId: string): ApiSticker | undefined {
-		return (this.world.guildStickers ?? []).find(s => s.guildId === guildId && s.sticker.id === stickerId)?.sticker;
+		return oneByGuild(this.world.guildStickers, guildId, stickerId, s => s.sticker);
 	}
 
 	/** @internal When Discord creates a scheduled event. */
@@ -1632,19 +1650,17 @@ export class WorldState implements WorldStateReader {
 
 	/** @internal When Discord deletes a scheduled event. */
 	removeScheduledEvent(guildId: string, eventId: string): void {
-		this.world.scheduledEvents = (this.world.scheduledEvents ?? []).filter(
-			e => e.guildId !== guildId || e.event.id !== eventId,
-		);
+		this.world.scheduledEvents = removeByGuild(this.world.scheduledEvents, guildId, eventId, e => e.event);
 	}
 
 	/** The scheduled events of a guild. */
 	scheduledEvents(guildId: string): ApiScheduledEvent[] {
-		return (this.world.scheduledEvents ?? []).filter(e => e.guildId === guildId).map(e => e.event);
+		return listByGuild(this.world.scheduledEvents, guildId, e => e.event);
 	}
 
 	/** A single scheduled event by id. */
 	scheduledEvent(guildId: string, eventId: string): ApiScheduledEvent | undefined {
-		return (this.world.scheduledEvents ?? []).find(e => e.guildId === guildId && e.event.id === eventId)?.event;
+		return oneByGuild(this.world.scheduledEvents, guildId, eventId, e => e.event);
 	}
 
 	/** @internal When Discord creates a guild template. */
@@ -1661,7 +1677,7 @@ export class WorldState implements WorldStateReader {
 
 	/** The templates of a guild. */
 	guildTemplates(guildId: string): ApiGuildTemplate[] {
-		return (this.world.guildTemplates ?? []).filter(t => t.guildId === guildId).map(t => t.template);
+		return listByGuild(this.world.guildTemplates, guildId, t => t.template);
 	}
 
 	/** A guild template by code. */
@@ -1671,7 +1687,7 @@ export class WorldState implements WorldStateReader {
 
 	/** The soundboard sounds of a guild. */
 	soundboardSounds(guildId: string): ApiSoundboardSound[] {
-		return (this.world.soundboardSounds ?? []).filter(s => s.guildId === guildId).map(s => s.sound);
+		return listByGuild(this.world.soundboardSounds, guildId, s => s.sound);
 	}
 
 	/** @internal When Discord creates a stage instance. */
@@ -1703,7 +1719,7 @@ export class WorldState implements WorldStateReader {
 
 	/** The audit log entries of a guild. */
 	auditLogEntries(guildId: string): ApiAuditLogEntry[] {
-		return (this.world.auditLogEntries ?? []).filter(e => e.guildId === guildId).map(e => e.entry);
+		return listByGuild(this.world.auditLogEntries, guildId, e => e.entry);
 	}
 
 	/** @internal When Discord edits a guild. */
