@@ -4,6 +4,12 @@ import { dispatchStore } from './dispatch-context';
 import { apiMessage } from './payloads';
 import { CHANNEL_MESSAGE_POST, Routes, WEBHOOK_EXECUTE_POST } from './routes';
 
+// Capture the real setTimeout/clearTimeout at module load so the internal waitForAction/gate control timeout
+// runs on the wall clock even when a test fakes global timers (vi.useFakeTimers replaces globalThis.setTimeout).
+// Otherwise the deadline would freeze (until()/waitForAction hang) or be tripped spuriously by advanceTime().
+const realSetTimeout = setTimeout.bind(globalThis);
+const realClearTimeout = clearTimeout.bind(globalThis);
+
 export interface RecordedAction {
 	seq: number;
 	/** Dispatch that produced this action, for per-dispatch attribution under concurrency. */
@@ -409,7 +415,7 @@ export class MockApiHandler extends ApiHandler {
 
 	releasePending(): void {
 		for (const listener of this.listeners) {
-			clearTimeout(listener.timer);
+			realClearTimeout(listener.timer);
 			listener.reject(new Error('MockApiHandler released pending waitForAction listeners during close().'));
 		}
 		this.listeners = [];
@@ -567,7 +573,7 @@ export class MockApiHandler extends ApiHandler {
 		return new Promise((resolve, reject) => {
 			let listener!: ActionListener;
 			listener = {
-				timer: setTimeout(() => {
+				timer: realSetTimeout(() => {
 					this.listeners = this.listeners.filter(entry => entry !== listener);
 					const seen = this.actions.map(action => `${action.method} ${action.route}`).join('\n  ') || '(none)';
 					reject(new Error(`waitForAction timed out after ${timeoutMs}ms. Actions seen:\n  ${seen}`));
@@ -576,7 +582,7 @@ export class MockApiHandler extends ApiHandler {
 				onAction: (action: RecordedAction, phase: NotifyPhase) => {
 					if (phase !== resolveOn) return;
 					if (!predicate(action)) return;
-					clearTimeout(listener.timer);
+					realClearTimeout(listener.timer);
 					this.listeners = this.listeners.filter(entry => entry !== listener);
 					resolve(enrich(action));
 				},

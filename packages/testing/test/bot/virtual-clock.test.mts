@@ -302,4 +302,13 @@ describe('virtual clock', () => {
 		vi.useRealTimers();
 		await bot.close();
 	});
+
+	test('waitForAction still rejects on real time under faked setTimeout (control timeout is wall-clock)', async () => {
+		const bot = await createMockBot({});
+		// With global setTimeout faked, a naive control timer would freeze and waitForAction would hang forever.
+		vi.useFakeTimers(FAKE_TIMER_OPTIONS);
+		await expect(bot.rest.waitForAction({ method: 'GET', route: '/never-happens' }, 50)).rejects.toThrow(/timed out/);
+		vi.useRealTimers();
+		await bot.close();
+	});
 });
