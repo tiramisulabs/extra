@@ -223,6 +223,7 @@ function assertValidComponents(components: unknown, isV2: boolean): void {
 				if (url === undefined || url.length === 0) {
 					apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: a link button requires a url');
 				}
+				assertEmbedUrl(url, 'link button url', false);
 				if (customId !== undefined) {
 					apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: a link button cannot have custom_id');
 				}
@@ -408,18 +409,35 @@ export function assertNameBounds(value: unknown, min: number, max: number, label
 
 const ATTACHMENT_SCHEME = 'attachment://';
 
-function collectAttachmentRefs(value: unknown, out: Set<string>): void {
+function collectAttachmentUrl(value: unknown, out: Set<string>): void {
 	if (typeof value === 'string') {
 		if (value.startsWith(ATTACHMENT_SCHEME)) out.add(value.slice(ATTACHMENT_SCHEME.length));
-		return;
 	}
+}
+
+function collectComponentAttachmentRefs(value: unknown, out: Set<string>): void {
 	if (Array.isArray(value)) {
-		for (const entry of value) collectAttachmentRefs(entry, out);
+		for (const entry of value) collectComponentAttachmentRefs(entry, out);
 		return;
 	}
-	if (value && typeof value === 'object') {
-		for (const entry of Object.values(value)) collectAttachmentRefs(entry, out);
+	if (!value || typeof value !== 'object') return;
+	const record = asRecord(value);
+	collectComponentAttachmentRefs(record.components, out);
+	collectComponentAttachmentRefs(record.items, out);
+	collectAttachmentUrl(asRecord(record.media).url, out);
+	collectAttachmentUrl(asRecord(record.file).url, out);
+}
+
+function collectAttachmentRefs(body: unknown, out: Set<string>): void {
+	const raw = asRecord(body);
+	for (const embed of arrayValue(raw.embeds)) {
+		const record = asRecord(embed);
+		collectAttachmentUrl(asRecord(record.image).url, out);
+		collectAttachmentUrl(asRecord(record.thumbnail).url, out);
+		collectAttachmentUrl(asRecord(record.footer).icon_url, out);
+		collectAttachmentUrl(asRecord(record.author).icon_url, out);
 	}
+	collectComponentAttachmentRefs(raw.components, out);
 }
 
 /**

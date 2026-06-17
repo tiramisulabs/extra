@@ -54,6 +54,17 @@ function optionEntries(options: OptionInputBag | undefined): [string, OptionInpu
 	return Array.isArray(options) ? options.map(option => [option.name, option.value]) : Object.entries(options);
 }
 
+function assertUniqueOptionNames(options: OptionInputBag | undefined, verb: string, commandName: string): void {
+	if (!Array.isArray(options)) return;
+	const seen = new Set<string>();
+	for (const option of options) {
+		if (seen.has(option.name)) {
+			throw new TypeError(`${verb}: option "${option.name}" is provided more than once on command "${commandName}".`);
+		}
+		seen.add(option.name);
+	}
+}
+
 /** The shape this module needs from a registered command list (`client.commands.values`). */
 export type CommandList = readonly { name: string; type: unknown }[];
 
@@ -90,12 +101,19 @@ function assertSubcommandTarget(
 	options: Pick<ChatInputInteractionOptions, 'name' | 'group' | 'subcommand'>,
 	verb = 'slash',
 ): void {
-	if (!options.group && !options.subcommand) return;
 	const subcommands = subcommandsOf(commands, options.name);
+	if (!options.group && !options.subcommand) {
+		if (subcommands.length > 0) {
+			throw new TypeError(`${verb}: command "${options.name}" requires a subcommand.`);
+		}
+		return;
+	}
 	if (options.group && !subcommands.some(sub => sub.group === options.group)) {
 		throw new TypeError(`${verb}: subcommand group "${options.group}" is not registered on "${options.name}".`);
 	}
-	if (!options.subcommand) return;
+	if (!options.subcommand) {
+		throw new TypeError(`${verb}: subcommand group "${options.group}" on "${options.name}" requires a subcommand.`);
+	}
 	const found = subcommands.some(
 		sub => sub.name === options.subcommand && (options.group ? sub.group === options.group : !sub.group),
 	);
@@ -134,6 +152,7 @@ function validateChatInputOptions(
 	verb = 'slash',
 	requireRequired = true,
 ): void {
+	assertUniqueOptionNames(options.options, verb, options.name);
 	const entries = new Map(optionEntries(options.options));
 	const declared = new Set(definitions.map(definition => definition.name));
 	for (const name of entries.keys()) {
@@ -175,8 +194,11 @@ function validateChatInputOptions(
 
 		if (definition.type === CommandOptionType.Integer || definition.type === CommandOptionType.Number) {
 			if (typeof value !== 'number') throw new TypeError(`${verb}: option "${definition.name}" must be a number.`);
-			if (definition.type === CommandOptionType.Integer && !Number.isInteger(value)) {
-				throw new TypeError(`${verb}: option "${definition.name}" must be an integer.`);
+			if (!Number.isFinite(value)) {
+				throw new TypeError(`${verb}: option "${definition.name}" must be a finite number.`);
+			}
+			if (definition.type === CommandOptionType.Integer && !Number.isSafeInteger(value)) {
+				throw new TypeError(`${verb}: option "${definition.name}" must be a safe integer.`);
 			}
 			if (definition.min_value !== undefined && value < definition.min_value) {
 				throw new TypeError(`${verb}: option "${definition.name}" is less than ${definition.min_value}.`);
@@ -217,15 +239,16 @@ function validateChatInputOptions(
 			const encoded = requireEncodedOption(definition.name, input, definition.type, 'channelOption(...)', verb);
 			requireResolvedEntry(definition.name, encoded, 'channels', verb);
 			const channel = encoded.resolved?.channels?.[String(encoded.value)];
-			if (
-				definition.channel_types?.length &&
-				channel?.type !== undefined &&
-				!definition.channel_types.includes(channel.type)
-			) {
-				throw new TypeError(
-					`${verb}: option "${definition.name}" channel type ${channel.type} is not allowed. ` +
-						`Allowed: ${definition.channel_types.join(', ')}.`,
-				);
+			if (definition.channel_types?.length) {
+				if (typeof channel?.type !== 'number') {
+					throw new TypeError(`${verb}: option "${definition.name}" resolved channel is missing a numeric type.`);
+				}
+				if (!definition.channel_types.includes(channel.type)) {
+					throw new TypeError(
+						`${verb}: option "${definition.name}" channel type ${channel.type} is not allowed. ` +
+							`Allowed: ${definition.channel_types.join(', ')}.`,
+					);
+				}
 			}
 			continue;
 		}
@@ -263,6 +286,7 @@ export function prepareAutocompleteOptions(
 	assertSubcommandTarget(commands, options, 'autocomplete');
 	const definitions = optionDefinitionsFor(commands, options);
 	if (validate) {
+		assertUniqueOptionNames(options.options, 'autocomplete', options.name);
 		const entries = new Map(optionEntries(options.options));
 		if (entries.has(options.focused)) {
 			throw new TypeError(
@@ -297,8 +321,11 @@ export function prepareAutocompleteOptions(
 			}
 		} else {
 			if (typeof value !== 'number') throw new TypeError(`autocomplete: option "${options.focused}" must be a number.`);
-			if (focused.type === CommandOptionType.Integer && !Number.isInteger(value)) {
-				throw new TypeError(`autocomplete: option "${options.focused}" must be an integer.`);
+			if (!Number.isFinite(value)) {
+				throw new TypeError(`autocomplete: option "${options.focused}" must be a finite number.`);
+			}
+			if (focused.type === CommandOptionType.Integer && !Number.isSafeInteger(value)) {
+				throw new TypeError(`autocomplete: option "${options.focused}" must be a safe integer.`);
 			}
 			if (focused.min_value !== undefined && value < focused.min_value) {
 				throw new TypeError(`autocomplete: option "${options.focused}" is less than ${focused.min_value}.`);

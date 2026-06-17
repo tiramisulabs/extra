@@ -39,7 +39,7 @@ export interface DispatchHookDeps {
 	/** Drain the given dispatch's REST surface until quiescent or aborted. */
 	drainUntilQuiescent: (dispatchId: number | undefined, aborted: () => boolean) => Promise<void>;
 	/** Snapshot the modal definition just displayed to userId, so fillModal can validate customId/fields. */
-	onModalDisplayed?: (userId: string) => void;
+	onModalDisplayed?: (userId: string, dispatchId: number | undefined) => void;
 }
 
 interface DispatchHookInstallState {
@@ -128,7 +128,7 @@ export function installDispatchHooks(client: Client, deps: DispatchHookDeps): Di
 			}
 			const result = realSet(key, value);
 			if (ownerId !== undefined) state.deps.modalOwners.set(key, ownerId);
-			state.deps.onModalDisplayed?.(key);
+			state.deps.onModalDisplayed?.(key, ownerId);
 			state.deps.modalWaiters.delete(key);
 			for (const waiter of matching) waiter.resolve();
 			return result;

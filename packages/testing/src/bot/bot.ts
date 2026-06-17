@@ -83,7 +83,7 @@ import {
 } from './rest';
 import { FOLLOWUP_ROUTE, WEBHOOK_MESSAGE_ROUTE } from './routes';
 import { resolveSelectResolved } from './select-resolved';
-import { asUsingClient, clientLifecycle, eventsInternals, pluginEventNames } from './seyfert-internals';
+import { asUsingClient, clientLifecycle, eventsInternals, modalRegistry, pluginEventNames } from './seyfert-internals';
 import {
 	type ButtonView,
 	type ChannelView,
@@ -902,6 +902,9 @@ export class MockBot {
 			);
 		}
 		this.assertComponentVerbType(verb, customId, message);
+		if (component.disabled === true) {
+			throw new TypeError(`${verb}: component "${customId}" on source message "${message.id}" is disabled.`);
+		}
 		return component;
 	}
 
@@ -950,9 +953,10 @@ export class MockBot {
 	 * read from the most recent type-9 interaction callback. Lets {@link assertModalMatchesDisplayed} reject a
 	 * fillModal aimed at the wrong customId or carrying field keys that no input on the modal accepts.
 	 */
-	private captureDisplayedModal(userId: string): void {
+	private captureDisplayedModal(userId: string, dispatchId: number | undefined): void {
 		for (let i = this.rest.actions.length - 1; i >= 0; i--) {
 			const action = this.rest.actions[i];
+			if (dispatchId !== undefined && action.dispatchId !== dispatchId) continue;
 			if (!action.route.includes('/callback')) continue;
 			const body = action.body as { type?: number; data?: Record<string, unknown> } | undefined;
 			if (body?.type !== 9) continue;
@@ -1074,20 +1078,17 @@ export class MockBot {
 		return active[0]?.dispatchId;
 	}
 
-	private assertNoConcurrentSyntheticComponentSource(
+	private assertNoConcurrentImplicitComponentSource(
 		verb: 'clickButton' | 'selectMenu',
 		customId: string,
 		sourceProvided: boolean,
-		message: { id: string; channel_id?: string } | undefined,
 	): void {
-		if (message || sourceProvided) return;
-		if (!this.hasComponentCommand()) return;
+		if (sourceProvided) return;
 		const unsettled = this.dispatches.filter(dispatch => !dispatch.isCompleted);
 		if (unsettled.length === 0) return;
 		throw new TypeError(
-			`${verb}: no source message resolved for "${customId}" while another dispatch is still running. ` +
-				`Synthetic ComponentCommand dispatch can race with collector/source resolution. Pass source: "message-id" ` +
-				`or a RecordedAction whose response is the message.`,
+			`${verb}: source-less component dispatch for "${customId}" is ambiguous while another dispatch is still running. ` +
+				`Pass source: "message-id" or a RecordedAction whose response is the component message.`,
 		);
 	}
 
@@ -1524,6 +1525,20 @@ export class MockBot {
 		}
 	}
 
+	private async drainTokenUntilQuiescent(token: string, maxIterations = DRAIN_MAX_ITERATIONS): Promise<void> {
+		assertRealSetImmediate();
+		let lastCount = -1;
+		let iterations = 0;
+		while (true) {
+			const count = this.rest.actions.filter(action => action.route.split('/').includes(token)).length;
+			const quiet = count === lastCount && !this.rest.hasPendingRequests();
+			if (quiet) return;
+			lastCount = count;
+			if (++iterations > maxIterations) return;
+			await drainTick();
+		}
+	}
+
 	/**
 	 * Install the component/middleware wrappers ONCE on the shared client singletons. Delegates to the free
 	 * function in ./hooks and stores the detected capabilities it returns.
@@ -1535,7 +1550,7 @@ export class MockBot {
 			modalWaiters: this.modalWaiters,
 			modalOwners: this.modalOwners,
 			drainUntilQuiescent: (dispatchId, aborted) => this.drainUntilQuiescent(dispatchId, aborted),
-			onModalDisplayed: userId => this.captureDisplayedModal(userId),
+			onModalDisplayed: (userId, dispatchId) => this.captureDisplayedModal(userId, dispatchId),
 		});
 		this.canDetectComponentCommand = capabilities.canDetectComponentCommand;
 		this.canDetectCollector = capabilities.canDetectCollector;
@@ -1577,8 +1592,12 @@ export class MockBot {
 				]);
 			});
 		} finally {
-			if (isModalPayload && userId) this.modalOwners.delete(userId);
+			if (isModalPayload && userId) {
+				modalRegistry(this.client).delete(userId);
+				this.modalOwners.delete(userId);
+			}
 		}
+		if (isModalPayload) await this.drainTokenUntilQuiescent(payload.token);
 		const { componentCommandExecuted, collectorMatched, modalMatched } = ctx;
 		// An unhandled error inside the command/component/modal run was captured by the onRunError hook. Fail loud
 		// by default so a happy-path test surfaces the bug; 'capture' exposes it on result.error instead.
@@ -1872,7 +1891,7 @@ export class MockBot {
 		const opts: ButtonInteractionOptions = { ...rest, customId };
 		return this.dispatchVia('clickButton', opts, prepared => {
 			const message = this.resolveMessageSource(source);
-			this.assertNoConcurrentSyntheticComponentSource('clickButton', customId, source !== undefined, message);
+			this.assertNoConcurrentImplicitComponentSource('clickButton', customId, source !== undefined);
 			if (!message && !allowSyntheticSource) {
 				throw new TypeError(
 					`clickButton: no source message resolved for "${customId}". Send the message first, pass source, ` +
@@ -1903,7 +1922,7 @@ export class MockBot {
 		const opts: SelectMenuInteractionOptions = { ...rest, customId, values };
 		return this.dispatchVia('selectMenu', opts, prepared => {
 			const message = this.resolveMessageSource(source);
-			this.assertNoConcurrentSyntheticComponentSource('selectMenu', customId, source !== undefined, message);
+			this.assertNoConcurrentImplicitComponentSource('selectMenu', customId, source !== undefined);
 			if (!message && !allowSyntheticSource) {
 				throw new TypeError(
 					`selectMenu: no source message resolved for "${customId}". Send the message first, pass source, ` +

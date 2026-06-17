@@ -97,6 +97,7 @@ interface GuildCrudConfig {
 	drop?: (guildId: string, id: string) => void;
 	fallback: (guildId: string, id: string) => unknown;
 	/** Guild-existence guard (world-gated requireGuild); runs before every create/edit/delete. */
+	parentGuard?: (guildId: string) => void;
 	guard?: (guildId: string) => void;
 	/** When set (world mode), an edit/delete of a missing entity is this 404 code instead of a fabrication. */
 	unknownCode?: number;
@@ -111,17 +112,21 @@ function registerGuildCrud(rest: MockApiHandler, config: GuildCrudConfig): void 
 			return config.add(params.guildId, bodyRecord(pending.body));
 		});
 	}
-	if (config.list) rest.intercept(config.list, (_pending, params) => config.all(params.guildId));
+	if (config.list)
+		rest.intercept(config.list, (_pending, params) => {
+			config.parentGuard?.(params.guildId);
+			return config.all(params.guildId);
+		});
 	if (config.fetch) {
-		interceptFetchOne(
-			rest,
-			config.fetch,
-			params => config.one(params.guildId, params[idParam]),
-			params => config.fallback(params.guildId, params[idParam]),
-			config.unknownCode === undefined
-				? undefined
-				: { code: config.unknownCode, message: config.unknownMessage ?? 'Unknown' },
-		);
+		rest.intercept(config.fetch, (_pending, params) => {
+			config.parentGuard?.(params.guildId);
+			const found = config.one(params.guildId, params[idParam]);
+			if (found !== undefined) return found;
+			if (config.unknownCode !== undefined) {
+				apiError(404, config.unknownCode, config.unknownMessage ?? 'Unknown');
+			}
+			return rest.markSynthetic(config.fallback(params.guildId, params[idParam]));
+		});
 	}
 	if (config.edit && config.patch) {
 		const patch = config.patch;
@@ -348,6 +353,7 @@ export function registerWorldDefaults(
 		return encodedChannelId;
 	};
 	const requireInteractionWebhook = (applicationId: string, token: string): void => {
+		if (!hooks.state.hasInteractionToken(token)) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
 		const expected = hooks.state.applicationIdForToken(token) ?? hooks.applicationId;
 		if (applicationId !== expected) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
 	};
@@ -525,6 +531,7 @@ export function registerWorldDefaults(
 		return threadResponder(pending, params);
 	});
 	rest.intercept(Routes.deleteChannel, (_pending, params) => {
+		requireChannel(params.channelId);
 		requireChannelPerm(params.channelId, PermissionFlagsBits.ManageChannels);
 		const existing = world?.channels.find(channel => channel.id === params.channelId);
 		hooks.state.removeChannel(params.channelId);
@@ -547,8 +554,8 @@ export function registerWorldDefaults(
 		// F13: editing a non-existent message is a 404, and a message the bot did not author can never be edited
 		// (Discord forbids editing others' messages outright) — a 403. Worldless mode stays lenient (synthesize).
 		if (world) {
-			const existing = hooks.state.rawMessage(params.channelId, params.messageId);
-			if (!existing) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
+			requireMessage(params.channelId, params.messageId);
+			const existing = hooks.state.rawMessage(params.channelId, params.messageId)!;
 			if (existing.author.id !== hooks.botId) {
 				apiError(403, ErrorCode.CannotEditAnotherUsersMessage, 'Cannot edit a message authored by another user');
 			}
@@ -562,9 +569,7 @@ export function registerWorldDefaults(
 	});
 	rest.intercept(Routes.deleteMessage, (_pending, params) => {
 		// F13: deleting a non-existent message is a 404 (deleting another user's message IS allowed with perms).
-		if (world && !hooks.state.rawMessage(params.channelId, params.messageId)) {
-			apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
-		}
+		if (world) requireMessage(params.channelId, params.messageId);
 		hooks.state.deleteMessage(params.channelId, params.messageId);
 		return {};
 	});
@@ -734,6 +739,7 @@ export function registerWorldDefaults(
 			void hooks.cacheRemove('emojis', id, guildId);
 		},
 		fallback: (guildId, id) => apiEmoji({ id, guildId }),
+		parentGuard: requireGuild,
 		guard: (guildId: string) => {
 			requireGuild(guildId);
 			requirePerm(guildId, PermissionFlagsBits.ManageGuildExpressions);
@@ -800,6 +806,7 @@ export function registerWorldDefaults(
 		patch: (guildId, id, body) => hooks.state.editAutoModRule(guildId, id, body),
 		drop: (guildId, id) => hooks.state.removeAutoModRule(guildId, id),
 		fallback: (guildId, id) => apiAutoModRule({ id, guildId }),
+		parentGuard: requireGuild,
 		guard: (guildId: string) => {
 			requireGuild(guildId);
 			requirePerm(guildId, PermissionFlagsBits.ManageGuild);
@@ -861,6 +868,7 @@ export function registerWorldDefaults(
 			void hooks.cacheRemove('stickers', id, guildId);
 		},
 		fallback: (guildId, id) => apiSticker({ id, guildId }),
+		parentGuard: requireGuild,
 		guard: (guildId: string) => {
 			requireGuild(guildId);
 			requirePerm(guildId, PermissionFlagsBits.ManageGuildExpressions);
@@ -879,6 +887,7 @@ export function registerWorldDefaults(
 		one: (guildId, id) => hooks.state.scheduledEvent(guildId, id),
 		drop: (guildId, id) => hooks.state.removeScheduledEvent(guildId, id),
 		fallback: (guildId, id) => apiScheduledEvent({ id, guildId }),
+		parentGuard: requireGuild,
 		guard: (guildId: string) => {
 			requireGuild(guildId);
 			requirePerm(guildId, PermissionFlagsBits.ManageEvents);

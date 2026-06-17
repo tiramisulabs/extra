@@ -1033,6 +1033,10 @@ export class WorldState implements WorldStateReader {
 		return this.acknowledgedTokens.has(token);
 	}
 
+	hasInteractionToken(token: string): boolean {
+		return this.channelIdByToken.has(token);
+	}
+
 	/** @internal Point a token at an EXISTING message as its @original (deferUpdate on a component). */
 	registerOriginalResponse(token: string, channelId: string, messageId: string): void {
 		this.deletedOriginalTokens.delete(token);
