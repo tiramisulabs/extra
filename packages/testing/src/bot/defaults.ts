@@ -447,6 +447,7 @@ export function registerWorldDefaults(
 		return {};
 	});
 	rest.intercept(Routes.bulkDeleteMessages, (pending, params) => {
+		requireChannel(params.channelId);
 		const messages = bodyRecord(pending.body).messages;
 		const ids = Array.isArray(messages) ? messages : [];
 		if (ids.length < 2 || ids.length > 100) {
@@ -612,10 +613,12 @@ export function registerWorldDefaults(
 	});
 	const resolveThreadUser = (userId: string) => (userId === '@me' ? hooks.botId : userId);
 	rest.intercept(Routes.addThreadMember, (_pending, params) => {
+		requireChannel(params.channelId);
 		hooks.state.addThreadMember(params.channelId, resolveThreadUser(params.userId));
 		return {};
 	});
 	rest.intercept(Routes.removeThreadMember, (_pending, params) => {
+		requireChannel(params.channelId);
 		hooks.state.removeThreadMember(params.channelId, resolveThreadUser(params.userId));
 		return {};
 	});
@@ -694,6 +697,7 @@ export function registerWorldDefaults(
 		return updated ?? { ...apiGuild({ id: params.guildId }), ...bodyRecord(pending.body) };
 	});
 	rest.intercept(Routes.fetchBan, (_pending, params) => {
+		requireGuild(params.guildId);
 		if (!hooks.state.isBanned(params.guildId, params.userId)) {
 			return apiError(404, ErrorCode.UnknownBan, 'Unknown Ban');
 		}
@@ -724,14 +728,17 @@ export function registerWorldDefaults(
 		})),
 	);
 	rest.intercept(Routes.editChannel, (pending, params) => {
+		requireChannel(params.channelId);
 		const updated = hooks.state.editChannel(params.channelId, bodyRecord(pending.body));
 		return updated ?? { ...apiChannel({ id: params.channelId }), ...bodyRecord(pending.body) };
 	});
 	rest.intercept(Routes.editChannelPermissions, (pending, params) => {
+		requireChannel(params.channelId);
 		hooks.state.setChannelOverwrite(params.channelId, params.overwriteId, bodyRecord(pending.body));
 		return {};
 	});
 	rest.intercept(Routes.deleteChannelPermission, (_pending, params) => {
+		requireChannel(params.channelId);
 		hooks.state.removeChannelOverwrite(params.channelId, params.overwriteId);
 		return {};
 	});
@@ -770,7 +777,14 @@ export function registerWorldDefaults(
 		await emitReaction('MESSAGE_REACTION_ADD', params.channelId, params.messageId, params.emoji, hooks.botId);
 		return {};
 	});
+	// Reaction REMOVAL parity with addReaction: a reaction op against a message that does not exist is a 404,
+	// not a silent no-op. Only the message's existence is gated (removing an absent reaction from a real
+	// message is a legit no-op), mirroring Discord.
+	const requireMessage = (channelId: string, messageId: string) => {
+		if (!hooks.state.rawMessage(channelId, messageId)) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
+	};
 	rest.intercept(Routes.removeOwnReaction, async (_pending, params) => {
+		requireMessage(params.channelId, params.messageId);
 		hooks.state.removeReaction(params.channelId, params.messageId, params.emoji, hooks.botId);
 		await emitReaction('MESSAGE_REACTION_REMOVE', params.channelId, params.messageId, params.emoji, hooks.botId);
 		return {};
@@ -778,11 +792,13 @@ export function registerWorldDefaults(
 	rest.intercept(Routes.removeUserReaction, async (_pending, params) => {
 		// `@me` collides with the own-reaction route shape; route it to the bot user for parity.
 		const userId = params.userId === '@me' ? hooks.botId : params.userId;
+		requireMessage(params.channelId, params.messageId);
 		hooks.state.removeReaction(params.channelId, params.messageId, params.emoji, userId);
 		await emitReaction('MESSAGE_REACTION_REMOVE', params.channelId, params.messageId, params.emoji, userId);
 		return {};
 	});
 	rest.intercept(Routes.removeEmojiReactions, async (_pending, params) => {
+		requireMessage(params.channelId, params.messageId);
 		hooks.state.removeEmojiReactions(params.channelId, params.messageId, params.emoji);
 		if (hooks.simulateGateway) {
 			await hooks.emit('MESSAGE_REACTION_REMOVE_EMOJI', {
@@ -793,6 +809,7 @@ export function registerWorldDefaults(
 		return {};
 	});
 	rest.intercept(Routes.removeAllReactions, async (_pending, params) => {
+		requireMessage(params.channelId, params.messageId);
 		hooks.state.removeAllReactions(params.channelId, params.messageId);
 		if (hooks.simulateGateway) {
 			await hooks.emit('MESSAGE_REACTION_REMOVE_ALL', reactionEventBase(params.channelId, params.messageId));

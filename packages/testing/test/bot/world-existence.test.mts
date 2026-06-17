@@ -84,6 +84,60 @@ describe('world-mode existence enforcement', () => {
 		await bot.close();
 	});
 
+	test('removing a reaction from a non-existent message is a 404, like adding (parity)', async () => {
+		const { world, guild, actor, channel } = seedGuildFixture('react-missing');
+
+		@Declare({ name: 'unreact-ghost', description: 'removes a reaction from a message that does not exist' })
+		class UnreactGhost extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.client.reactions.delete('ghost-msg', channel.id, '👍');
+				await ctx.write({ content: 'removed' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [UnreactGhost], world });
+		await expect(
+			bot.slash({ name: 'unreact-ghost', guildId: guild.id, channel, user: actor.user }),
+		).rejects.toMatchObject({ code: DiscordErrors.UnknownMessage.code });
+		await bot.close();
+	});
+
+	test('editing a non-existent channel is a 404 (no phantom edit)', async () => {
+		const { world, guild, actor, channel } = seedGuildFixture('chan-edit');
+
+		@Declare({ name: 'edit-ghost-chan', description: 'edits a channel that was never seeded' })
+		class EditGhostChan extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.client.channels.edit('ghost-channel', { name: 'renamed' });
+				await ctx.write({ content: 'edited' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [EditGhostChan], world });
+		await expect(
+			bot.slash({ name: 'edit-ghost-chan', guildId: guild.id, channel, user: actor.user }),
+		).rejects.toMatchObject({ code: DiscordErrors.UnknownChannel.code });
+		await bot.close();
+	});
+
+	test('fetching a ban in an unseeded guild is Unknown Guild, not Unknown Ban', async () => {
+		const { world, guild, actor, channel } = seedGuildFixture('ban-fetch');
+
+		@Declare({ name: 'fetch-ghost-ban', description: 'fetches a ban from a guild that was never seeded' })
+		class FetchGhostBan extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.client.bans.fetch('ghost-guild', 'victim');
+				await ctx.write({ content: 'fetched' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [FetchGhostBan], world });
+		await expect(
+			bot.slash({ name: 'fetch-ghost-ban', guildId: guild.id, channel, user: actor.user }),
+		).rejects.toMatchObject({ code: DiscordErrors.UnknownGuild.code });
+		await bot.close();
+	});
+
 	test('worldless mode stays lenient: a ban in any guild succeeds', async () => {
 		@Declare({ name: 'ban-anywhere', description: 'bans with no world seeded' })
 		class BanAnywhere extends Command {
