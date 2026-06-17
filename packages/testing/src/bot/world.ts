@@ -339,6 +339,16 @@ export async function seedWorld(client: UsingClient, world: MockWorld): Promise<
 	for (const channel of world.channels) {
 		if (channel.guild_id) {
 			await client.cache.channels?.set(CacheFrom.Test, channel.id, channel.guild_id, channel);
+			// seyfert's channel cache strips permission_overwrites into the separate `overwrites` resource, so a
+			// seeded channel's overwrites are invisible to cache reads unless seeded there directly.
+			if (channel.permission_overwrites?.length) {
+				await client.cache.overwrites?.set(
+					CacheFrom.Test,
+					channel.id,
+					channel.guild_id,
+					channel.permission_overwrites,
+				);
+			}
 		}
 	}
 	for (const entry of world.roles) {
@@ -352,5 +362,14 @@ export async function seedWorld(client: UsingClient, world: MockWorld): Promise<
 	}
 	for (const entry of world.voiceStates ?? []) {
 		await client.cache.voiceStates?.set(CacheFrom.Test, entry.voiceState.user_id, entry.guildId, entry.voiceState);
+	}
+	for (const entry of world.guildEmojis ?? []) {
+		await client.cache.emojis?.set(CacheFrom.Test, entry.emoji.id, entry.guildId, entry.emoji);
+	}
+	for (const entry of world.guildStickers ?? []) {
+		await client.cache.stickers?.set(CacheFrom.Test, entry.sticker.id, entry.guildId, entry.sticker);
+	}
+	for (const stage of world.stageInstances ?? []) {
+		if (stage.guild_id) await client.cache.stageInstances?.set(CacheFrom.Test, stage.id, stage.guild_id, stage);
 	}
 }
