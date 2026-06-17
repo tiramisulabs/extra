@@ -62,7 +62,7 @@ function interceptFetchOne<T>(
 	find: (params: Record<string, string>) => T | undefined,
 	fallback: (params: Record<string, string>) => T,
 ): void {
-	rest.intercept(route, (_pending, params) => find(params) ?? fallback(params));
+	rest.intercept(route, (_pending, params) => find(params) ?? rest.markSynthetic(fallback(params)));
 }
 
 /**
@@ -105,7 +105,7 @@ function registerGuildCrud(rest: MockApiHandler, config: GuildCrudConfig): void 
 			config.edit,
 			(pending, params) =>
 				patch(params.guildId, params[idParam], bodyRecord(pending.body)) ??
-				config.fallback(params.guildId, params[idParam]),
+				rest.markSynthetic(config.fallback(params.guildId, params[idParam])),
 		);
 	}
 	if (config.remove && config.drop) {

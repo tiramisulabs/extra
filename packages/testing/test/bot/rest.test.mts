@@ -3,6 +3,7 @@ import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { DiscordErrors, MockApiHandler } from '../../src/bot/rest';
 import { Routes } from '../../src/bot/routes';
+import { mockWorld } from '../../src/bot/world';
 
 const englishLang = { greeting: 'Hello!' };
 
@@ -49,6 +50,23 @@ describe('MockApiHandler', () => {
 				body: { content: 'hello' },
 			}),
 		).toHaveLength(1);
+	});
+
+	test('a fabricated fallback fetch is stamped synthetic; a real one is not', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'syn-guild' });
+		const channel = world.registerChannel(guild.id, { id: 'syn-channel' });
+		const bot = await createMockBot({ world });
+
+		const real = await bot.rest.request<{ id: string }>('GET', `/channels/${channel.id}`);
+		expect(real.id).toBe(channel.id);
+		expect(bot.actions.at(-1)?.synthetic).toBeFalsy();
+
+		const ghost = await bot.rest.request<{ id: string }>('GET', '/channels/does-not-exist');
+		expect(ghost.id).toBe('does-not-exist');
+		expect(bot.actions.at(-1)?.synthetic).toBe(true);
+
+		await bot.close();
 	});
 
 	test('interceptors take precedence and expose route params', async () => {

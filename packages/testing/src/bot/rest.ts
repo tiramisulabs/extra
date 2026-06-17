@@ -19,6 +19,8 @@ export interface RecordedAction {
 	response: unknown;
 	/** The responder error; set before the original error is rethrown. */
 	error?: unknown;
+	/** True when the responder fabricated this response (no real entity/collection backed it). */
+	synthetic?: boolean;
 }
 
 export function isOutgoingMessagePost(action: RecordedAction): boolean {
@@ -292,6 +294,8 @@ export class MockApiHandler extends ApiHandler {
 	private readonly unhandled: 'warn' | 'error' | 'silent';
 	private readonly routeCache = new Map<string, { pattern: RegExp; names: string[] }>();
 	private readonly warnedRoutes = new Set<string>();
+	/** Response objects a responder fabricated; used to stamp RecordedAction.synthetic. */
+	private readonly syntheticResponses = new WeakSet<object>();
 
 	constructor(options: { onUnhandledRest?: 'warn' | 'error' | 'silent' } = {}) {
 		super({ token: 'slipher-mock-token' });
@@ -334,6 +338,16 @@ export class MockApiHandler extends ApiHandler {
 			const index = this.interceptors.indexOf(interceptor);
 			if (index !== -1) this.interceptors.splice(index, 1);
 		};
+	}
+
+	/**
+	 * Tag a fabricated response so the recorded action is stamped `synthetic: true`. A responder calls this on
+	 * a value it invented (no real entity/collection backed it), letting a test tell a genuine result from a
+	 * plausible-looking fallback. Returns the value unchanged for inline use.
+	 */
+	markSynthetic<T>(value: T): T {
+		if (value !== null && typeof value === 'object') this.syntheticResponses.add(value as object);
+		return value;
 	}
 
 	/**
@@ -621,6 +635,9 @@ export class MockApiHandler extends ApiHandler {
 			try {
 				const response = await this.resolveResponse(pending);
 				action.response = response;
+				if (response !== null && typeof response === 'object' && this.syntheticResponses.has(response)) {
+					action.synthetic = true;
+				}
 				this.notifyListeners(action, 'settled');
 				return response as T;
 			} catch (error) {
@@ -667,10 +684,10 @@ export class MockApiHandler extends ApiHandler {
 		// (respecting onUnhandledRest) instead of silently answering with a synthetic.
 		if (matchesModeledRoute(pending.method, pending.route)) {
 			this.reportUnhandled(pending);
-			return this.syntheticResponse(pending);
+			return this.markSynthetic(this.syntheticResponse(pending));
 		}
 
-		return this.syntheticResponse(pending);
+		return this.markSynthetic(this.syntheticResponse(pending));
 	}
 
 	private syntheticResponse(pending: PendingAction): unknown {
