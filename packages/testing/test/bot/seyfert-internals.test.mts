@@ -35,6 +35,13 @@ describe('seyfert internals contract', () => {
 
 		const lifecycle = clientLifecycle(client);
 		expect(typeof lifecycle.setupPlugins, 'client.setupPlugins (plugin lifecycle)').toBe('function');
+		expect(typeof lifecycle.refreshPluginContributions, 'client.refreshPluginContributions (plugin lifecycle)').toBe(
+			'function',
+		);
+		expect(typeof lifecycle.reloadPluginCommands, 'client.reloadPluginCommands (plugin lifecycle)').toBe('function');
+		expect(typeof lifecycle.reloadPluginComponents, 'client.reloadPluginComponents (plugin lifecycle)').toBe(
+			'function',
+		);
 		expect(typeof lifecycle.reloadPluginContributions, 'client.reloadPluginContributions (plugin lifecycle)').toBe(
 			'function',
 		);

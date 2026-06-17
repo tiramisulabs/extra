@@ -1,4 +1,4 @@
-import { createPlugin } from 'seyfert';
+import { Command, type CommandContext, ComponentCommand, type ComponentContext, createPlugin, Declare } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 
@@ -80,6 +80,65 @@ describe('plugins', () => {
 		});
 		const bot = await createMockBot({ plugins: [plugin] });
 		expect(bot.registeredEvents()).toContain('MESSAGE_CREATE');
+		await bot.close();
+	});
+
+	test('createMockBot drives plugin startup hooks without opening the gateway', async () => {
+		const calls: string[] = [];
+		const readyClients: unknown[] = [];
+
+		@Declare({ name: 'lifecycle-ping', description: 'Lifecycle ping' })
+		class LifecyclePingCommand extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.write({ content: 'pong' });
+			}
+		}
+
+		class LifecycleButton extends ComponentCommand {
+			componentType = 'Button' as const;
+			filter(ctx: ComponentContext<'Button'>) {
+				return ctx.customId === 'lifecycle-button';
+			}
+			async run(ctx: ComponentContext<'Button'>) {
+				await ctx.write({ content: 'clicked' });
+			}
+		}
+
+		const plugin = createPlugin({
+			name: 'slipher-startup-hooks',
+			register(api) {
+				api.hooks.tap('plugins:ready', client => {
+					readyClients.push(client);
+					calls.push('plugins:ready');
+				});
+				api.hooks.tap('commands:beforeLoad', (_client, dir) => {
+					calls.push(`commands:beforeLoad:${dir ?? '<none>'}`);
+				});
+				api.hooks.tap('commands:afterLoad', metadata => {
+					calls.push(`commands:afterLoad:${metadata.total}`);
+				});
+				api.hooks.tap('components:afterLoad', metadata => {
+					calls.push(`components:afterLoad:${metadata.total}`);
+				});
+			},
+		});
+
+		const bot = await createMockBot({
+			plugins: [plugin],
+			commands: [LifecyclePingCommand],
+			components: [LifecycleButton],
+		});
+
+		expect(readyClients).toEqual([bot.client]);
+		expect(calls).toEqual([
+			'plugins:ready',
+			'commands:beforeLoad:<none>',
+			'commands:afterLoad:1',
+			'components:afterLoad:1',
+		]);
+		expect(bot.gateway.sent).toEqual([]);
+		const result = await bot.slash({ name: 'lifecycle-ping' });
+		expect(result.content).toBe('pong');
 		await bot.close();
 	});
 });

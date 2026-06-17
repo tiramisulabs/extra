@@ -9,7 +9,12 @@ import {
 	type OptionsRecord,
 } from 'seyfert';
 import { CacheFrom } from 'seyfert/lib/cache';
-import type { AnySeyfertPlugin, PluginDiagnostics, ResolvedPluginList } from 'seyfert/lib/client/plugins';
+import {
+	type AnySeyfertPlugin,
+	type PluginDiagnostics,
+	type ResolvedPluginList,
+	runPluginHooks,
+} from 'seyfert/lib/client/plugins';
 import { HandleCommand } from 'seyfert/lib/commands/handle';
 import type { ClientEvent } from 'seyfert/lib/events/event';
 import type { LangInstance } from 'seyfert/lib/langs/handler';
@@ -85,24 +90,24 @@ import { FOLLOWUP_ROUTE, WEBHOOK_MESSAGE_ROUTE } from './routes';
 import { resolveSelectResolved } from './select-resolved';
 import { asUsingClient, clientLifecycle, eventsInternals, modalRegistry, pluginEventNames } from './seyfert-internals';
 import {
+	arrayValue,
+	asRecord,
 	type ButtonView,
 	type ChannelView,
 	type EmbedView,
 	type GuildMemberView,
 	type GuildView,
-	arrayValue,
-	asRecord,
 	harvestComponents,
 	type MessageView,
 	normalizeEmbed,
 	numberValue,
 	type RoleView,
 	stringValue,
-	walkComponents,
 	type WorldDiff,
 	type WorldSnapshot,
 	WorldState,
 	type WorldStateReader,
+	walkComponents,
 } from './state';
 import { type MockWorld, seedWorld, type WorldBuilder } from './world';
 import { applyWorldEvent, WORLD_EVENT_NAMES } from './world-events';
@@ -113,6 +118,28 @@ export { WORLD_EVENT_NAMES } from './world-events';
 type ClientConstructorOptions = ConstructorParameters<typeof Client>[0];
 type ClientOptions = NonNullable<ClientConstructorOptions>;
 type ServicesOptions = Parameters<Client['setServices']>[0];
+
+async function runMockClientStartup(client: Client, options: MockBotOptions): Promise<void> {
+	const lifecycle = clientLifecycle(client);
+	const loadFromConfig = options.loadFromConfig === true;
+
+	await lifecycle.setupPlugins();
+	lifecycle.refreshPluginContributions();
+	await runPluginHooks(client, 'plugins:ready', client);
+	await client.cache.adapter.start();
+
+	if (loadFromConfig || options.langsDir) await client.loadLangs(options.langsDir);
+	if (options.defaultLang) client.langs.defaultLang = options.defaultLang;
+
+	await runPluginHooks(client, 'commands:beforeLoad', client, options.commandsDir);
+	if (loadFromConfig || options.commandsDir) await client.loadCommands(options.commandsDir);
+	await lifecycle.reloadPluginCommands();
+
+	if (loadFromConfig || options.componentsDir) await client.loadComponents(options.componentsDir);
+	await lifecycle.reloadPluginComponents();
+
+	if (loadFromConfig || options.eventsDir) await client.loadEvents(options.eventsDir);
+}
 
 export interface CapturedReply {
 	/** Discord interaction callback body captured before it would be sent. */
@@ -2293,15 +2320,8 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 		// Tests pass public event definitions; Seyfert fills the internal loader-only fields when executing.
 		client.events.set(events as Parameters<Client['events']['set']>[0]);
 	}
-	const loadFromConfig = options.loadFromConfig === true;
-	if (loadFromConfig || options.commandsDir) await client.loadCommands(options.commandsDir);
-	if (loadFromConfig || options.componentsDir) await client.loadComponents(options.componentsDir);
-	if (loadFromConfig || options.eventsDir) await client.loadEvents(options.eventsDir);
-	if (loadFromConfig || options.langsDir) await client.loadLangs(options.langsDir);
-
-	// Plugin setup/contribution refresh are intentionally not public on Client, but production start() calls them.
-	await clientLifecycle(client).setupPlugins();
-	await clientLifecycle(client).reloadPluginContributions();
+	// Drive the production startup plugin lifecycle without opening a gateway connection or requiring a token/config.
+	await runMockClientStartup(client, options);
 	// seedWorld only needs the UsingClient cache/rest surface already installed above.
 	if (world) await seedWorld(asUsingClient(client), world);
 	const state = new WorldState(world);

@@ -43,6 +43,9 @@ export interface EventsInternals {
 /** Construction-time plugin/lang lifecycle the mock must drive by hand (not exposed publicly by seyfert). */
 export interface ClientLifecycleInternals {
 	setupPlugins(): Promise<void>;
+	refreshPluginContributions(): void;
+	reloadPluginCommands(): Promise<void>;
+	reloadPluginComponents(): Promise<void>;
 	reloadPluginContributions(): Promise<void>;
 	langBaseValues: unknown;
 }
@@ -61,8 +64,11 @@ export function eventsInternals(client: Client): EventsInternals {
 
 /** Active named plugin event listeners, normalized to the gateway UPPER_SNAKE the events handler keys on. */
 export function pluginEventNames(client: Client): string[] {
-	const registry = (client as unknown as { pluginRegistry?: { events?: { name: string; active?: boolean }[] } }).pluginRegistry;
-	return (registry?.events ?? []).filter(listener => listener.active).map(listener => normalizeEventName(listener.name));
+	const registry = (client as unknown as { pluginRegistry?: { events?: { name: string; active?: boolean }[] } })
+		.pluginRegistry;
+	return (registry?.events ?? [])
+		.filter(listener => listener.active)
+		.map(listener => normalizeEventName(listener.name));
 }
 
 export function clientLifecycle(client: Client): ClientLifecycleInternals {

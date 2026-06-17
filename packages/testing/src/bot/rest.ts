@@ -46,6 +46,29 @@ export class MockApiError extends Error {
 	}
 }
 
+interface ApiObserverNotifier {
+	notifyRequest(method: HttpMethods, url: `/${string}`, request: ApiRequestOptions): Promise<void>;
+	notifySuccessRequest(
+		method: HttpMethods,
+		url: `/${string}`,
+		response: Response,
+		request: ApiRequestOptions,
+	): Promise<void>;
+	notifyFailRequest(
+		method: HttpMethods,
+		url: `/${string}`,
+		error: unknown,
+		statusCode: number | undefined,
+		request: ApiRequestOptions,
+	): Promise<void>;
+	notifyRatelimit(
+		response: Response,
+		request: ApiRequestOptions,
+		method: HttpMethods,
+		url: `/${string}`,
+	): Promise<void>;
+}
+
 /** Named Discord JSON error codes used by the mock's fail-loud guards, so no call site spells a bare number. */
 export const ErrorCode = {
 	UnknownChannel: 10003,
@@ -620,6 +643,65 @@ export class MockApiHandler extends ApiHandler {
 		for (const listener of [...this.listeners]) listener.onAction(action, phase);
 	}
 
+	private observerRequest(
+		url: `/${string}`,
+		requestOptions: ApiRequestOptions,
+	): { url: `/${string}`; request: ApiRequestOptions } {
+		const request = { ...requestOptions, auth: requestOptions.auth ?? true };
+		const { finalUrl } = this.parseRequest({ url, headers: { 'User-Agent': this.options.userAgent }, request });
+		return { url: finalUrl as `/${string}`, request };
+	}
+
+	private observerResponse(body: unknown, status = 200): Response {
+		const payload = this.responseBody(body);
+		return new Response(payload, {
+			status,
+			statusText: STATUS_TEXT[status] ?? (status === 200 ? 'OK' : ''),
+			headers: payload === undefined ? undefined : { 'content-type': 'application/json' },
+		});
+	}
+
+	private responseBody(body: unknown): ConstructorParameters<typeof Response>[0] | undefined {
+		if (body === undefined) return undefined;
+		if (
+			typeof body === 'string' ||
+			body instanceof ArrayBuffer ||
+			body instanceof Blob ||
+			body instanceof FormData ||
+			body instanceof URLSearchParams
+		) {
+			return body;
+		}
+		try {
+			return JSON.stringify(body);
+		} catch {
+			return undefined;
+		}
+	}
+
+	private statusCodeFor(error: unknown): number | undefined {
+		if (error instanceof MockApiError) return error.status;
+		if (isRecord(error)) {
+			if (typeof error.status === 'number') return error.status;
+			const metadata = error.metadata;
+			if (isRecord(metadata) && typeof metadata.status === 'number') return metadata.status;
+		}
+		return undefined;
+	}
+
+	private errorBodyFor(error: unknown): unknown {
+		if (error instanceof MockApiError) return { code: error.code, message: error.message };
+		if (isRecord(error) && isRecord(error.metadata) && 'response' in error.metadata) return error.metadata.response;
+		return { message: error instanceof Error ? error.message : String(error) };
+	}
+
+	private hasRestNotification(name: 'onRequest' | 'onSuccess' | 'onFail' | 'onRatelimit'): boolean {
+		if (name === 'onSuccess' && this.onSuccessRequest) return true;
+		if (name === 'onFail' && this.onFailRequest) return true;
+		if (name === 'onRatelimit' && this.onRatelimit) return true;
+		return (this.pluginRestObserverProvider?.() ?? []).some(entry => typeof entry.observer[name] === 'function');
+	}
+
 	async request<T = unknown>(
 		method: HttpMethods,
 		url: `/${string}`,
@@ -638,8 +720,14 @@ export class MockApiHandler extends ApiHandler {
 		this.actions.push(action);
 		this.inFlight.set(dispatchId, (this.inFlight.get(dispatchId) ?? 0) + 1);
 		this.notifyListeners(action, 'pending');
+		const observer = this.observerRequest(url, requestOptions);
+		const notifier = this as unknown as ApiObserverNotifier;
 
 		try {
+			if (this.hasRestNotification('onRequest')) {
+				await notifier.notifyRequest(method, observer.url, observer.request);
+			}
+
 			for (const entry of [...this.gates]) {
 				if (entry.test(action)) {
 					this.gates = this.gates.filter(other => other !== entry);
@@ -653,10 +741,25 @@ export class MockApiHandler extends ApiHandler {
 				if (response !== null && typeof response === 'object' && this.syntheticResponses.has(response)) {
 					action.synthetic = true;
 				}
+				if (this.hasRestNotification('onSuccess')) {
+					await notifier.notifySuccessRequest(method, observer.url, this.observerResponse(response), observer.request);
+				}
 				this.notifyListeners(action, 'settled');
 				return response as T;
 			} catch (error) {
 				action.error = error;
+				const statusCode = this.statusCodeFor(error);
+				if (statusCode === 429 && this.hasRestNotification('onRatelimit')) {
+					await notifier.notifyRatelimit(
+						this.observerResponse(this.errorBodyFor(error), statusCode),
+						observer.request,
+						method,
+						observer.url,
+					);
+				}
+				if (this.hasRestNotification('onFail')) {
+					await notifier.notifyFailRequest(method, observer.url, error, statusCode, observer.request);
+				}
 				this.notifyListeners(action, 'settled');
 				throw error;
 			}

@@ -1,3 +1,4 @@
+import { createPlugin } from 'seyfert';
 import { SeyfertError } from 'seyfert/lib/common';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
@@ -79,6 +80,92 @@ describe('MockApiHandler', () => {
 		rest.intercept('GET', '/guilds/:guildId', (_action, params) => ({ id: params.guildId, name: 'Stubbed' }));
 		const response = await rest.request<{ name: string }>('GET', '/guilds/999');
 		expect(response.name).toBe('Stubbed');
+	});
+
+	test('notifies plugin REST observers for mock success, failure, and ratelimits', async () => {
+		const seen: {
+			phase: string;
+			client?: unknown;
+			method?: string;
+			url?: string;
+			query?: unknown;
+			status?: number;
+			statusCode?: number;
+		}[] = [];
+		const plugin = createPlugin({
+			name: 'slipher-rest-observer',
+			register(api) {
+				api.rest.observe({
+					onRequest(payload) {
+						seen.push({
+							phase: 'request',
+							client: payload.client,
+							method: payload.method,
+							url: payload.url,
+							query: payload.request.query,
+						});
+					},
+					onSuccess(payload) {
+						seen.push({ phase: 'success', status: payload.response.status });
+					},
+					onRatelimit(payload) {
+						seen.push({ phase: 'ratelimit', status: payload.response.status });
+					},
+					onFail(payload) {
+						seen.push({ phase: 'fail', statusCode: payload.statusCode });
+					},
+				});
+			},
+		});
+		const bot = await createMockBot({ plugins: [plugin], onUnhandledRest: 'silent' });
+
+		await bot.rest.request('GET', '/guilds/observer', { query: { with_counts: true } });
+		bot.rest.fail(Routes.fetchGuild, DiscordErrors.MissingAccess, { times: 1 });
+		await expect(bot.rest.request('GET', '/guilds/blocked')).rejects.toBeInstanceOf(SeyfertError);
+		bot.rest.fail(Routes.createMessage, DiscordErrors.RateLimited, { times: 1 });
+		await expect(bot.rest.request('POST', '/channels/observer/messages')).rejects.toBeInstanceOf(SeyfertError);
+
+		expect(seen[0]?.client).toBe(bot.client);
+		expect(
+			seen.map(({ phase, method, url, query, status, statusCode }) => ({
+				phase,
+				method,
+				url,
+				query,
+				status,
+				statusCode,
+			})),
+		).toEqual([
+			{
+				phase: 'request',
+				method: 'GET',
+				url: '/guilds/observer?with_counts=true',
+				query: { with_counts: true },
+				status: undefined,
+				statusCode: undefined,
+			},
+			{ phase: 'success', method: undefined, url: undefined, query: undefined, status: 200, statusCode: undefined },
+			{
+				phase: 'request',
+				method: 'GET',
+				url: '/guilds/blocked',
+				query: undefined,
+				status: undefined,
+				statusCode: undefined,
+			},
+			{ phase: 'fail', method: undefined, url: undefined, query: undefined, status: undefined, statusCode: 403 },
+			{
+				phase: 'request',
+				method: 'POST',
+				url: '/channels/observer/messages',
+				query: undefined,
+				status: undefined,
+				statusCode: undefined,
+			},
+			{ phase: 'ratelimit', method: undefined, url: undefined, query: undefined, status: 429, statusCode: undefined },
+			{ phase: 'fail', method: undefined, url: undefined, query: undefined, status: undefined, statusCode: 429 },
+		]);
+		await bot.close();
 	});
 
 	test('strict mode rejects unmodeled non-GET fallbacks', async () => {
