@@ -78,10 +78,10 @@ describe('component flows', () => {
 
 		const bot = await createMockBot({ commands: [SelfClickPanelCommand] });
 		const panel = await bot.slash({ name: 'self-click-panel' });
-		const button = panel.button('Self Click');
-		expect(button?.source?.messageId).toBeTypeOf('string');
+		const component = panel.component('Self Click');
+		expect(component?.source?.messageId).toBeTypeOf('string');
 
-		const result = await button?.click();
+		const result = await component?.click();
 
 		expect(clicked).toEqual(['self-click']);
 		expect(result?.content).toBe('clicked via view');
@@ -250,7 +250,7 @@ describe('component flows', () => {
 
 		const bot = await createMockBot({ commands: [PickColorCommand] });
 		const panel = await bot.slash({ name: 'pick-color' });
-		const picker = panel.button('pick');
+		const picker = panel.component('pick');
 		expect(picker?.source?.messageId).toBeTypeOf('string');
 		const result = await picker?.select(['red']);
 		expect(selected).toEqual([['red']]);

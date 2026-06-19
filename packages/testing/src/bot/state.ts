@@ -65,7 +65,7 @@ export interface EmbedView {
 	thumbnail?: { url: string };
 }
 
-export interface ButtonView {
+export interface InteractiveComponentView {
 	customId?: string;
 	label?: string;
 	type: number;
@@ -104,8 +104,8 @@ export interface MessageView {
 	isComponentsV2: boolean;
 	componentTypes: number[];
 	textDisplays: string[];
-	buttons: ButtonView[];
-	button(labelOrCustomId: string): ButtonView | undefined;
+	interactiveComponents: InteractiveComponentView[];
+	component(labelOrCustomId: string): InteractiveComponentView | undefined;
 	reactions: ReactionView[];
 	reaction(emoji: string): ReactionView | undefined;
 	reference?: MessageReferenceView;
@@ -371,9 +371,13 @@ export interface WorldDiff {
 	pollVoters: EntityDiff<PollVoterSnapshot>;
 }
 
+export interface WorldStateOptions {
+	botId?: string;
+}
+
 /**
  * The read-only view of {@link WorldState} exposed publicly as `bot.world`. Exposes only the query
- * methods test authors call to assert on world state; the `@internal` mutators that the mock drives
+ * methods test authors call to assert on world state; the internal mutators that the mock drives
  * in response to Discord traffic are intentionally absent so an internal refactor of them is not a
  * breaking change. The concrete {@link WorldState} class implements this and is used internally.
  */
@@ -536,6 +540,7 @@ function normalizePoll(raw: Record<string, unknown>): ApiPoll {
 			const media = asRecord(asRecord(entry).poll_media);
 			return stringValue(media.text) === undefined ? {} : { text: stringValue(media.text) };
 		}),
+		...(numberValue(raw.duration) === undefined ? {} : { duration: numberValue(raw.duration) }),
 		...(typeof raw.allow_multiselect === 'boolean' ? { allowMultiselect: raw.allow_multiselect } : {}),
 		...(numberValue(raw.layout_type) === undefined ? {} : { layoutType: numberValue(raw.layout_type) }),
 	});
@@ -587,9 +592,9 @@ interface DerivedMentions {
 	mention_roles: string[];
 }
 
-export function collectButtons(value: unknown, out: ButtonView[]): void {
+function collectInteractiveComponents(value: unknown, out: InteractiveComponentView[]): void {
 	if (Array.isArray(value)) {
-		for (const entry of value) collectButtons(entry, out);
+		for (const entry of value) collectInteractiveComponents(entry, out);
 		return;
 	}
 	const raw = asRecord(value);
@@ -602,7 +607,8 @@ export function collectButtons(value: unknown, out: ButtonView[]): void {
 			...(typeof raw.disabled === 'boolean' ? { disabled: raw.disabled } : {}),
 		});
 	}
-	if (Array.isArray(raw.components)) collectButtons(raw.components, out);
+	if (raw.accessory !== undefined) collectInteractiveComponents(raw.accessory, out);
+	if (Array.isArray(raw.components)) collectInteractiveComponents(raw.components, out);
 }
 
 /**
@@ -623,24 +629,25 @@ export function walkComponents(value: unknown, visit: (node: Record<string, unkn
  * and the TextDisplay (type 10) contents — the shared projection used by both the dispatch result and MessageView.
  */
 export function harvestComponents(components: unknown): {
-	buttons: ButtonView[];
+	components: InteractiveComponentView[];
 	componentTypes: number[];
 	textDisplays: string[];
 } {
-	const buttons: ButtonView[] = [];
+	const interactiveComponents: InteractiveComponentView[] = [];
 	const componentTypes: number[] = [];
 	const textDisplays: string[] = [];
-	collectButtons(components, buttons);
+	collectInteractiveComponents(components, interactiveComponents);
 	walkComponents(components, node => {
 		const type = numberValue(node.type);
 		if (type !== undefined) componentTypes.push(type);
 		if (type === 10 && typeof node.content === 'string') textDisplays.push(node.content);
 	});
-	return { buttons, componentTypes, textDisplays };
+	return { components: interactiveComponents, componentTypes, textDisplays };
 }
 
 export class WorldState implements WorldStateReader {
 	private readonly world: MockWorld;
+	private readonly botId: string;
 	private readonly bansByGuild = new Map<string, Set<string>>();
 	private readonly dmChannelByUser = new Map<string, string>();
 	private readonly messageIdByToken = new Map<string, string>();
@@ -657,8 +664,9 @@ export class WorldState implements WorldStateReader {
 	private readonly pollVotersByMessage = new Map<string, Map<number, Set<string>>>();
 	private readonly threadMembersByChannel = new Map<string, Set<string>>();
 
-	constructor(seed?: MockWorld) {
+	constructor(seed?: MockWorld, options: WorldStateOptions = {}) {
 		this.world = seed ?? EMPTY_WORLD();
+		this.botId = options.botId ?? TEST_BOT_ID;
 		this.world.roles ??= [];
 		this.world.messages ??= [];
 		this.world.guildEmojis ??= [];
@@ -982,7 +990,7 @@ export class WorldState implements WorldStateReader {
 		const reactions = [...byEmoji].map(([emoji, users]) => ({
 			emoji: emojiPayload(emoji),
 			count: users.size,
-			me: users.has(TEST_BOT_ID),
+			me: users.has(this.botId),
 		}));
 		return { ...message, reactions };
 	}
@@ -1190,7 +1198,7 @@ export class WorldState implements WorldStateReader {
 						...apiUser({ id: String(rawAuthor.id) }),
 						...rawAuthor,
 					} as ApiUser)
-				: apiUser({ id: stringValue(raw.author_id) ?? TEST_BOT_ID, bot: true });
+				: apiUser({ id: stringValue(raw.author_id) ?? this.botId, bot: true });
 		const content = stringValue(raw.content) ?? '';
 		const message = apiMessage({
 			id: stringValue(raw.id),
@@ -1215,9 +1223,15 @@ export class WorldState implements WorldStateReader {
 				...(numberValue(ref.type) === undefined ? {} : { type: numberValue(ref.type) }),
 			};
 			const referencedId = stringValue(ref.message_id);
+			const referencedChannelId = stringValue(ref.channel_id) ?? channelId;
 			const referenced = referencedId
-				? this.world.messages.find(entry => entry.message.id === referencedId)?.message
+				? this.world.messages.find(
+						entry => entry.channelId === referencedChannelId && entry.message.id === referencedId,
+					)?.message
 				: undefined;
+			if (referencedId && !referenced && ref.fail_if_not_exists !== false) {
+				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: referenced message does not exist');
+			}
 			if (referenced && numberValue(ref.type) === 1) {
 				message.message_snapshots = [
 					{
@@ -1257,6 +1271,15 @@ export class WorldState implements WorldStateReader {
 		if ('attachments' in raw && raw.attachments !== undefined)
 			entry.message.attachments = normalizeAttachments(raw.attachments);
 		if (raw.flags !== undefined) entry.message.flags = numberValue(raw.flags) ?? entry.message.flags;
+		if ('content' in raw || 'allowed_mentions' in raw) {
+			const derived = this.deriveMentions(entry.message.content, raw.allowed_mentions);
+			entry.message.mention_everyone = derived.mention_everyone;
+			entry.message.mentions = derived.mentions;
+			entry.message.mention_roles = derived.mention_roles;
+		}
+		entry.message.edited_timestamp = new Date(
+			Math.max(Date.parse(mockTimestamp()), Date.parse(entry.message.timestamp) + 1),
+		).toISOString();
 	}
 
 	/** @internal When Discord deletes a message. */
@@ -1332,7 +1355,7 @@ export class WorldState implements WorldStateReader {
 		return [...byEmoji].map(([emoji, users]) => ({
 			emoji,
 			count: users.size,
-			me: users.has(TEST_BOT_ID),
+			me: users.has(this.botId),
 			users: [...users],
 		}));
 	}
@@ -1452,6 +1475,12 @@ export class WorldState implements WorldStateReader {
 	addPollVoter(channelId: string, messageId: string, answerId: number, userId: string): void {
 		const key = this.reactionKey(channelId, messageId);
 		const byAnswer = this.pollVotersByMessage.get(key) ?? new Map<number, Set<string>>();
+		const poll = this.world.messages.find(
+			message => message.channelId === channelId && message.message.id === messageId,
+		)?.message.poll;
+		if (poll && !poll.allow_multiselect) {
+			for (const answerVoters of byAnswer.values()) answerVoters.delete(userId);
+		}
 		const voters = byAnswer.get(answerId) ?? new Set<string>();
 		voters.add(userId);
 		byAnswer.set(answerId, voters);
@@ -1468,7 +1497,7 @@ export class WorldState implements WorldStateReader {
 		const byAnswer = this.pollVotersByMessage.get(this.reactionKey(channelId, messageId));
 		poll.results.answer_counts = poll.answers.map(answer => {
 			const voters = byAnswer?.get(answer.answer_id);
-			return { id: answer.answer_id, count: voters?.size ?? 0, me_voted: voters?.has(TEST_BOT_ID) ?? false };
+			return { id: answer.answer_id, count: voters?.size ?? 0, me_voted: voters?.has(this.botId) ?? false };
 		});
 	}
 
@@ -1538,6 +1567,9 @@ export class WorldState implements WorldStateReader {
 	/** @internal When Discord deletes a role. */
 	removeRole(guildId: string, roleId: string): void {
 		this.world.roles = this.world.roles.filter(entry => entry.guildId !== guildId || entry.role.id !== roleId);
+		for (const entry of this.world.members) {
+			if (entry.guildId === guildId) entry.member.roles = entry.member.roles.filter(id => id !== roleId);
+		}
 	}
 
 	/** @internal When Discord creates an emoji. */
@@ -2026,7 +2058,7 @@ export class WorldState implements WorldStateReader {
 	}
 
 	private buildMessageView(message: ApiMessage): MessageView {
-		const { buttons, componentTypes, textDisplays } = harvestComponents(message.components);
+		const { components, componentTypes, textDisplays } = harvestComponents(message.components);
 		const reactions = this.reactionViews(message.channel_id, message.id);
 		return {
 			id: message.id,
@@ -2052,9 +2084,9 @@ export class WorldState implements WorldStateReader {
 					embeds: arrayValue(snapMessage.embeds).map(normalizeEmbed),
 				};
 			}),
-			buttons,
-			button: labelOrCustomId =>
-				buttons.find(button => button.label === labelOrCustomId || button.customId === labelOrCustomId),
+			interactiveComponents: components,
+			component: labelOrCustomId =>
+				components.find(component => component.label === labelOrCustomId || component.customId === labelOrCustomId),
 			reactions,
 			reaction: emoji => reactions.find(entry => entry.emoji === decodeEmoji(emoji)),
 			...(message.message_reference === undefined

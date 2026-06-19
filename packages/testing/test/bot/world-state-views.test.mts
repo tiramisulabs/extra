@@ -15,7 +15,7 @@ declare module 'seyfert' {
 }
 
 describe('world state views', () => {
-	test('materializes created channels, messages, embeds, and buttons', async () => {
+	test('materializes created channels, messages, embeds, and interactive components', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'state-guild' });
 		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'state-actor' }) });
@@ -46,7 +46,7 @@ describe('world state views', () => {
 		await bot.slash({ name: 'build-campaign', guildId: guild.id, channel: dispatchChannel, user: actor.user });
 		const channel = bot.worldGuild(guild.id)?.channel('acme-s1');
 		expect(channel?.lastMessage?.content).toContain('Welcome Acme S1');
-		expect(channel?.lastMessage?.buttons).toMatchObject([{ customId: 'approve', label: 'Approve' }]);
+		expect(channel?.lastMessage?.interactiveComponents).toMatchObject([{ customId: 'approve', label: 'Approve' }]);
 		expect(channel?.lastMessage?.embeds[0]).toMatchObject({
 			title: 'Acme S1',
 			fields: [{ name: 'Budget', value: '$5,000' }],

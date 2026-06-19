@@ -34,6 +34,28 @@ describe('polls', () => {
 		await bot.close();
 	});
 
+	test('poll duration is reflected as a future expiry', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'duration-guild' });
+		const channel = world.registerChannel(guild.id, { id: 'duration-chan' });
+		const bot = await createMockBot({ world });
+
+		const created = (await bot.rest.request('POST', `/channels/${channel.id}/messages`, {
+			body: {
+				poll: {
+					question: { text: 'Best color?' },
+					answers: [{ poll_media: { text: 'Red' } }, { poll_media: { text: 'Blue' } }],
+					duration: 2,
+				},
+			},
+		})) as { id: string };
+
+		const raw = bot.world.rawMessage(channel.id, created.id);
+		expect(raw?.poll?.expiry).toBeDefined();
+		expect(Date.parse(raw?.poll?.expiry ?? '') - Date.parse(raw?.timestamp ?? '')).toBe(2 * 60 * 60 * 1000);
+		await bot.close();
+	});
+
 	test('seedPollVote seeds voters that getAnswerVoters reads back', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'vote-guild' });
@@ -54,6 +76,29 @@ describe('polls', () => {
 		expect(bot.world.pollVoters(channel.id, 'poll-msg', 1)).toEqual(['voter-a']);
 		const res = await bot.slash({ name: 'voters', guildId: guild.id, channel, user: actor.user });
 		expect(res.content).toBe('voter-a');
+		await bot.close();
+	});
+
+	test('single-select poll revote moves the voter and honors custom botId for me_voted', async () => {
+		const botId = 'custom-poll-bot';
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'revote-guild' });
+		const channel = world.registerChannel(guild.id, { id: 'revote-chan' });
+		world.registerMessage(channel.id, {
+			id: 'revote-poll-msg',
+			poll: apiPoll({ question: 'Q', answers: ['A', 'B'], allowMultiselect: false }),
+		});
+
+		const bot = await createMockBot({ botId, world });
+		bot.seedPollVote(channel.id, 'revote-poll-msg', 1, botId);
+		bot.seedPollVote(channel.id, 'revote-poll-msg', 2, botId);
+
+		expect(bot.world.pollVoters(channel.id, 'revote-poll-msg', 1)).toEqual([]);
+		expect(bot.world.pollVoters(channel.id, 'revote-poll-msg', 2)).toEqual([botId]);
+		expect(bot.world.rawMessage(channel.id, 'revote-poll-msg')?.poll?.results.answer_counts).toEqual([
+			{ id: 1, count: 0, me_voted: false },
+			{ id: 2, count: 1, me_voted: true },
+		]);
 		await bot.close();
 	});
 
@@ -79,6 +124,26 @@ describe('polls', () => {
 			?.channel('end-chan')
 			?.messages.find(message => message.id === 'end-poll-msg');
 		expect(view?.poll?.isFinalized).toBe(true);
+		await bot.close();
+	});
+
+	test('poll routes reject non-poll messages and unknown answers', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'poll-guard-guild' });
+		const channel = world.registerChannel(guild.id, { id: 'poll-guard-chan' });
+		world.registerMessage(channel.id, { id: 'plain-msg', content: 'not a poll' });
+		world.registerMessage(channel.id, { id: 'guard-poll-msg', poll: apiPoll({ question: 'Q', answers: ['A'] }) });
+
+		const bot = await createMockBot({ world });
+		await expect(bot.rest.request('POST', `/channels/${channel.id}/polls/plain-msg/expire`)).rejects.toThrow(
+			/message has no poll/,
+		);
+		await expect(
+			bot.rest.request('GET', `/channels/${channel.id}/polls/plain-msg/answers/1`),
+		).rejects.toThrow(/message has no poll/);
+		await expect(
+			bot.rest.request('GET', `/channels/${channel.id}/polls/guard-poll-msg/answers/2`),
+		).rejects.toThrow(/unknown poll answer/);
 		await bot.close();
 	});
 });

@@ -1,14 +1,116 @@
 import { isAmbiguousQueueAddArgs, queueAddAmbiguityMessage } from '@slipher/internal';
-import type {
-	LoggerLike,
-	QueueEventMapLike,
-	QueueJobLike,
-	QueueLike,
-	QueuesLike,
-	SchedulerEventMapLike,
-	SchedulerLike,
-} from '@slipher/types';
 import { mockId } from './id';
+
+type Awaitable<T> = T | PromiseLike<T>;
+type DurationInputLike = number | string;
+type DataLike = Record<string, unknown>;
+
+type LoggerLevelMethod = (...args: readonly unknown[]) => Awaitable<void>;
+
+interface LoggerLike {
+	readonly currentContext: Readonly<DataLike>;
+	add(data: DataLike): void;
+	trace: LoggerLevelMethod;
+	debug: LoggerLevelMethod;
+	info: LoggerLevelMethod;
+	warn: LoggerLevelMethod;
+	error: LoggerLevelMethod;
+	fatal: LoggerLevelMethod;
+	flush?(): Awaitable<void>;
+}
+
+interface QueueJobOptionsLike extends DataLike {}
+
+interface QueueJobLike<TData = unknown, TResult = unknown, TName extends string = string> {
+	readonly id?: string | number;
+	readonly name: TName;
+	readonly data?: TData;
+	readonly payload?: TData;
+	readonly result?: TResult;
+	readonly options?: QueueJobOptionsLike;
+}
+
+interface QueueEventMapLike<TData, TResult, TJob extends QueueJobLike<TData, TResult>> {
+	added: { job: TJob };
+	active: { job: TJob };
+	completed: { job: TJob; result: TResult };
+	failed: { job: TJob; error: unknown };
+	retrying: { job: TJob; error: unknown; delay: number };
+	idle: {};
+}
+
+type QueueListenerLike<TPayload> = (payload: TPayload) => Awaitable<void>;
+
+interface QueueLike<
+	TData = unknown,
+	TResult = unknown,
+	TJob extends QueueJobLike<TData, TResult> = QueueJobLike<TData, TResult>,
+> {
+	readonly name: string;
+	add<TJobData = TData>(
+		name: string,
+		data: TJobData,
+		options?: QueueJobOptionsLike,
+	): Awaitable<QueueJobLike<TJobData, TResult>>;
+	add(data: TData, options?: QueueJobOptionsLike): Awaitable<TJob>;
+	on<TEvent extends keyof QueueEventMapLike<TData, TResult, TJob>>(
+		event: TEvent,
+		listener: QueueListenerLike<QueueEventMapLike<TData, TResult, TJob>[TEvent]>,
+	): () => void;
+	once<TEvent extends keyof QueueEventMapLike<TData, TResult, TJob>>(
+		event: TEvent,
+		listener: QueueListenerLike<QueueEventMapLike<TData, TResult, TJob>[TEvent]>,
+	): () => void;
+	off<TEvent extends keyof QueueEventMapLike<TData, TResult, TJob>>(
+		event: TEvent,
+		listener: QueueListenerLike<QueueEventMapLike<TData, TResult, TJob>[TEvent]>,
+	): void;
+}
+
+interface QueuesLike {
+	get<TData = unknown, TResult = unknown>(name: string, options?: unknown): QueueLike<TData, TResult>;
+	add?<TData = unknown, TResult = unknown>(
+		queueName: string,
+		name: string,
+		data: TData,
+		options?: QueueJobOptionsLike,
+	): Awaitable<QueueJobLike<TData, TResult>>;
+	add?<TData = unknown, TResult = unknown>(
+		queueName: string,
+		data: TData,
+		options?: QueueJobOptionsLike,
+	): Awaitable<QueueJobLike<TData, TResult>>;
+	close?(): Awaitable<void>;
+}
+
+type SchedulerRunnerLike<TTask = unknown> = (task: TTask) => Awaitable<unknown>;
+
+interface SchedulerEventMapLike<TTask = unknown> {
+	scheduled: { task: TTask };
+	started: { task: TTask };
+	completed: { task: TTask; result: unknown };
+	failed: { task: TTask; error: unknown };
+	paused: { task: TTask };
+	resumed: { task: TTask };
+	removed: { task: TTask };
+}
+
+interface SchedulerLike<TTask = unknown> {
+	add(id: string, schedule: DurationInputLike, runner: SchedulerRunnerLike<TTask>, options?: DataLike): TTask;
+	interval(id: string, schedule: DurationInputLike, runner: SchedulerRunnerLike<TTask>, options?: DataLike): TTask;
+	cron(id: string, expression: string, runner: SchedulerRunnerLike<TTask>, options?: DataLike): TTask;
+	on<TEvent extends keyof SchedulerEventMapLike<TTask>>(
+		event: TEvent,
+		listener: (payload: SchedulerEventMapLike<TTask>[TEvent]) => Awaitable<void>,
+	): () => void;
+	once<TEvent extends keyof SchedulerEventMapLike<TTask>>(
+		event: TEvent,
+		listener: (payload: SchedulerEventMapLike<TTask>[TEvent]) => Awaitable<void>,
+	): () => void;
+	pause?(id: string): Awaitable<void>;
+	resume?(id: string): Awaitable<void>;
+	remove?(id: string): Awaitable<void>;
+}
 
 export type MockLogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
 

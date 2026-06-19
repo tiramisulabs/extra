@@ -365,6 +365,6 @@ export async function seedWorld(client: UsingClient, world: MockWorld): Promise<
 		await client.cache.stickers?.set(CacheFrom.Test, entry.sticker.id, entry.guildId, entry.sticker);
 	}
 	for (const stage of world.stageInstances ?? []) {
-		if (stage.guild_id) await client.cache.stageInstances?.set(CacheFrom.Test, stage.id, stage.guild_id, stage);
+		if (stage.guild_id) await client.cache.stageInstances?.set(CacheFrom.Test, stage.channel_id, stage.guild_id, stage);
 	}
 }

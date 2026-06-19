@@ -39,7 +39,3 @@ let nextId = 1;
 export function nextDispatchId(): number {
 	return nextId++;
 }
-
-export function resetDispatchIds(): void {
-	nextId = 1;
-}

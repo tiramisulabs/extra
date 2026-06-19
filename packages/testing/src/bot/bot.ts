@@ -29,14 +29,8 @@ import {
 import { resetMockIds } from '../id';
 import { TEST_APPLICATION_ID, TEST_BOT_ID, TEST_CHANNEL_ID, TEST_GUILD_ID, TEST_USER_ID } from './constants';
 import { registerWorldDefaults } from './defaults';
-import { Dispatch, type ModalWaiter } from './dispatch';
-import {
-	type DispatchContext,
-	type DispatchDenial,
-	dispatchStore,
-	nextDispatchId,
-	resetDispatchIds,
-} from './dispatch-context';
+import { Dispatch, type ModalWaiter, type ModalWaitRegistration } from './dispatch';
+import { type DispatchContext, type DispatchDenial, dispatchStore, nextDispatchId } from './dispatch-context';
 import { MockGateway } from './gateway';
 import { installDispatchHooks as installDispatchHooksImpl } from './hooks';
 import {
@@ -86,7 +80,7 @@ import {
 	type RouteMatcher,
 	type TypedMatchedAction,
 } from './rest';
-import { FOLLOWUP_ROUTE, WEBHOOK_MESSAGE_ROUTE } from './routes';
+import { FOLLOWUP_ROUTE, Routes, WEBHOOK_MESSAGE_ROUTE } from './routes';
 import { resolveSelectResolved } from './select-resolved';
 import {
 	asUsingClient,
@@ -99,12 +93,12 @@ import {
 import {
 	arrayValue,
 	asRecord,
-	type ButtonView,
 	type ChannelView,
 	type EmbedView,
 	type GuildMemberView,
 	type GuildView,
 	harvestComponents,
+	type InteractiveComponentView,
 	type MessageView,
 	normalizeEmbed,
 	numberValue,
@@ -184,9 +178,19 @@ type ComponentSourceOptions = {
 	allowSyntheticSource?: boolean;
 };
 
+const INTERACTION_WEBHOOK_ROUTES = [
+	Routes.followup,
+	Routes.fetchOriginalResponse,
+	Routes.editOriginalResponse,
+	Routes.deleteOriginalResponse,
+	Routes.fetchWebhookMessage,
+	Routes.editWebhookMessage,
+	Routes.deleteWebhookMessage,
+] as const;
+
 type MessageSource = { id: string; channel_id?: string };
 type MessagePart = { body: OutgoingMessage; source?: MessageSource };
-type BindComponentView = (view: ButtonView, source?: MessageSource) => ComponentActionView;
+type BindComponentView = (view: InteractiveComponentView, source?: MessageSource) => ComponentActionView;
 
 export interface ComponentSourceView {
 	messageId: string;
@@ -200,7 +204,7 @@ export type ComponentSelectOptions = Omit<SelectMenuInteractionOptions, 'customI
 	Omit<ComponentSourceOptions, 'source'>;
 
 /** Interactive component harvested from a dispatch result, bound to the message that rendered it. */
-export interface ComponentActionView extends ButtonView {
+export interface ComponentActionView extends InteractiveComponentView {
 	source?: ComponentSourceView;
 	click(options?: ComponentClickOptions): Dispatch<DispatchResult>;
 	select(values: string[], options?: ComponentSelectOptions): Dispatch<DispatchResult>;
@@ -236,10 +240,10 @@ export interface DispatchResult {
 	embedViews: EmbedView[];
 	/** First parsed embed view, for the common single-embed assertion. */
 	embedView?: EmbedView;
-	/** Interactive components collected from `messages[].components` (recursively, incl. v2 sections). */
-	buttons: ComponentActionView[];
-	/** A button by its label or customId, or undefined. */
-	button(labelOrCustomId: string): ComponentActionView | undefined;
+	/** Interactive components collected from `messages[].components`. */
+	components: ComponentActionView[];
+	/** Lookup for an interactive component by label or customId. */
+	component(labelOrCustomId: string): ComponentActionView | undefined;
 	/** Components-v2 TextDisplay (type 10) contents, in dispatch order. */
 	textDisplays: string[];
 	/** Files flattened from `messages`, in dispatch order. */
@@ -308,10 +312,10 @@ export interface MessageResultBase {
 	embedViews: EmbedView[];
 	/** First parsed embed view, for the common single-embed assertion. */
 	embedView?: EmbedView;
-	/** Interactive components collected from `messages[].components` (recursively, incl. v2 sections). */
-	buttons: ComponentActionView[];
-	/** A button by its label or customId, or undefined. */
-	button(labelOrCustomId: string): ComponentActionView | undefined;
+	/** Interactive components collected from `messages[].components`. */
+	components: ComponentActionView[];
+	/** Lookup for an interactive component by label or customId. */
+	component(labelOrCustomId: string): ComponentActionView | undefined;
 	/** Components-v2 TextDisplay (type 10) contents, in dispatch order. */
 	textDisplays: string[];
 }
@@ -391,11 +395,11 @@ function buildMessageResult(
 	const embeds = messages.flatMap(message => message.embeds ?? []);
 	const files = messages.flatMap(message => message.files ?? []);
 	const embedViews = embeds.map(normalizeEmbed);
-	const buttons: ComponentActionView[] = [];
+	const components: ComponentActionView[] = [];
 	const textDisplays: string[] = [];
 	for (const part of parts) {
 		const harvested = harvestComponents((part.body as { components?: unknown }).components);
-		buttons.push(...harvested.buttons.map(button => bindComponentView(button, part.source)));
+		components.push(...harvested.components.map(component => bindComponentView(component, part.source)));
 		textDisplays.push(...harvested.textDisplays);
 	}
 	return {
@@ -405,16 +409,16 @@ function buildMessageResult(
 		files,
 		content: messages.at(-1)?.content,
 		embedViews,
-		buttons,
+		components,
+		component(labelOrCustomId: string) {
+			return components.find(view => view.customId === labelOrCustomId || view.label === labelOrCustomId);
+		},
 		textDisplays,
 		get embed() {
 			return embeds[0];
 		},
 		get embedView() {
 			return embedViews[0];
-		},
-		button(labelOrCustomId: string) {
-			return buttons.find(view => view.customId === labelOrCustomId || view.label === labelOrCustomId);
 		},
 	};
 }
@@ -762,7 +766,7 @@ export class MockBot {
 		return dispatch;
 	}
 
-	private bindComponentView(view: ButtonView, source?: MessageSource): ComponentActionView {
+	private bindComponentView(view: InteractiveComponentView, source?: MessageSource): ComponentActionView {
 		const sourceView: ComponentSourceView | undefined = source
 			? { messageId: source.id, ...(source.channel_id ? { channelId: source.channel_id } : {}) }
 			: undefined;
@@ -1423,14 +1427,19 @@ export class MockBot {
 	 * opener command calls synchronously while replying). Used by {@link Dispatch.untilModal} to await
 	 * registration event-driven instead of polling a wall clock. Resolves immediately if already registered.
 	 */
-	private onModalRegistered(userId: string, dispatchId: number | undefined): Promise<void> {
+	private onModalRegistered(userId: string, dispatchId: number | undefined): ModalWaitRegistration {
+		const resolved = (): ModalWaitRegistration => ({ registered: Promise.resolve(), dispose: () => {} });
+		const rejected = (error: unknown): ModalWaitRegistration => ({
+			registered: Promise.reject(error),
+			dispose: () => {},
+		});
 		if (dispatchId === undefined) {
-			return Promise.reject(new TypeError('untilModal: this dispatch has no dispatch id; cannot own a modal.'));
+			return rejected(new TypeError('untilModal: this dispatch has no dispatch id; cannot own a modal.'));
 		}
 		if (this.client.components.modals.has(userId)) {
 			const owner = this.modalOwners.get(userId);
-			if (owner === undefined || owner === dispatchId) return Promise.resolve();
-			return Promise.reject(
+			if (owner === undefined || owner === dispatchId) return resolved();
+			return rejected(
 				new TypeError(
 					`untilModal: user ${userId} already has a pending modal owned by dispatch ${owner}. ` +
 						`Same-user modal flows must be driven sequentially.`,
@@ -1440,19 +1449,43 @@ export class MockBot {
 		const existing = this.modalWaiters.get(userId);
 		const other = existing?.find(waiter => waiter.dispatchId !== dispatchId);
 		if (other) {
-			return Promise.reject(
+			return rejected(
 				new TypeError(
 					`untilModal: dispatch ${other.dispatchId} is already waiting for user ${userId}'s next modal. ` +
 						`Same-user modal flows must be driven sequentially.`,
 				),
 			);
 		}
-		return new Promise<void>((resolve, reject) => {
+		let settled = false;
+		let waiter!: ModalWaiter;
+		const registered = new Promise<void>((resolve, reject) => {
 			const waiters = this.modalWaiters.get(userId);
-			const waiter = { dispatchId, resolve, reject };
+			waiter = {
+				dispatchId,
+				resolve: () => {
+					settled = true;
+					resolve();
+				},
+				reject: error => {
+					settled = true;
+					reject(error);
+				},
+			};
 			if (waiters) waiters.push(waiter);
 			else this.modalWaiters.set(userId, [waiter]);
 		});
+		return {
+			registered,
+			dispose: () => {
+				if (settled) return;
+				settled = true;
+				const waiters = this.modalWaiters.get(userId);
+				if (!waiters) return;
+				const next = waiters.filter(entry => entry !== waiter);
+				if (next.length) this.modalWaiters.set(userId, next);
+				else this.modalWaiters.delete(userId);
+			},
+		};
 	}
 
 	/**
@@ -1633,12 +1666,20 @@ export class MockBot {
 		}
 	}
 
-	private async drainTokenUntilQuiescent(token: string, maxIterations = DRAIN_MAX_ITERATIONS): Promise<void> {
+	private async drainTokenUntilQuiescent(
+		applicationId: string,
+		token: string,
+		interactionId?: string,
+		maxIterations = DRAIN_MAX_ITERATIONS,
+	): Promise<void> {
 		assertRealSetImmediate();
 		let lastCount = -1;
 		let iterations = 0;
 		while (true) {
-			const count = this.rest.actions.filter(action => action.route.split('/').includes(token)).length;
+			const count = this.rest.actions.filter(action =>
+				this.isInteractionWebhookActionFor(action, applicationId, token) ||
+				this.isInteractionCallbackActionFor(action, token, interactionId),
+			).length;
 			const quiet = count === lastCount && !this.rest.hasPendingRequests();
 			if (quiet) return;
 			lastCount = count;
@@ -1663,6 +1704,37 @@ export class MockBot {
 		this.canDetectComponentCommand = capabilities.canDetectComponentCommand;
 		this.canDetectCollector = capabilities.canDetectCollector;
 		this.canDetectModalCollector = capabilities.canDetectModalCollector;
+	}
+
+	private isInteractionWebhookActionFor(action: RecordedAction, applicationId: string, token: string): boolean {
+		for (const route of INTERACTION_WEBHOOK_ROUTES) {
+			const params = this.rest.matchRouteParams(route, action) as
+				| { applicationId: string; interactionToken: string }
+				| undefined;
+			if (!params) continue;
+			if (params.applicationId !== applicationId) continue;
+			if (params.interactionToken !== token) continue;
+			return true;
+		}
+		return false;
+	}
+
+	private isInteractionCallbackActionFor(
+		action: RecordedAction,
+		token: string,
+		interactionId?: string,
+	): boolean {
+		const params = this.rest.matchRouteParams(Routes.interactionCallback, action);
+		if (!params) return false;
+		if (params.token !== token) return false;
+		return interactionId === undefined || params.id === interactionId;
+	}
+
+	private isInteractionAction(action: RecordedAction, payload: ApiInteractionPayload): boolean {
+		return (
+			this.isInteractionWebhookActionFor(action, payload.application_id, payload.token) ||
+			this.isInteractionCallbackActionFor(action, payload.token, payload.id)
+		);
 	}
 
 	private async runInteraction(payload: ApiInteractionPayload, dispatchId: number): Promise<DispatchResult> {
@@ -1705,7 +1777,7 @@ export class MockBot {
 				this.modalOwners.delete(userId);
 			}
 		}
-		if (isModalPayload) await this.drainTokenUntilQuiescent(payload.token);
+		if (isModalPayload) await this.drainTokenUntilQuiescent(payload.application_id, payload.token, payload.id);
 		const { componentCommandExecuted, collectorMatched, modalMatched } = ctx;
 		// An unhandled error inside the command/component/modal run was captured by the onRunError hook. Fail loud
 		// by default so a happy-path test surfaces the bug; 'capture' exposes it on result.error instead.
@@ -1734,9 +1806,9 @@ export class MockBot {
 		// original-response edits) for THIS interaction's token. The latter may be emitted from a different async
 		// frame — e.g. a modal submit whose reply is written inside the opener command's resumed continuation — so
 		// the token, which is unique per interaction, is the reliable owner key for those responses.
-		const actions = this.rest.actions.filter(
-			action => action.dispatchId === dispatchId || action.route.split('/').includes(payload.token),
-		);
+			const actions = this.rest.actions.filter(
+				action => action.dispatchId === dispatchId || this.isInteractionAction(action, payload),
+			);
 		if (replies.length === 0) {
 			const callback = actions.find(
 				action => action.method === 'POST' && action.route === `/interactions/${payload.id}/${payload.token}/callback`,
@@ -1773,12 +1845,19 @@ export class MockBot {
 						: this.messageSourceFrom(this._state.messageForToken(payload.token)),
 			};
 		};
+		const matchesPayloadWebhookRoute = (route: (typeof INTERACTION_WEBHOOK_ROUTES)[number], action: RecordedAction) => {
+			const params = this.rest.matchRouteParams(route, action) as
+				| { applicationId: string; interactionToken: string }
+				| undefined;
+			return params?.applicationId === payload.application_id && params.interactionToken === payload.token;
+		};
 		const isWebhookMessageEdit = (action: RecordedAction) =>
 			action.method === 'PATCH' &&
 			WEBHOOK_MESSAGE_ROUTE.test(action.route) &&
-			action.route.split('/').includes(payload.token);
+			(matchesPayloadWebhookRoute(Routes.editOriginalResponse, action) ||
+				matchesPayloadWebhookRoute(Routes.editWebhookMessage, action));
 		const isFollowup = (action: RecordedAction) =>
-			action.method === 'POST' && FOLLOWUP_ROUTE.test(action.route) && action.route.split('/').includes(payload.token);
+			action.method === 'POST' && FOLLOWUP_ROUTE.test(action.route) && matchesPayloadWebhookRoute(Routes.followup, action);
 		const editActions = actions.filter(isWebhookMessageEdit);
 		const followupActions = actions.filter(isFollowup);
 		const messageActions = actions.filter(action => isWebhookMessageEdit(action) || isFollowup(action));
@@ -2340,7 +2419,6 @@ export class MockBot {
 
 export async function createMockBot(options: MockBotOptions = {}): Promise<MockBot> {
 	resetMockIds();
-	resetDispatchIds();
 	const rest = new MockApiHandler({ onUnhandledRest: options.onUnhandledRest });
 	const built = options.world?.build();
 	const world = built ? structuredClone(built) : undefined;
@@ -2456,7 +2534,7 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	await runMockClientStartup(client, options);
 	// seedWorld only needs the UsingClient cache/rest surface already installed above.
 	if (world) await seedWorld(asUsingClient(client), world);
-	const state = new WorldState(world);
+	const state = new WorldState(world, { botId: client.botId });
 	registerWorldDefaults(rest, world, {
 		emit: (name, payload) => client.events.runEvent(name, client, payload, -1, true) as Promise<void>,
 		removeCachedMember: async (guildId, userId) => {

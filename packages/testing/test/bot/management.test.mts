@@ -34,6 +34,7 @@ describe('management routes', () => {
 		const guild = world.registerGuild({ id: 'delete-role-guild' });
 		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'delete-role-actor' }) });
 		const role = world.registerRole(guild.id, { id: 'delete-role-target' });
+		world.registerMember(guild.id, { user: apiUser({ id: 'delete-role-member' }), roles: [role.id] });
 		const channel = world.registerChannel(guild.id);
 
 		@Declare({ name: 'drop-role', description: 'Deletes a role' })
@@ -50,6 +51,7 @@ describe('management routes', () => {
 			{ content: 'deleted' },
 		);
 		expect(bot.worldGuild(guild.id)?.role(role.id)).toBeUndefined();
+		expect(bot.worldMember(guild.id, 'delete-role-member')?.roles).toEqual([]);
 		await bot.close();
 	});
 

@@ -9,6 +9,11 @@ export interface ModalWaiter {
 	reject: (error: unknown) => void;
 }
 
+export interface ModalWaitRegistration {
+	registered: Promise<void>;
+	dispose(): void;
+}
+
 /** Lazy, step-able handle returned by every user-action dispatcher. */
 export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 	private execution?: Promise<T>;
@@ -22,7 +27,7 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		readonly userId: string | undefined,
 		private readonly executor: () => Promise<T>,
 		/** Resolves when seyfert registers a modal for the given userId; supplied by MockBot. */
-		private readonly modalWaiter?: (userId: string, dispatchId: number | undefined) => Promise<void>,
+		private readonly modalWaiter?: (userId: string, dispatchId: number | undefined) => ModalWaitRegistration,
 		/**
 		 * This dispatch's id, so {@link until} can scope its gate to only this dispatch's recorded actions.
 		 * Optional: a gate created without an id stays unscoped (matches any dispatch's actions).
@@ -93,22 +98,27 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		const userId = this.userId;
 		this.releaseCheckpoint();
 		this.start();
-		const registered = this.modalWaiter
-			? this.modalWaiter(userId, this.dispatchId)
-			: this.clientRef.components.modals.has(userId)
+		const registration = this.modalWaiter?.(userId, this.dispatchId);
+		const registered =
+			registration?.registered ??
+			(this.clientRef.components.modals.has(userId)
 				? Promise.resolve()
 				: // Fallback when no waiter hook was threaded: resolve only via the completion guard below.
-					new Promise<void>(() => {});
-		// Swallow late rejection if `registered` wins the race; the awaiting test owns the dispatch promise.
-		this.execution!.catch(() => {});
-		await Promise.race([
-			registered,
-			this.execution!.then(() => {
-				if (!this.clientRef.components.modals.has(userId)) {
-					throw new Error(`untilModal: dispatch completed without opening a modal for user ${userId}.`);
-				}
-			}),
-		]);
+					new Promise<void>(() => {}));
+		try {
+			// Swallow late rejection if `registered` wins the race; the awaiting test owns the dispatch promise.
+			this.execution!.catch(() => {});
+			await Promise.race([
+				registered,
+				this.execution!.then(() => {
+					if (!this.clientRef.components.modals.has(userId)) {
+						throw new Error(`untilModal: dispatch completed without opening a modal for user ${userId}.`);
+					}
+				}),
+			]);
+		} finally {
+			registration?.dispose();
+		}
 	}
 
 	/**

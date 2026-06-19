@@ -22,12 +22,12 @@ import {
 } from './payloads';
 import { computeChannelPermissions } from './permissions';
 import { apiError, ErrorCode, MockApiError, type MockApiHandler, type RouteMatcher, type RouteResponder } from './rest';
-import { Routes } from './routes';
+import { ROUTE_COVERAGE, Routes } from './routes';
 import type { MessageQuery, WorldState } from './state';
 import type { MockWorld } from './world';
 import type { WorldEmitEvent } from './world-events';
 
-type CacheResourceName = 'emojis' | 'stickers' | 'overwrites' | 'bans';
+type CacheResourceName = 'channels' | 'roles' | 'stageInstances' | 'emojis' | 'stickers' | 'overwrites' | 'bans';
 
 interface WorldDefaultHooks {
 	emit: (name: WorldEmitEvent, payload: Record<string, unknown>) => Promise<void>;
@@ -107,9 +107,9 @@ interface GuildCrudConfig {
 function registerGuildCrud(rest: MockApiHandler, config: GuildCrudConfig): void {
 	const { idParam } = config;
 	if (config.create) {
-		rest.intercept(config.create, (pending, params) => {
+		rest.intercept(config.create, async (pending, params) => {
 			config.guard?.(params.guildId);
-			return config.add(params.guildId, bodyRecord(pending.body));
+			return await config.add(params.guildId, bodyRecord(pending.body));
 		});
 	}
 	if (config.list)
@@ -130,9 +130,9 @@ function registerGuildCrud(rest: MockApiHandler, config: GuildCrudConfig): void 
 	}
 	if (config.edit && config.patch) {
 		const patch = config.patch;
-		rest.intercept(config.edit, (pending, params) => {
+		rest.intercept(config.edit, async (pending, params) => {
 			config.guard?.(params.guildId);
-			const patched = patch(params.guildId, params[idParam], bodyRecord(pending.body));
+			const patched = await patch(params.guildId, params[idParam], bodyRecord(pending.body));
 			if (patched !== undefined) return patched;
 			if (config.unknownCode !== undefined) apiError(404, config.unknownCode, config.unknownMessage ?? 'Unknown');
 			return rest.markSynthetic(config.fallback(params.guildId, params[idParam]));
@@ -140,12 +140,12 @@ function registerGuildCrud(rest: MockApiHandler, config: GuildCrudConfig): void 
 	}
 	if (config.remove && config.drop) {
 		const drop = config.drop;
-		rest.intercept(config.remove, (_pending, params) => {
+		rest.intercept(config.remove, async (_pending, params) => {
 			config.guard?.(params.guildId);
 			if (config.unknownCode !== undefined && config.one(params.guildId, params[idParam]) === undefined) {
 				apiError(404, config.unknownCode, config.unknownMessage ?? 'Unknown');
 			}
-			drop(params.guildId, params[idParam]);
+			await drop(params.guildId, params[idParam]);
 			return {};
 		});
 	}
@@ -191,13 +191,39 @@ export function registerWorldDefaults(
 
 	const resolveUser = (id: string) => world?.users.find(user => user.id === id) ?? apiUser({ id });
 	const guildOfChannel = (channelId: string) => world?.channels.find(channel => channel.id === channelId)?.guild_id;
+	const channelPermissionTarget = (channelId: string) =>
+		world?.channels.find(channel => channel.id === channelId)?.parent_id ?? channelId;
+	const cacheChannel = async (channel: Record<string, unknown>) => {
+		const id = typeof channel.id === 'string' ? channel.id : undefined;
+		const guildId = typeof channel.guild_id === 'string' ? channel.guild_id : undefined;
+		if (id && guildId) await hooks.cacheSet('channels', id, guildId, channel);
+	};
+	const removeCachedChannel = async (channelId: string, guildId: string | undefined) => {
+		if (guildId) await hooks.cacheRemove('channels', channelId, guildId);
+	};
+	const cacheRole = async (guildId: string, role: { id: string }) => {
+		await hooks.cacheSet('roles', role.id, guildId, role);
+	};
+	const removeCachedRole = async (guildId: string, roleId: string) => {
+		await hooks.cacheRemove('roles', roleId, guildId);
+	};
+	const cacheStage = async (stage: { channel_id?: unknown; guild_id?: unknown }) => {
+		const channelId = typeof stage.channel_id === 'string' ? stage.channel_id : undefined;
+		const guildId = typeof stage.guild_id === 'string' ? stage.guild_id : undefined;
+		if (channelId && guildId) {
+			await hooks.cacheSet('stageInstances', channelId, guildId, stage);
+		}
+	};
+	const removeCachedStage = async (channelId: string, guildId: string | undefined) => {
+		if (guildId) await hooks.cacheRemove('stageInstances', channelId, guildId);
+	};
 	// Mirror a channel's overwrite list into seyfert's separate `overwrites` cache resource after a REST edit.
-	const syncOverwriteCache = (channelId: string) => {
+	const syncOverwriteCache = async (channelId: string) => {
 		const channel = world?.channels.find(entry => entry.id === channelId);
 		if (!channel?.guild_id) return;
 		if (channel.permission_overwrites.length)
-			void hooks.cacheSet('overwrites', channelId, channel.guild_id, channel.permission_overwrites);
-		else void hooks.cacheRemove('overwrites', channelId, channel.guild_id);
+			await hooks.cacheSet('overwrites', channelId, channel.guild_id, channel.permission_overwrites);
+		else await hooks.cacheRemove('overwrites', channelId, channel.guild_id);
 	};
 
 	// F15: when a world is seeded, a guild-scoped op against an unknown (or stringified undefined/null) guild id
@@ -259,6 +285,10 @@ export function registerWorldDefaults(
 	// Channel-scoped permission guard: resolves the channel's guild and folds its overwrites into the check.
 	const requireChannelPerm = (channelId: string, bit: bigint) =>
 		requirePerm(guildOfChannel(channelId) ?? '', bit, channelId);
+	const requireThreadPerm = (channelId: string, bit: bigint) => {
+		const target = channelPermissionTarget(channelId);
+		requirePerm(guildOfChannel(target) ?? '', bit, target);
+	};
 	const topRole = (roleIds: string[], roles: { id: string; position: number }[]) =>
 		Math.max(0, ...roleIds.map(id => roles.find(role => role.id === id)?.position ?? 0));
 	const requireHierarchy = (guildId: string, targetUserId: string) => {
@@ -511,30 +541,38 @@ export function registerWorldDefaults(
 		});
 		return { ...channel, recipients: [recipient] };
 	});
-	rest.intercept(Routes.createChannel, (pending, params) => {
+	rest.intercept(Routes.createChannel, async (pending, params) => {
 		requireGuild(params.guildId);
 		requirePerm(params.guildId, PermissionFlagsBits.ManageChannels);
-		return hooks.state.addChannel(params.guildId, { ...bodyRecord(pending.body), guild_id: params.guildId });
+		const channel = hooks.state.addChannel(params.guildId, { ...bodyRecord(pending.body), guild_id: params.guildId });
+		await cacheChannel(channel);
+		return channel;
 	});
-	const threadResponder: RouteResponder = (pending, params) => {
+	const threadResponder: RouteResponder = async (pending, params) => {
 		requireChannel(params.channelId);
-		return hooks.state.addChannel(undefined, {
+		requireThreadPerm(params.channelId, PermissionFlagsBits.SendMessagesInThreads);
+		const thread = hooks.state.addChannel(undefined, {
 			...bodyRecord(pending.body),
 			parent_id: params.channelId,
 			guild_id: guildOfChannel(params.channelId),
 			type: bodyRecord(pending.body).type ?? 11,
 		});
+		await cacheChannel(thread);
+		return thread;
 	};
 	rest.intercept(Routes.createThread, threadResponder);
 	rest.intercept(Routes.startThreadFromMessage, (pending, params) => {
 		requireMessage(params.channelId, params.messageId);
 		return threadResponder(pending, params);
 	});
-	rest.intercept(Routes.deleteChannel, (_pending, params) => {
+	rest.intercept(Routes.deleteChannel, async (_pending, params) => {
 		requireChannel(params.channelId);
 		requireChannelPerm(params.channelId, PermissionFlagsBits.ManageChannels);
 		const existing = world?.channels.find(channel => channel.id === params.channelId);
+		const guildId = existing?.guild_id;
 		hooks.state.removeChannel(params.channelId);
+		await removeCachedChannel(params.channelId, guildId);
+		if (guildId) await hooks.cacheRemove('overwrites', params.channelId, guildId);
 		return existing ?? apiChannel({ id: params.channelId });
 	});
 
@@ -617,17 +655,21 @@ export function registerWorldDefaults(
 	});
 	rest.intercept(Routes.endPoll, (_pending, params) => {
 		requireMessage(params.channelId, params.messageId);
-		return (
-			hooks.state.finalizePoll(params.channelId, params.messageId) ??
-			hooks.state.rawMessage(params.channelId, params.messageId) ??
-			apiMessage({ id: params.messageId, channelId: params.channelId })
-		);
+		const message = hooks.state.finalizePoll(params.channelId, params.messageId);
+		if (!message) apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: message has no poll');
+		return message;
 	});
 	rest.intercept(Routes.getPollAnswerVoters, (_pending, params) => {
 		requireMessage(params.channelId, params.messageId);
+		const poll = hooks.state.rawMessage(params.channelId, params.messageId)?.poll;
+		if (!poll) apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: message has no poll');
+		const answerId = Number(params.answerId);
+		if (!poll.answers.some(answer => answer.answer_id === answerId)) {
+			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: unknown poll answer');
+		}
 		return {
 			users: hooks.state
-				.pollVoters(params.channelId, params.messageId, Number(params.answerId))
+				.pollVoters(params.channelId, params.messageId, answerId)
 				.map(userId => resolveUser(userId)),
 		};
 	});
@@ -692,27 +734,39 @@ export function registerWorldDefaults(
 		return hooks.state.addFollowup(params.interactionToken, bodyRecord(pending.body), hooks.botId);
 	});
 
-	rest.intercept(Routes.createRole, (pending, params) => {
+	rest.intercept(Routes.createRole, async (pending, params) => {
 		requireGuild(params.guildId);
 		requirePerm(params.guildId, PermissionFlagsBits.ManageRoles);
-		return hooks.state.addRole(params.guildId, bodyRecord(pending.body));
+		const role = hooks.state.addRole(params.guildId, bodyRecord(pending.body));
+		await cacheRole(params.guildId, role);
+		return role;
 	});
-	rest.intercept(Routes.editRole, (pending, params) => {
+	rest.intercept(Routes.editRole, async (pending, params) => {
 		requireGuild(params.guildId);
 		requirePerm(params.guildId, PermissionFlagsBits.ManageRoles);
+		if (params.roleId === params.guildId) {
+			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: the @everyone role cannot be edited');
+		}
 		if (world && !guildRolesOf(params.guildId).some(role => role.id === params.roleId)) {
 			apiError(404, ErrorCode.UnknownRole, 'Unknown Role');
 		}
+		requireManageableRole(params.guildId, params.roleId);
 		const updated = hooks.state.editRole(params.guildId, params.roleId, bodyRecord(pending.body));
+		if (updated) await cacheRole(params.guildId, updated);
 		return updated ?? apiRole({ id: params.roleId, ...bodyRecord(pending.body) });
 	});
-	rest.intercept(Routes.deleteRole, (_pending, params) => {
+	rest.intercept(Routes.deleteRole, async (_pending, params) => {
 		requireGuild(params.guildId);
 		requirePerm(params.guildId, PermissionFlagsBits.ManageRoles);
+		if (params.roleId === params.guildId) {
+			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: the @everyone role cannot be deleted');
+		}
 		if (world && !guildRolesOf(params.guildId).some(role => role.id === params.roleId)) {
 			apiError(404, ErrorCode.UnknownRole, 'Unknown Role');
 		}
+		requireManageableRole(params.guildId, params.roleId);
 		hooks.state.removeRole(params.guildId, params.roleId);
+		await removeCachedRole(params.guildId, params.roleId);
 		return {};
 	});
 	registerGuildCrud(rest, {
@@ -722,21 +776,21 @@ export function registerWorldDefaults(
 		fetch: Routes.fetchEmoji,
 		edit: Routes.editEmoji,
 		remove: Routes.deleteEmoji,
-		add: (guildId, body) => {
+		add: async (guildId, body) => {
 			const entity = hooks.state.addEmoji(guildId, body);
-			void hooks.cacheSet('emojis', entity.id, guildId, entity);
+			await hooks.cacheSet('emojis', entity.id, guildId, entity);
 			return entity;
 		},
 		all: guildId => hooks.state.emojis(guildId),
 		one: (guildId, id) => hooks.state.emoji(guildId, id),
-		patch: (guildId, id, body) => {
+		patch: async (guildId, id, body) => {
 			const entity = hooks.state.editEmoji(guildId, id, body);
-			if (entity) void hooks.cacheSet('emojis', id, guildId, entity);
+			if (entity) await hooks.cacheSet('emojis', id, guildId, entity);
 			return entity;
 		},
-		drop: (guildId, id) => {
+		drop: async (guildId, id) => {
 			hooks.state.removeEmoji(guildId, id);
-			void hooks.cacheRemove('emojis', id, guildId);
+			await hooks.cacheRemove('emojis', id, guildId);
 		},
 		fallback: (guildId, id) => apiEmoji({ id, guildId }),
 		parentGuard: requireGuild,
@@ -788,7 +842,7 @@ export function registerWorldDefaults(
 				throw error;
 			}
 			await removeMember(params.guildId, userId, true);
-			void hooks.cacheSet('bans', userId, params.guildId, { reason: null, user: resolveUser(userId) });
+			await hooks.cacheSet('bans', userId, params.guildId, { reason: null, user: resolveUser(userId) });
 			banned.push(userId);
 		}
 		return { banned_users: banned, failed_users: failed };
@@ -815,22 +869,32 @@ export function registerWorldDefaults(
 	const resolveThreadUser = (userId: string) => (userId === '@me' ? hooks.botId : userId);
 	rest.intercept(Routes.addThreadMember, (_pending, params) => {
 		requireChannel(params.channelId);
+		requireThreadPerm(
+			params.channelId,
+			params.userId === '@me' ? PermissionFlagsBits.ViewChannel : PermissionFlagsBits.SendMessagesInThreads,
+		);
 		hooks.state.addThreadMember(params.channelId, resolveThreadUser(params.userId));
 		return {};
 	});
 	rest.intercept(Routes.removeThreadMember, (_pending, params) => {
 		requireChannel(params.channelId);
+		requireThreadPerm(
+			params.channelId,
+			params.userId === '@me' ? PermissionFlagsBits.ViewChannel : PermissionFlagsBits.SendMessagesInThreads,
+		);
 		hooks.state.removeThreadMember(params.channelId, resolveThreadUser(params.userId));
 		return {};
 	});
 	rest.intercept(Routes.listThreadMembers, (_pending, params) => {
 		requireChannel(params.channelId);
+		requireThreadPerm(params.channelId, PermissionFlagsBits.ViewChannel);
 		return hooks.state
 			.threadMembers(params.channelId)
 			.map(userId => apiThreadMember({ threadId: params.channelId, userId }));
 	});
 	rest.intercept(Routes.fetchThreadMember, (_pending, params) => {
 		requireChannel(params.channelId);
+		requireThreadPerm(params.channelId, PermissionFlagsBits.ViewChannel);
 		const userId = resolveThreadUser(params.userId);
 		const members = hooks.state.threadMembers(params.channelId);
 		if (world && !members.includes(userId)) apiError(404, ErrorCode.UnknownMember, 'Unknown Member');
@@ -851,21 +915,21 @@ export function registerWorldDefaults(
 		fetch: Routes.fetchSticker,
 		edit: Routes.editSticker,
 		remove: Routes.deleteSticker,
-		add: (guildId, body) => {
+		add: async (guildId, body) => {
 			const entity = hooks.state.addSticker(guildId, body);
-			void hooks.cacheSet('stickers', entity.id, guildId, entity);
+			await hooks.cacheSet('stickers', entity.id, guildId, entity);
 			return entity;
 		},
 		all: guildId => hooks.state.stickers(guildId),
 		one: (guildId, id) => hooks.state.sticker(guildId, id),
-		patch: (guildId, id, body) => {
+		patch: async (guildId, id, body) => {
 			const entity = hooks.state.editSticker(guildId, id, body);
-			if (entity) void hooks.cacheSet('stickers', id, guildId, entity);
+			if (entity) await hooks.cacheSet('stickers', id, guildId, entity);
 			return entity;
 		},
-		drop: (guildId, id) => {
+		drop: async (guildId, id) => {
 			hooks.state.removeSticker(guildId, id);
-			void hooks.cacheRemove('stickers', id, guildId);
+			await hooks.cacheRemove('stickers', id, guildId);
 		},
 		fallback: (guildId, id) => apiSticker({ id, guildId }),
 		parentGuard: requireGuild,
@@ -913,12 +977,14 @@ export function registerWorldDefaults(
 		return { items: hooks.state.soundboardSounds(params.guildId) };
 	});
 	rest.intercept(Routes.listDefaultSoundboardSounds, () => []);
-	rest.intercept(Routes.createStageInstance, pending => {
+	rest.intercept(Routes.createStageInstance, async pending => {
 		const stageBody = bodyRecord(pending.body);
 		const channelId = String(stageBody.channel_id ?? '');
 		requireChannel(channelId);
 		requireChannelPerm(channelId, PermissionFlagsBits.ManageChannels);
-		return hooks.state.addStageInstance(stageBody);
+		const stage = hooks.state.addStageInstance(stageBody);
+		await cacheStage(stage);
+		return stage;
 	});
 	interceptFetchOne(
 		rest,
@@ -930,12 +996,14 @@ export function registerWorldDefaults(
 		params => apiStageInstance({ channelId: params.channelId }),
 		world ? { code: ErrorCode.UnknownStageInstance, message: 'Unknown Stage Instance' } : undefined,
 	);
-	rest.intercept(Routes.deleteStageInstance, (_pending, params) => {
+	rest.intercept(Routes.deleteStageInstance, async (_pending, params) => {
 		requireChannel(params.channelId);
-		if (world && !hooks.state.stageInstance(params.channelId)) {
+		const stage = hooks.state.stageInstance(params.channelId);
+		if (world && !stage) {
 			apiError(404, ErrorCode.UnknownStageInstance, 'Unknown Stage Instance');
 		}
 		hooks.state.removeStageInstance(params.channelId);
+		await removeCachedStage(params.channelId, stage?.guild_id ?? guildOfChannel(params.channelId));
 		return {};
 	});
 	rest.intercept(Routes.fetchAuditLogs, (_pending, params) => {
@@ -968,7 +1036,7 @@ export function registerWorldDefaults(
 		requirePerm(params.guildId, PermissionFlagsBits.BanMembers);
 		requireHierarchy(params.guildId, params.userId);
 		await removeMember(params.guildId, params.userId, true);
-		void hooks.cacheSet('bans', params.userId, params.guildId, { reason: null, user: resolveUser(params.userId) });
+		await hooks.cacheSet('bans', params.userId, params.guildId, { reason: null, user: resolveUser(params.userId) });
 		return {};
 	});
 	rest.intercept(Routes.kick, async (_pending, params) => {
@@ -979,13 +1047,14 @@ export function registerWorldDefaults(
 		await removeMember(params.guildId, params.userId, false);
 		return {};
 	});
-	rest.intercept(Routes.unban, (_pending, params) => {
+	rest.intercept(Routes.unban, async (_pending, params) => {
 		requireGuild(params.guildId);
+		requirePerm(params.guildId, PermissionFlagsBits.BanMembers);
 		if (world && !hooks.state.isBanned(params.guildId, params.userId)) {
 			apiError(404, ErrorCode.UnknownBan, 'Unknown Ban');
 		}
 		hooks.state.unban(params.guildId, params.userId);
-		void hooks.cacheRemove('bans', params.userId, params.guildId);
+		await hooks.cacheRemove('bans', params.userId, params.guildId);
 		return {};
 	});
 	rest.intercept(Routes.fetchBans, (_pending, params) => {
@@ -994,25 +1063,26 @@ export function registerWorldDefaults(
 			user: resolveUser(userId),
 		}));
 	});
-	rest.intercept(Routes.editChannel, (pending, params) => {
+	rest.intercept(Routes.editChannel, async (pending, params) => {
 		requireChannel(params.channelId);
 		requireChannelPerm(params.channelId, PermissionFlagsBits.ManageChannels);
 		const updated = hooks.state.editChannel(params.channelId, bodyRecord(pending.body));
-		syncOverwriteCache(params.channelId);
+		if (updated) await cacheChannel(updated);
+		await syncOverwriteCache(params.channelId);
 		return updated ?? { ...apiChannel({ id: params.channelId }), ...bodyRecord(pending.body) };
 	});
-	rest.intercept(Routes.editChannelPermissions, (pending, params) => {
+	rest.intercept(Routes.editChannelPermissions, async (pending, params) => {
 		requireChannel(params.channelId);
 		requireChannelPerm(params.channelId, PermissionFlagsBits.ManageRoles);
 		hooks.state.setChannelOverwrite(params.channelId, params.overwriteId, bodyRecord(pending.body));
-		syncOverwriteCache(params.channelId);
+		await syncOverwriteCache(params.channelId);
 		return {};
 	});
-	rest.intercept(Routes.deleteChannelPermission, (_pending, params) => {
+	rest.intercept(Routes.deleteChannelPermission, async (_pending, params) => {
 		requireChannel(params.channelId);
 		requireChannelPerm(params.channelId, PermissionFlagsBits.ManageRoles);
 		hooks.state.removeChannelOverwrite(params.channelId, params.overwriteId);
-		syncOverwriteCache(params.channelId);
+		await syncOverwriteCache(params.channelId);
 		return {};
 	});
 	rest.intercept(Routes.triggerTyping, (_pending, params) => {
@@ -1172,4 +1242,16 @@ export function registerWorldDefaults(
 		await emitMemberUpdate(params.guildId, entry.member);
 		return entry.member;
 	});
+
+	for (const [name, coverage] of Object.entries(ROUTE_COVERAGE) as [
+		keyof typeof Routes,
+		(typeof ROUTE_COVERAGE)[keyof typeof ROUTE_COVERAGE],
+	][]) {
+		if (coverage !== 'handled') continue;
+		if (!rest.hasInterceptor(Routes[name])) {
+			throw new Error(
+				`registerWorldDefaults: ROUTE_COVERAGE marks Routes.${String(name)} handled, but no interceptor was registered.`,
+			);
+		}
+	}
 }

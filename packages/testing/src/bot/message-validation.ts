@@ -423,6 +423,7 @@ function collectComponentAttachmentRefs(value: unknown, out: Set<string>): void 
 	if (!value || typeof value !== 'object') return;
 	const record = asRecord(value);
 	collectComponentAttachmentRefs(record.components, out);
+	collectComponentAttachmentRefs(record.accessory, out);
 	collectComponentAttachmentRefs(record.items, out);
 	collectAttachmentUrl(asRecord(record.media).url, out);
 	collectAttachmentUrl(asRecord(record.file).url, out);

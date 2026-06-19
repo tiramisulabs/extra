@@ -39,6 +39,33 @@ describe('message reactions', () => {
 		await bot.close();
 	});
 
+	test('custom botId marks own reactions as me', async () => {
+		const botId = 'custom-react-bot';
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'custom-react-guild' });
+		world.registerBotMember(guild.id, { botId });
+		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'custom-react-actor' }) });
+		const channel = world.registerChannel(guild.id);
+		const message = world.registerMessage(channel.id, { id: 'custom-react-message' });
+
+		@Declare({ name: 'custom-react', description: 'Reacts as a custom bot id' })
+		class CustomReact extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.client.reactions.add(message.id, channel.id, EMOJI);
+				await ctx.write({ content: 'reacted' });
+			}
+		}
+
+		const bot = await createMockBot({ botId, commands: [CustomReact], world });
+		await bot.slash({ name: 'custom-react', guildId: guild.id, channel, user: actor.user });
+
+		const view = bot.worldMessage(channel.id, message.id)?.reaction(EMOJI);
+		expect(view).toMatchObject({ count: 1, me: true });
+		expect(view?.users).toEqual([botId]);
+		expect(bot.world.rawMessage(channel.id, message.id)?.reactions?.[0]).toMatchObject({ count: 1, me: true });
+		await bot.close();
+	});
+
 	test('removing a reaction clears it from the message view', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'unreact-guild' });

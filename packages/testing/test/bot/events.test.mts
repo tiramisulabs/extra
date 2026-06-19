@@ -1,7 +1,19 @@
 import { createEvent, createPlugin } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
-import { apiMember, apiMessage, apiUser, memberAddEvent, memberRemoveEvent } from '../../src/bot/payloads';
+import {
+	apiMember,
+	apiMessage,
+	apiUser,
+	channelCreateEvent,
+	memberAddEvent,
+	memberRemoveEvent,
+	messageCreateEvent,
+	messageReactionAddEvent,
+	messageReactionRemoveEvent,
+	threadCreateEvent,
+	voiceStateUpdateEvent,
+} from '../../src/bot/payloads';
 import { mockWorld } from '../../src/bot/world';
 
 declare module 'seyfert/lib/events/event' {
@@ -202,6 +214,55 @@ describe('emit result and factories', () => {
 		await bot.emit('GUILD_MEMBER_REMOVE', memberRemoveEvent(apiUser({ username: 'gone' }), { guildId: '123' }));
 
 		expect(left).toEqual(['gone']);
+		await bot.close();
+	});
+
+	test('world event builders produce payloads that emit can apply', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'builder-guild' });
+		const channel = world.registerChannel(guild.id, { id: 'builder-channel' });
+		const bot = await createMockBot({ world });
+
+		await bot.emit(
+			'MESSAGE_CREATE',
+			messageCreateEvent({ id: 'builder-message', channelId: channel.id, guildId: guild.id, content: 'created' }),
+			{ allowNoHandler: true },
+		);
+		expect(bot.worldMessage(channel.id, 'builder-message')?.content).toBe('created');
+
+		await bot.emit(
+			'CHANNEL_CREATE',
+			channelCreateEvent({ id: 'builder-created-channel', guildId: guild.id, name: 'created-channel' }),
+			{ allowNoHandler: true },
+		);
+		expect(bot.worldChannel('builder-created-channel')?.name).toBe('created-channel');
+
+		await bot.emit(
+			'THREAD_CREATE',
+			threadCreateEvent({ id: 'builder-thread', parentId: channel.id, guildId: guild.id, name: 'thread' }),
+			{ allowNoHandler: true },
+		);
+		expect(bot.worldChannel('builder-thread')?.parentId).toBe(channel.id);
+
+		await bot.emit(
+			'VOICE_STATE_UPDATE',
+			voiceStateUpdateEvent({ userId: 'voice-user', channelId: channel.id }, { guildId: guild.id }),
+			{ allowNoHandler: true },
+		);
+		expect(bot.worldVoiceState(guild.id, 'voice-user')?.channel_id).toBe(channel.id);
+
+		await bot.emit(
+			'MESSAGE_REACTION_ADD',
+			messageReactionAddEvent({ channelId: channel.id, messageId: 'builder-message', userId: 'reactor', emoji: 'ok:123' }),
+			{ allowNoHandler: true },
+		);
+		expect(bot.worldMessage(channel.id, 'builder-message')?.reaction('ok:123')?.users).toContain('reactor');
+		await bot.emit(
+			'MESSAGE_REACTION_REMOVE',
+			messageReactionRemoveEvent({ channelId: channel.id, messageId: 'builder-message', userId: 'reactor', emoji: 'ok:123' }),
+			{ allowNoHandler: true },
+		);
+		expect(bot.worldMessage(channel.id, 'builder-message')?.reaction('ok:123')).toBeUndefined();
 		await bot.close();
 	});
 });

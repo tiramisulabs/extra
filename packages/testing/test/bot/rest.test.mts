@@ -82,6 +82,16 @@ describe('MockApiHandler', () => {
 		expect(response.name).toBe('Stubbed');
 	});
 
+	test('routeUrl, call and requireAction support typed route params', async () => {
+		const rest = new MockApiHandler();
+		rest.intercept(Routes.fetchGuild, (_action, params) => ({ id: params.guildId, name: 'Typed' }));
+
+		expect(rest.routeUrl(Routes.fetchGuild, { guildId: '999' })).toBe('/guilds/999');
+		const response = (await rest.call(Routes.fetchGuild, { guildId: '999' })) as { id: string; name: string };
+		expect(response).toEqual({ id: '999', name: 'Typed' });
+		expect(rest.requireAction(Routes.fetchGuild, { guildId: '999' }).params.guildId).toBe('999');
+	});
+
 	test('notifies plugin REST observers for mock success, failure, and ratelimits', async () => {
 		const seen: {
 			phase: string;
@@ -195,7 +205,7 @@ describe('MockApiHandler', () => {
 		await rest.request('POST', '/channels/1/messages', { body: { content: 'done' } });
 		await expect(byResponse).resolves.toMatchObject({ response: { content: 'done' }, params: { channelId: '1' } });
 
-		await expect(rest.waitForAction(action => action.route === '/never', 20)).rejects.toThrow(/timed out/);
+		await expect(rest.waitForAction(action => action.route === '/never', 20)).rejects.toThrow(/Actions seen/);
 	});
 
 	test('waitForAction waits for an existing pending action to settle', async () => {
@@ -218,6 +228,15 @@ describe('MockApiHandler', () => {
 		release({ ok: true });
 		await expect(action).resolves.toMatchObject({ response: { ok: true } });
 		await expect(request).resolves.toEqual({ ok: true });
+	});
+
+	test('waitForAction treats a settled undefined response as complete', async () => {
+		const rest = new MockApiHandler();
+		rest.intercept('GET', '/void', () => undefined);
+
+		const action = rest.waitForAction({ method: 'GET', route: '/void' });
+		await expect(rest.request('GET', '/void')).resolves.toBeUndefined();
+		await expect(action).resolves.toMatchObject({ settled: true, response: undefined });
 	});
 
 	test('records responder errors before rethrowing them', async () => {

@@ -737,6 +737,138 @@ export function messageReactionAddEvent(
 	};
 }
 
+export type ApiMessageInput = ApiMessage | ApiMessageOptions;
+
+function resolveMessage(input: ApiMessageInput, options: { channelId?: string; guildId?: string } = {}): ApiMessage {
+	return 'channel_id' in input
+		? input
+		: apiMessage({ ...input, channelId: input.channelId ?? options.channelId, guildId: input.guildId ?? options.guildId });
+}
+
+/** Raw `d` for MESSAGE_CREATE. */
+export function messageCreateEvent(
+	input: ApiMessageInput,
+	options: { channelId?: string; guildId?: string } = {},
+): ApiMessage {
+	return resolveMessage(input, options);
+}
+
+/** Raw `d` for MESSAGE_DELETE. */
+export function messageDeleteEvent(input: { messageId: string; channelId: string; guildId?: string }): {
+	id: string;
+	channel_id: string;
+	guild_id?: string;
+} {
+	return {
+		id: input.messageId,
+		channel_id: input.channelId,
+		...opt('guild_id', input.guildId),
+	};
+}
+
+export type ApiChannelInput = ApiChannel | ApiChannelOptions;
+
+function resolveChannel(input: ApiChannelInput): ApiChannel {
+	return 'guild_id' in input || 'permission_overwrites' in input ? (input as ApiChannel) : apiChannel(input);
+}
+
+/** Raw `d` for CHANNEL_CREATE. */
+export function channelCreateEvent(input: ApiChannelInput): ApiChannel {
+	return resolveChannel(input);
+}
+
+/** Raw `d` for CHANNEL_DELETE. */
+export function channelDeleteEvent(input: ApiChannel | string, options: { guildId?: string } = {}): {
+	id: string;
+	guild_id?: string;
+} {
+	return typeof input === 'string'
+		? { id: input, ...opt('guild_id', options.guildId) }
+		: { id: input.id, ...opt('guild_id', input.guild_id ?? options.guildId) };
+}
+
+/** Raw `d` for THREAD_CREATE. */
+export function threadCreateEvent(input: ApiChannel | ApiThreadOptions): ApiChannel {
+	return 'guild_id' in input || 'permission_overwrites' in input ? (input as ApiChannel) : apiThread(input);
+}
+
+/** Raw `d` for THREAD_DELETE. */
+export function threadDeleteEvent(input: ApiChannel | string, options: { guildId?: string; parentId?: string } = {}): {
+	id: string;
+	guild_id?: string;
+	parent_id?: string;
+} {
+	return typeof input === 'string'
+		? { id: input, ...opt('guild_id', options.guildId), ...opt('parent_id', options.parentId) }
+		: { id: input.id, ...opt('guild_id', input.guild_id ?? options.guildId), ...opt('parent_id', input.parent_id) };
+}
+
+/** Raw `d` for VOICE_STATE_UPDATE. */
+export function voiceStateUpdateEvent(
+	input: ApiVoiceState | ApiVoiceStateOptions,
+	options: { guildId?: string } = {},
+): ApiVoiceState & { guild_id?: string } {
+	const voiceState = 'user_id' in input ? input : apiVoiceState(input);
+	return { ...voiceState, ...opt('guild_id', voiceState.guild_id ?? options.guildId) };
+}
+
+export interface MessageReactionEventInput {
+	channelId: string;
+	messageId: string;
+	emoji: string;
+	userId?: string;
+	guildId?: string;
+}
+
+/** Raw `d` for MESSAGE_REACTION_REMOVE. */
+export function messageReactionRemoveEvent(input: Required<Pick<MessageReactionEventInput, 'userId'>> & MessageReactionEventInput): {
+	user_id: string;
+	channel_id: string;
+	message_id: string;
+	guild_id?: string;
+	emoji: ReturnType<typeof emojiPayload>;
+} {
+	return {
+		user_id: input.userId,
+		channel_id: input.channelId,
+		message_id: input.messageId,
+		...opt('guild_id', input.guildId),
+		emoji: emojiPayload(input.emoji),
+	};
+}
+
+/** Raw `d` for MESSAGE_REACTION_REMOVE_ALL. */
+export function messageReactionRemoveAllEvent(
+	input: Omit<MessageReactionEventInput, 'emoji' | 'userId'>,
+): {
+	channel_id: string;
+	message_id: string;
+	guild_id?: string;
+} {
+	return {
+		channel_id: input.channelId,
+		message_id: input.messageId,
+		...opt('guild_id', input.guildId),
+	};
+}
+
+/** Raw `d` for MESSAGE_REACTION_REMOVE_EMOJI. */
+export function messageReactionRemoveEmojiEvent(
+	input: Omit<MessageReactionEventInput, 'userId'>,
+): {
+	channel_id: string;
+	message_id: string;
+	guild_id?: string;
+	emoji: ReturnType<typeof emojiPayload>;
+} {
+	return {
+		channel_id: input.channelId,
+		message_id: input.messageId,
+		...opt('guild_id', input.guildId),
+		emoji: emojiPayload(input.emoji),
+	};
+}
+
 export interface ApiMessageOptions {
 	id?: string;
 	channelId?: string;
@@ -757,7 +889,7 @@ export interface ApiMessage {
 	author: ApiUser;
 	content: string;
 	timestamp: string;
-	edited_timestamp: null;
+	edited_timestamp: string | null;
 	tts: boolean;
 	mention_everyone: boolean;
 	mentions: unknown[];
@@ -830,8 +962,13 @@ export interface ApiPollOptions {
 	question?: ApiPollMedia | string;
 	answers?: (ApiPollMedia | string)[];
 	expiry?: string;
+	duration?: number;
 	allowMultiselect?: boolean;
 	layoutType?: number;
+}
+
+function timestampAfterHours(hours: number): string {
+	return new Date(Date.parse(mockTimestamp()) + hours * 60 * 60 * 1000).toISOString();
 }
 
 export function apiPoll(options: ApiPollOptions = {}): ApiPoll {
@@ -846,7 +983,7 @@ export function apiPoll(options: ApiPollOptions = {}): ApiPoll {
 	return {
 		question,
 		answers,
-		expiry: options.expiry ?? mockTimestamp(),
+		expiry: options.expiry ?? (options.duration === undefined ? mockTimestamp() : timestampAfterHours(options.duration)),
 		allow_multiselect: options.allowMultiselect ?? false,
 		layout_type: options.layoutType ?? 1,
 		results: {

@@ -59,6 +59,40 @@ describe('fidelity fixes', () => {
 		await bot.close();
 	});
 
+	test('editing a stored message updates edited_timestamp and recalculates mentions', async () => {
+		const botId = 'edit-fidelity-bot';
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'edit-mention-guild' });
+		const channel = world.registerChannel(guild.id, { id: 'edit-mention-chan' });
+		const mentioned = world.registerUser({ id: '789', username: 'new-mentioned' });
+		world.registerMessage(channel.id, {
+			id: 'edit-mention-msg',
+			author: apiUser({ id: botId, bot: true }),
+			content: '<@123> and <@&456>',
+		});
+
+		const bot = await createMockBot({ botId, world });
+		expect(bot.world.rawMessage(channel.id, 'edit-mention-msg')?.edited_timestamp).toBeNull();
+
+		await bot.rest.request('PATCH', `/channels/${channel.id}/messages/edit-mention-msg`, {
+			body: {
+				content: '<@789> and @everyone',
+				allowed_mentions: { parse: ['users', 'everyone'] },
+			},
+		});
+
+		const raw = bot.world.rawMessage(channel.id, 'edit-mention-msg');
+		const mentions = raw?.mentions as { id: string; username: string }[] | undefined;
+		expect(raw?.edited_timestamp).toEqual(expect.any(String));
+		expect(Date.parse(raw?.edited_timestamp ?? '')).toBeGreaterThan(Date.parse(raw?.timestamp ?? ''));
+		expect(raw?.content).toBe('<@789> and @everyone');
+		expect(mentions?.map(user => user.id)).toEqual(['789']);
+		expect(mentions?.[0]?.username).toBe(mentioned.username);
+		expect(raw?.mention_roles).toEqual([]);
+		expect(raw?.mention_everyone).toBe(true);
+		await bot.close();
+	});
+
 	test('S14a: component source message is hydrated from state, not an empty synthetic', async () => {
 		const seenComponents: unknown[][] = [];
 

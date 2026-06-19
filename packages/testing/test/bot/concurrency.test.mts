@@ -3,8 +3,28 @@ import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { chatInputInteraction } from '../../src/bot/interactions';
 import { Routes } from '../../src/bot/routes';
+import { mockWorld } from '../../src/bot/world';
 
 describe('concurrent dispatch isolation', () => {
+	test('creating another bot does not reset the global dispatch id allocator', async () => {
+		@Declare({ name: 'id-probe', description: 'dispatch id probe' })
+		class IdProbe extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.write({ content: 'ok' });
+			}
+		}
+
+		const firstBot = await createMockBot({ commands: [IdProbe] });
+		const first = firstBot.slash({ name: 'id-probe' });
+		const secondBot = await createMockBot({ commands: [IdProbe] });
+		const second = secondBot.slash({ name: 'id-probe' });
+
+		expect(second.dispatchId).toBeGreaterThan(first.dispatchId ?? 0);
+		await Promise.all([first, second]);
+		await firstBot.close();
+		await secondBot.close();
+	});
+
 	test('a slash and a button racing through one dedup gate are attributed to themselves', async () => {
 		const claimed = new Set<string>();
 		const verdict = (key: string): 'won' | 'already' => {
@@ -239,6 +259,31 @@ describe('concurrent dispatch isolation', () => {
 		await bot.close();
 	});
 
+	test('an out-of-band webhook action with the same token but different application id is not attributed', async () => {
+		@Declare({ name: 'token-app', description: 'Replies while a standalone webhook uses the same token' })
+		class TokenAppCommand extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.write({ content: 'reply:token-app' });
+			}
+		}
+
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'token-app-guild' });
+		const channel = world.registerChannel(guild.id, { id: 'token-app-channel' });
+		const webhook = world.registerWebhook(channel.id, { id: 'standalone-webhook', token: 'shared-token' });
+		const bot = await createMockBot({ commands: [TokenAppCommand], world });
+
+		await bot.rest.request('POST', `/webhooks/${webhook.id}/shared-token`, { body: { content: 'out-of-band' } });
+		const payload = chatInputInteraction({ name: 'token-app', channel, guildId: guild.id });
+		payload.token = 'shared-token';
+		const result = await bot.dispatchInteraction(payload);
+
+		expect(result.actions.some(action => action.route === `/webhooks/${webhook.id}/shared-token`)).toBe(false);
+		expect(result.messages.map(message => message.content)).toEqual(['reply:token-app']);
+		expect(result.followups).toHaveLength(0);
+		await bot.close();
+	});
+
 	test('explicit RecordedAction source without a message id fails instead of falling back globally', async () => {
 		class ClaimButton extends ComponentCommand {
 			componentType = 'Button' as const;
@@ -336,6 +381,52 @@ describe('concurrent dispatch isolation', () => {
 		const second = bot.clickButton('modal:second', { user, source });
 		await expect(second.untilModal()).rejects.toThrow(/already has a pending modal owned by dispatch/);
 		await first.timeoutModal();
+		await bot.close();
+	});
+
+	test('a failed untilModal wait is disposed before the same user opens a later modal', async () => {
+		@Declare({ name: 'no-modal', description: 'Completes without opening a modal' })
+		class NoModal extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.write({ content: 'no modal' });
+			}
+		}
+
+		class LaterModalButton extends ComponentCommand {
+			componentType = 'Button' as const;
+			filter(ctx: ComponentContext<'Button'>) {
+				return ctx.customId === 'modal:later';
+			}
+			async run(ctx: ComponentContext<'Button'>) {
+				await ctx.interaction.modal(new Modal().setCustomId('later').setTitle('Later').setComponents([]), {
+					waitFor: 30_000,
+				});
+			}
+		}
+
+		const bot = await createMockBot({ commands: [NoModal], components: [LaterModalButton] });
+		const user = {
+			id: 'stale-modal-user',
+			username: 'stale-modal-user',
+			global_name: null,
+			discriminator: '0',
+			avatar: null,
+			bot: false,
+		};
+		const failed = bot.slash({ name: 'no-modal', user });
+		await expect(failed.untilModal()).rejects.toThrow(/completed without opening a modal/);
+
+		await bot.rest.request('POST', '/channels/stale-modal-channel/messages', {
+			body: {
+				content: 'modal source',
+				components: [{ type: 1, components: [{ type: 2, style: 1, custom_id: 'modal:later', label: 'Later' }] }],
+			},
+		});
+		const source = bot.actions.at(-1);
+		if (!source) throw new Error('expected source message action');
+		const later = bot.clickButton('modal:later', { user, source });
+		await expect(later.untilModal()).resolves.toBeUndefined();
+		await later.timeoutModal();
 		await bot.close();
 	});
 });

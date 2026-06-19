@@ -201,4 +201,30 @@ describe('message references (replies and forwards)', () => {
 		expect(view?.snapshots[0]?.content).toBe('forward me');
 		await bot.close();
 	});
+
+	test('a missing message reference is rejected unless fail_if_not_exists is false', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'missing-ref-guild' });
+		const channel = world.registerChannel(guild.id, { id: 'missing-ref-chan' });
+		const bot = await createMockBot({ world });
+
+		await expect(
+			bot.rest.request('POST', `/channels/${channel.id}/messages`, {
+				body: {
+					content: 'bad ref',
+					message_reference: { message_id: 'ghost-msg', channel_id: channel.id },
+				},
+			}),
+		).rejects.toThrow(/referenced message does not exist/);
+
+		await expect(
+			bot.rest.request('POST', `/channels/${channel.id}/messages`, {
+				body: {
+					content: 'soft ref',
+					message_reference: { message_id: 'ghost-msg', channel_id: channel.id, fail_if_not_exists: false },
+				},
+			}),
+		).resolves.toBeDefined();
+		await bot.close();
+	});
 });

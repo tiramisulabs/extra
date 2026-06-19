@@ -5,7 +5,7 @@ import { apiUser } from '../../src/bot/payloads';
 import { mockWorld } from '../../src/bot/world';
 
 describe('components v2 surfacing', () => {
-	test('a v2 reply exposes its text displays, component types and buttons flat', async () => {
+	test('a v2 reply exposes its text displays, component types and interactive components flat', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'cv2-guild' });
 		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'cv2-actor' }) });
@@ -18,6 +18,11 @@ describe('components v2 surfacing', () => {
 					flags: MessageFlags.IsComponentsV2,
 					components: [
 						{ type: 17, components: [{ type: 10, content: 'Welcome!' }] },
+						{
+							type: 9,
+							components: [{ type: 10, content: 'Accessory section' }],
+							accessory: { type: 2, style: 1, label: 'Accessory', custom_id: 'accessory' },
+						},
 						{ type: 1, components: [{ type: 2, style: 1, label: 'Click', custom_id: 'btn' }] },
 					],
 				});
@@ -30,7 +35,11 @@ describe('components v2 surfacing', () => {
 		expect(view?.isComponentsV2).toBe(true);
 		expect(view?.textDisplays).toContain('Welcome!');
 		expect(view?.componentTypes).toEqual(expect.arrayContaining([17, 10, 1, 2]));
-		expect(view?.button('Click')).toBeDefined();
+		expect(view?.interactiveComponents.map(component => component.customId)).toEqual(
+			expect.arrayContaining(['accessory', 'btn']),
+		);
+		expect(view?.component('Accessory')).toBeDefined();
+		expect(view?.component('Click')).toBeDefined();
 		await bot.close();
 	});
 

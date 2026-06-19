@@ -1,6 +1,7 @@
 import { Command, type CommandContext, Declare } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
+import { TEST_BOT_ID } from '../../src/bot/constants';
 import { apiUser } from '../../src/bot/payloads';
 import { mockWorld } from '../../src/bot/world';
 
@@ -102,6 +103,39 @@ describe('role-assignment & bulk-ban edge enforcement', () => {
 		await bot.close();
 	});
 
+	test('unban without BanMembers is rejected before mutating bans', async () => {
+		const { world, guild } = seedRoles();
+		const botRole = world.build().roles.find(entry => entry.role.id === 'bot-role')?.role;
+		if (botRole) botRole.permissions = '0';
+		const bot = await createMockBot({ world });
+		await expect(bot.rest.request('DELETE', `/guilds/${guild.id}/bans/subject`)).rejects.toThrow(/Missing Permissions/);
+		await bot.close();
+	});
+
+	test('editRole and deleteRole reject roles at or above the bot', async () => {
+		const { world, guild, highRole } = seedRoles();
+		const bot = await createMockBot({ world });
+		await expect(
+			bot.rest.request('PATCH', `/guilds/${guild.id}/roles/${highRole.id}`, { body: { name: 'nope' } }),
+		).rejects.toThrow(/Missing Permissions/);
+		await expect(bot.rest.request('DELETE', `/guilds/${guild.id}/roles/${highRole.id}`)).rejects.toThrow(
+			/Missing Permissions/,
+		);
+		await bot.close();
+	});
+
+	test('editRole and deleteRole reject the @everyone role', async () => {
+		const { world, guild } = seedRoles();
+		const bot = await createMockBot({ world });
+		await expect(
+			bot.rest.request('PATCH', `/guilds/${guild.id}/roles/${guild.id}`, { body: { name: 'everyone' } }),
+		).rejects.toThrow(/@everyone role cannot be edited/);
+		await expect(bot.rest.request('DELETE', `/guilds/${guild.id}/roles/${guild.id}`)).rejects.toThrow(
+			/@everyone role cannot be deleted/,
+		);
+		await bot.close();
+	});
+
 	test('bulkBan is partial: bannable users banned, un-outrankable owner reported in failed_users', async () => {
 		const { world, guild, channel, actor } = seedRoles();
 		world.registerMember(guild.id, { user: apiUser({ id: 'bannable' }), roles: [] });
@@ -171,6 +205,51 @@ describe('expanded management-route enforcement (+ channel overwrites)', () => {
 		await expect(
 			bot.rest.request('POST', `/guilds/${guild.id}/emojis`, { body: { name: 'sparkle', image: '' } }),
 		).rejects.toThrow(/Missing Permissions/);
+		await bot.close();
+	});
+
+	test('thread self-join only requires viewing the thread', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'thread-self-guild' });
+		const role = world.registerRole(guild.id, {
+			id: 'thread-self-role',
+			permissions: ['ViewChannel'],
+			position: 5,
+		});
+		const parent = world.registerChannel(guild.id, { id: 'thread-self-parent' });
+		const thread = world.registerThread(parent.id, { id: 'thread-self-child' });
+		world.registerBotMember(guild.id, { roles: [role.id] });
+		const bot = await createMockBot({ world });
+
+		await expect(bot.rest.request('PUT', `/channels/${thread.id}/thread-members/@me`)).resolves.toEqual({});
+		expect(bot.world.threadMembers(thread.id)).toContain(TEST_BOT_ID);
+		await expect(bot.rest.request('PUT', `/channels/${thread.id}/thread-members/user-1`)).rejects.toThrow(
+			/Missing Permissions/,
+		);
+		await expect(bot.rest.request('DELETE', `/channels/${thread.id}/thread-members/@me`)).resolves.toEqual({});
+		expect(bot.world.threadMembers(thread.id)).not.toContain(TEST_BOT_ID);
+		await bot.close();
+	});
+
+	test('thread member writes honor the parent channel overwrites', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'thread-perm-guild' });
+		const role = world.registerRole(guild.id, {
+			id: 'thread-perm-role',
+			permissions: ['SendMessagesInThreads'],
+			position: 5,
+		});
+		const parent = world.registerChannel(guild.id, {
+			id: 'thread-parent',
+			overwrites: [{ id: role.id, type: 'role', deny: ['SendMessagesInThreads'] }],
+		});
+		const thread = world.registerThread(parent.id, { id: 'thread-child' });
+		world.registerBotMember(guild.id, { roles: [role.id] });
+		const bot = await createMockBot({ world });
+
+		await expect(bot.rest.request('PUT', `/channels/${thread.id}/thread-members/user-1`)).rejects.toThrow(
+			/Missing Permissions/,
+		);
 		await bot.close();
 	});
 });

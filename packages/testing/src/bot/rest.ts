@@ -21,7 +21,9 @@ export interface RecordedAction {
 	files?: unknown[];
 	/** Audit-log reason, when the command passed one. */
 	reason?: string;
-	/** The responder's result; undefined while an async responder is pending. */
+	/** True once the responder finished, even when the response itself is undefined. */
+	settled: boolean;
+	/** The responder's result; may legitimately be undefined after settlement. */
 	response: unknown;
 	/** The responder error; set before the original error is rethrown. */
 	error?: unknown;
@@ -154,34 +156,51 @@ export function gate(): { open: Promise<void>; release: () => void } {
 	return { open, release };
 }
 
-export type PendingAction = Omit<RecordedAction, 'response' | 'seq'>;
+export type PendingAction = Omit<RecordedAction, 'response' | 'seq' | 'settled'>;
 
 export type RouteResponder = (action: PendingAction, params: Record<string, string>) => unknown;
 
-export interface RouteMatcher {
+export type RouteParamNames<TRoute extends string> =
+	TRoute extends `${string}:${infer TParam}/${infer TRest}`
+		? TParam | RouteParamNames<`/${TRest}`>
+		: TRoute extends `${string}:${infer TParam}`
+			? TParam
+			: never;
+
+export type RouteParams<TRoute extends string> = [RouteParamNames<TRoute>] extends [never]
+	? Record<string, never>
+	: Record<RouteParamNames<TRoute>, string>;
+
+export interface RouteMatcher<TRoute extends string = string> {
 	method: HttpMethods;
-	route: string;
+	route: TRoute;
 }
 
 /** A recorded action enriched with the route params its matcher captured. */
-export type MatchedAction = RecordedAction & { params: Record<string, string> };
+export type MatchedAction<TParams extends Record<string, string> = Record<string, string>> = RecordedAction & {
+	params: TParams;
+};
 
 /**
  * {@link MatchedAction} with caller-supplied types for the request `body` and `response`, so assertions
  * off a matched call don't need a cast. The generics are erased at runtime; the library casts internally.
  */
-export type TypedMatchedAction<TBody = Record<string, unknown>, TResponse = unknown> = Omit<
-	MatchedAction,
+export type TypedMatchedAction<
+	TBody = Record<string, unknown>,
+	TResponse = unknown,
+	TParams extends Record<string, string> = Record<string, string>,
+> = Omit<
+	MatchedAction<TParams>,
 	'body' | 'response'
 > & { body?: TBody; response: TResponse };
 
 export type ActionPredicate = (action: RecordedAction) => boolean;
 export type ValuePredicate<T> = (value: T, action: RecordedAction) => boolean;
 
-export interface ActionFilter {
+export interface ActionFilter<TParams extends Record<string, string> = Record<string, string>> {
 	method?: HttpMethods;
 	route?: string | RegExp | ValuePredicate<string>;
-	params?: Record<string, string>;
+	params?: Partial<TParams>;
 	body?: Record<string, unknown> | ValuePredicate<Record<string, unknown> | undefined>;
 	query?: Record<string, unknown> | ValuePredicate<Record<string, unknown> | undefined>;
 	files?: unknown[] | ValuePredicate<unknown[] | undefined>;
@@ -190,13 +209,17 @@ export interface ActionFilter {
 	error?: Error | string | ValuePredicate<unknown>;
 }
 
-export type RouteActionFilter = Omit<ActionFilter, 'method' | 'route'>;
+export type RouteActionFilter<TParams extends Record<string, string> = Record<string, string>> = Omit<
+	ActionFilter<TParams>,
+	'method' | 'route'
+>;
 export type ActionMatcher = RouteMatcher | ActionFilter | ActionPredicate;
 
 interface Interceptor {
 	method: HttpMethods;
 	pattern: RegExp;
 	names: string[];
+	sourceRoute?: string;
 	responder: RouteResponder;
 }
 
@@ -228,6 +251,17 @@ function compileRoute(route: string): { pattern: RegExp; names: string[] } {
 		})
 		.join('/');
 	return { pattern: new RegExp(`^/${source}$`), names };
+}
+
+export function routeUrl<TRoute extends string>(matcher: RouteMatcher<TRoute>, params: RouteParams<TRoute>): `/${string}` {
+	const route = matcher.route.replace(/:([^/]+)/g, (_, name: string) => {
+		const value = (params as Record<string, string | undefined>)[name];
+		if (value === undefined) {
+			throw new TypeError(`routeUrl: missing route param "${name}" for ${matcher.method} ${matcher.route}.`);
+		}
+		return encodeURIComponent(value);
+	});
+	return route as `/${string}`;
 }
 
 /**
@@ -284,6 +318,17 @@ function matchesError(actual: unknown, expected: ActionFilter['error'], action: 
 	return matchesSubset(actual, expected);
 }
 
+function compact(value: unknown): string {
+	if (value instanceof Error) return `${value.name}: ${value.message}`;
+	try {
+		const text = JSON.stringify(value);
+		if (text === undefined) return String(value);
+		return text.length > 240 ? `${text.slice(0, 237)}...` : text;
+	} catch {
+		return String(value);
+	}
+}
+
 /** Single source for the route-filter keys; `satisfies` makes a new RouteActionFilter field a compile error until listed. */
 const ROUTE_FILTER_KEYS = {
 	params: true,
@@ -310,7 +355,9 @@ function isRouteMatcherOnly(value: ActionMatcher): value is RouteMatcher {
 	);
 }
 
-function normalizeRouteActionFilter(paramsOrFilter?: Record<string, string> | RouteActionFilter): RouteActionFilter {
+function normalizeRouteActionFilter(
+	paramsOrFilter?: Partial<Record<string, string>> | RouteActionFilter,
+): RouteActionFilter {
 	if (!paramsOrFilter) return {};
 	return hasRouteFilterKeys(paramsOrFilter as Record<string, unknown>)
 		? (paramsOrFilter as RouteActionFilter)
@@ -367,7 +414,12 @@ export class MockApiHandler extends ApiHandler {
 		}
 		const compiled =
 			typeof routeOrResponder === 'string' ? compileRoute(routeOrResponder) : { pattern: routeOrResponder, names: [] };
-		const interceptor: Interceptor = { method: methodOrMatcher, ...compiled, responder };
+		const interceptor: Interceptor = {
+			method: methodOrMatcher,
+			...compiled,
+			...(typeof routeOrResponder === 'string' ? { sourceRoute: routeOrResponder } : {}),
+			responder,
+		};
 		this.interceptors.unshift(interceptor);
 		return () => {
 			const index = this.interceptors.indexOf(interceptor);
@@ -427,6 +479,12 @@ export class MockApiHandler extends ApiHandler {
 		this.interceptors = [...this.defaultInterceptors];
 	}
 
+	hasInterceptor(matcher: RouteMatcher): boolean {
+		return this.interceptors.some(
+			interceptor => interceptor.method === matcher.method && interceptor.sourceRoute === matcher.route,
+		);
+	}
+
 	clearActions(): void {
 		this.actions.length = 0;
 	}
@@ -441,10 +499,10 @@ export class MockApiHandler extends ApiHandler {
 		this.gates = [];
 	}
 
-	private matchParams(
-		matcher: RouteMatcher,
+	matchRouteParams<TRoute extends string>(
+		matcher: RouteMatcher<TRoute>,
 		action: Pick<RecordedAction, 'method' | 'route'>,
-	): Record<string, string> | undefined {
+	): RouteParams<TRoute> | undefined {
 		if (matcher.method !== action.method) return undefined;
 		let compiled = this.routeCache.get(matcher.route);
 		if (!compiled) {
@@ -458,11 +516,11 @@ export class MockApiHandler extends ApiHandler {
 		names.forEach((name, index) => {
 			params[name] = match[index + 1];
 		});
-		return params;
+		return params as RouteParams<TRoute>;
 	}
 
 	matches(matcher: RouteMatcher, action: Pick<RecordedAction, 'method' | 'route'>): boolean {
-		return this.matchParams(matcher, action) !== undefined;
+		return this.matchRouteParams(matcher, action) !== undefined;
 	}
 
 	private filterMatches(action: RecordedAction, filter: ActionFilter, params: Record<string, string>): boolean {
@@ -489,25 +547,28 @@ export class MockApiHandler extends ApiHandler {
 
 	private filterParams(action: RecordedAction, filter: ActionFilter): Record<string, string> {
 		if (typeof filter.route !== 'string' || !filter.route.includes(':')) return {};
-		return this.matchParams({ method: filter.method ?? action.method, route: filter.route }, action) ?? {};
+		return this.matchRouteParams({ method: filter.method ?? action.method, route: filter.route }, action) ?? {};
 	}
 
-	findActions<TBody = Record<string, unknown>, TResponse = unknown>(
-		matcher: RouteMatcher | ActionPredicate,
-		params?: Record<string, string>,
-	): TypedMatchedAction<TBody, TResponse>[];
-	findActions<TBody = Record<string, unknown>, TResponse = unknown>(
-		matcher: RouteMatcher,
-		filter: RouteActionFilter,
-	): TypedMatchedAction<TBody, TResponse>[];
+	findActions<TBody = Record<string, unknown>, TResponse = unknown, TRoute extends string = string>(
+		matcher: RouteMatcher<TRoute>,
+		params?: Partial<RouteParams<TRoute>>,
+	): TypedMatchedAction<TBody, TResponse, RouteParams<TRoute>>[];
+	findActions<TBody = Record<string, unknown>, TResponse = unknown, TRoute extends string = string>(
+		matcher: RouteMatcher<TRoute>,
+		filter: RouteActionFilter<RouteParams<TRoute>>,
+	): TypedMatchedAction<TBody, TResponse, RouteParams<TRoute>>[];
 	findActions<TBody = Record<string, unknown>, TResponse = unknown>(
 		matcher: ActionFilter | ActionPredicate,
 	): TypedMatchedAction<TBody, TResponse>[];
 	findActions<TBody = Record<string, unknown>, TResponse = unknown>(
 		matcher: ActionMatcher,
-		paramsOrFilter?: Record<string, string> | RouteActionFilter,
+		paramsOrFilter?: Partial<Record<string, string>> | RouteActionFilter,
 	): TypedMatchedAction<TBody, TResponse>[];
-	findActions(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction[] {
+	findActions(
+		matcher: ActionMatcher,
+		paramsOrFilter?: Partial<Record<string, string>> | RouteActionFilter,
+	): MatchedAction[] {
 		const out: MatchedAction[] = [];
 		for (const action of this.actions) {
 			if (typeof matcher === 'function') {
@@ -521,7 +582,7 @@ export class MockApiHandler extends ApiHandler {
 				continue;
 			}
 
-			const captured = this.matchParams(matcher, action);
+			const captured = this.matchRouteParams(matcher, action);
 			if (!captured) continue;
 			if (!this.filterMatches(action, normalizeRouteActionFilter(paramsOrFilter), captured)) continue;
 			out.push({ ...action, params: captured });
@@ -529,30 +590,50 @@ export class MockApiHandler extends ApiHandler {
 		return out;
 	}
 
-	findAction<TBody = Record<string, unknown>, TResponse = unknown>(
-		matcher: RouteMatcher | ActionPredicate,
-		params?: Record<string, string>,
-	): TypedMatchedAction<TBody, TResponse> | undefined;
-	findAction<TBody = Record<string, unknown>, TResponse = unknown>(
-		matcher: RouteMatcher,
-		filter: RouteActionFilter,
-	): TypedMatchedAction<TBody, TResponse> | undefined;
+	findAction<TBody = Record<string, unknown>, TResponse = unknown, TRoute extends string = string>(
+		matcher: RouteMatcher<TRoute>,
+		params?: Partial<RouteParams<TRoute>>,
+	): TypedMatchedAction<TBody, TResponse, RouteParams<TRoute>> | undefined;
+	findAction<TBody = Record<string, unknown>, TResponse = unknown, TRoute extends string = string>(
+		matcher: RouteMatcher<TRoute>,
+		filter: RouteActionFilter<RouteParams<TRoute>>,
+	): TypedMatchedAction<TBody, TResponse, RouteParams<TRoute>> | undefined;
 	findAction<TBody = Record<string, unknown>, TResponse = unknown>(
 		matcher: ActionFilter | ActionPredicate,
 	): TypedMatchedAction<TBody, TResponse> | undefined;
 	findAction<TBody = Record<string, unknown>, TResponse = unknown>(
 		matcher: ActionMatcher,
-		paramsOrFilter?: Record<string, string> | RouteActionFilter,
+		paramsOrFilter?: Partial<Record<string, string>> | RouteActionFilter,
 	): TypedMatchedAction<TBody, TResponse> | undefined;
 	findAction(
 		matcher: ActionMatcher,
-		paramsOrFilter?: Record<string, string> | RouteActionFilter,
+		paramsOrFilter?: Partial<Record<string, string>> | RouteActionFilter,
 	): MatchedAction | undefined {
 		return this.findActions(matcher, paramsOrFilter)[0];
 	}
 
+	requireAction<TBody = Record<string, unknown>, TResponse = unknown, TRoute extends string = string>(
+		matcher: RouteMatcher<TRoute>,
+		params?: Partial<RouteParams<TRoute>>,
+	): TypedMatchedAction<TBody, TResponse, RouteParams<TRoute>>;
+	requireAction<TBody = Record<string, unknown>, TResponse = unknown>(
+		matcher: ActionFilter | ActionPredicate,
+	): TypedMatchedAction<TBody, TResponse>;
+	requireAction<TBody = Record<string, unknown>, TResponse = unknown>(
+		matcher: ActionMatcher,
+		paramsOrFilter?: Partial<Record<string, string>> | RouteActionFilter,
+	): TypedMatchedAction<TBody, TResponse> {
+		const action = this.findAction(matcher, paramsOrFilter) as TypedMatchedAction<TBody, TResponse> | undefined;
+		if (action) return action;
+		throw new Error(`requireAction: no action matched ${this.describeMatcher(matcher)}. Actions seen:\n${this.actionsSeen()}`);
+	}
+
+	waitForAction<TBody = Record<string, unknown>, TResponse = unknown, TRoute extends string = string>(
+		matcher: RouteMatcher<TRoute>,
+		timeoutMs?: number,
+	): Promise<TypedMatchedAction<TBody, TResponse, RouteParams<TRoute>>>;
 	waitForAction<TBody = Record<string, unknown>, TResponse = unknown>(
-		matcher: RouteMatcher | ActionFilter,
+		matcher: ActionFilter,
 		timeoutMs?: number,
 	): Promise<TypedMatchedAction<TBody, TResponse>>;
 	waitForAction<TBody = Record<string, unknown>, TResponse = unknown>(
@@ -566,6 +647,38 @@ export class MockApiHandler extends ApiHandler {
 		return this.listenForAction(matcherOrPredicate, timeoutMs, 'settled');
 	}
 
+	routeUrl<TRoute extends string>(matcher: RouteMatcher<TRoute>, params: RouteParams<TRoute>): `/${string}` {
+		return routeUrl(matcher, params);
+	}
+
+	call<T = unknown, TRoute extends string = string>(
+		matcher: RouteMatcher<TRoute>,
+		params: RouteParams<TRoute>,
+		requestOptions: ApiRequestOptions = {},
+	): Promise<T> {
+		return this.request<T>(matcher.method, this.routeUrl(matcher, params), requestOptions);
+	}
+
+	private actionsSeen(): string {
+		if (this.actions.length === 0) return '  (none)';
+		return this.actions.map(action => `  ${this.describeAction(action)}`).join('\n');
+	}
+
+	private describeMatcher(matcher: RouteMatcher | ActionFilter | ActionPredicate): string {
+		if (typeof matcher === 'function') return '(predicate)';
+		const route = typeof matcher.route === 'string' ? matcher.route : matcher.route instanceof RegExp ? matcher.route : '*';
+		return `${matcher.method ?? '*'} ${route}`;
+	}
+
+	private describeAction(action: RecordedAction): string {
+		const parts = [`#${action.seq}`, `${action.method} ${action.route}`];
+		if (Object.keys(action.body ?? {}).length) parts.push(`body=${compact(action.body)}`);
+		if (Object.keys(action.query ?? {}).length) parts.push(`query=${compact(action.query)}`);
+		if (action.response !== undefined || action.settled) parts.push(`response=${compact(action.response)}`);
+		if (action.error !== undefined) parts.push(`error=${compact(action.error)}`);
+		return parts.join(' ');
+	}
+
 	private listenForAction(
 		matcherOrPredicate: RouteMatcher | ActionFilter | ActionPredicate,
 		timeoutMs: number,
@@ -574,7 +687,7 @@ export class MockApiHandler extends ApiHandler {
 		const enrich = (action: RecordedAction): MatchedAction => {
 			if (typeof matcherOrPredicate === 'function') return { ...action, params: {} };
 			if (isRouteMatcherOnly(matcherOrPredicate)) {
-				return { ...action, params: this.matchParams(matcherOrPredicate, action) ?? {} };
+				return { ...action, params: this.matchRouteParams(matcherOrPredicate, action) ?? {} };
 			}
 			return { ...action, params: this.filterParams(action, matcherOrPredicate) };
 		};
@@ -586,19 +699,23 @@ export class MockApiHandler extends ApiHandler {
 					: (action: RecordedAction) => this.filterMatches(action, matcherOrPredicate, {});
 
 		const existing = this.actions.find(
-			action =>
-				predicate(action) && (resolveOn === 'pending' || action.response !== undefined || action.error !== undefined),
+				action => predicate(action) && (resolveOn === 'pending' || action.settled || action.error !== undefined),
 		);
 		if (existing) return Promise.resolve(enrich(existing));
 
 		return new Promise((resolve, reject) => {
 			let listener!: ActionListener;
 			listener = {
-				timer: realSetTimeout(() => {
-					this.listeners = this.listeners.filter(entry => entry !== listener);
-					const seen = this.actions.map(action => `${action.method} ${action.route}`).join('\n  ') || '(none)';
-					reject(new Error(`waitForAction timed out after ${timeoutMs}ms. Actions seen:\n  ${seen}`));
-				}, timeoutMs),
+					timer: realSetTimeout(() => {
+						this.listeners = this.listeners.filter(entry => entry !== listener);
+						reject(
+							new Error(
+								`waitForAction timed out after ${timeoutMs}ms waiting for ${this.describeMatcher(
+									matcherOrPredicate,
+								)}. Actions seen:\n${this.actionsSeen()}`,
+							),
+						);
+					}, timeoutMs),
 				reject,
 				onAction: (action: RecordedAction, phase: NotifyPhase) => {
 					if (phase !== resolveOn) return;
@@ -716,7 +833,7 @@ export class MockApiHandler extends ApiHandler {
 			reason: requestOptions.reason,
 		};
 		const dispatchId = dispatchStore.getStore()?.dispatchId ?? 0;
-		const action: RecordedAction = { seq: this.seq++, dispatchId, ...pending, response: undefined };
+			const action: RecordedAction = { seq: this.seq++, dispatchId, ...pending, settled: false, response: undefined };
 		this.actions.push(action);
 		this.inFlight.set(dispatchId, (this.inFlight.get(dispatchId) ?? 0) + 1);
 		this.notifyListeners(action, 'pending');
@@ -736,19 +853,21 @@ export class MockApiHandler extends ApiHandler {
 			}
 
 			try {
-				const response = await this.resolveResponse(pending);
-				action.response = response;
-				if (response !== null && typeof response === 'object' && this.syntheticResponses.has(response)) {
-					action.synthetic = true;
-				}
+					const response = await this.resolveResponse(pending);
+					action.response = response;
+					action.settled = true;
+					if (response !== null && typeof response === 'object' && this.syntheticResponses.has(response)) {
+						action.synthetic = true;
+					}
 				if (this.hasRestNotification('onSuccess')) {
 					await notifier.notifySuccessRequest(method, observer.url, this.observerResponse(response), observer.request);
 				}
 				this.notifyListeners(action, 'settled');
 				return response as T;
-			} catch (error) {
-				action.error = error;
-				const statusCode = this.statusCodeFor(error);
+				} catch (error) {
+					action.error = error;
+					action.settled = true;
+					const statusCode = this.statusCodeFor(error);
 				if (statusCode === 429 && this.hasRestNotification('onRatelimit')) {
 					await notifier.notifyRatelimit(
 						this.observerResponse(this.errorBodyFor(error), statusCode),
