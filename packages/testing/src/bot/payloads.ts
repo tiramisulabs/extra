@@ -742,7 +742,11 @@ export type ApiMessageInput = ApiMessage | ApiMessageOptions;
 function resolveMessage(input: ApiMessageInput, options: { channelId?: string; guildId?: string } = {}): ApiMessage {
 	return 'channel_id' in input
 		? input
-		: apiMessage({ ...input, channelId: input.channelId ?? options.channelId, guildId: input.guildId ?? options.guildId });
+		: apiMessage({
+				...input,
+				channelId: input.channelId ?? options.channelId,
+				guildId: input.guildId ?? options.guildId,
+			});
 }
 
 /** Raw `d` for MESSAGE_CREATE. */
@@ -778,7 +782,10 @@ export function channelCreateEvent(input: ApiChannelInput): ApiChannel {
 }
 
 /** Raw `d` for CHANNEL_DELETE. */
-export function channelDeleteEvent(input: ApiChannel | string, options: { guildId?: string } = {}): {
+export function channelDeleteEvent(
+	input: ApiChannel | string,
+	options: { guildId?: string } = {},
+): {
 	id: string;
 	guild_id?: string;
 } {
@@ -793,7 +800,10 @@ export function threadCreateEvent(input: ApiChannel | ApiThreadOptions): ApiChan
 }
 
 /** Raw `d` for THREAD_DELETE. */
-export function threadDeleteEvent(input: ApiChannel | string, options: { guildId?: string; parentId?: string } = {}): {
+export function threadDeleteEvent(
+	input: ApiChannel | string,
+	options: { guildId?: string; parentId?: string } = {},
+): {
 	id: string;
 	guild_id?: string;
 	parent_id?: string;
@@ -821,7 +831,9 @@ export interface MessageReactionEventInput {
 }
 
 /** Raw `d` for MESSAGE_REACTION_REMOVE. */
-export function messageReactionRemoveEvent(input: Required<Pick<MessageReactionEventInput, 'userId'>> & MessageReactionEventInput): {
+export function messageReactionRemoveEvent(
+	input: Required<Pick<MessageReactionEventInput, 'userId'>> & MessageReactionEventInput,
+): {
 	user_id: string;
 	channel_id: string;
 	message_id: string;
@@ -838,9 +850,7 @@ export function messageReactionRemoveEvent(input: Required<Pick<MessageReactionE
 }
 
 /** Raw `d` for MESSAGE_REACTION_REMOVE_ALL. */
-export function messageReactionRemoveAllEvent(
-	input: Omit<MessageReactionEventInput, 'emoji' | 'userId'>,
-): {
+export function messageReactionRemoveAllEvent(input: Omit<MessageReactionEventInput, 'emoji' | 'userId'>): {
 	channel_id: string;
 	message_id: string;
 	guild_id?: string;
@@ -853,9 +863,7 @@ export function messageReactionRemoveAllEvent(
 }
 
 /** Raw `d` for MESSAGE_REACTION_REMOVE_EMOJI. */
-export function messageReactionRemoveEmojiEvent(
-	input: Omit<MessageReactionEventInput, 'userId'>,
-): {
+export function messageReactionRemoveEmojiEvent(input: Omit<MessageReactionEventInput, 'userId'>): {
 	channel_id: string;
 	message_id: string;
 	guild_id?: string;
@@ -983,7 +991,8 @@ export function apiPoll(options: ApiPollOptions = {}): ApiPoll {
 	return {
 		question,
 		answers,
-		expiry: options.expiry ?? (options.duration === undefined ? mockTimestamp() : timestampAfterHours(options.duration)),
+		expiry:
+			options.expiry ?? (options.duration === undefined ? mockTimestamp() : timestampAfterHours(options.duration)),
 		allow_multiselect: options.allowMultiselect ?? false,
 		layout_type: options.layoutType ?? 1,
 		results: {

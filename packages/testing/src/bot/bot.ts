@@ -1676,9 +1676,10 @@ export class MockBot {
 		let lastCount = -1;
 		let iterations = 0;
 		while (true) {
-			const count = this.rest.actions.filter(action =>
-				this.isInteractionWebhookActionFor(action, applicationId, token) ||
-				this.isInteractionCallbackActionFor(action, token, interactionId),
+			const count = this.rest.actions.filter(
+				action =>
+					this.isInteractionWebhookActionFor(action, applicationId, token) ||
+					this.isInteractionCallbackActionFor(action, token, interactionId),
 			).length;
 			const quiet = count === lastCount && !this.rest.hasPendingRequests();
 			if (quiet) return;
@@ -1719,11 +1720,7 @@ export class MockBot {
 		return false;
 	}
 
-	private isInteractionCallbackActionFor(
-		action: RecordedAction,
-		token: string,
-		interactionId?: string,
-	): boolean {
+	private isInteractionCallbackActionFor(action: RecordedAction, token: string, interactionId?: string): boolean {
 		const params = this.rest.matchRouteParams(Routes.interactionCallback, action);
 		if (!params) return false;
 		if (params.token !== token) return false;
@@ -1806,9 +1803,9 @@ export class MockBot {
 		// original-response edits) for THIS interaction's token. The latter may be emitted from a different async
 		// frame — e.g. a modal submit whose reply is written inside the opener command's resumed continuation — so
 		// the token, which is unique per interaction, is the reliable owner key for those responses.
-			const actions = this.rest.actions.filter(
-				action => action.dispatchId === dispatchId || this.isInteractionAction(action, payload),
-			);
+		const actions = this.rest.actions.filter(
+			action => action.dispatchId === dispatchId || this.isInteractionAction(action, payload),
+		);
 		if (replies.length === 0) {
 			const callback = actions.find(
 				action => action.method === 'POST' && action.route === `/interactions/${payload.id}/${payload.token}/callback`,
@@ -1857,7 +1854,9 @@ export class MockBot {
 			(matchesPayloadWebhookRoute(Routes.editOriginalResponse, action) ||
 				matchesPayloadWebhookRoute(Routes.editWebhookMessage, action));
 		const isFollowup = (action: RecordedAction) =>
-			action.method === 'POST' && FOLLOWUP_ROUTE.test(action.route) && matchesPayloadWebhookRoute(Routes.followup, action);
+			action.method === 'POST' &&
+			FOLLOWUP_ROUTE.test(action.route) &&
+			matchesPayloadWebhookRoute(Routes.followup, action);
 		const editActions = actions.filter(isWebhookMessageEdit);
 		const followupActions = actions.filter(isFollowup);
 		const messageActions = actions.filter(action => isWebhookMessageEdit(action) || isFollowup(action));

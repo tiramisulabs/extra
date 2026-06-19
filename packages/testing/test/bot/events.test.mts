@@ -253,13 +253,23 @@ describe('emit result and factories', () => {
 
 		await bot.emit(
 			'MESSAGE_REACTION_ADD',
-			messageReactionAddEvent({ channelId: channel.id, messageId: 'builder-message', userId: 'reactor', emoji: 'ok:123' }),
+			messageReactionAddEvent({
+				channelId: channel.id,
+				messageId: 'builder-message',
+				userId: 'reactor',
+				emoji: 'ok:123',
+			}),
 			{ allowNoHandler: true },
 		);
 		expect(bot.worldMessage(channel.id, 'builder-message')?.reaction('ok:123')?.users).toContain('reactor');
 		await bot.emit(
 			'MESSAGE_REACTION_REMOVE',
-			messageReactionRemoveEvent({ channelId: channel.id, messageId: 'builder-message', userId: 'reactor', emoji: 'ok:123' }),
+			messageReactionRemoveEvent({
+				channelId: channel.id,
+				messageId: 'builder-message',
+				userId: 'reactor',
+				emoji: 'ok:123',
+			}),
 			{ allowNoHandler: true },
 		);
 		expect(bot.worldMessage(channel.id, 'builder-message')?.reaction('ok:123')).toBeUndefined();

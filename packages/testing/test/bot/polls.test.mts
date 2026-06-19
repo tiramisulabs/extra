@@ -138,12 +138,12 @@ describe('polls', () => {
 		await expect(bot.rest.request('POST', `/channels/${channel.id}/polls/plain-msg/expire`)).rejects.toThrow(
 			/message has no poll/,
 		);
-		await expect(
-			bot.rest.request('GET', `/channels/${channel.id}/polls/plain-msg/answers/1`),
-		).rejects.toThrow(/message has no poll/);
-		await expect(
-			bot.rest.request('GET', `/channels/${channel.id}/polls/guard-poll-msg/answers/2`),
-		).rejects.toThrow(/unknown poll answer/);
+		await expect(bot.rest.request('GET', `/channels/${channel.id}/polls/plain-msg/answers/1`)).rejects.toThrow(
+			/message has no poll/,
+		);
+		await expect(bot.rest.request('GET', `/channels/${channel.id}/polls/guard-poll-msg/answers/2`)).rejects.toThrow(
+			/unknown poll answer/,
+		);
 		await bot.close();
 	});
 });

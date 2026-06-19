@@ -668,9 +668,7 @@ export function registerWorldDefaults(
 			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: unknown poll answer');
 		}
 		return {
-			users: hooks.state
-				.pollVoters(params.channelId, params.messageId, answerId)
-				.map(userId => resolveUser(userId)),
+			users: hooks.state.pollVoters(params.channelId, params.messageId, answerId).map(userId => resolveUser(userId)),
 		};
 	});
 

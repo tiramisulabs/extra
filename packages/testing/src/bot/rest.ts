@@ -160,12 +160,11 @@ export type PendingAction = Omit<RecordedAction, 'response' | 'seq' | 'settled'>
 
 export type RouteResponder = (action: PendingAction, params: Record<string, string>) => unknown;
 
-export type RouteParamNames<TRoute extends string> =
-	TRoute extends `${string}:${infer TParam}/${infer TRest}`
-		? TParam | RouteParamNames<`/${TRest}`>
-		: TRoute extends `${string}:${infer TParam}`
-			? TParam
-			: never;
+export type RouteParamNames<TRoute extends string> = TRoute extends `${string}:${infer TParam}/${infer TRest}`
+	? TParam | RouteParamNames<`/${TRest}`>
+	: TRoute extends `${string}:${infer TParam}`
+		? TParam
+		: never;
 
 export type RouteParams<TRoute extends string> = [RouteParamNames<TRoute>] extends [never]
 	? Record<string, never>
@@ -189,10 +188,7 @@ export type TypedMatchedAction<
 	TBody = Record<string, unknown>,
 	TResponse = unknown,
 	TParams extends Record<string, string> = Record<string, string>,
-> = Omit<
-	MatchedAction<TParams>,
-	'body' | 'response'
-> & { body?: TBody; response: TResponse };
+> = Omit<MatchedAction<TParams>, 'body' | 'response'> & { body?: TBody; response: TResponse };
 
 export type ActionPredicate = (action: RecordedAction) => boolean;
 export type ValuePredicate<T> = (value: T, action: RecordedAction) => boolean;
@@ -253,7 +249,10 @@ function compileRoute(route: string): { pattern: RegExp; names: string[] } {
 	return { pattern: new RegExp(`^/${source}$`), names };
 }
 
-export function routeUrl<TRoute extends string>(matcher: RouteMatcher<TRoute>, params: RouteParams<TRoute>): `/${string}` {
+export function routeUrl<TRoute extends string>(
+	matcher: RouteMatcher<TRoute>,
+	params: RouteParams<TRoute>,
+): `/${string}` {
 	const route = matcher.route.replace(/:([^/]+)/g, (_, name: string) => {
 		const value = (params as Record<string, string | undefined>)[name];
 		if (value === undefined) {
@@ -625,7 +624,9 @@ export class MockApiHandler extends ApiHandler {
 	): TypedMatchedAction<TBody, TResponse> {
 		const action = this.findAction(matcher, paramsOrFilter) as TypedMatchedAction<TBody, TResponse> | undefined;
 		if (action) return action;
-		throw new Error(`requireAction: no action matched ${this.describeMatcher(matcher)}. Actions seen:\n${this.actionsSeen()}`);
+		throw new Error(
+			`requireAction: no action matched ${this.describeMatcher(matcher)}. Actions seen:\n${this.actionsSeen()}`,
+		);
 	}
 
 	waitForAction<TBody = Record<string, unknown>, TResponse = unknown, TRoute extends string = string>(
@@ -666,7 +667,8 @@ export class MockApiHandler extends ApiHandler {
 
 	private describeMatcher(matcher: RouteMatcher | ActionFilter | ActionPredicate): string {
 		if (typeof matcher === 'function') return '(predicate)';
-		const route = typeof matcher.route === 'string' ? matcher.route : matcher.route instanceof RegExp ? matcher.route : '*';
+		const route =
+			typeof matcher.route === 'string' ? matcher.route : matcher.route instanceof RegExp ? matcher.route : '*';
 		return `${matcher.method ?? '*'} ${route}`;
 	}
 
@@ -699,23 +701,23 @@ export class MockApiHandler extends ApiHandler {
 					: (action: RecordedAction) => this.filterMatches(action, matcherOrPredicate, {});
 
 		const existing = this.actions.find(
-				action => predicate(action) && (resolveOn === 'pending' || action.settled || action.error !== undefined),
+			action => predicate(action) && (resolveOn === 'pending' || action.settled || action.error !== undefined),
 		);
 		if (existing) return Promise.resolve(enrich(existing));
 
 		return new Promise((resolve, reject) => {
 			let listener!: ActionListener;
 			listener = {
-					timer: realSetTimeout(() => {
-						this.listeners = this.listeners.filter(entry => entry !== listener);
-						reject(
-							new Error(
-								`waitForAction timed out after ${timeoutMs}ms waiting for ${this.describeMatcher(
-									matcherOrPredicate,
-								)}. Actions seen:\n${this.actionsSeen()}`,
-							),
-						);
-					}, timeoutMs),
+				timer: realSetTimeout(() => {
+					this.listeners = this.listeners.filter(entry => entry !== listener);
+					reject(
+						new Error(
+							`waitForAction timed out after ${timeoutMs}ms waiting for ${this.describeMatcher(
+								matcherOrPredicate,
+							)}. Actions seen:\n${this.actionsSeen()}`,
+						),
+					);
+				}, timeoutMs),
 				reject,
 				onAction: (action: RecordedAction, phase: NotifyPhase) => {
 					if (phase !== resolveOn) return;
@@ -833,7 +835,7 @@ export class MockApiHandler extends ApiHandler {
 			reason: requestOptions.reason,
 		};
 		const dispatchId = dispatchStore.getStore()?.dispatchId ?? 0;
-			const action: RecordedAction = { seq: this.seq++, dispatchId, ...pending, settled: false, response: undefined };
+		const action: RecordedAction = { seq: this.seq++, dispatchId, ...pending, settled: false, response: undefined };
 		this.actions.push(action);
 		this.inFlight.set(dispatchId, (this.inFlight.get(dispatchId) ?? 0) + 1);
 		this.notifyListeners(action, 'pending');
@@ -853,21 +855,21 @@ export class MockApiHandler extends ApiHandler {
 			}
 
 			try {
-					const response = await this.resolveResponse(pending);
-					action.response = response;
-					action.settled = true;
-					if (response !== null && typeof response === 'object' && this.syntheticResponses.has(response)) {
-						action.synthetic = true;
-					}
+				const response = await this.resolveResponse(pending);
+				action.response = response;
+				action.settled = true;
+				if (response !== null && typeof response === 'object' && this.syntheticResponses.has(response)) {
+					action.synthetic = true;
+				}
 				if (this.hasRestNotification('onSuccess')) {
 					await notifier.notifySuccessRequest(method, observer.url, this.observerResponse(response), observer.request);
 				}
 				this.notifyListeners(action, 'settled');
 				return response as T;
-				} catch (error) {
-					action.error = error;
-					action.settled = true;
-					const statusCode = this.statusCodeFor(error);
+			} catch (error) {
+				action.error = error;
+				action.settled = true;
+				const statusCode = this.statusCodeFor(error);
 				if (statusCode === 429 && this.hasRestNotification('onRatelimit')) {
 					await notifier.notifyRatelimit(
 						this.observerResponse(this.errorBodyFor(error), statusCode),

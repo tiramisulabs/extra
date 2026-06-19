@@ -42,11 +42,9 @@ describe('seeded world data reaches seyfert cache reads', () => {
 				seen.emojis = (await ctx.client.cache.emojis?.values(guild.id))?.map(emoji => emoji.name);
 				seen.stickers = (await ctx.client.cache.stickers?.values(guild.id))?.map(sticker => sticker.name);
 				seen.overwrites = await ctx.client.cache.overwrites?.raw(channel.id);
-				seen.stageTopic = (await cacheGet<{ topic?: string }>(
-					ctx.client.cache.stageInstances,
-					stageChannel.id,
-					guild.id,
-				))?.topic;
+				seen.stageTopic = (
+					await cacheGet<{ topic?: string }>(ctx.client.cache.stageInstances, stageChannel.id, guild.id)
+				)?.topic;
 				await ctx.write({ content: 'ok' });
 			}
 		}
@@ -96,15 +94,27 @@ describe('seeded world data reaches seyfert cache reads', () => {
 		const stageChannel = world.registerChannel(guild.id, { id: 'entity-cache-stage', type: 13 });
 		const bot = await createMockBot({ world });
 
-		const channel = (await bot.rest.call(Routes.createChannel, { guildId: guild.id }, {
-			body: { name: 'live-channel' },
-		})) as { id: string; name: string };
-		const role = (await bot.rest.call(Routes.createRole, { guildId: guild.id }, {
-			body: { name: 'live-role' },
-		})) as { id: string; name: string };
-		const stage = (await bot.rest.call(Routes.createStageInstance, {}, {
-			body: { channel_id: stageChannel.id, topic: 'Live Stage' },
-		})) as { channel_id: string; topic: string };
+		const channel = (await bot.rest.call(
+			Routes.createChannel,
+			{ guildId: guild.id },
+			{
+				body: { name: 'live-channel' },
+			},
+		)) as { id: string; name: string };
+		const role = (await bot.rest.call(
+			Routes.createRole,
+			{ guildId: guild.id },
+			{
+				body: { name: 'live-role' },
+			},
+		)) as { id: string; name: string };
+		const stage = (await bot.rest.call(
+			Routes.createStageInstance,
+			{},
+			{
+				body: { channel_id: stageChannel.id, topic: 'Live Stage' },
+			},
+		)) as { channel_id: string; topic: string };
 
 		const channels = await cacheValues<{ id: string; name: string }>(bot.client.cache.channels, guild.id);
 		const roles = await cacheValues<{ id: string; name: string }>(bot.client.cache.roles, guild.id);
