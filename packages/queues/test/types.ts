@@ -5,8 +5,7 @@ import {
 	definePlugins,
 	type HttpClient,
 	type PluginUsingClient,
-	type Register,
-	type RegisterPlugins,
+	type SeyfertRegistry,
 	type UsingClient,
 	type WorkerClient,
 } from 'seyfert';
@@ -53,10 +52,12 @@ const queuesPlugin = queues({ driver: memory() });
 const plugins = definePlugins(queuesPlugin);
 
 declare module 'seyfert' {
-	interface Register extends RegisterPlugins<typeof plugins> {}
+	interface SeyfertRegistry {
+		plugins: typeof plugins;
+	}
 }
 
-expectType<Register>({ plugins });
+expectType<Pick<SeyfertRegistry, 'plugins'>>({ plugins });
 expectType<QueuesRegistry>(commandContext.queues);
 expectType<QueuesRegistry | undefined>(concreteClient.queues);
 expectType<QueuesRegistry | undefined>(httpClient.queues);
