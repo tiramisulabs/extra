@@ -7,9 +7,8 @@ import type {
 	HttpClient,
 	PluginMiddlewaresMapOf,
 	PluginUsingClient,
-	Register,
 	RegisteredMiddlewares,
-	RegisterPlugins,
+	RegisteredPlugins,
 	ResolvedRegisteredMiddlewares,
 	SubCommand,
 	UsingClient,
@@ -47,11 +46,14 @@ const pluginsWithDisabledMiddleware = definePlugins(pluginWithDisabledMiddleware
 const pluginsWithConfiguredMiddleware = definePlugins(pluginWithConfiguredMiddleware);
 
 declare module 'seyfert' {
-	interface Register extends RegisterPlugins<typeof plugins> {}
-	interface RegisteredMiddlewares extends CooldownMiddlewares<'commandCooldown'> {}
+	interface SeyfertRegistry {
+		plugins: typeof plugins;
+		client: Client;
+		middlewares: CooldownMiddlewares<'commandCooldown'>;
+	}
 }
 
-expectType<Register>({ plugins });
+expectType<typeof plugins>({} as RegisteredPlugins);
 expectType<CooldownManager>(context.cooldown);
 expectType<CooldownManager | undefined>(client.cooldown);
 expectType<CooldownManager | undefined>(httpClient.cooldown);

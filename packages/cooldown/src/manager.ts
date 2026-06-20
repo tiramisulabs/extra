@@ -162,7 +162,7 @@ export class CooldownManager {
 	attach(client: BaseClient): this {
 		this._client = client;
 		const target = client as BaseClient & { cooldown?: CooldownManager };
-		if (target.cooldown !== this) target.cooldown = this;
+		if (!target.cooldown) target.cooldown = this;
 		this._resource = new CooldownResource(client.cache, client as unknown as UsingClient);
 		return this;
 	}
@@ -554,7 +554,7 @@ export function cooldown<const TOptions extends CooldownPluginOptions = {}>(
 		},
 		register(api) {
 			if (middleware) {
-				api.middlewares.add(
+				(api.middlewares.add as (name: string, middleware: CooldownMiddleware, opts?: { global?: boolean }) => void)(
 					middleware.name,
 					middleware.run,
 					middleware.global === undefined ? undefined : { global: middleware.global },

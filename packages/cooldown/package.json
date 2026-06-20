@@ -32,7 +32,7 @@
 	},
 	"devDependencies": {
 		"@types/node": "^25.0.10",
-		"seyfert": "github:tiramisulabs/seyfert#socram/plugin-contract-polish-spike",
+		"seyfert": "dev",
 		"typescript": "^5.9.3"
 	},
 	"peerDependencies": {
