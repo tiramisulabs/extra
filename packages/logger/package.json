@@ -35,7 +35,7 @@
 		"@slipher/types": "workspace:*",
 		"@types/node": "^25.0.10",
 		"evlog": "^2.18.1",
-		"seyfert": "github:tiramisulabs/seyfert#socram/plugin-contract-polish-spike",
+		"seyfert": "github:tiramisulabs/seyfert#main",
 		"typescript": "^5.9.3"
 	},
 	"peerDependencies": {
