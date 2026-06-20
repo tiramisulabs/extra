@@ -57,7 +57,7 @@
 	"devDependencies": {
 		"@slipher/types": "workspace:*",
 		"@types/node": "^25.0.10",
-		"seyfert": "github:tiramisulabs/seyfert#socram/plugin-contract-polish-spike",
+		"seyfert": "github:tiramisulabs/seyfert#main",
 		"typescript": "^5.9.3"
 	}
 }

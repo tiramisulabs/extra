@@ -219,7 +219,7 @@ export function scheduler(options: CreateSchedulerOptions): SchedulerPlugin {
 			scheduler: () => registry,
 		},
 		async setup(client) {
-			if (client.scheduler !== registry) client.scheduler = registry;
+			if (!client.scheduler) client.scheduler = registry;
 
 			if (client.logger) {
 				registry.setLogger(client.logger);

@@ -5,8 +5,7 @@ import {
 	definePlugins,
 	type HttpClient,
 	type PluginUsingClient,
-	type Register,
-	type RegisterPlugins,
+	type SeyfertRegistry,
 	type UsingClient,
 	type WorkerClient,
 } from 'seyfert';
@@ -23,10 +22,13 @@ const schedulerPlugin = scheduler({ driver: memory() });
 const plugins = definePlugins(schedulerPlugin);
 
 declare module 'seyfert' {
-	interface Register extends RegisterPlugins<typeof plugins> {}
+	interface SeyfertRegistry {
+		plugins: typeof plugins;
+		client: Client;
+	}
 }
 
-expectType<Register>({ plugins });
+expectType<SeyfertRegistry>({ plugins, client });
 expectType<SchedulerRegistry>(context.scheduler);
 expectType<SchedulerRegistry | undefined>(client.scheduler);
 expectType<SchedulerRegistry | undefined>(httpClient.scheduler);
