@@ -40,8 +40,8 @@ importers:
         specifier: ^25.0.10
         version: 25.0.10
       seyfert:
-        specifier: dev
-        version: 4.3.1-dev-27804544209.0
+        specifier: github:tiramisulabs/seyfert#main
+        version: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/abce1db08b9d63eb24b28313037359d365a2e8bc
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -691,8 +691,9 @@ packages:
   seyfert@4.1.0:
     resolution: {integrity: sha512-SIv40+9oOT8gNXIbtaQhxZWN/PuVP1vF2yU+ZM2XkmRwirqmonATHlNF2o/pCGsX9hudNuD59HJfHEixOmESlw==}
 
-  seyfert@4.3.1-dev-27804544209.0:
-    resolution: {integrity: sha512-MzZ6eDSKz9avkIdOQU50gIxK6agWXEC4U2O+u4JrtvYAUa9UgY3/qAFlmhYqnXO/txxuAMyHQ0lr9GOzcGM1ZA==}
+  seyfert@https://codeload.github.com/tiramisulabs/seyfert/tar.gz/abce1db08b9d63eb24b28313037359d365a2e8bc:
+    resolution: {tarball: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/abce1db08b9d63eb24b28313037359d365a2e8bc}
+    version: 5.0.0
 
   siginfo@2.0.0:
     resolution: {integrity: sha512-ybx0WO1/8bSBLEWXZvEd7gMW3Sn3JFlW3TvX1nREbDLRNQNaeNN8WK0meBwPdAaOI7TtRRRJn/Es1zhrrCHu7g==}
@@ -1266,7 +1267,7 @@ snapshots:
 
   seyfert@4.1.0: {}
 
-  seyfert@4.3.1-dev-27804544209.0: {}
+  seyfert@https://codeload.github.com/tiramisulabs/seyfert/tar.gz/abce1db08b9d63eb24b28313037359d365a2e8bc: {}
 
   siginfo@2.0.0: {}
 
