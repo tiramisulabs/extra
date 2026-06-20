@@ -187,13 +187,13 @@ describe('autocomplete and context menus', () => {
 			ratio: createNumberOption({
 				description: 'Decimal ratio',
 				autocomplete: async interaction => {
-					await interaction.respond([{ name: 'ratio', value: interaction.getInput() }]);
+					await interaction.respond([{ name: 'ratio', value: Number(interaction.getInput()) }]);
 				},
 			}),
 			count: createIntegerOption({
 				description: 'Whole count',
 				autocomplete: async interaction => {
-					await interaction.respond([{ name: 'count', value: interaction.getInput() }]);
+					await interaction.respond([{ name: 'count', value: Number(interaction.getInput()) }]);
 				},
 			}),
 		};

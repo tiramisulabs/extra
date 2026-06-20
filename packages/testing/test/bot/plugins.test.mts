@@ -129,17 +129,17 @@ describe('plugins', () => {
 		const plugin = createPlugin({
 			name: 'slipher-startup-hooks',
 			register(api) {
-				api.hooks.tap('plugins:ready', client => {
+				api.hooks.on('plugins:ready', client => {
 					readyClients.push(client);
 					calls.push('plugins:ready');
 				});
-				api.hooks.tap('commands:beforeLoad', (_client, dir) => {
+				api.hooks.on('commands:beforeLoad', (_client, dir) => {
 					calls.push(`commands:beforeLoad:${dir ?? '<none>'}`);
 				});
-				api.hooks.tap('commands:afterLoad', metadata => {
+				api.hooks.on('commands:afterLoad', metadata => {
 					calls.push(`commands:afterLoad:${metadata.total}`);
 				});
-				api.hooks.tap('components:afterLoad', metadata => {
+				api.hooks.on('components:afterLoad', metadata => {
 					calls.push(`components:afterLoad:${metadata.total}`);
 				});
 			},
