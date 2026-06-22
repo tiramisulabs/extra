@@ -69,6 +69,8 @@ export interface MockCommandContext<TOptions extends Record<string, unknown> = R
 	deferReply(): Promise<void>;
 	clearResponses(): void;
 	lastResponse(): MockContextResponse | undefined;
+	/** Run a command/component/modal's `run()` against this mock (skips the pipeline; the cast lives here, not in your test). */
+	run(command: { run(context: never): unknown }): Promise<unknown>;
 }
 
 export interface MockInteractionContextOptions {
@@ -124,6 +126,8 @@ export interface MockInteractionContextBase {
 	deferReply(): Promise<void>;
 	clearResponses(): void;
 	lastResponse(): MockContextResponse | undefined;
+	/** Run a command/component/modal's `run()` against this mock (skips the pipeline; the cast lives here, not in your test). */
+	run(command: { run(context: never): unknown }): Promise<unknown>;
 }
 
 export interface MockComponentContext extends MockInteractionContextBase {
@@ -209,6 +213,9 @@ function mockInteractionBase(options: MockInteractionContextOptions = {}): MockI
 		lastResponse() {
 			return responses.at(-1);
 		},
+		async run(command) {
+			return command.run(this as never);
+		},
 	};
 }
 
@@ -273,6 +280,9 @@ export function mockCommandContext<TOptions extends Record<string, unknown> = Re
 		},
 		lastResponse() {
 			return responses.at(-1);
+		},
+		async run(command) {
+			return command.run(this as never);
 		},
 	};
 }

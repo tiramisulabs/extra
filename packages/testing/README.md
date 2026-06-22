@@ -26,23 +26,27 @@ pnpm add -D @slipher/testing
 ```ts
 import { mockCommandContext, mockUser } from '@slipher/testing';
 import { expect, test } from 'vitest';
+import BanCommand from './commands/ban';
 
-test('command replies', async () => {
-	const ctx = mockCommandContext<{ user: ReturnType<typeof mockUser> }>({
+test('replies after banning', async () => {
+	// A stand-in context carrying just the fields the command touches.
+	// `TOptions` is inferred from `options` — no generic annotation needed.
+	const ctx = mockCommandContext({
 		commandName: 'ban',
 		options: { user: mockUser({ id: '123' }) },
 	});
 
-	// MockCommandContext models the Seyfert fields most command tests touch, but
-	// it is intentionally not a full CommandContext implementation.
-	const run = async (context: typeof ctx) => {
-		await context.write({ content: `Banned ${context.options.user.id}` });
-	};
-	await run(ctx);
+	// Run the real command body against the mock — no cast at the call site.
+	// MockCommandContext is intentionally a partial, not a full CommandContext;
+	// ctx.run() owns that one cast internally so your test doesn't.
+	await ctx.run(new BanCommand());
 
-	expect(ctx.responses.at(-1)).toMatchObject({ content: expect.stringContaining('Banned') });
+	// Every reply lands in ctx.responses, so you assert without spies.
+	expect(ctx.lastResponse()).toMatchObject({ content: expect.stringContaining('Banned') });
 });
 ```
+
+> `ctx.run()` skips the whole Seyfert pipeline (middlewares, option parsing) and calls `run()` directly — the lightweight path for unit-testing a command body. When you want the **real** `CommandContext` with parsing and middlewares, use the [mock bot](#mock-bot) instead, which never needs a cast.
 
 `mockCommandContext()` includes:
 
@@ -130,6 +134,26 @@ import { resetMockIds } from '@slipher/testing';
 
 beforeEach(() => resetMockIds());
 ```
+
+### Time-relative ids
+
+Discord encodes a message's creation time in its snowflake, so logic like a `clear` command ("delete messages newer than two weeks") reads that timestamp back. `mockId()` is anchored to a fixed base, so it always looks old. To mint an id created at a specific time, pass `at` (absolute) or `age` (relative to now), and decode with `timestampFrom`/`idAge` — no bit-twiddling:
+
+```ts
+import { mockId, idAge, timestampFrom } from '@slipher/testing';
+
+const recent = mockId({ age: '13d' });               // created 13 days ago
+const stale = mockId({ age: '15d' });                // created 15 days ago
+const exact = mockId({ at: new Date('2024-03-01') }); // absolute created-at
+
+idAge(recent) < 14 * 24 * 60 * 60 * 1000;            // true — ms since creation
+timestampFrom(exact);                                 // 1709251200000 (epoch ms)
+```
+
+`age` uses Slipher's duration format (`'30m'`, `'12h'`, `'7d'` — same as queues/scheduler; **no weeks**, so write `'14d'` not `'2w'`). Two notes:
+
+- These ids read the wall clock, so they are **not reproducible** across runs — don't snapshot them, and `resetMockIds()` doesn't make them stable.
+- For "newer/older than N" assertions, **avoid the exact boundary** (`'13d'`/`'15d'`, not `'14d'`): your test's clock and the command's clock differ by a few ms, so the boundary is a coin flip.
 
 ## Mock bot
 

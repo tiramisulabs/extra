@@ -6,12 +6,15 @@ import {
 	mockCommandContext,
 	mockComponentContext,
 	mockGuild,
+	mockId,
 	mockMember,
 	mockModalContext,
 	mockQueues,
 	mockScheduler,
 	mockUser,
+	idAge,
 	resetMockIds,
+	timestampFrom,
 	userOption,
 } from '../src';
 
@@ -78,6 +81,42 @@ describe('entity factories', () => {
 		resetMockIds(' 42 ');
 
 		assert.equal(mockUser().id, '661720242761760810');
+	});
+});
+
+describe('time-aware mock ids', () => {
+	test('mockId({ at }) round-trips through timestampFrom', () => {
+		const at = new Date('2024-03-01T12:00:00.000Z');
+		const id = mockId({ at });
+
+		assert.equal(timestampFrom(id), at.getTime());
+	});
+
+	test('mockId({ age }) encodes a creation time that many ms ago', () => {
+		const id = mockId({ age: '13d' });
+		const thirteenDays = 13 * 24 * 60 * 60 * 1000;
+
+		// within a generous window: age reads Date.now() at call + decode
+		assert.ok(idAge(id) >= thirteenDays - 2000);
+		assert.ok(idAge(id) <= thirteenDays + 2000);
+	});
+
+	test('time-pinned ids do not disturb the deterministic counter', () => {
+		resetMockIds(42);
+		mockId({ age: '7d' });
+		mockId({ at: new Date('2024-01-01T00:00:00.000Z') });
+
+		// plain mockId() is still byte-identical to seq 42
+		assert.equal(mockUser().id, '661720242761760810');
+	});
+
+	test('ids pinned to the same instant stay distinct', () => {
+		const at = new Date('2024-01-01T00:00:00.000Z');
+		assert.notEqual(mockId({ at }), mockId({ at }));
+	});
+
+	test('mockId({ at }) rejects an unparseable date string', () => {
+		assert.throws(() => mockId({ at: 'not-a-date' }), TypeError);
 	});
 });
 
@@ -167,6 +206,30 @@ describe('mockCommandContext', () => {
 		assert.deepEqual(ctx.logger.entries.at(-1), { level: 'info', args: ['through-client'] });
 		assert.deepEqual(ctx.queues.get('welcome').jobs.at(-1)?.payload, { userId: ctx.author.id });
 		assert.equal(ctx.scheduler.tasks.at(-1)?.name, 'reminder');
+	});
+
+	test('ctx.run() executes a command body against the mock without a call-site cast', async () => {
+		class BanCommand {
+			async run(context: { options: { user: { id: string } }; editOrReply(r: { content: string }): unknown }) {
+				await context.editOrReply({ content: `Banned ${context.options.user.id}` });
+			}
+		}
+
+		const ctx = mockCommandContext({ commandName: 'ban', options: { user: { id: '123' } } });
+		await ctx.run(new BanCommand());
+
+		expect(ctx.lastResponse()).toMatchObject({ content: 'Banned 123' });
+	});
+
+	test('ctx.run() surfaces errors thrown by the command body', async () => {
+		class BoomCommand {
+			async run() {
+				throw new Error('boom');
+			}
+		}
+
+		const ctx = mockCommandContext();
+		await expect(ctx.run(new BoomCommand())).rejects.toThrow('boom');
 	});
 });
 
