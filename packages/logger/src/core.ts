@@ -30,13 +30,10 @@ export interface LoggerOptions {
 	renderer?: LoggerAdapter;
 	/** Structured sinks (evlog/pino/file). They ship the entry; they don't own the console. */
 	transports?: readonly LoggerAdapter[];
-	/** @internal Pre-resolved adapter list, used by `child()`. */
-	adapters?: readonly LoggerAdapter[];
 	now?: () => Date;
 }
 
 function resolveAdapters(options: LoggerOptions): readonly LoggerAdapter[] {
-	if (options.adapters) return options.adapters;
 	return [options.renderer ?? new ConsoleLoggerAdapter(), ...(options.transports ?? [])];
 }
 
@@ -46,6 +43,35 @@ export interface WideEventEmitOptions {
 	message?: string;
 	data?: LogData;
 	error?: unknown;
+}
+
+export interface WideEventOptions {
+	/** @internal Warn (dev only) if this event is enriched via add() but never emitted. */
+	warnIfUnemitted?: boolean;
+}
+
+// Dev-only safety net for the add()-without-emit() footgun (e.g. useLogger() called
+// outside an interaction scope). The registry fires when an enriched-but-unemitted event
+// is garbage-collected — zero false positives, no cost in production.
+const unemittedEventRegistry =
+	typeof FinalizationRegistry === 'undefined'
+		? undefined
+		: new FinalizationRegistry<string>(callsite => {
+				process.emitWarning(
+					'A wide event was enriched with .add() but never .emit()-ed, so it was discarded.\n' +
+						'This usually means useLogger() ran outside an interaction scope (a setTimeout, event ' +
+						'listener, or queue job, where AsyncLocalStorage does not propagate). Call .emit() ' +
+						'yourself, or wrap the work in withLoggerScope() so it emits automatically.\n' +
+						`Enriched at:\n${callsite}`,
+					{ type: 'SlipherLoggerWarning' },
+				);
+			});
+
+function captureCallsite(): string {
+	const stack = new Error().stack;
+	if (!stack) return '(stack unavailable)';
+	// Drop the Error header + internal frames (captureCallsite, armUnemittedWarning, add).
+	return stack.split('\n').slice(4).join('\n').trimEnd() || '(stack unavailable)';
 }
 
 const levelValues: Record<LogLevel, number> = {
@@ -64,10 +90,10 @@ export class RootLogger {
 	private readonly adapters: readonly LoggerAdapter[];
 	private readonly now: () => Date;
 
-	constructor(options: LoggerOptions = {}) {
+	constructor(options: LoggerOptions = {}, adapters?: readonly LoggerAdapter[]) {
 		this.level = options.level ?? 'info';
 		this.bindings = stripUndefined({ name: options.name, ...(options.bindings ?? {}) });
-		this.adapters = resolveAdapters(options);
+		this.adapters = adapters ?? resolveAdapters(options);
 		this.now = options.now ?? (() => new Date());
 	}
 
@@ -96,16 +122,14 @@ export class RootLogger {
 	}
 
 	child(bindings: LogBindings): RootLogger {
-		return new RootLogger({
-			level: this.level,
-			bindings: { ...this.bindings, ...bindings },
-			adapters: this.adapters.map(adapter => adapter.child?.(bindings) ?? adapter),
-			now: this.now,
-		});
+		return new RootLogger(
+			{ level: this.level, bindings: { ...this.bindings, ...bindings }, now: this.now },
+			this.adapters.map(adapter => adapter.child?.(bindings) ?? adapter),
+		);
 	}
 
-	event(data: LogData = {}): WideEventLogger {
-		return new WideEventLogger(this, data, { bindings: this.bindings });
+	event(data: LogData = {}, options: WideEventOptions = {}): WideEventLogger {
+		return new WideEventLogger(this, data, { bindings: this.bindings }, options);
 	}
 
 	flush(): Awaitable<void> {
@@ -155,17 +179,36 @@ export class WideEventLogger {
 	private data: LogData;
 	private emitted = false;
 	private emitPromise?: Promise<void>;
+	private readonly warnIfUnemitted: boolean;
+	private armed = false;
 
-	constructor(root: RootLogger, data: LogData = {}, metadata: Pick<LogEntry, 'bindings'> = { bindings: {} }) {
+	constructor(
+		root: RootLogger,
+		data: LogData = {},
+		metadata: Pick<LogEntry, 'bindings'> = { bindings: {} },
+		options: WideEventOptions = {},
+	) {
 		this.root = root;
 		this.startedAt = root.timestamp();
 		this.bindings = metadata.bindings;
 		this.data = data;
+		this.warnIfUnemitted = options.warnIfUnemitted ?? false;
 	}
 
 	add(data: LogData): this {
 		this.data = { ...this.data, ...data };
+		this.armUnemittedWarning();
 		return this;
+	}
+
+	// When this event came from useLogger() outside an interaction scope, nothing will
+	// auto-emit it. If it's enriched and then dropped, warn (dev only) so the lost data
+	// isn't silent. Cleared on emit().
+	private armUnemittedWarning(): void {
+		if (this.armed || this.emitted || !this.warnIfUnemitted) return;
+		if (!unemittedEventRegistry || process.env.NODE_ENV === 'production') return;
+		this.armed = true;
+		unemittedEventRegistry.register(this, captureCallsite(), this);
 	}
 
 	get currentContext(): Readonly<LogData> {
@@ -208,6 +251,7 @@ export class WideEventLogger {
 	private async emitOnce(options: WideEventEmitOptions): Promise<void> {
 		if (this.emitted) return;
 		this.emitted = true;
+		if (this.armed) unemittedEventRegistry?.unregister(this);
 
 		const time = this.root.timestamp();
 		const outcome = options.outcome ?? (options.error === undefined ? 'success' : 'error');
@@ -234,8 +278,6 @@ export class WideEventLogger {
 		return this.root.writeLevel(level, args);
 	}
 }
-
-export { RootLogger as Logger };
 
 export function createLogger(options: LoggerOptions = {}): RootLogger {
 	return new RootLogger(options);

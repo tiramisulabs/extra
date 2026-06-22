@@ -95,7 +95,8 @@ export function useLogger(): WideEventLogger {
 	}
 	// Outside an interaction scope, hand back a fresh root-backed wide event: level
 	// methods emit immediately, and add()/emit() let you build a one-off wide event.
-	return installedRootLogger.event();
+	// Nothing auto-emits this one, so flag it to warn (dev) if add()-ed but never emitted.
+	return installedRootLogger.event({}, { warnIfUnemitted: true });
 }
 
 export function runInLoggerScope<T>(event: WideEventLogger, run: () => T): T {

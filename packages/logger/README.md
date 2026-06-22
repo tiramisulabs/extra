@@ -43,10 +43,11 @@ declare module 'seyfert' {
 
 | Option | Type | Description |
 | --- | --- | --- |
-| `name` | `string` | A **binding** that labels every record. It does not rename the plugin (always `@slipher/logger`). |
+| `name` | `string` | A **binding** that labels every record (the console tag). It does not rename the plugin (always `@slipher/logger`). It also becomes evlog's `env.service` when slipher owns `initLogger` (see [evlog](#evlog)). |
 | `level` | `LogLevel` | Minimum level to emit. `'trace' \| 'debug' \| 'info' \| 'warn' \| 'error' \| 'fatal' \| 'silent'`. Default `'info'`. |
 | `bindings` | `Record<string, unknown>` | Static fields attached to every record. |
-| `adapter` | `LoggerAdapter` | Where records go. Default: the pretty/JSON console adapter. |
+| `renderer` | `LoggerAdapter` | The single thing that prints to the terminal. Default `prettyRenderer()`. Use `silentRenderer()` for none, or `evlogRenderer()` / a pretty `pinoAdapter()` to let a backend print. |
+| `transports` | `LoggerAdapter[]` | Structured sinks that ship the entry but don't print: `evlogTransport()`, `pinoAdapter(filePino)`, … |
 | `context` | `AutoContextConfig` | Toggle which Seyfert fields are auto-extracted (see below). |
 
 ## Per-interaction wide events
@@ -177,15 +178,31 @@ export default class ProfileCommand extends Command {
 
 No `emit()` is called anywhere — when `run()` returns, the plugin emits one wide event that already carries the `plan` and `cached` fields added inside `loadProfile()`.
 
-## Adapters
+## Renderer & transports
 
-An adapter decides where records go. The default is the console adapter; swap it for Pino or evlog to feed an existing pipeline. Pino support wraps the instance you provide; evlog is an optional peer dependency because the adapter imports it. Install the one you use (`pnpm add pino` or `pnpm add evlog`). On field collisions, data from `add()` and level methods wins over bindings.
+Output is split into two roles, so they never fight:
 
-> **Redaction belongs to the sink.** The console adapter does **not** redact. Configure redaction in your runtime/collector, in your Pino instance, or in evlog's `initLogger()`. evlog's built-in patterns (`creditCard`, `email`, `jwt`, …) do **not** cover Discord bot tokens — add a pattern for those.
+- **`renderer`** — the *one* thing that prints to the terminal (human-facing). Omit it for the default pretty console.
+- **`transports`** — *N* structured sinks that ship the entry elsewhere (file, OTLP, …) and don't print.
+
+```ts
+import { logger, prettyRenderer, silentRenderer, evlogRenderer, evlogTransport, pinoAdapter } from '@slipher/logger';
+
+logger({ name: 'slipher-bot' });                                  // pretty console (default)
+logger({ name: 'slipher-bot', transports: [evlogTransport(cfg)] }); // console + evlog drains (OTLP/fs)
+logger({ name: 'slipher-bot', renderer: evlogRenderer(cfg) });      // evlog prints AND drains
+logger({ name: 'slipher-bot', renderer: silentRenderer(), transports: [evlogTransport(cfg)] }); // nothing prints, just ship
+```
+
+Factories: `prettyRenderer()` (slipher's own console), `silentRenderer()` (no output), `evlogRenderer()` / `evlogTransport()` (evlog as printer / drain-only), `pinoAdapter(instance)` (pino — usable in either slot depending on the instance you pass).
+
+evlog and pino are optional peer dependencies, imported only by their factories. Install the one you use (`pnpm add evlog` or `pnpm add pino`). On field collisions, data from `add()` and level methods wins over bindings.
+
+> **Redaction belongs to the sink.** `prettyRenderer()` does **not** redact. Configure it in your collector, your Pino instance, or evlog's config. evlog's built-in patterns (`creditCard`, `email`, `jwt`, …) do **not** cover Discord bot tokens — add a pattern for those.
 
 ### Console (default)
 
-Pretty, colored, multi-line output in development; one JSON object per line when `NODE_ENV=production`.
+`prettyRenderer()` — pretty, colored, multi-line in development; one JSON object per line when `NODE_ENV=production`.
 
 ```
 19:00:00.123  INFO   [slipher-bot]  command completed
@@ -208,52 +225,54 @@ pnpm add pino
 
 ```ts
 import { Client } from 'seyfert';
-import { createPinoAdapter, logger } from '@slipher/logger';
+import { logger, pinoAdapter } from '@slipher/logger';
 import pino from 'pino';
 
 const sink = pino({ redact: ['token', 'headers.authorization'] });
 
 const client = new Client({
-	plugins: [logger({ name: 'slipher-bot', adapter: createPinoAdapter(sink) })],
+	// pino owns the output here; for "slipher console + pino file" put it in `transports` instead.
+	plugins: [logger({ name: 'slipher-bot', renderer: pinoAdapter(sink) })],
 });
 ```
 
-`createPinoAdapter` wraps your own Pino instance, so any Pino transport or extension works — e.g. `pino-pretty` for friendlier dev output.
+`pinoAdapter` wraps your own Pino instance, so any Pino transport or extension works — `pino-pretty` for a pretty renderer, a file/stream destination for a transport. Whether it prints or ships is decided by the instance you pass, so the one factory serves both slots.
 
 ### evlog
-
-evlog owns its global configuration — drains, redaction, sampling, the service envelope — set once with `initLogger()` in your entrypoint. `createEvlogAdapter()` takes no options; it only translates records into evlog calls.
 
 ```sh
 pnpm add evlog
 ```
 
+evlog owns a single global pipeline — drains, redaction, sampling, the service envelope — configured with `initLogger()`. **Pass that config to the evlog factory and slipher calls `initLogger` for you:** it sets `silent` by role (`evlogRenderer` prints, `evlogTransport` drains only) and derives `env.service` from the logger `name`, so you don't define the service twice.
+
 ```ts
 import { Client } from 'seyfert';
-import { initLogger } from 'evlog';
 import { createFsDrain } from 'evlog/fs';
 import { createDrainPipeline } from 'evlog/pipeline';
-import { createEvlogAdapter, logger } from '@slipher/logger';
+import { logger, evlogTransport } from '@slipher/logger';
 
 const drain = createDrainPipeline({ batch: { size: 50, intervalMs: 5_000 } })(createFsDrain());
 
-initLogger({
-	env: {
-		service: 'slipher-bot',
-		environment: process.env.NODE_ENV ?? 'development',
-		version: process.env.npm_package_version,
-	},
-	redact: {
-		paths: ['token', 'headers.authorization'],
-		patterns: [/Bot\s+[A-Za-z0-9._-]+/g], // built-ins don't cover Discord tokens
-	},
-	drain,
-	silent: true,
-});
-
 const client = new Client({
-	plugins: [logger({ name: 'slipher-bot', adapter: createEvlogAdapter() })],
+	plugins: [
+		logger({
+			name: 'slipher-bot', // → evlog env.service
+			transports: [
+				evlogTransport({
+					env: { environment: process.env.NODE_ENV ?? 'development', version: process.env.npm_package_version },
+					redact: {
+						paths: ['token', 'headers.authorization'],
+						patterns: [/Bot\s+[A-Za-z0-9._-]+/g], // built-ins don't cover Discord tokens
+					},
+					drain,
+				}),
+			],
+		}),
+	],
 });
 ```
 
-Any evlog drain works — Axiom, OTLP, Sentry, fs, or your own pipeline.
+Use `evlogRenderer(config)` instead if you want evlog to also print to the terminal. Any evlog drain works — Axiom, OTLP, Sentry, fs, or your own pipeline.
+
+If you'd rather manage evlog yourself, call `initLogger()` in your entrypoint and pass the factory **no** config (`evlogTransport()` / `evlogRenderer()`) — slipher then leaves evlog's setup untouched. In that case set `silent: true` yourself when slipher's `prettyRenderer` owns the console, so evlog doesn't double-print.
