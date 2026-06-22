@@ -21,7 +21,7 @@
 		"prepublish": "pnpm build"
 	},
 	"dependencies": {
-		"seyfert": "4.1.0",
+		"seyfert": "4.4.0",
 		"tweetnacl": "^1.0.3",
 		"uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.51.0"
 	},
