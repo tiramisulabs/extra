@@ -805,7 +805,9 @@ describe('createLogger', () => {
 
 	test('stores root name as a binding', async () => {
 		const adapter = new RecordingAdapter();
-		const root = createLogger({ renderer: adapter, bindings: { app: 'bot' }, name: 'slipher-bot' }).child({ shardId: 1 });
+		const root = createLogger({ renderer: adapter, bindings: { app: 'bot' }, name: 'slipher-bot' }).child({
+			shardId: 1,
+		});
 		const event = root.event({ job: 'sync-guild' });
 
 		await event.emit({ message: 'guild sync completed' });
@@ -882,7 +884,11 @@ describe('createLogger', () => {
 		try {
 			const good = new RecordingAdapter();
 			const root = createLogger({
-				renderer: { write() { throw new Error('renderer down'); } },
+				renderer: {
+					write() {
+						throw new Error('renderer down');
+					},
+				},
 				transports: [good],
 			});
 
