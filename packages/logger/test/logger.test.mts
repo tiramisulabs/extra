@@ -4,9 +4,9 @@ import { LogLevels } from 'seyfert/lib/common';
 import { assert, describe, test } from 'vitest';
 import {
 	ConsoleLoggerAdapter,
-	createEvlogAdapter,
+	evlogTransport,
 	createLogger,
-	createPinoAdapter,
+	pinoAdapter,
 	extractSeyfertLogContext,
 	type LogEntry,
 	type LoggerAdapter,
@@ -96,7 +96,7 @@ function getLoggerContext(plugin: LoggerPlugin, source: unknown): { logger: Wide
 
 describe('logger plugin', () => {
 	test('returns a Seyfert plugin with context and lifecycle defaults', () => {
-		const plugin: LoggerPlugin = logger({ adapter: new RecordingAdapter() });
+		const plugin: LoggerPlugin = logger({ renderer: new RecordingAdapter() });
 		const options = getLoggerPluginOptions(plugin);
 
 		assert.equal(plugin.name, '@slipher/logger');
@@ -111,7 +111,7 @@ describe('logger plugin', () => {
 	test('level methods emit immediately and wide events contain no logs array', async () => {
 		const adapter = new RecordingAdapter();
 		const plugin = logger({
-			adapter,
+			renderer: adapter,
 			now: clock([
 				new Date('2026-05-29T10:00:00.000Z'),
 				new Date('2026-05-29T10:00:00.042Z'),
@@ -158,7 +158,7 @@ describe('logger plugin', () => {
 
 	test('currentContext returns a frozen copy for opt-in enriched immediate logs', async () => {
 		const adapter = new RecordingAdapter();
-		const root = createLogger({ adapter });
+		const root = createLogger({ renderer: adapter });
 		const event = root.event({ command: 'ping' });
 
 		event.add({ requestId: 'req-1' });
@@ -223,7 +223,7 @@ describe('logger plugin', () => {
 
 	test('explicit add fields can include username even though auto extraction does not', async () => {
 		const adapter = new RecordingAdapter();
-		const plugin = logger({ adapter });
+		const plugin = logger({ renderer: adapter });
 		const options = getLoggerPluginOptions(plugin);
 		const extension = getLoggerContext(plugin, {
 			id: 'interaction-1',
@@ -238,7 +238,7 @@ describe('logger plugin', () => {
 
 	test('guards concurrent command emits while the adapter write is pending', async () => {
 		const adapter = new BlockingAdapter();
-		const plugin = logger({ adapter });
+		const plugin = logger({ renderer: adapter });
 		const options = getLoggerPluginOptions(plugin);
 		const extension = getLoggerContext(plugin, { id: 'interaction-1' });
 
@@ -258,7 +258,7 @@ describe('logger plugin', () => {
 
 	test('command run errors emit a single wide event with context, not a duplicate immediate log', async () => {
 		const adapter = new RecordingAdapter();
-		const plugin = logger({ adapter });
+		const plugin = logger({ renderer: adapter });
 		const options = getLoggerPluginOptions(plugin);
 		const extension = getLoggerContext(plugin, { id: 'interaction-1', guildId: 'guild-1' });
 		const context = commandContext(extension.logger);
@@ -277,7 +277,7 @@ describe('logger plugin', () => {
 
 	test('setup installs the logger on Seyfert subsystems and cleans up on teardown', async () => {
 		const adapter = new RecordingAdapter();
-		const plugin = logger({ adapter });
+		const plugin = logger({ renderer: adapter });
 		const previousCommandsLogger = { previous: 'commands' };
 		const previousCacheInternalLogger = { previous: 'cache-internal' };
 		const previousCustomizer = (SeyfertLogger as unknown as { __callback?: unknown }).__callback;
@@ -318,7 +318,7 @@ describe('logger plugin', () => {
 
 	test('teardown cleans up Seyfert logger state even when flush rejects', async () => {
 		const adapter = new RejectingFlushAdapter();
-		const plugin = logger({ adapter });
+		const plugin = logger({ renderer: adapter });
 		const previousCommandsLogger = { previous: 'commands' };
 		const previousCacheInternalLogger = { previous: 'cache-internal' };
 		const previousCustomizer = (SeyfertLogger as unknown as { __callback?: unknown }).__callback;
@@ -353,7 +353,7 @@ describe('logger plugin', () => {
 
 	test('useLogger works outside an interaction scope, immediate and as a one-off wide event', async () => {
 		const adapter = new RecordingAdapter();
-		const plugin = logger({ adapter });
+		const plugin = logger({ renderer: adapter });
 		await plugin.setup?.({ commands: {}, components: {}, events: {}, langs: {}, cache: {} });
 
 		await useLogger().info('ready');
@@ -372,7 +372,7 @@ describe('logger plugin', () => {
 
 	test('runInLoggerScope binds an event so useLogger() resolves to it', () => {
 		const adapter = new RecordingAdapter();
-		const root = createLogger({ adapter });
+		const root = createLogger({ renderer: adapter });
 		const event = root.event({ kind: 'job' });
 
 		runInLoggerScope(event, () => {
@@ -385,7 +385,7 @@ describe('logger plugin', () => {
 
 	test('withLoggerScope scopes a unit of work and emits one wide event on success', async () => {
 		const adapter = new RecordingAdapter();
-		const plugin = logger({ adapter });
+		const plugin = logger({ renderer: adapter });
 		await plugin.setup?.({ commands: {}, components: {}, events: {}, langs: {}, cache: {} });
 
 		const result = await withLoggerScope({ kind: 'job', jobId: 'job-1' }, () => {
@@ -403,7 +403,7 @@ describe('logger plugin', () => {
 
 	test('withLoggerScope emits an error wide event and rethrows on failure', async () => {
 		const adapter = new RecordingAdapter();
-		const plugin = logger({ adapter });
+		const plugin = logger({ renderer: adapter });
 		await plugin.setup?.({ commands: {}, components: {}, events: {}, langs: {}, cache: {} });
 		const boom = new Error('boom');
 
@@ -433,7 +433,7 @@ describe('logger plugin', () => {
 		});
 
 		try {
-			const plugin = logger({ adapter, now: () => new Date('2026-05-29T10:00:00.000Z') });
+			const plugin = logger({ renderer: adapter, now: () => new Date('2026-05-29T10:00:00.000Z') });
 			await plugin.setup?.({ commands: {}, components: {}, events: {}, langs: {}, cache: {} });
 
 			new SeyfertLogger({ name: '[API]', active: true }).info('identify', { requestId: 'req-1' });
@@ -461,7 +461,7 @@ describe('logger plugin', () => {
 
 	test('useLogger exposes the current command logger without passing context', async () => {
 		const adapter = new RecordingAdapter();
-		const plugin = logger({ adapter, level: 'debug' });
+		const plugin = logger({ renderer: adapter, level: 'debug' });
 		const options = getLoggerPluginOptions(plugin);
 		const extension = getLoggerContext(plugin, { id: 'interaction-1' });
 		const context = commandContext(extension.logger);
@@ -488,7 +488,7 @@ describe('logger plugin', () => {
 
 	test('context scopes do not mutate Seyfert contexts with logger fields', async () => {
 		const adapter = new RecordingAdapter();
-		const plugin = logger({ adapter });
+		const plugin = logger({ renderer: adapter });
 		const options = getLoggerPluginOptions(plugin);
 		const context = { fullCommandName: 'ping' };
 
@@ -504,7 +504,7 @@ describe('logger plugin', () => {
 
 	test('generic context extension does not hard-code command kind for components', async () => {
 		const adapter = new RecordingAdapter();
-		const plugin = logger({ adapter });
+		const plugin = logger({ renderer: adapter });
 		const options = getLoggerPluginOptions(plugin);
 		const extension = getLoggerContext(plugin, { customId: 'button:confirm' });
 
@@ -652,7 +652,7 @@ describe('logger adapters', () => {
 		assert.equal(typeof parsed.error.stack, 'string');
 	});
 
-	test('createPinoAdapter forwards unapplied bindings and uses child bindings', async () => {
+	test('pinoAdapter forwards unapplied bindings and uses child bindings', async () => {
 		const childCalls: unknown[] = [];
 		const calls: unknown[][] = [];
 		const target = {
@@ -662,7 +662,7 @@ describe('logger adapters', () => {
 			},
 			info: (...args: unknown[]) => calls.push(args),
 		};
-		const adapter = createPinoAdapter(target).child?.({ name: 'bot', shardId: 1 }) ?? createPinoAdapter(target);
+		const adapter = pinoAdapter(target).child?.({ name: 'bot', shardId: 1 }) ?? pinoAdapter(target);
 
 		await adapter.write({
 			bindings: { cluster: 'use1', name: 'bot', region: 'us-east', shardId: 1 },
@@ -676,7 +676,7 @@ describe('logger adapters', () => {
 		assert.deepEqual(calls, [[{ cluster: 'use1', region: 'runtime', guildId: 'guild-1' }, 'ready']]);
 	});
 
-	test('createEvlogAdapter routes entries through the evlog global pipeline', async () => {
+	test('evlogTransport routes entries through the evlog global pipeline', async () => {
 		const events: Array<Record<string, unknown>> = [];
 		initLogger({
 			_suppressDrainWarning: true,
@@ -686,7 +686,7 @@ describe('logger adapters', () => {
 				events.push(context.event as Record<string, unknown>);
 			},
 		});
-		const adapter = createEvlogAdapter();
+		const adapter = evlogTransport();
 
 		await adapter.write({
 			bindings: { service: 'bot' },
@@ -710,7 +710,7 @@ describe('logger adapters', () => {
 		assert.equal('status' in events[0]!, false);
 	});
 
-	test('createEvlogAdapter emits warn lifecycle entries as wide events without fake HTTP fields', async () => {
+	test('evlogTransport emits warn lifecycle entries as wide events without fake HTTP fields', async () => {
 		const events: Array<Record<string, unknown>> = [];
 		initLogger({
 			_suppressDrainWarning: true,
@@ -719,7 +719,7 @@ describe('logger adapters', () => {
 				events.push(context.event as Record<string, unknown>);
 			},
 		});
-		const adapter = createEvlogAdapter();
+		const adapter = evlogTransport();
 
 		await adapter.write({
 			bindings: {},
@@ -739,7 +739,7 @@ describe('logger adapters', () => {
 		assert.equal('method' in events[0]!, false);
 	});
 
-	test('createEvlogAdapter uses the tagged form for simple entries, folding name into the tag', async () => {
+	test('evlogTransport uses the tagged form for simple entries, folding name into the tag', async () => {
 		const events: Array<Record<string, unknown>> = [];
 		initLogger({
 			_suppressDrainWarning: true,
@@ -748,7 +748,7 @@ describe('logger adapters', () => {
 				events.push(context.event as Record<string, unknown>);
 			},
 		} as never);
-		const adapter = createEvlogAdapter();
+		const adapter = evlogTransport();
 
 		await adapter.write({
 			bindings: { name: 'tohka-bot' },
@@ -764,12 +764,34 @@ describe('logger adapters', () => {
 		assert.equal(events[0]!.message, 'Tohka is ready');
 		assert.equal('name' in events[0]!, false);
 	});
+
+	test('evlogTransport(config) lets slipher call initLogger, deriving env.service from the logger name', async () => {
+		const events: Array<Record<string, unknown>> = [];
+		const adapter = evlogTransport({
+			_suppressDrainWarning: true,
+			drain(context: { event: Record<string, unknown> }) {
+				events.push(context.event);
+			},
+		});
+
+		await adapter.write({
+			bindings: { name: 'svc-from-name' },
+			data: {},
+			level: 'info',
+			message: 'ready',
+			time: new Date('2026-05-29T10:00:00.000Z'),
+		});
+		await flushEvlogDrain();
+
+		assert.equal(events.length, 1);
+		assert.equal(events[0]!.service, 'svc-from-name');
+	});
 });
 
 describe('createLogger', () => {
 	test('writes immediate root logs and supports child bindings', async () => {
 		const adapter = new RecordingAdapter();
-		const root = createLogger({ adapter, bindings: { app: 'bot' } }).child({ shardId: 1 });
+		const root = createLogger({ renderer: adapter, bindings: { app: 'bot' } }).child({ shardId: 1 });
 		const error = new Error('boom');
 
 		await root.error({ route: '/sync' }, 'sync failed', error);
@@ -783,7 +805,7 @@ describe('createLogger', () => {
 
 	test('stores root name as a binding', async () => {
 		const adapter = new RecordingAdapter();
-		const root = createLogger({ adapter, bindings: { app: 'bot' }, name: 'slipher-bot' }).child({ shardId: 1 });
+		const root = createLogger({ renderer: adapter, bindings: { app: 'bot' }, name: 'slipher-bot' }).child({ shardId: 1 });
 		const event = root.event({ job: 'sync-guild' });
 
 		await event.emit({ message: 'guild sync completed' });
@@ -804,14 +826,14 @@ describe('createLogger', () => {
 			const syncError = new Error('sync sink failed');
 			const asyncError = new Error('async sink failed');
 			const syncLogger = createLogger({
-				adapter: {
+				renderer: {
 					write() {
 						throw syncError;
 					},
 				},
 			});
 			const asyncLogger = createLogger({
-				adapter: {
+				renderer: {
 					write() {
 						return Promise.reject(asyncError);
 					},
@@ -835,6 +857,42 @@ describe('createLogger', () => {
 			['[logger] adapter.write failed:', new Error('sync sink failed')],
 			['[logger] adapter.write failed:', new Error('async sink failed')],
 		]);
+	});
+
+	test('fans out to renderer and every transport, and child propagates to all', async () => {
+		const renderer = new RecordingAdapter();
+		const a = new RecordingAdapter();
+		const b = new RecordingAdapter();
+		const root = createLogger({ renderer, transports: [a, b] }).child({ shardId: 2 });
+
+		await root.info('hi');
+		await root.flush();
+
+		for (const sink of [renderer, a, b]) {
+			assert.equal(sink.entries.length, 1);
+			assert.equal(sink.entries[0].message, 'hi');
+			assert.deepEqual(sink.entries[0].bindings, { shardId: 2 });
+			assert.equal(sink.flushes, 1);
+		}
+	});
+
+	test('a throwing transport does not stop the others', async () => {
+		const originalError = console.error;
+		console.error = () => {};
+		try {
+			const good = new RecordingAdapter();
+			const root = createLogger({
+				renderer: { write() { throw new Error('renderer down'); } },
+				transports: [good],
+			});
+
+			await root.info('still ships');
+
+			assert.equal(good.entries.length, 1);
+			assert.equal(good.entries[0].message, 'still ships');
+		} finally {
+			console.error = originalError;
+		}
 	});
 });
 

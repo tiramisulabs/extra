@@ -26,8 +26,18 @@ export interface LoggerOptions {
 	name?: string;
 	level?: LogLevel;
 	bindings?: LogBindings;
-	adapter?: LoggerAdapter;
+	/** The single thing that prints to the terminal. Defaults to a pretty console. */
+	renderer?: LoggerAdapter;
+	/** Structured sinks (evlog/pino/file). They ship the entry; they don't own the console. */
+	transports?: readonly LoggerAdapter[];
+	/** @internal Pre-resolved adapter list, used by `child()`. */
+	adapters?: readonly LoggerAdapter[];
 	now?: () => Date;
+}
+
+function resolveAdapters(options: LoggerOptions): readonly LoggerAdapter[] {
+	if (options.adapters) return options.adapters;
+	return [options.renderer ?? new ConsoleLoggerAdapter(), ...(options.transports ?? [])];
 }
 
 export interface WideEventEmitOptions {
@@ -51,13 +61,13 @@ const levelValues: Record<LogLevel, number> = {
 export class RootLogger {
 	private readonly level: LogLevel;
 	private readonly bindings: LogBindings;
-	private readonly adapter: LoggerAdapter;
+	private readonly adapters: readonly LoggerAdapter[];
 	private readonly now: () => Date;
 
 	constructor(options: LoggerOptions = {}) {
 		this.level = options.level ?? 'info';
 		this.bindings = stripUndefined({ name: options.name, ...(options.bindings ?? {}) });
-		this.adapter = options.adapter ?? new ConsoleLoggerAdapter();
+		this.adapters = resolveAdapters(options);
 		this.now = options.now ?? (() => new Date());
 	}
 
@@ -89,7 +99,7 @@ export class RootLogger {
 		return new RootLogger({
 			level: this.level,
 			bindings: { ...this.bindings, ...bindings },
-			adapter: this.adapter.child?.(bindings) ?? this.adapter,
+			adapters: this.adapters.map(adapter => adapter.child?.(bindings) ?? adapter),
 			now: this.now,
 		});
 	}
@@ -99,7 +109,7 @@ export class RootLogger {
 	}
 
 	flush(): Awaitable<void> {
-		return this.adapter.flush?.();
+		return Promise.all(this.adapters.map(adapter => adapter.flush?.())).then(() => undefined);
 	}
 
 	isEnabled(level: WritableLogLevel): boolean {
@@ -113,11 +123,15 @@ export class RootLogger {
 	async writeEntry(entry: LogEntry): Promise<void> {
 		if (!this.isEnabled(entry.level)) return;
 
-		try {
-			await this.adapter.write(entry);
-		} catch (error) {
-			console.error('[logger] adapter.write failed:', error);
-		}
+		await Promise.all(
+			this.adapters.map(async adapter => {
+				try {
+					await adapter.write(entry);
+				} catch (error) {
+					console.error('[logger] adapter.write failed:', error);
+				}
+			}),
+		);
 	}
 
 	writeLevel(level: WritableLogLevel, args: readonly unknown[]): Awaitable<void> {

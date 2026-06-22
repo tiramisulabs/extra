@@ -1,7 +1,7 @@
 import type { LoggerLike } from '@slipher/types';
 import type { Client, PluginContextMapOf, RegisteredPlugins, Logger as SeyfertLogger } from 'seyfert';
 import { Command, type CommandContext, createMiddleware, Declare, definePlugins } from 'seyfert';
-import { createEvlogAdapter, type LoggerAdapter, logger, useLogger, type WideEventLogger } from '../src';
+import { evlogRenderer, evlogTransport, type LoggerAdapter, logger, useLogger, type WideEventLogger } from '../src';
 
 declare function expectType<T>(value: T): void;
 declare const context: CommandContext;
@@ -29,9 +29,9 @@ expectType<SeyfertLogger>(client.logger);
 expectType<WideEventLogger>(client.logger);
 expectType<LoggerLike>({} as WideEventLogger);
 
-expectType<LoggerAdapter>(createEvlogAdapter());
-// @ts-expect-error evlog drain/redact/enrich configuration belongs in initLogger()
-createEvlogAdapter({ drain() {} });
+expectType<LoggerAdapter>(evlogTransport());
+// Passing evlog config is now accepted: @slipher/logger calls initLogger for you.
+expectType<LoggerAdapter>(evlogRenderer({ env: { environment: 'development' }, redact: { paths: ['token'] } }));
 expectType<WideEventLogger>(useLogger());
 
 @Declare({

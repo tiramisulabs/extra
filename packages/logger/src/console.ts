@@ -38,6 +38,16 @@ export class ConsoleLoggerAdapter implements LoggerAdapter {
 	}
 }
 
+/** The default human renderer: a pretty console (NDJSON when NODE_ENV=production). */
+export function prettyRenderer(): LoggerAdapter {
+	return new ConsoleLoggerAdapter();
+}
+
+/** A renderer that prints nothing. Use when a transport owns all output. */
+export function silentRenderer(): LoggerAdapter {
+	return { write() {} };
+}
+
 function consoleColorEnabled(): boolean {
 	if (process.env.NO_COLOR) return false;
 	if (process.env.FORCE_COLOR) return true;

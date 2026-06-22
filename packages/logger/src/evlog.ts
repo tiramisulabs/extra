@@ -5,6 +5,17 @@ import { getString, stripUndefined } from './utils';
 
 export type EvlogLevel = 'debug' | 'info' | 'warn' | 'error';
 
+/**
+ * evlog `initLogger` config. Pass it to let @slipher/logger own evlog's setup:
+ * it calls `initLogger` for you, derives `env.service` from the logger `name`,
+ * and sets `silent` by role (renderer prints, transport drains only). Omit it to
+ * manage `initLogger` yourself — then the adapter never touches evlog's config.
+ */
+export interface EvlogConfig {
+	env?: Record<string, unknown>;
+	[key: string]: unknown;
+}
+
 type EvlogLogMethod = {
 	(tag: string, message: string): void;
 	(event: Record<string, unknown>): void;
@@ -12,23 +23,54 @@ type EvlogLogMethod = {
 
 interface EvlogCoreModule {
 	log: Record<EvlogLevel, EvlogLogMethod>;
+	initLogger: (config: Record<string, unknown>) => void;
 }
 
 const requireFromHere = createRequire(__filename);
 
-export function createEvlogAdapter(): LoggerAdapter {
+/** evlog prints to the terminal AND drains. Use in `renderer`. */
+export function evlogRenderer(config?: EvlogConfig): LoggerAdapter {
+	return createEvlogAdapter(false, config);
+}
+
+/** evlog drains only (OTLP/fs), never prints. Use in `transports`. */
+export function evlogTransport(config?: EvlogConfig): LoggerAdapter {
+	return createEvlogAdapter(true, config);
+}
+
+function createEvlogAdapter(silent: boolean, config?: EvlogConfig): LoggerAdapter {
 	assertEvlogInstalled();
 	const core = importEvlogCore();
+	let initialized = false;
 
 	return {
 		async write(entry) {
+			const resolved = await core;
+
+			// Only own evlog's setup when given config; otherwise assume the app called
+			// initLogger and don't clobber its drains/silent.
+			if (config && !initialized) {
+				initialized = true;
+				resolved.initLogger(buildInitConfig(silent, config, entry));
+			}
+
 			if (isEvlogLifecycleEntry(entry)) {
-				writeEvlogWideEvent(entry, await core);
+				writeEvlogWideEvent(entry, resolved);
 				return;
 			}
 
-			writeEvlogImmediateEntry(entry, await core);
+			writeEvlogImmediateEntry(entry, resolved);
 		},
+	};
+}
+
+function buildInitConfig(silent: boolean, config: EvlogConfig, entry: LogEntry): Record<string, unknown> {
+	// `env.service` defaults to the logger name so it isn't defined twice; explicit
+	// `config.env.service` still wins. `silent` is role-controlled (renderer vs transport).
+	return {
+		...config,
+		env: { service: getString(entry.bindings.name) ?? 'app', ...(config.env ?? {}) },
+		silent,
 	};
 }
 
@@ -92,7 +134,7 @@ function assertEvlogInstalled(): void {
 		requireFromHere.resolve('evlog');
 	} catch (error) {
 		if (isMissingModuleError(error)) {
-			throw new Error('@slipher/logger createEvlogAdapter() requires "evlog"; install it in your application.');
+			throw new Error('@slipher/logger evlog adapters require "evlog"; install it in your application.');
 		}
 		throw error;
 	}
@@ -103,7 +145,7 @@ async function importEvlogCore(): Promise<EvlogCoreModule> {
 		return await importEsmModule<EvlogCoreModule>('evlog');
 	} catch (error) {
 		if (isMissingModuleError(error)) {
-			throw new Error('@slipher/logger createEvlogAdapter() requires "evlog"; install it in your application.');
+			throw new Error('@slipher/logger evlog adapters require "evlog"; install it in your application.');
 		}
 		throw error;
 	}
