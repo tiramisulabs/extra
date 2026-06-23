@@ -12,9 +12,9 @@ import { ButtonStyle } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 
-// Clippy's dominant flow: defer -> editOrReply(fetchReply) -> collector on that message,
-// with a DYNAMIC customId matched by regex. (~69% of Clippy components use parameterized customIds.)
-describe('Clippy collector patterns', () => {
+// A common real-world flow: defer -> editOrReply(fetchReply) -> collector on that message, with a DYNAMIC
+// customId matched by regex (parameterized customIds are very common).
+describe('collector patterns', () => {
 	test('collector on a deferred reply matches a dynamic customId (regex, non-blocking run)', async () => {
 		const launched: string[] = [];
 		const id = 'camp_abc';
@@ -75,11 +75,11 @@ describe('Clippy collector patterns', () => {
 		await bot.close();
 	});
 
-	// Clippy's EXACT shape: a slash command opens a modal with `{ waitFor }`, awaits the submit, and replies on
-	// that submit interaction (`editOrReply(body, true)`) IN THE SAME CONTINUATION, then a collector on that
-	// reply drives a "Continue" button. This is the "collector behind a Continue button after a modal" flow that
-	// was reported as a wall — it works on current code (the submit reply's @original is materialized under its
-	// token, so clickButton resolves the source with no explicit `source`). Regression lock.
+	// A slash command opens a modal with `{ waitFor }`, awaits the submit, and replies on that submit
+	// interaction (`editOrReply(body, true)`) IN THE SAME CONTINUATION, then a collector on that reply drives a
+	// "Continue" button. This "collector behind a Continue button after a modal" flow works because the submit
+	// reply's @original is materialized under its token, so clickButton resolves the source with no explicit
+	// `source`. Regression lock.
 	test('collector on a reply written in the modal-opener continuation is clickable', async () => {
 		const done: string[] = [];
 
@@ -87,15 +87,15 @@ describe('Clippy collector patterns', () => {
 		class SetupCommand extends Command {
 			async run(ctx: CommandContext) {
 				const submit = await ctx.interaction.modal(
-					new Modal().setCustomId('cpm-modal').setTitle('CPM').setComponents([]),
+					new Modal().setCustomId('setup-modal').setTitle('Setup').setComponents([]),
 					{ waitFor: 30_000 },
 				);
 				if (!submit) return;
 				const row = new ActionRow<Button>().setComponents([
-					new Button().setCustomId('cpm-continue').setLabel('Continue').setStyle(ButtonStyle.Primary),
+					new Button().setCustomId('setup-continue').setLabel('Continue').setStyle(ButtonStyle.Primary),
 				]);
 				const message = await submit.editOrReply({ content: 'Summary', components: [row] }, true);
-				message.createComponentCollector().run('cpm-continue', async i => {
+				message.createComponentCollector().run('setup-continue', async i => {
 					done.push('clicked');
 					await i.write({ content: 'created channels' });
 				});
@@ -103,8 +103,8 @@ describe('Clippy collector patterns', () => {
 		}
 
 		const bot = await createMockBot({ commands: [SetupCommand] });
-		await bot.slash({ name: 'setup' }).fillModal('cpm-modal', {});
-		const res = await bot.clickButton('cpm-continue');
+		await bot.slash({ name: 'setup' }).fillModal('setup-modal', {});
+		const res = await bot.clickButton('setup-continue');
 		expect(done).toEqual(['clicked']);
 		expect(res.reply?.body).toMatchObject({ data: { content: 'created channels' } });
 		await bot.close();

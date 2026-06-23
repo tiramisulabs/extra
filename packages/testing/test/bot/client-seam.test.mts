@@ -2,7 +2,7 @@ import { Client, Command, type CommandContext, createPlugin, Declare } from 'sey
 import { describe, expect, test, vi } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 
-// Mirrors a production bot's module-level `export let client` singleton (e.g. Clippy's start.ts):
+// Mirrors a production bot's module-level `export let client` singleton (e.g. a `start.ts` export):
 // commands reach Discord REST through THIS variable, not through ctx.client.
 let client: Client;
 
