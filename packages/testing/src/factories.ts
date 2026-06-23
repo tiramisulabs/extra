@@ -155,3 +155,56 @@ export function mockMember(options: MockMemberOptions = {}): MockMember {
 		flags: 0,
 	};
 }
+
+export interface MockMessageOptions {
+	id?: string;
+	channelId?: string;
+	guildId?: string | null;
+	author?: MockUser;
+	content?: string;
+	embeds?: unknown[];
+	components?: unknown[];
+}
+
+export interface MockMessage {
+	id: string;
+	/** Ergonomic accessor; mirrors {@link channel_id}. */
+	channelId: string;
+	/** Wire field; mirrors {@link channelId}. */
+	channel_id: string;
+	/** Present only for guild messages; mirrors {@link guild_id}. */
+	guildId?: string;
+	/** Wire field; mirrors {@link guildId}. */
+	guild_id?: string;
+	author: MockUser;
+	content: string;
+	embeds: unknown[];
+	components: unknown[];
+	timestamp: string;
+	tts: boolean;
+	pinned: boolean;
+	type: number;
+}
+
+/**
+ * A message entity — for context-menu targets, collector/source messages, and event payloads. Mirrors the
+ * camelCase + snake_case contract of the other factories.
+ */
+export function mockMessage(options: MockMessageOptions = {}): MockMessage {
+	const channelId = options.channelId ?? mockId();
+	const guildId = options.guildId == null ? undefined : options.guildId;
+	return {
+		id: options.id ?? mockId(),
+		channelId,
+		channel_id: channelId,
+		...(guildId === undefined ? {} : { guildId, guild_id: guildId }),
+		author: options.author ?? mockUser(),
+		content: options.content ?? '',
+		embeds: options.embeds ?? [],
+		components: options.components ?? [],
+		timestamp: new Date(0).toISOString(),
+		tts: false,
+		pinned: false,
+		type: 0,
+	};
+}

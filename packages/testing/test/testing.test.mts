@@ -8,12 +8,15 @@ import {
 	mockGuild,
 	mockId,
 	mockMember,
+	mockMessage,
 	mockModalContext,
 	mockQueues,
+	mockScene,
 	mockScheduler,
 	mockUser,
 	idAge,
 	resetMockIds,
+	setupSlipherTesting,
 	timestampFrom,
 	userOption,
 } from '../src';
@@ -231,6 +234,21 @@ describe('mockCommandContext', () => {
 		const ctx = mockCommandContext();
 		await expect(ctx.run(new BoomCommand())).rejects.toThrow('boom');
 	});
+
+	test('ctx.run() accepts commands whose run() takes extra parameters (no cast)', async () => {
+		// Guards the signature: a run() with a second param must still be assignable.
+		// If the param type narrows back to a single arg, this file fails to typecheck.
+		class WithMetadata {
+			async run(context: { editOrReply(r: { content: string }): unknown }, _metadata: { requestId: string }) {
+				await context.editOrReply({ content: 'ok' });
+			}
+		}
+
+		const ctx = mockCommandContext();
+		await ctx.run(new WithMetadata());
+
+		expect(ctx.lastResponse()).toMatchObject({ content: 'ok' });
+	});
 });
 
 describe('standalone interaction contexts', () => {
@@ -301,5 +319,65 @@ describe('standalone stubs', () => {
 		assert.equal(client.custom, 1);
 		assert.ok(client.logger);
 		assert.ok(client.scheduler);
+	});
+});
+
+describe('Phase-4a additions', () => {
+	test('mockMessage mirrors camelCase/snake_case and defaults', () => {
+		const m = mockMessage({ channelId: 'chan-1', guildId: 'guild-1', content: 'hi' });
+		assert.equal(m.channelId, 'chan-1');
+		assert.equal(m.channel_id, 'chan-1');
+		assert.equal(m.guildId, 'guild-1');
+		assert.equal(m.guild_id, 'guild-1');
+		assert.equal(m.content, 'hi');
+		assert.ok(m.author.id);
+		assert.deepEqual(m.embeds, []);
+	});
+
+	test('mockMessage omits guild fields for a DM message', () => {
+		const m = mockMessage({ guildId: null });
+		assert.equal('guildId' in m, false);
+		assert.equal('guild_id' in m, false);
+	});
+
+	test('mockScene wires channel to guild and member to user', () => {
+		const scene = mockScene({ options: { foo: 1 } });
+		assert.equal(scene.channel.guildId, scene.guild?.id);
+		assert.equal(scene.member?.user, scene.user);
+		assert.equal(scene.ctx.author, scene.user);
+		assert.deepEqual(scene.ctx.options, { foo: 1 });
+	});
+
+	test('mockScene with guild: null yields a DM scene (no member)', () => {
+		const scene = mockScene({ guild: null });
+		assert.equal(scene.guild, null);
+		assert.equal(scene.member, null);
+		assert.equal(scene.channel.guildId, null);
+	});
+
+	test('setupSlipherTesting registers a beforeEach that resets ids; no-op without a runner hook', () => {
+		const original = (globalThis as { beforeEach?: unknown }).beforeEach;
+		try {
+			let registered: (() => void) | undefined;
+			(globalThis as { beforeEach?: (fn: () => void) => void }).beforeEach = fn => {
+				registered = fn;
+			};
+			setupSlipherTesting();
+			assert.equal(typeof registered, 'function');
+
+			// the registered hook resets ids to the deterministic start
+			resetMockIds();
+			const firstAtStart = mockUser().id;
+			resetMockIds(500);
+			mockUser(); // advance the sequence
+			registered?.(); // what beforeEach would run -> resetMockIds()
+			assert.equal(mockUser().id, firstAtStart);
+
+			// no-op when no hook is present
+			(globalThis as { beforeEach?: unknown }).beforeEach = undefined;
+			assert.doesNotThrow(() => setupSlipherTesting());
+		} finally {
+			(globalThis as { beforeEach?: unknown }).beforeEach = original;
+		}
 	});
 });

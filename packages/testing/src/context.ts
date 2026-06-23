@@ -69,8 +69,12 @@ export interface MockCommandContext<TOptions extends Record<string, unknown> = R
 	deferReply(): Promise<void>;
 	clearResponses(): void;
 	lastResponse(): MockContextResponse | undefined;
-	/** Run a command/component/modal's `run()` against this mock (skips the pipeline; the cast lives here, not in your test). */
-	run(command: { run(context: never): unknown }): Promise<unknown>;
+	/**
+	 * Run a command/component/modal's `run()` against this mock (skips the pipeline; the cast lives here,
+	 * not in your test). Only the context is passed, so a command that reads a second `run()` argument
+	 * should use the mock bot instead.
+	 */
+	run(command: { run(...args: any[]): unknown }): Promise<unknown>;
 }
 
 export interface MockInteractionContextOptions {
@@ -126,8 +130,12 @@ export interface MockInteractionContextBase {
 	deferReply(): Promise<void>;
 	clearResponses(): void;
 	lastResponse(): MockContextResponse | undefined;
-	/** Run a command/component/modal's `run()` against this mock (skips the pipeline; the cast lives here, not in your test). */
-	run(command: { run(context: never): unknown }): Promise<unknown>;
+	/**
+	 * Run a command/component/modal's `run()` against this mock (skips the pipeline; the cast lives here,
+	 * not in your test). Only the context is passed, so a command that reads a second `run()` argument
+	 * should use the mock bot instead.
+	 */
+	run(command: { run(...args: any[]): unknown }): Promise<unknown>;
 }
 
 export interface MockComponentContext extends MockInteractionContextBase {
@@ -343,4 +351,34 @@ export function mockModalContext(options: MockModalContextOptions = {}): MockMod
 			getInputValue,
 		},
 	};
+}
+
+export interface MockScene<TOptions extends Record<string, unknown> = Record<string, unknown>> {
+	user: MockUser;
+	guild: MockGuild | null;
+	channel: MockChannel;
+	member: MockMember | null;
+	ctx: MockCommandContext<TOptions>;
+}
+
+/**
+ * Build a consistently-wired set of entities plus a command context in one call: the channel belongs to the
+ * guild, the member wraps the user, and `ctx` is built from all of them. Removes the boilerplate of threading
+ * ids between `mockUser`/`mockGuild`/`mockChannel`/`mockMember` and `mockCommandContext`.
+ */
+export function mockScene<TOptions extends Record<string, unknown> = Record<string, unknown>>(
+	options: MockCommandContextOptions<TOptions> = {},
+): MockScene<TOptions> {
+	const user = options.author ?? mockUser({ id: options.userId });
+	const guild = options.guild === null ? null : (options.guild ?? mockGuild({ id: options.guildId }));
+	const channel = options.channel ?? mockChannel({ id: options.channelId, guildId: guild ? guild.id : null });
+	const member = guild ? (options.member ?? mockMember({ user })) : null;
+	const ctx = mockCommandContext<TOptions>({
+		...options,
+		author: user,
+		guild,
+		channel,
+		member: member ?? undefined,
+	});
+	return { user, guild, channel, member, ctx };
 }
