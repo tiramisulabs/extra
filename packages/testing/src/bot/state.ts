@@ -566,7 +566,13 @@ function roleView(role: { id: string; name: string; position: number; permission
 }
 
 export function normalizeEmbed(value: unknown): EmbedView {
-	const raw = asRecord(value);
+	// Unwrap a seyfert builder (Embed) — its fields live under .toJSON(), not as own properties — so this works
+	// on both raw REST-body embeds (bot path) and stored builder instances (context path).
+	const source =
+		value && typeof (value as { toJSON?: unknown }).toJSON === 'function'
+			? (value as { toJSON(): unknown }).toJSON()
+			: value;
+	const raw = asRecord(source);
 	const fields = arrayValue(raw.fields).map(field => {
 		const entry = asRecord(field);
 		return {

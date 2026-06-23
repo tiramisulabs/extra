@@ -174,3 +174,26 @@ describe('expectContent', () => {
 		expect(() => expectContent(noContent, /x/)).toThrow(/no reply with content/);
 	});
 });
+
+describe('lastReply (typed front door)', () => {
+	test('returns content + typed embeds + components in one object, no casts', async () => {
+		const ctx = mockCommandContext();
+		await ctx.write({
+			content: 'done',
+			embeds: [new Embed().setTitle('Receipt')],
+			components: [
+				new ActionRow<Button>().setComponents([
+					new Button().setCustomId('ok').setLabel('OK').setStyle(ButtonStyle.Primary),
+				]),
+			],
+		});
+
+		const reply = ctx.lastReply();
+		expect(reply.content).toBe('done');
+		expect(reply.embeds[0]?.title).toBe('Receipt'); // EmbedView, typed
+		expect(reply.components[0]?.customId).toBe('ok'); // InteractiveComponentView, typed
+
+		const empty = mockCommandContext();
+		expect(() => empty.lastReply()).toThrow(/no responses were captured/);
+	});
+});

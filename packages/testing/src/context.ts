@@ -8,7 +8,7 @@ import {
 	mockMember,
 	mockUser,
 } from './factories';
-import { harvestComponents, type InteractiveComponentView } from './bot/state';
+import { type EmbedView, harvestComponents, type InteractiveComponentView, normalizeEmbed } from './bot/state';
 import {
 	type MockClient,
 	type MockLogger,
@@ -36,8 +36,8 @@ function responseEmbeds(response: MockContextResponse | undefined): unknown[] {
 	return Array.isArray(embeds) ? embeds : [];
 }
 
-function lastEmbedsFrom(responses: MockContextResponse[]): Record<string, unknown>[] {
-	return responseEmbeds(responses.at(-1)).map(normalizeBuilder);
+function lastEmbedsFrom(responses: MockContextResponse[]): EmbedView[] {
+	return responseEmbeds(responses.at(-1)).map(normalizeEmbed);
 }
 
 function lastComponentsFrom(responses: MockContextResponse[]): InteractiveComponentView[] {
@@ -49,7 +49,7 @@ function lastComponentsFrom(responses: MockContextResponse[]): InteractiveCompon
 	return harvestComponents(rows.map(normalizeBuilder)).components;
 }
 
-function lastEmbedFrom(responses: MockContextResponse[], index: number): Record<string, unknown> {
+function lastEmbedFrom(responses: MockContextResponse[], index: number): EmbedView {
 	if (responses.length === 0) {
 		throw new TypeError('lastEmbed: no responses were captured — the handler never replied.');
 	}
@@ -60,7 +60,30 @@ function lastEmbedFrom(responses: MockContextResponse[], index: number): Record<
 	if (index < 0 || index >= embeds.length) {
 		throw new TypeError(`lastEmbed: index ${index} is out of range — the last response has ${embeds.length} embed(s).`);
 	}
-	return normalizeBuilder(embeds[index]);
+	return normalizeEmbed(embeds[index]);
+}
+
+export interface ReplyView {
+	content?: string;
+	embeds: EmbedView[];
+	components: InteractiveComponentView[];
+	flags?: number;
+}
+
+function lastReplyFrom(responses: MockContextResponse[]): ReplyView {
+	const last = responses.at(-1);
+	if (last === undefined) {
+		throw new TypeError('lastReply: no responses were captured — the handler never replied.');
+	}
+	if (typeof last === 'string') return { content: last, embeds: [], components: [] };
+	const content = (last as { content?: unknown }).content;
+	const flags = (last as { flags?: unknown }).flags;
+	return {
+		...(typeof content === 'string' ? { content } : {}),
+		embeds: lastEmbedsFrom(responses),
+		components: lastComponentsFrom(responses),
+		...(typeof flags === 'number' ? { flags } : {}),
+	};
 }
 
 export interface MockCommandContextOptions<TOptions extends Record<string, unknown> = Record<string, unknown>> {
@@ -117,15 +140,20 @@ export interface MockCommandContext<TOptions extends Record<string, unknown> = R
 	 * under `.toJSON()`). THROWS when there is no response, no embed, or the index is out of range — it never
 	 * returns `undefined`, so a typo can't make an assertion pass vacuously.
 	 */
-	lastEmbed(index?: number): Record<string, unknown>;
-	/** All embeds of the last response, normalized to plain data; `[]` when the last response has none. */
-	lastEmbeds(): Record<string, unknown>[];
+	lastEmbed(index?: number): EmbedView;
+	/** All embeds of the last response, normalized to a typed {@link EmbedView}; `[]` when the last response has none. */
+	lastEmbeds(): EmbedView[];
 	/**
 	 * All interactive components (buttons/selects) of the last response, flattened from its action rows and
 	 * normalized to plain data; `[]` when the last response has none. Reading `.customId`/`.label`/`.disabled`/
 	 * `.options` works even when the handler passed seyfert builders (whose fields live under `.toJSON()`).
 	 */
 	lastComponents(): InteractiveComponentView[];
+	/**
+	 * The last reply as one typed object: `content` plus normalized `embeds`/`components` (and `flags`). The
+	 * fluid front door for assertions — no casts, no optional chains. THROWS when no response was captured.
+	 */
+	lastReply(): ReplyView;
 	/**
 	 * Run a command/component/modal's `run()` against this mock (skips the pipeline; the cast lives here,
 	 * not in your test). Only the context is passed, so a command that reads a second `run()` argument
@@ -193,15 +221,20 @@ export interface MockInteractionContextBase {
 	 * under `.toJSON()`). THROWS when there is no response, no embed, or the index is out of range — it never
 	 * returns `undefined`, so a typo can't make an assertion pass vacuously.
 	 */
-	lastEmbed(index?: number): Record<string, unknown>;
-	/** All embeds of the last response, normalized to plain data; `[]` when the last response has none. */
-	lastEmbeds(): Record<string, unknown>[];
+	lastEmbed(index?: number): EmbedView;
+	/** All embeds of the last response, normalized to a typed {@link EmbedView}; `[]` when the last response has none. */
+	lastEmbeds(): EmbedView[];
 	/**
 	 * All interactive components (buttons/selects) of the last response, flattened from its action rows and
 	 * normalized to plain data; `[]` when the last response has none. Reading `.customId`/`.label`/`.disabled`/
 	 * `.options` works even when the handler passed seyfert builders (whose fields live under `.toJSON()`).
 	 */
 	lastComponents(): InteractiveComponentView[];
+	/**
+	 * The last reply as one typed object: `content` plus normalized `embeds`/`components` (and `flags`). The
+	 * fluid front door for assertions — no casts, no optional chains. THROWS when no response was captured.
+	 */
+	lastReply(): ReplyView;
 	/**
 	 * Run a command/component/modal's `run()` against this mock (skips the pipeline; the cast lives here,
 	 * not in your test). Only the context is passed, so a command that reads a second `run()` argument
@@ -302,6 +335,9 @@ function mockInteractionBase(options: MockInteractionContextOptions = {}): MockI
 		lastComponents() {
 			return lastComponentsFrom(responses);
 		},
+		lastReply() {
+			return lastReplyFrom(responses);
+		},
 		async run(command) {
 			return command.run(this as never);
 		},
@@ -378,6 +414,9 @@ export function mockCommandContext<TOptions extends Record<string, unknown> = Re
 		},
 		lastComponents() {
 			return lastComponentsFrom(responses);
+		},
+		lastReply() {
+			return lastReplyFrom(responses);
 		},
 		async run(command) {
 			return command.run(this as never);
