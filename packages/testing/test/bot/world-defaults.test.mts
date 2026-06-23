@@ -194,6 +194,7 @@ describe('stateful world defaults', () => {
 		await expect(
 			bot.slash({ name: 'unban-then-list', guildId: guild.id, channel, user: actor.user }),
 		).resolves.toMatchObject({ content: 'none' });
+		expect(bot.worldGuild(guild.id), 'guild must exist in the world').toBeDefined();
 		expect(bot.worldGuild(guild.id)?.bans).not.toContain(target.user.id);
 		await bot.close();
 	});

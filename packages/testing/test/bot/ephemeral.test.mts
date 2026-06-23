@@ -22,6 +22,7 @@ describe('ephemeral replies do not leak into channel reads (F17)', () => {
 		expect(result.ephemeral).toBe(true);
 
 		// But it is NOT part of the channel — absent from both the view and GET /channels/{id}/messages.
+		expect(bot.worldChannel(channel.id), 'channel must exist in the world').toBeDefined();
 		expect(bot.worldChannel(channel.id)?.messages.map(message => message.content)).not.toContain('top-secret');
 		expect(bot.world.channelMessages(channel.id).map(message => message.content)).not.toContain('top-secret');
 		await bot.close();
