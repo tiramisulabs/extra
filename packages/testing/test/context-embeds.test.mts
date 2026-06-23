@@ -163,7 +163,7 @@ describe('expectContent', () => {
 		const ctx = mockCommandContext();
 		await ctx.write({ content: 'reopened campaign' });
 		expect(expectContent(ctx, /reopened/)).toBe('reopened campaign');
-		expect(() => expectContent(ctx, 'closed')).toThrow(/did not match/);
+		expect(() => expectContent(ctx, 'closed')).toThrow(/no reply text matched/);
 
 		const bare = mockCommandContext();
 		await bare.write('bare string reply');
@@ -171,7 +171,42 @@ describe('expectContent', () => {
 
 		const noContent = mockCommandContext();
 		await noContent.write({ embeds: [{ title: 'x' }] });
-		expect(() => expectContent(noContent, /x/)).toThrow(/no reply with content/);
+		expect(() => expectContent(noContent, /x/)).toThrow(/no reply with text/);
+	});
+});
+
+describe('assertion gaps (RegExp render, cross-response, TextDisplay)', () => {
+	test('A: expect* error renders the RegExp pattern, not {}', async () => {
+		const ctx = mockCommandContext();
+		await ctx.write({ embeds: [{ title: 'real' }] });
+		expect(() => expectEmbed(ctx, { contains: /needle/ })).toThrow(/\/needle\//);
+	});
+
+	test('B: expectComponent/components() span ALL responses, not just the last', async () => {
+		const ctx = mockCommandContext();
+		await ctx.write({
+			components: [{ type: 1, components: [{ type: 3, custom_id: 'delete_payout_menu', options: [] }] }],
+		});
+		await ctx.write({ embeds: [{ title: 'Timeout' }] }); // last reply has no component
+
+		expect(ctx.lastComponents()).toEqual([]); // last response: nothing
+		expect(ctx.allComponents().map(component => component.customId)).toContain('delete_payout_menu');
+		expect(() => expectComponent(ctx, { customId: 'delete_payout_menu' })).not.toThrow();
+
+		const e = mockCommandContext();
+		await e.write({ embeds: [{ title: 'First' }] });
+		await e.write({ content: 'plain last' });
+		expect(e.allEmbeds().map(embed => embed.title)).toContain('First');
+		expect(() => expectEmbed(e, { title: 'First' })).not.toThrow();
+	});
+
+	test('C: Components-v2 TextDisplay is surfaced via texts()/lastReply and scanned by expectContent', async () => {
+		const ctx = mockCommandContext();
+		await ctx.write({ components: [{ type: 17, components: [{ type: 10, content: 'Found 2 payouts' }] }] });
+
+		expect(ctx.allTexts()).toContain('Found 2 payouts');
+		expect(ctx.lastReply().texts).toContain('Found 2 payouts');
+		expect(expectContent(ctx, /Found 2 payouts/)).toBe('Found 2 payouts');
 	});
 });
 

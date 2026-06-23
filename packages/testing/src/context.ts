@@ -40,13 +40,31 @@ function lastEmbedsFrom(responses: MockContextResponse[]): EmbedView[] {
 	return responseEmbeds(responses.at(-1)).map(normalizeEmbed);
 }
 
+function allEmbedsFrom(responses: MockContextResponse[]): EmbedView[] {
+	return responses.flatMap(response => responseEmbeds(response).map(normalizeEmbed));
+}
+
+// Stored ActionRow builders, normalized via toJSON (which recurses into children) so harvestComponents can flatten.
+function responseComponentRows(response: MockContextResponse | undefined): unknown[] {
+	if (!response || typeof response === 'string') return [];
+	const rows = (response as { components?: unknown }).components;
+	return Array.isArray(rows) ? rows.map(normalizeBuilder) : [];
+}
+
 function lastComponentsFrom(responses: MockContextResponse[]): InteractiveComponentView[] {
-	const last = responses.at(-1);
-	if (!last || typeof last === 'string') return [];
-	const rows = (last as { components?: unknown }).components;
-	if (!Array.isArray(rows)) return [];
-	// Normalize each stored ActionRow builder (its toJSON recurses into children), then flatten to leaf components.
-	return harvestComponents(rows.map(normalizeBuilder)).components;
+	return harvestComponents(responseComponentRows(responses.at(-1))).components;
+}
+
+function allComponentsFrom(responses: MockContextResponse[]): InteractiveComponentView[] {
+	return responses.flatMap(response => harvestComponents(responseComponentRows(response)).components);
+}
+
+function lastTextsFrom(responses: MockContextResponse[]): string[] {
+	return harvestComponents(responseComponentRows(responses.at(-1))).textDisplays;
+}
+
+function allTextsFrom(responses: MockContextResponse[]): string[] {
+	return responses.flatMap(response => harvestComponents(responseComponentRows(response)).textDisplays);
 }
 
 function lastEmbedFrom(responses: MockContextResponse[], index: number): EmbedView {
@@ -67,6 +85,8 @@ export interface ReplyView {
 	content?: string;
 	embeds: EmbedView[];
 	components: InteractiveComponentView[];
+	/** Components-v2 TextDisplay (type 10) contents of the last reply — where text lives when not in `content`. */
+	texts: string[];
 	flags?: number;
 }
 
@@ -75,13 +95,14 @@ function lastReplyFrom(responses: MockContextResponse[]): ReplyView {
 	if (last === undefined) {
 		throw new TypeError('lastReply: no responses were captured — the handler never replied.');
 	}
-	if (typeof last === 'string') return { content: last, embeds: [], components: [] };
+	if (typeof last === 'string') return { content: last, embeds: [], components: [], texts: [] };
 	const content = (last as { content?: unknown }).content;
 	const flags = (last as { flags?: unknown }).flags;
 	return {
 		...(typeof content === 'string' ? { content } : {}),
 		embeds: lastEmbedsFrom(responses),
 		components: lastComponentsFrom(responses),
+		texts: lastTextsFrom(responses),
 		...(typeof flags === 'number' ? { flags } : {}),
 	};
 }
@@ -149,9 +170,15 @@ export interface MockCommandContext<TOptions extends Record<string, unknown> = R
 	 * `.options` works even when the handler passed seyfert builders (whose fields live under `.toJSON()`).
 	 */
 	lastComponents(): InteractiveComponentView[];
+	/** Every embed across ALL responses (not just the last), normalized — for flows whose embed isn't in the final reply. */
+	allEmbeds(): EmbedView[];
+	/** Every interactive component across ALL responses, flattened + normalized — e.g. a select rendered before a later timeout reply. */
+	allComponents(): InteractiveComponentView[];
+	/** Every Components-v2 TextDisplay (type 10) content across ALL responses. */
+	allTexts(): string[];
 	/**
-	 * The last reply as one typed object: `content` plus normalized `embeds`/`components` (and `flags`). The
-	 * fluid front door for assertions — no casts, no optional chains. THROWS when no response was captured.
+	 * The last reply as one typed object: `content` plus normalized `embeds`/`components`/`texts` (and `flags`).
+	 * The fluid front door for assertions — no casts, no optional chains. THROWS when no response was captured.
 	 */
 	lastReply(): ReplyView;
 	/**
@@ -230,9 +257,15 @@ export interface MockInteractionContextBase {
 	 * `.options` works even when the handler passed seyfert builders (whose fields live under `.toJSON()`).
 	 */
 	lastComponents(): InteractiveComponentView[];
+	/** Every embed across ALL responses (not just the last), normalized — for flows whose embed isn't in the final reply. */
+	allEmbeds(): EmbedView[];
+	/** Every interactive component across ALL responses, flattened + normalized — e.g. a select rendered before a later timeout reply. */
+	allComponents(): InteractiveComponentView[];
+	/** Every Components-v2 TextDisplay (type 10) content across ALL responses. */
+	allTexts(): string[];
 	/**
-	 * The last reply as one typed object: `content` plus normalized `embeds`/`components` (and `flags`). The
-	 * fluid front door for assertions — no casts, no optional chains. THROWS when no response was captured.
+	 * The last reply as one typed object: `content` plus normalized `embeds`/`components`/`texts` (and `flags`).
+	 * The fluid front door for assertions — no casts, no optional chains. THROWS when no response was captured.
 	 */
 	lastReply(): ReplyView;
 	/**
@@ -334,6 +367,15 @@ function mockInteractionBase(options: MockInteractionContextOptions = {}): MockI
 		},
 		lastComponents() {
 			return lastComponentsFrom(responses);
+		},
+		allEmbeds() {
+			return allEmbedsFrom(responses);
+		},
+		allComponents() {
+			return allComponentsFrom(responses);
+		},
+		allTexts() {
+			return allTextsFrom(responses);
 		},
 		lastReply() {
 			return lastReplyFrom(responses);

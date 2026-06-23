@@ -25,11 +25,17 @@ export interface ExpectedEmbed {
  * `DispatchResult` (via its raw `embeds`). One matcher serves both response paths.
  */
 export interface EmbedSource {
+	/** Context all-responses accessor (normalized). */
+	allEmbeds?(): EmbedView[];
+	/** Context last-response accessor (normalized). */
 	lastEmbeds?(): EmbedView[];
+	/** Bot-path `DispatchResult.embeds` array (raw). */
 	embeds?: unknown;
 }
 
 function embedsOf(subject: EmbedSource): EmbedView[] {
+	// Prefer the all-responses accessor, so an embed in an earlier reply still matches.
+	if (typeof subject.allEmbeds === 'function') return subject.allEmbeds();
 	if (typeof subject.lastEmbeds === 'function') return subject.lastEmbeds();
 	return (Array.isArray(subject.embeds) ? subject.embeds : []).map(normalizeEmbed);
 }
@@ -40,6 +46,10 @@ const matchText = (value: unknown, matcher: string | RegExp): boolean => {
 	const text = asText(value);
 	return typeof matcher === 'string' ? text.includes(matcher) : matcher.test(text);
 };
+
+/** Render an expected-matcher for an error message — `JSON.stringify(/x/)` is `{}`, which hides the pattern. */
+const describeMatcher = (value: unknown): string =>
+	JSON.stringify(value, (_key, entry) => (entry instanceof RegExp ? entry.toString() : entry));
 
 function embedText(embed: EmbedView): string {
 	const parts = [
@@ -89,29 +99,43 @@ export function expectEmbed(subject: EmbedSource, expected?: ExpectedEmbed): Emb
 	const match = embeds.find(embed => embedMatches(embed, expected));
 	if (!match) {
 		throw new MockAssertionError(
-			`expectEmbed: no embed matched ${JSON.stringify(expected)}. Embeds sent: ${JSON.stringify(embeds)}.`,
+			`expectEmbed: no embed matched ${describeMatcher(expected)}. Embeds sent: ${JSON.stringify(embeds)}.`,
 		);
 	}
 	return match;
 }
 
 /**
- * Anything that carries a last reply's text: a context fixture (via {@link lastResponse}) or a bot-path
- * `DispatchResult` (via its `content`). One matcher serves both response paths.
+ * Anything that carries user-visible reply text: a context fixture (via its `responses` + `texts()`) or a
+ * bot-path `DispatchResult` (via `content` + `textDisplays`). One matcher serves both response paths.
  */
 export interface ContentSource {
-	lastResponse?(): Record<string, unknown> | string | undefined;
+	/** Context: all captured responses (each one's `content` is scanned). */
+	responses?: (Record<string, unknown> | string)[];
+	/** Context: all Components-v2 TextDisplay (type 10) contents, scanned alongside `content`. */
+	allTexts?(): string[];
+	/** Bot-path `DispatchResult`: latest content. */
 	content?: string;
+	/** Bot-path `DispatchResult`: TextDisplay contents. */
+	textDisplays?: string[];
 }
 
-function contentOf(subject: ContentSource): string | undefined {
-	if (typeof subject.lastResponse === 'function') {
-		const last = subject.lastResponse();
-		if (typeof last === 'string') return last;
-		const content = (last as { content?: unknown } | undefined)?.content;
-		return typeof content === 'string' ? content : undefined;
+/** Every user-visible string on the subject: reply `content` (across all responses) plus TextDisplay contents. */
+function textsOf(subject: ContentSource): string[] {
+	const out: string[] = [];
+	if (Array.isArray(subject.responses)) {
+		for (const response of subject.responses) {
+			if (typeof response === 'string') out.push(response);
+			else if (typeof (response as { content?: unknown }).content === 'string') {
+				out.push((response as { content: string }).content);
+			}
+		}
+	} else if (typeof subject.content === 'string') {
+		out.push(subject.content);
 	}
-	return typeof subject.content === 'string' ? subject.content : undefined;
+	if (typeof subject.allTexts === 'function') out.push(...subject.allTexts());
+	else if (Array.isArray(subject.textDisplays)) out.push(...subject.textDisplays);
+	return out;
 }
 
 const matchesContent = (content: string, matcher: ErrorMatcher): boolean => {
@@ -120,21 +144,22 @@ const matchesContent = (content: string, matcher: ErrorMatcher): boolean => {
 };
 
 /**
- * Assert the last reply's `content` matches the substring / RegExp / predicate. Throws when no reply was sent
- * or it carried no `content`, so it can't pass vacuously the way `expect(lastResponse()?.content).toContain(x)`
- * does when `content` is `undefined`. Works on a mock context fixture and a bot-path `DispatchResult`. Returns
- * the matched content for chaining. (Unlike embeds, `content` is always a plain string — no builder footgun —
- * so the value here is purely the anti-vacuous guard + shared vocabulary.)
+ * Assert a reply's text matches the substring / RegExp / predicate. Scans `content` AND Components-v2 TextDisplay
+ * contents, across all responses — so text rendered in a v2 container (not in `content`) still matches. Throws
+ * when no reply text was sent or none matches, so it can't pass vacuously the way
+ * `expect(lastResponse()?.content).toContain(x)` does when `content` is `undefined`. Works on a mock context
+ * fixture and a bot-path `DispatchResult`. Returns the matched string.
  */
 export function expectContent(subject: ContentSource, matcher: ErrorMatcher): string {
-	const content = contentOf(subject);
-	if (content === undefined) {
-		throw new MockAssertionError('expectContent: no reply with content was sent.');
+	const candidates = textsOf(subject);
+	if (candidates.length === 0) {
+		throw new MockAssertionError('expectContent: no reply with text was sent.');
 	}
-	if (!matchesContent(content, matcher)) {
-		throw new MockAssertionError(`expectContent: content did not match — got ${JSON.stringify(content)}.`);
+	const match = candidates.find(text => matchesContent(text, matcher));
+	if (match === undefined) {
+		throw new MockAssertionError(`expectContent: no reply text matched — saw ${JSON.stringify(candidates)}.`);
 	}
-	return content;
+	return match;
 }
 
 /**
@@ -155,11 +180,17 @@ export interface ExpectedComponent {
  * or a bot-path `DispatchResult` (via its already-normalized `components`). One matcher serves both paths.
  */
 export interface ComponentSource {
+	/** Context all-responses accessor. */
+	allComponents?(): InteractiveComponentView[];
+	/** Context last-response accessor. */
 	lastComponents?(): InteractiveComponentView[];
+	/** Bot-path `DispatchResult.components` array. */
 	components?: unknown;
 }
 
 function componentsOf(subject: ComponentSource): InteractiveComponentView[] {
+	// Prefer the all-responses accessor, so a select in an earlier reply still matches.
+	if (typeof subject.allComponents === 'function') return subject.allComponents();
 	if (typeof subject.lastComponents === 'function') return subject.lastComponents();
 	return Array.isArray(subject.components) ? (subject.components as InteractiveComponentView[]) : [];
 }
@@ -209,7 +240,7 @@ export function expectComponent(subject: ComponentSource, expected?: ExpectedCom
 	const match = components.find(component => componentMatches(component, expected));
 	if (!match) {
 		throw new MockAssertionError(
-			`expectComponent: no component matched ${JSON.stringify(expected)}. Components sent: ${JSON.stringify(components)}.`,
+			`expectComponent: no component matched ${describeMatcher(expected)}. Components sent: ${JSON.stringify(components)}.`,
 		);
 	}
 	return match;
