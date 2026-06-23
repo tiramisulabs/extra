@@ -190,3 +190,54 @@ describe('#8 bot.created() semantic query', () => {
 		await bot.close();
 	});
 });
+
+describe('#4 regression: defer -> non-REST gap -> render collector button', () => {
+	const events: string[] = [];
+
+	// The shape that broke on the REST-quiescence drain: a non-REST await (a DB query) sits between deferReply and
+	// the reply that renders "confirm", so the button lands well after REST first goes quiet.
+	@Declare({ name: 'reopen', description: 'defers, awaits non-REST work, then renders a confirm button' })
+	class ReopenCommand extends Command {
+		async run(ctx: CommandContext) {
+			await ctx.deferReply();
+			await new Promise<void>(resolve => setTimeout(resolve, 40)); // non-REST gap (stands in for a DB query)
+			const row = new ActionRow<Button>().setComponents([
+				new Button().setCustomId('confirm').setLabel('Confirm').setStyle(ButtonStyle.Primary),
+			]);
+			const message = await ctx.editOrReply({ content: 'Reopen?', components: [row] }, true);
+			const interaction = await message.createComponentCollector().waitFor('confirm', 20_000);
+			if (interaction) {
+				events.push('confirmed');
+				await interaction.write({ content: 'reopened' });
+			}
+		}
+	}
+
+	test('untilComponent waits across the non-REST gap, then a source-less click drives it', async () => {
+		events.length = 0;
+		const bot = await createMockBot({ commands: [ReopenCommand] });
+
+		const flow = bot.slash({ name: 'reopen' });
+		await flow.untilComponent('confirm'); // must not bail during the 40ms non-REST gap
+		expect(events).toEqual([]);
+
+		await bot.clickButton('confirm');
+		await flow;
+
+		expect(events).toEqual(['confirmed']);
+		await bot.close();
+	});
+
+	test('the source-based click hatch also drives the parked collector', async () => {
+		events.length = 0;
+		const bot = await createMockBot({ commands: [ReopenCommand] });
+
+		const flow = bot.slash({ name: 'reopen' });
+		const reply = await flow.untilComponent('confirm');
+		await bot.clickButton('confirm', { source: reply });
+		await flow;
+
+		expect(events).toEqual(['confirmed']);
+		await bot.close();
+	});
+});

@@ -1617,24 +1617,46 @@ export class MockBot {
 				dispatchId,
 				user ? (customId, fields) => this.fillModal(customId, fields, { user }) : undefined,
 				id => this.modalOwners.delete(id),
-				(customId, scopeId) => this.awaitRenderedComponent(customId, scopeId),
+				(customId, scopeId, execution, timeoutMs) =>
+					this.awaitRenderedComponent(customId, scopeId, execution, timeoutMs),
 			),
 		);
 	}
 
-	private async awaitRenderedComponent(customId: string, dispatchId: number | undefined): Promise<RecordedAction> {
-		await this.flushPending(dispatchId);
-		const action = this.rest.actions.find(
-			candidate =>
-				(dispatchId === undefined || candidate.dispatchId === dispatchId) &&
-				actionRendersComponent(candidate, customId),
-		);
+	private async awaitRenderedComponent(
+		customId: string,
+		dispatchId: number | undefined,
+		execution: Promise<unknown>,
+		timeoutMs = 5000,
+	): Promise<RecordedAction> {
+		const matches = (candidate: RecordedAction): boolean =>
+			(dispatchId === undefined || candidate.dispatchId === dispatchId) && actionRendersComponent(candidate, customId);
+
+		let action = this.rest.actions.find(matches);
+		if (!action) {
+			// Event-driven, NOT REST-quiescence: the render can land after a non-REST gap (a DB query between
+			// deferReply and the reply), so we wait for the action itself — but bail fast if the handler finishes
+			// without ever rendering, rather than waiting out the timeout.
+			const rendered = this.rest.waitForAction(matches, timeoutMs);
+			rendered.catch(() => {}); // if the completion branch wins the race, don't leave this unhandled
+			const COMPLETED = Symbol('completed');
+			const outcome = await Promise.race([
+				rendered,
+				execution.then(
+					() => COMPLETED,
+					() => COMPLETED,
+				),
+			]);
+			action = outcome === COMPLETED ? this.rest.actions.find(matches) : (outcome as RecordedAction);
+		}
 		if (!action) {
 			throw new Error(
 				`untilComponent: this dispatch settled without rendering a component "${customId}". ` +
 					`The handler must reply with the component (e.g. editOrReply({ components: [...] }, true)) before a collector can drive it.`,
 			);
 		}
+		// Let the handler's continuation run up to the collector park, so a click right after this resolves.
+		await this.flushPending(dispatchId);
 		return action;
 	}
 

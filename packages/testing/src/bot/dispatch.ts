@@ -38,10 +38,16 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		/** Clears same-user modal ownership after timeoutModal consumes the registry entry. */
 		private readonly modalCleaner?: (userId: string) => void,
 		/**
-		 * Drains this dispatch's pending async and resolves with the recorded action that rendered a message
-		 * bearing `customId`; supplied by MockBot so {@link untilComponent} needs no bot handle.
+		 * Waits for the recorded action that renders a message bearing `customId` (event-driven, so it crosses
+		 * non-REST gaps like a DB query), raced against this dispatch completing without it; supplied by MockBot
+		 * so {@link untilComponent} needs no bot handle.
 		 */
-		private readonly componentAwaiter?: (customId: string, dispatchId: number | undefined) => Promise<RecordedAction>,
+		private readonly componentAwaiter?: (
+			customId: string,
+			dispatchId: number | undefined,
+			execution: Promise<unknown>,
+			timeoutMs?: number,
+		) => Promise<RecordedAction>,
 	) {}
 
 	private start(): Promise<T> {
@@ -103,8 +109,12 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 	 * await bot.clickButton('continue');        // drives the collector
 	 * await flow;                               // handler resumes and returns
 	 * ```
+	 *
+	 * The wait is event-driven, so it tolerates non-REST gaps (a DB query between `deferReply` and the reply).
+	 * `timeoutMs` (default 5000) bounds how long to wait for the render; a handler that completes WITHOUT
+	 * rendering fails immediately rather than waiting out the timeout.
 	 */
-	async untilComponent(customId: string): Promise<RecordedAction> {
+	async untilComponent(customId: string, timeoutMs?: number): Promise<RecordedAction> {
 		if (!this.componentAwaiter) {
 			throw new TypeError('Dispatch.untilComponent: this dispatch type cannot render components.');
 		}
@@ -117,7 +127,7 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		this.start();
 		// The awaiting test owns the dispatch promise; swallow a late rejection so this step never unhandles it.
 		this.execution!.catch(() => {});
-		return this.componentAwaiter(customId, this.dispatchId);
+		return this.componentAwaiter(customId, this.dispatchId, this.execution!, timeoutMs);
 	}
 
 	/**
