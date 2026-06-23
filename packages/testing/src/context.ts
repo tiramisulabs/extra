@@ -21,6 +21,38 @@ import {
 
 export type MockContextResponse = Record<string, unknown> | string;
 
+/** Normalize a stored embed to plain data: a seyfert `Embed` builder keeps its fields under `.toJSON()`. */
+function normalizeEmbed(value: unknown): Record<string, unknown> {
+	if (value && typeof (value as { toJSON?: unknown }).toJSON === 'function') {
+		return (value as { toJSON(): Record<string, unknown> }).toJSON();
+	}
+	return value as Record<string, unknown>;
+}
+
+function responseEmbeds(response: MockContextResponse | undefined): unknown[] {
+	if (!response || typeof response === 'string') return [];
+	const embeds = (response as { embeds?: unknown }).embeds;
+	return Array.isArray(embeds) ? embeds : [];
+}
+
+function lastEmbedsFrom(responses: MockContextResponse[]): Record<string, unknown>[] {
+	return responseEmbeds(responses.at(-1)).map(normalizeEmbed);
+}
+
+function lastEmbedFrom(responses: MockContextResponse[], index: number): Record<string, unknown> {
+	if (responses.length === 0) {
+		throw new TypeError('lastEmbed: no responses were captured — the handler never replied.');
+	}
+	const embeds = responseEmbeds(responses.at(-1));
+	if (embeds.length === 0) {
+		throw new TypeError('lastEmbed: the last response has no embeds.');
+	}
+	if (index < 0 || index >= embeds.length) {
+		throw new TypeError(`lastEmbed: index ${index} is out of range — the last response has ${embeds.length} embed(s).`);
+	}
+	return normalizeEmbed(embeds[index]);
+}
+
 export interface MockCommandContextOptions<TOptions extends Record<string, unknown> = Record<string, unknown>> {
 	commandName?: string;
 	fullCommandName?: string;
@@ -69,6 +101,15 @@ export interface MockCommandContext<TOptions extends Record<string, unknown> = R
 	deferReply(): Promise<void>;
 	clearResponses(): void;
 	lastResponse(): MockContextResponse | undefined;
+	/**
+	 * The last response's embed at `index`, normalized to plain data (Discord API shape) so reading
+	 * `.title`/`.description` works even when the handler passed a seyfert `Embed` builder (whose fields live
+	 * under `.toJSON()`). THROWS when there is no response, no embed, or the index is out of range — it never
+	 * returns `undefined`, so a typo can't make an assertion pass vacuously.
+	 */
+	lastEmbed(index?: number): Record<string, unknown>;
+	/** All embeds of the last response, normalized to plain data; `[]` when the last response has none. */
+	lastEmbeds(): Record<string, unknown>[];
 	/**
 	 * Run a command/component/modal's `run()` against this mock (skips the pipeline; the cast lives here,
 	 * not in your test). Only the context is passed, so a command that reads a second `run()` argument
@@ -130,6 +171,15 @@ export interface MockInteractionContextBase {
 	deferReply(): Promise<void>;
 	clearResponses(): void;
 	lastResponse(): MockContextResponse | undefined;
+	/**
+	 * The last response's embed at `index`, normalized to plain data (Discord API shape) so reading
+	 * `.title`/`.description` works even when the handler passed a seyfert `Embed` builder (whose fields live
+	 * under `.toJSON()`). THROWS when there is no response, no embed, or the index is out of range — it never
+	 * returns `undefined`, so a typo can't make an assertion pass vacuously.
+	 */
+	lastEmbed(index?: number): Record<string, unknown>;
+	/** All embeds of the last response, normalized to plain data; `[]` when the last response has none. */
+	lastEmbeds(): Record<string, unknown>[];
 	/**
 	 * Run a command/component/modal's `run()` against this mock (skips the pipeline; the cast lives here,
 	 * not in your test). Only the context is passed, so a command that reads a second `run()` argument
@@ -221,6 +271,12 @@ function mockInteractionBase(options: MockInteractionContextOptions = {}): MockI
 		lastResponse() {
 			return responses.at(-1);
 		},
+		lastEmbed(index = 0) {
+			return lastEmbedFrom(responses, index);
+		},
+		lastEmbeds() {
+			return lastEmbedsFrom(responses);
+		},
 		async run(command) {
 			return command.run(this as never);
 		},
@@ -288,6 +344,12 @@ export function mockCommandContext<TOptions extends Record<string, unknown> = Re
 		},
 		lastResponse() {
 			return responses.at(-1);
+		},
+		lastEmbed(index = 0) {
+			return lastEmbedFrom(responses, index);
+		},
+		lastEmbeds() {
+			return lastEmbedsFrom(responses);
 		},
 		async run(command) {
 			return command.run(this as never);
