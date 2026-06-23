@@ -1,4 +1,13 @@
-import { ActionRow, Button, Command, type CommandContext, Declare, Modal, ModalCommand, type ModalContext } from 'seyfert';
+import {
+	ActionRow,
+	Button,
+	Command,
+	type CommandContext,
+	Declare,
+	Modal,
+	ModalCommand,
+	type ModalContext,
+} from 'seyfert';
 import { ButtonStyle } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
