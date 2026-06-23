@@ -70,6 +70,8 @@ export interface InteractiveComponentView {
 	label?: string;
 	type: number;
 	disabled?: boolean;
+	/** Select-menu choices (string selects), each with its label/value when present. */
+	options?: { label?: string; value?: string }[];
 }
 
 export interface ReactionView {
@@ -600,11 +602,19 @@ function collectInteractiveComponents(value: unknown, out: InteractiveComponentV
 	const raw = asRecord(value);
 	const type = numberValue(raw.type);
 	if (type !== undefined && type >= 2 && type <= 8) {
+		const options = arrayValue(raw.options).map(option => {
+			const opt = asRecord(option);
+			return {
+				...(stringValue(opt.label) === undefined ? {} : { label: stringValue(opt.label) }),
+				...(stringValue(opt.value) === undefined ? {} : { value: stringValue(opt.value) }),
+			};
+		});
 		out.push({
 			type,
 			...(stringValue(raw.custom_id) === undefined ? {} : { customId: stringValue(raw.custom_id) }),
 			...(stringValue(raw.label) === undefined ? {} : { label: stringValue(raw.label) }),
 			...(typeof raw.disabled === 'boolean' ? { disabled: raw.disabled } : {}),
+			...(options.length > 0 ? { options } : {}),
 		});
 	}
 	if (raw.accessory !== undefined) collectInteractiveComponents(raw.accessory, out);

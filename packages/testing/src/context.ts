@@ -8,6 +8,7 @@ import {
 	mockMember,
 	mockUser,
 } from './factories';
+import { harvestComponents, type InteractiveComponentView } from './bot/state';
 import {
 	type MockClient,
 	type MockLogger,
@@ -21,8 +22,8 @@ import {
 
 export type MockContextResponse = Record<string, unknown> | string;
 
-/** Normalize a stored embed to plain data: a seyfert `Embed` builder keeps its fields under `.toJSON()`. */
-function normalizeEmbed(value: unknown): Record<string, unknown> {
+/** Normalize a stored seyfert builder (Embed, ActionRow, …) to plain data — its fields live under `.toJSON()`. */
+function normalizeBuilder(value: unknown): Record<string, unknown> {
 	if (value && typeof (value as { toJSON?: unknown }).toJSON === 'function') {
 		return (value as { toJSON(): Record<string, unknown> }).toJSON();
 	}
@@ -36,7 +37,16 @@ function responseEmbeds(response: MockContextResponse | undefined): unknown[] {
 }
 
 function lastEmbedsFrom(responses: MockContextResponse[]): Record<string, unknown>[] {
-	return responseEmbeds(responses.at(-1)).map(normalizeEmbed);
+	return responseEmbeds(responses.at(-1)).map(normalizeBuilder);
+}
+
+function lastComponentsFrom(responses: MockContextResponse[]): InteractiveComponentView[] {
+	const last = responses.at(-1);
+	if (!last || typeof last === 'string') return [];
+	const rows = (last as { components?: unknown }).components;
+	if (!Array.isArray(rows)) return [];
+	// Normalize each stored ActionRow builder (its toJSON recurses into children), then flatten to leaf components.
+	return harvestComponents(rows.map(normalizeBuilder)).components;
 }
 
 function lastEmbedFrom(responses: MockContextResponse[], index: number): Record<string, unknown> {
@@ -50,7 +60,7 @@ function lastEmbedFrom(responses: MockContextResponse[], index: number): Record<
 	if (index < 0 || index >= embeds.length) {
 		throw new TypeError(`lastEmbed: index ${index} is out of range — the last response has ${embeds.length} embed(s).`);
 	}
-	return normalizeEmbed(embeds[index]);
+	return normalizeBuilder(embeds[index]);
 }
 
 export interface MockCommandContextOptions<TOptions extends Record<string, unknown> = Record<string, unknown>> {
@@ -110,6 +120,12 @@ export interface MockCommandContext<TOptions extends Record<string, unknown> = R
 	lastEmbed(index?: number): Record<string, unknown>;
 	/** All embeds of the last response, normalized to plain data; `[]` when the last response has none. */
 	lastEmbeds(): Record<string, unknown>[];
+	/**
+	 * All interactive components (buttons/selects) of the last response, flattened from its action rows and
+	 * normalized to plain data; `[]` when the last response has none. Reading `.customId`/`.label`/`.disabled`/
+	 * `.options` works even when the handler passed seyfert builders (whose fields live under `.toJSON()`).
+	 */
+	lastComponents(): InteractiveComponentView[];
 	/**
 	 * Run a command/component/modal's `run()` against this mock (skips the pipeline; the cast lives here,
 	 * not in your test). Only the context is passed, so a command that reads a second `run()` argument
@@ -180,6 +196,12 @@ export interface MockInteractionContextBase {
 	lastEmbed(index?: number): Record<string, unknown>;
 	/** All embeds of the last response, normalized to plain data; `[]` when the last response has none. */
 	lastEmbeds(): Record<string, unknown>[];
+	/**
+	 * All interactive components (buttons/selects) of the last response, flattened from its action rows and
+	 * normalized to plain data; `[]` when the last response has none. Reading `.customId`/`.label`/`.disabled`/
+	 * `.options` works even when the handler passed seyfert builders (whose fields live under `.toJSON()`).
+	 */
+	lastComponents(): InteractiveComponentView[];
 	/**
 	 * Run a command/component/modal's `run()` against this mock (skips the pipeline; the cast lives here,
 	 * not in your test). Only the context is passed, so a command that reads a second `run()` argument
@@ -277,6 +299,9 @@ function mockInteractionBase(options: MockInteractionContextOptions = {}): MockI
 		lastEmbeds() {
 			return lastEmbedsFrom(responses);
 		},
+		lastComponents() {
+			return lastComponentsFrom(responses);
+		},
 		async run(command) {
 			return command.run(this as never);
 		},
@@ -350,6 +375,9 @@ export function mockCommandContext<TOptions extends Record<string, unknown> = Re
 		},
 		lastEmbeds() {
 			return lastEmbedsFrom(responses);
+		},
+		lastComponents() {
+			return lastComponentsFrom(responses);
 		},
 		async run(command) {
 			return command.run(this as never);

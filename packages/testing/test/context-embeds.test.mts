@@ -1,7 +1,8 @@
-import { Command, type CommandContext, Declare, Embed } from 'seyfert';
+import { ActionRow, Button, Command, type CommandContext, Declare, Embed } from 'seyfert';
+import { ButtonStyle } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../src/bot/bot';
-import { expectEmbed, mockCommandContext, mockComponentContext } from '../src';
+import { expectComponent, expectContent, expectEmbed, mockCommandContext, mockComponentContext } from '../src';
 
 describe('context path: embed accessors kill the vacuous-pass footgun', () => {
 	test('lastEmbed normalizes a seyfert Embed builder (whose fields live under toJSON)', async () => {
@@ -86,5 +87,90 @@ describe('expectEmbed matcher', () => {
 		const res = await bot.slash({ name: 'card' });
 		expectEmbed(res, { title: 'Card', description: /body/ });
 		await bot.close();
+	});
+});
+
+describe('context path: component accessors + expectComponent', () => {
+	test('lastComponents flattens + normalizes builder action rows', async () => {
+		const ctx = mockCommandContext();
+		await ctx.write({
+			components: [
+				new ActionRow<Button>().setComponents([
+					new Button().setCustomId('go').setLabel('Go').setStyle(ButtonStyle.Primary),
+				]),
+			],
+		});
+
+		// footgun: the raw stored Button builder hides its custom_id under .data (only surfaced via .toJSON())
+		const rawButton = (ctx.lastResponse() as { components: { components: { custom_id?: string }[] }[] }).components[0]
+			.components[0];
+		expect(rawButton.custom_id).toBeUndefined();
+
+		const [button] = ctx.lastComponents();
+		expect(button.customId).toBe('go');
+		expect(button.label).toBe('Go');
+		expect(button.type).toBe(2);
+	});
+
+	test('expectComponent matches customId/type/disabled, select options, and throws when none match', async () => {
+		const ctx = mockCommandContext();
+		await ctx.write({
+			components: [
+				{ type: 1, components: [{ type: 2, custom_id: 'delete_payout_menu', label: 'Delete', disabled: true }] },
+			],
+		});
+		expectComponent(ctx, { customId: 'delete_payout_menu', type: 'button', disabled: true });
+		expect(() => expectComponent(ctx, { customId: 'nope' })).toThrow(/no component matched/);
+
+		const select = mockCommandContext();
+		await select.write({
+			components: [
+				{ type: 1, components: [{ type: 3, custom_id: 'pick', options: [{ label: 'Display c1', value: 'c1' }] }] },
+			],
+		});
+		expectComponent(select, { type: 'select', options: [{ label: /Display/, value: 'c1' }] });
+	});
+
+	test('expectComponent throws (not vacuous) when no component was sent', async () => {
+		const ctx = mockCommandContext();
+		await ctx.write({ content: 'no components here' });
+		expect(() => expectComponent(ctx)).toThrow(/no interactive component/);
+	});
+
+	test('same matcher works on a bot-path DispatchResult', async () => {
+		@Declare({ name: 'menu', description: 'sends a button' })
+		class MenuCommand extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.write({
+					components: [
+						new ActionRow<Button>().setComponents([
+							new Button().setCustomId('manage-account:link:c1').setLabel('Link').setStyle(ButtonStyle.Primary),
+						]),
+					],
+				});
+			}
+		}
+
+		const bot = await createMockBot({ commands: [MenuCommand] });
+		const res = await bot.slash({ name: 'menu' });
+		expectComponent(res, { customId: /manage-account:link/ });
+		await bot.close();
+	});
+});
+
+describe('expectContent', () => {
+	test('matches content (anti-vacuous) on context, bare strings, and DispatchResult', async () => {
+		const ctx = mockCommandContext();
+		await ctx.write({ content: 'reopened campaign' });
+		expect(expectContent(ctx, /reopened/)).toBe('reopened campaign');
+		expect(() => expectContent(ctx, 'closed')).toThrow(/did not match/);
+
+		const bare = mockCommandContext();
+		await bare.write('bare string reply');
+		expectContent(bare, /bare/);
+
+		const noContent = mockCommandContext();
+		await noContent.write({ embeds: [{ title: 'x' }] });
+		expect(() => expectContent(noContent, /x/)).toThrow(/no reply with content/);
 	});
 });
