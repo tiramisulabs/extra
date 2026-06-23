@@ -37,6 +37,11 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		private readonly modalFiller?: (customId: string, fields: Record<string, string>) => Dispatch<DispatchResult>,
 		/** Clears same-user modal ownership after timeoutModal consumes the registry entry. */
 		private readonly modalCleaner?: (userId: string) => void,
+		/**
+		 * Drains this dispatch's pending async and resolves with the recorded action that rendered a message
+		 * bearing `customId`; supplied by MockBot so {@link untilComponent} needs no bot handle.
+		 */
+		private readonly componentAwaiter?: (customId: string, dispatchId: number | undefined) => Promise<RecordedAction>,
 	) {}
 
 	private start(): Promise<T> {
@@ -83,6 +88,36 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		);
 		this.execution!.catch(() => {});
 		return Promise.race([gated.hit, failure.then(() => gated.hit)]);
+	}
+
+	/**
+	 * Start this dispatch and resolve once it has rendered a message carrying `customId` — without awaiting the
+	 * handler to completion. It drains the dispatch's pending async, so a handler that replies, attaches a
+	 * collector, then parks on `collector.waitFor(...)` settles right up to the park instead of blocking the
+	 * await for the full collector timeout. Read top-to-bottom afterwards: the dispatch is left in flight, so a
+	 * source-less {@link MockBot.clickButton} resolves against that reply, and `await dispatch` settles the rest.
+	 *
+	 * ```ts
+	 * const flow = bot.slash({ name: 'setup' });
+	 * await flow.untilComponent('continue');   // reply sent, collector attached, handler parked
+	 * await bot.clickButton('continue');        // drives the collector
+	 * await flow;                               // handler resumes and returns
+	 * ```
+	 */
+	async untilComponent(customId: string): Promise<RecordedAction> {
+		if (!this.componentAwaiter) {
+			throw new TypeError('Dispatch.untilComponent: this dispatch type cannot render components.');
+		}
+		if (this.settled) {
+			throw new TypeError(
+				'Dispatch.untilComponent(): this dispatch already ran to completion - step with untilComponent() before awaiting it.',
+			);
+		}
+		this.releaseCheckpoint();
+		this.start();
+		// The awaiting test owns the dispatch promise; swallow a late rejection so this step never unhandles it.
+		this.execution!.catch(() => {});
+		return this.componentAwaiter(customId, this.dispatchId);
 	}
 
 	/**
@@ -163,5 +198,17 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		this.releaseCheckpoint();
 		this.settled = true;
 		return this.start().then(onfulfilled, onrejected);
+	}
+
+	catch<TResult = never>(
+		onrejected?: ((reason: unknown) => TResult | PromiseLike<TResult>) | null,
+	): Promise<T | TResult> {
+		return this.then(undefined, onrejected);
+	}
+
+	finally(onfinally?: (() => void) | null): Promise<T> {
+		this.releaseCheckpoint();
+		this.settled = true;
+		return this.start().finally(onfinally);
 	}
 }

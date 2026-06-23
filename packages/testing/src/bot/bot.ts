@@ -671,6 +671,37 @@ function findComponentType(components: unknown, customId: string): number | unde
 	return numberValue(findComponentNode(components, customId)?.type);
 }
 
+/**
+ * Entity-create routes for {@link MockBot.created}, mapping a friendly resource name to the POST route that
+ * creates it. `message` is a direct channel send (`POST /channels/:id/messages`), NOT an interaction reply —
+ * for those query {@link Routes.editOriginalResponse}/`followup`.
+ */
+const CREATE_ROUTES = {
+	channel: Routes.createChannel,
+	role: Routes.createRole,
+	message: Routes.createMessage,
+	thread: Routes.createThread,
+	dm: Routes.createDm,
+	webhook: Routes.createWebhook,
+	invite: Routes.createInvite,
+	emoji: Routes.createEmoji,
+	sticker: Routes.createSticker,
+	scheduledEvent: Routes.createScheduledEvent,
+	autoModRule: Routes.createAutoModRule,
+	stageInstance: Routes.createStageInstance,
+} as const satisfies Record<string, RouteMatcher>;
+
+export type CreatedResource = keyof typeof CREATE_ROUTES;
+
+/** True when a recorded REST action's body rendered a component with `customId` (top-level send/edit or an interaction-callback `data` payload). */
+function actionRendersComponent(action: RecordedAction, customId: string): boolean {
+	const body = action.body as { components?: unknown; data?: { components?: unknown } } | undefined;
+	return (
+		findComponentNode(body?.components, customId) !== undefined ||
+		findComponentNode(body?.data?.components, customId) !== undefined
+	);
+}
+
 function selectTypeForInteraction(type: number | undefined): SelectMenuInteractionOptions['componentType'] | undefined {
 	if (type === undefined) return undefined;
 	return type === 3 || (type >= 5 && type <= 8) ? (type as 3 | 5 | 6 | 7 | 8) : undefined;
@@ -1198,10 +1229,13 @@ export class MockBot {
 		sourceProvided: boolean,
 	): void {
 		if (sourceProvided) return;
-		const unsettled = this.dispatches.filter(dispatch => !dispatch.isCompleted);
-		if (unsettled.length === 0) return;
+		// One in-flight dispatch is unambiguous: "the most recent message" is that dispatch's reply, which is the
+		// normal collector flow (a slash parked on waitFor, then a source-less click on its reply). Only 2+ racing
+		// dispatches make the source-less fallback a genuine race.
+		const inFlight = this.dispatches.filter(dispatch => dispatch.started && !dispatch.isCompleted);
+		if (inFlight.length <= 1) return;
 		throw new TypeError(
-			`${verb}: source-less component dispatch for "${customId}" is ambiguous while another dispatch is still running. ` +
+			`${verb}: source-less component dispatch for "${customId}" is ambiguous while ${inFlight.length} dispatches are still running. ` +
 				`Pass source: "message-id" or a RecordedAction whose response is the component message.`,
 		);
 	}
@@ -1351,6 +1385,24 @@ export class MockBot {
 		return this.rest.findAction(matcher, paramsOrFilter);
 	}
 
+	/**
+	 * Semantic query over recorded REST: the entity-create calls for a resource, optionally narrowed by a partial
+	 * body match — so `bot.created('channel', { type: 2 })` reads instead of mapping `bot.actions` to
+	 * `${method} ${route}` strings. Returns the matched {@link RecordedAction}s (read `.body` for the payload).
+	 *
+	 * `'message'` is a direct channel send, not an interaction reply (use `findAction(Routes.editOriginalResponse)`
+	 * for those). See {@link CreatedResource} for the resource set.
+	 */
+	created<TBody = Record<string, unknown>>(
+		resource: CreatedResource,
+		match?: Record<string, unknown>,
+	): TypedMatchedAction<TBody>[] {
+		const route = CREATE_ROUTES[resource];
+		return (
+			match ? this.rest.findActions(route, { body: match }) : this.rest.findActions(route)
+		) as TypedMatchedAction<TBody>[];
+	}
+
 	worldGuild(guildId: string): GuildView | undefined {
 		return this._state.guild(guildId);
 	}
@@ -1496,7 +1548,24 @@ export class MockBot {
 	 */
 	async flushPending(scope?: Dispatch<unknown> | number): Promise<void> {
 		assertRealSetImmediate();
-		const dispatchId = this.inferDrainDispatchId(scope);
+		await this.drainActions(this.inferDrainDispatchId(scope));
+	}
+
+	/**
+	 * Drain ALL pending async across every dispatch until the REST surface quiesces — for the
+	 * "handler responded, then kept doing background REST work (DB writes, follow-up Discord calls)" case where
+	 * awaiting the dispatch resolves at the first response and the rest runs detached. Unlike {@link flushPending}
+	 * it never throws on multiple in-flight dispatches; it is the unscoped "wait for everything to settle" drain.
+	 *
+	 * It can only observe work that eventually touches REST (or a tracked timer); a purely in-memory continuation
+	 * that does no REST is invisible to any drain — there is no general signal for that.
+	 */
+	async settle(): Promise<void> {
+		assertRealSetImmediate();
+		await this.drainActions(undefined);
+	}
+
+	private async drainActions(dispatchId: number | undefined): Promise<void> {
 		let iterations = 0;
 		// Yield until the REST surface stops changing AND nothing is in flight, bounded by iteration count.
 		let lastCount = -1;
@@ -1548,8 +1617,25 @@ export class MockBot {
 				dispatchId,
 				user ? (customId, fields) => this.fillModal(customId, fields, { user }) : undefined,
 				id => this.modalOwners.delete(id),
+				(customId, scopeId) => this.awaitRenderedComponent(customId, scopeId),
 			),
 		);
+	}
+
+	private async awaitRenderedComponent(customId: string, dispatchId: number | undefined): Promise<RecordedAction> {
+		await this.flushPending(dispatchId);
+		const action = this.rest.actions.find(
+			candidate =>
+				(dispatchId === undefined || candidate.dispatchId === dispatchId) &&
+				actionRendersComponent(candidate, customId),
+		);
+		if (!action) {
+			throw new Error(
+				`untilComponent: this dispatch settled without rendering a component "${customId}". ` +
+					`The handler must reply with the component (e.g. editOrReply({ components: [...] }, true)) before a collector can drive it.`,
+			);
+		}
+		return action;
 	}
 
 	private prepareGatewayEventPayload(name: string, d: Record<string, unknown>): Record<string, unknown> {
@@ -2084,8 +2170,10 @@ export class MockBot {
 				messageForInteraction = hydrated;
 			}
 			if (!messageForInteraction && allowSyntheticSource) this.assertSyntheticComponentAllowed('clickButton', customId);
+			const guildId = prepared.guildId === undefined ? hydrated?.guild_id : prepared.guildId;
 			return buttonInteraction({
 				...prepared,
+				...(guildId !== undefined ? { guildId } : {}),
 				...(messageForInteraction ? { message: messageForInteraction } : {}),
 			});
 		});
@@ -2115,8 +2203,11 @@ export class MockBot {
 			const sourceType = selectTypeForInteraction(numberValue(sourceComponent?.type));
 			const preparedWithSourceType = sourceType ? { ...prepared, componentType: sourceType } : prepared;
 			const resolved = resolveSelectResolved(this._world, customId, values, preparedWithSourceType);
+			const guildId =
+				preparedWithSourceType.guildId === undefined ? hydrated?.guild_id : preparedWithSourceType.guildId;
 			return selectMenuInteraction({
 				...preparedWithSourceType,
+				...(guildId !== undefined ? { guildId } : {}),
 				...(resolved ? { resolved } : {}),
 				...(sourceComponent && hydrated ? { message: hydrated } : {}),
 			});

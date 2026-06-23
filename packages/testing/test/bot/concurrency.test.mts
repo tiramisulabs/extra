@@ -194,7 +194,7 @@ describe('concurrent dispatch isolation', () => {
 		await bot.close();
 	});
 
-	test('source-less component dispatch fails while an implicit source owner is still running', async () => {
+	test('source-less component dispatch fails loud while the in-flight owner has not rendered a resolvable message', async () => {
 		let release!: () => void;
 		const hold = new Promise<void>(resolve => {
 			release = resolve;
@@ -225,7 +225,9 @@ describe('concurrent dispatch isolation', () => {
 		const active = bot.slash({ name: 'hold-source' });
 		await active.until(Routes.interactionCallback);
 
-		expect(() => bot.clickButton('claim:123')).toThrow(/source-less component dispatch.+ambiguous/);
+		// One in-flight dispatch is no longer "ambiguous" (a source-less click resolves the most recent message);
+		// but here the owner's reply is still HELD at the gate, so nothing resolves — it must still fail loud.
+		expect(() => bot.clickButton('claim:123')).toThrow(/no source message resolved/);
 		release();
 		await active;
 		await bot.close();
@@ -303,7 +305,7 @@ describe('concurrent dispatch isolation', () => {
 		await bot.close();
 	});
 
-	test('source-less ComponentCommand dispatch fails loud while a sibling dispatch is unresolved', async () => {
+	test('source-less ComponentCommand dispatch fails loud when no message has been sent yet', async () => {
 		let release!: () => void;
 		const barrier = new Promise<void>(resolve => {
 			release = resolve;
@@ -331,7 +333,8 @@ describe('concurrent dispatch isolation', () => {
 		const parked = bot.slash({ name: 'park' });
 		void parked.until(action => action.route.includes('/never-release')).catch(() => {});
 
-		expect(() => bot.clickButton('claim:fresh')).toThrow(/source-less component dispatch.+ambiguous/s);
+		// The parked owner never sent a message, so there is nothing to resolve a source-less click against.
+		expect(() => bot.clickButton('claim:fresh')).toThrow(/no source message resolved/);
 		release();
 		await parked;
 		await bot.close();
