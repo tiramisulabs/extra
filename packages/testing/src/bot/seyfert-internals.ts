@@ -83,3 +83,18 @@ export function clientLifecycle(client: Client): ClientLifecycleInternals {
 export function asUsingClient(client: Client): UsingClient {
 	return client as unknown as UsingClient;
 }
+
+/** Cast the MockGateway to the concrete ShardManager type `Client#setServices` expects (no public ctor type). */
+export function asClientGateway(gateway: unknown): Client['gateway'] {
+	return gateway as Client['gateway'];
+}
+
+/** A per-resource cache store (`client.cache[resource]`) with the optional set/remove the world seeder pokes. */
+export interface CacheResourceStore {
+	set?: (...args: unknown[]) => unknown;
+	remove?: (...args: unknown[]) => unknown;
+}
+
+export function cacheStore(client: Client, resource: string): CacheResourceStore | undefined {
+	return (client.cache as unknown as Record<string, CacheResourceStore | undefined>)[resource];
+}

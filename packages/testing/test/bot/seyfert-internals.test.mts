@@ -56,6 +56,10 @@ describe('seyfert internals contract', () => {
 			'function',
 		);
 
+		// Surfaces the cacheStore()/asClientGateway() helpers index into during world seeding + setServices.
+		expect(typeof client.cache, 'client.cache (world cache seeding via cacheStore)').toBe('object');
+		expect(typeof client.gateway, 'client.gateway (MockGateway swapped via setServices)').toBe('object');
+
 		await bot.close();
 	});
 });

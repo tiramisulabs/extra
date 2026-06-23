@@ -347,80 +347,13 @@ function mockInteractionBase(options: MockInteractionContextOptions = {}): MockI
 export function mockCommandContext<TOptions extends Record<string, unknown> = Record<string, unknown>>(
 	options: MockCommandContextOptions<TOptions> = {},
 ): MockCommandContext<TOptions> {
-	const author = options.author ?? mockUser({ id: options.userId });
-	const guild = options.guild === null ? null : (options.guild ?? mockGuild({ id: options.guildId }));
-	const guildId = guild?.id;
-	const channel = options.channel ?? mockChannel({ id: options.channelId, guildId: guildId ?? null });
-	const member = guild ? (options.member ?? mockMember({ user: author })) : null;
-	const logger = options.logger ?? options.client?.logger ?? mockLogger();
-	const queues = options.queues ?? options.client?.queues ?? mockQueues();
-	const scheduler = options.scheduler ?? options.client?.scheduler ?? mockScheduler();
-	const client =
-		options.client ??
-		mockClient({
-			logger,
-			queues,
-			scheduler,
-			botId: options.botId,
-			applicationId: options.applicationId,
-		});
-	const responses: MockContextResponse[] = [];
-	const recordResponse = async (response: MockContextResponse) => {
-		responses.push(response);
-		return response;
-	};
-
+	// A command context is an interaction context plus command identity + typed options. Build on the shared base
+	// (as the component/modal contexts do) so the response surface lives in exactly one place.
 	return {
+		...mockInteractionBase(options),
 		command: { name: options.commandName ?? 'test' },
 		fullCommandName: options.fullCommandName ?? options.commandName ?? 'test',
-		client,
-		author,
-		user: author,
-		guildId,
-		channelId: channel.id,
-		locale: options.locale ?? 'en-US',
-		guildLocale: options.guildLocale ?? guild?.preferredLocale,
-		async guild() {
-			return guild;
-		},
-		async channel() {
-			return channel;
-		},
-		async me() {
-			return member;
-		},
-		member,
 		options: options.options ?? ({} as TOptions),
-		metadata: options.metadata ?? {},
-		logger,
-		queues,
-		scheduler,
-		responses,
-		write: recordResponse,
-		editOrReply: recordResponse,
-		followup: recordResponse,
-		async deferReply() {},
-		clearResponses() {
-			responses.length = 0;
-		},
-		lastResponse() {
-			return responses.at(-1);
-		},
-		lastEmbed(index = 0) {
-			return lastEmbedFrom(responses, index);
-		},
-		lastEmbeds() {
-			return lastEmbedsFrom(responses);
-		},
-		lastComponents() {
-			return lastComponentsFrom(responses);
-		},
-		lastReply() {
-			return lastReplyFrom(responses);
-		},
-		async run(command) {
-			return command.run(this as never);
-		},
 	};
 }
 

@@ -81,9 +81,18 @@ import {
 	type TypedMatchedAction,
 } from './rest';
 import { FOLLOWUP_ROUTE, Routes, WEBHOOK_MESSAGE_ROUTE } from './routes';
+import {
+	actionRendersComponent,
+	collectComponentCustomIds,
+	findComponentNode,
+	findComponentType,
+	selectTypeForInteraction,
+} from './component-tree';
 import { resolveSelectResolved } from './select-resolved';
 import {
+	asClientGateway,
 	asUsingClient,
+	cacheStore,
 	clientLifecycle,
 	eventsInternals,
 	modalRegistry,
@@ -108,7 +117,6 @@ import {
 	type WorldSnapshot,
 	WorldState,
 	type WorldStateReader,
-	walkComponents,
 } from './state';
 import { type MockWorld, seedWorld, type WorldBuilder } from './world';
 import { applyWorldEvent, WORLD_EVENT_NAMES } from './world-events';
@@ -656,22 +664,6 @@ const realSetImmediate: typeof setImmediate | undefined = capturedSetImmediate
 	: undefined;
 
 /**
- * Walk a message's component tree (action rows plus V2 nesting containers) for a node whose custom_id matches,
- * returning its numeric `type`. Used to cross-check a component dispatch verb against the declared component.
- */
-function findComponentNode(components: unknown, customId: string): Record<string, unknown> | undefined {
-	let found: Record<string, unknown> | undefined;
-	walkComponents(components, node => {
-		if (!found && node.custom_id === customId) found = node;
-	});
-	return found;
-}
-
-function findComponentType(components: unknown, customId: string): number | undefined {
-	return numberValue(findComponentNode(components, customId)?.type);
-}
-
-/**
  * Entity-create routes for {@link MockBot.created}, mapping a friendly resource name to the POST route that
  * creates it. `message` is a direct channel send (`POST /channels/:id/messages`), NOT an interaction reply —
  * for those query {@link Routes.editOriginalResponse}/`followup`.
@@ -692,32 +684,6 @@ const CREATE_ROUTES = {
 } as const satisfies Record<string, RouteMatcher>;
 
 export type CreatedResource = keyof typeof CREATE_ROUTES;
-
-/** True when a recorded REST action's body rendered a component with `customId` (top-level send/edit or an interaction-callback `data` payload). */
-function actionRendersComponent(action: RecordedAction, customId: string): boolean {
-	const body = action.body as { components?: unknown; data?: { components?: unknown } } | undefined;
-	return (
-		findComponentNode(body?.components, customId) !== undefined ||
-		findComponentNode(body?.data?.components, customId) !== undefined
-	);
-}
-
-function selectTypeForInteraction(type: number | undefined): SelectMenuInteractionOptions['componentType'] | undefined {
-	if (type === undefined) return undefined;
-	return type === 3 || (type >= 5 && type <= 8) ? (type as 3 | 5 | 6 | 7 | 8) : undefined;
-}
-
-/** Collect every nested custom_id in a modal's component tree (text inputs, possibly wrapped in Label rows). */
-function collectComponentCustomIds(components: unknown, into: Set<string>): void {
-	if (!Array.isArray(components)) return;
-	for (const node of components) {
-		if (!node || typeof node !== 'object') continue;
-		const entry = node as { custom_id?: string; component?: unknown; components?: unknown };
-		if (typeof entry.custom_id === 'string') into.add(entry.custom_id);
-		collectComponentCustomIds(entry.components, into);
-		if (entry.component) collectComponentCustomIds([entry.component], into);
-	}
-}
 
 /**
  * Yield once so pending async (REST hops, collector onStop continuations) can settle. Uses the real
@@ -1565,21 +1531,39 @@ export class MockBot {
 		await this.drainActions(undefined);
 	}
 
-	private async drainActions(dispatchId: number | undefined): Promise<void> {
-		let iterations = 0;
-		// Yield until the REST surface stops changing AND nothing is in flight, bounded by iteration count.
+	/**
+	 * The single quiescence engine behind every drain: yield macrotasks until the relevant recorded-action count
+	 * stops changing AND nothing is in flight, bounded by an iteration cap (not wall-clock, so it terminates under
+	 * frozen fake timers). `count`/`hasPending` scope what "quiet" means; `aborted` stops early; `tickFirst` yields
+	 * before the first measurement (the flushPending shape) vs after (the until-quiescent shape).
+	 */
+	private async drainWhile(
+		count: () => number,
+		hasPending: () => boolean,
+		opts: { aborted?: () => boolean; maxIterations?: number; tickFirst?: boolean } = {},
+	): Promise<void> {
+		const { aborted, maxIterations = DRAIN_MAX_ITERATIONS, tickFirst = false } = opts;
 		let lastCount = -1;
-		while (true) {
-			await drainTick();
-			const count =
+		let iterations = 0;
+		while (!aborted?.()) {
+			if (tickFirst) await drainTick();
+			const current = count();
+			if (current === lastCount && !hasPending()) return;
+			lastCount = current;
+			if (++iterations > maxIterations) return;
+			if (!tickFirst) await drainTick();
+		}
+	}
+
+	private async drainActions(dispatchId: number | undefined): Promise<void> {
+		await this.drainWhile(
+			() =>
 				dispatchId === undefined
 					? this.rest.actions.length
-					: this.rest.actions.filter(action => action.dispatchId === dispatchId).length;
-			const quiet = count === lastCount && !this.rest.hasPendingRequests(dispatchId);
-			if (quiet) return;
-			lastCount = count;
-			if (++iterations > DRAIN_MAX_ITERATIONS) return;
-		}
+					: this.rest.actions.filter(action => action.dispatchId === dispatchId).length,
+			() => this.rest.hasPendingRequests(dispatchId),
+			{ tickFirst: true },
+		);
 	}
 
 	/**
@@ -1760,18 +1744,11 @@ export class MockBot {
 		// Same guard as advanceTime/flushPending: if the user faked global setImmediate, this drain (reached via
 		// the middleware denial path too) would spin silently to the cap. Fail loud with the fix instead.
 		assertRealSetImmediate();
-		let lastCount = -1;
-		let iterations = 0;
-		while (!aborted()) {
-			const count = this.rest.actions.filter(action => action.dispatchId === dispatchId).length;
-			const quiet = count === lastCount && !this.rest.hasPendingRequests(dispatchId);
-			if (quiet) return;
-			lastCount = count;
-			// Iteration cap (not a wall clock) so the loop terminates even when Date.now() is frozen by the
-			// user's fake timers. Each iteration yields a macrotask, so the bound is generous yet finite.
-			if (++iterations > maxIterations) return;
-			await drainTick();
-		}
+		await this.drainWhile(
+			() => this.rest.actions.filter(action => action.dispatchId === dispatchId).length,
+			() => this.rest.hasPendingRequests(dispatchId),
+			{ aborted, maxIterations },
+		);
 	}
 
 	private async drainTokenUntilQuiescent(
@@ -1781,20 +1758,16 @@ export class MockBot {
 		maxIterations = DRAIN_MAX_ITERATIONS,
 	): Promise<void> {
 		assertRealSetImmediate();
-		let lastCount = -1;
-		let iterations = 0;
-		while (true) {
-			const count = this.rest.actions.filter(
-				action =>
-					this.isInteractionWebhookActionFor(action, applicationId, token) ||
-					this.isInteractionCallbackActionFor(action, token, interactionId),
-			).length;
-			const quiet = count === lastCount && !this.rest.hasPendingRequests();
-			if (quiet) return;
-			lastCount = count;
-			if (++iterations > maxIterations) return;
-			await drainTick();
-		}
+		await this.drainWhile(
+			() =>
+				this.rest.actions.filter(
+					action =>
+						this.isInteractionWebhookActionFor(action, applicationId, token) ||
+						this.isInteractionCallbackActionFor(action, token, interactionId),
+				).length,
+			() => this.rest.hasPendingRequests(),
+			{ maxIterations },
+		);
 	}
 
 	/**
@@ -2608,7 +2581,7 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	client.setServices({
 		rest,
 		// ShardManager is a concrete class in Seyfert; MockGateway mirrors the runtime surface bots test against.
-		gateway: gateway as unknown as Client['gateway'],
+		gateway: asClientGateway(gateway),
 		handleCommand: HandleCommand,
 		...(options.middlewares ? { middlewares: options.middlewares } : {}),
 	});
@@ -2656,12 +2629,10 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 			await client.cache.members?.set(CacheFrom.Test, userId, guildId, member);
 		},
 		cacheSet: async (resource, id, guildId, data) => {
-			const store = (client.cache as unknown as Record<string, { set?: (...a: unknown[]) => unknown }>)[resource];
-			await store?.set?.(CacheFrom.Test, id, guildId, data);
+			await cacheStore(client, resource)?.set?.(CacheFrom.Test, id, guildId, data);
 		},
 		cacheRemove: async (resource, id, guildId) => {
-			const store = (client.cache as unknown as Record<string, { remove?: (...a: unknown[]) => unknown }>)[resource];
-			await store?.remove?.(id, guildId);
+			await cacheStore(client, resource)?.remove?.(id, guildId);
 		},
 		simulateGateway: options.simulateGateway ?? true,
 		state,
