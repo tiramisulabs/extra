@@ -571,8 +571,8 @@ export type MockEvent = Omit<ClientEvent, 'data'> & {
 
 /** Options used to boot an in-process Seyfert client without network transport. */
 export interface MockBotOptions {
-	/** Command classes to register directly. */
-	commands?: MockCommandClass[];
+	/** Command class(es) to register directly — a single class or an array. */
+	commands?: MockCommandClass | MockCommandClass[];
 	/** Component and modal command classes to register directly. */
 	components?: Parameters<Client['components']['set']>[0];
 	/** Event definitions to register directly. */
@@ -2606,8 +2606,9 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	client.applicationId = options.applicationId ?? ((options.client && client.applicationId) || TEST_APPLICATION_ID);
 
 	if (options.commands) {
+		const commands = Array.isArray(options.commands) ? options.commands : [options.commands];
 		// Seyfert's command handler accepts constructor arrays at runtime, but its type expects loaded command metadata.
-		client.commands.set(options.commands as unknown as Parameters<Client['commands']['set']>[0]);
+		client.commands.set(commands as unknown as Parameters<Client['commands']['set']>[0]);
 	}
 	if (options.components) client.components.set(options.components);
 	if (options.events) {

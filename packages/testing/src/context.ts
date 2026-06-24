@@ -322,8 +322,22 @@ function mockInteractionBase(options: MockInteractionContextOptions = {}): MockI
 		});
 	const responses: MockContextResponse[] = [];
 	const recordResponse = async (response: MockContextResponse) => {
-		responses.push(response);
-		return response;
+		responses.push(response); // verbatim — the `responses` log is the contract; the wrapper below is non-enumerable
+		if (typeof response === 'string') return response;
+		const reply = { ...response };
+		// Light unit harness has no component runtime: instead of a cryptic "createComponentCollector is not a
+		// function", direct collector/confirm flows to the bot harness. Non-enumerable so it stays invisible to
+		// deepEqual/spread of the returned reply.
+		Object.defineProperty(reply, 'createComponentCollector', {
+			value() {
+				throw new TypeError(
+					'createComponentCollector is not available on mockCommandContext (the light unit harness has no ' +
+						'component runtime). For collector/confirm flows use createMockBot({ commands: [...] }) and drive them ' +
+						'with bot.slash(...).untilComponent(id) + bot.clickButton(id).',
+				);
+			},
+		});
+		return reply;
 	};
 
 	return {

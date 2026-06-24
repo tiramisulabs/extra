@@ -221,6 +221,21 @@ export interface MockClient extends Record<string, unknown> {
 	scheduler: MockScheduler;
 	botId: string;
 	applicationId: string;
+	/** Entity managers that direct fetch flows to the bot harness (the light client resolves no entities). */
+	guilds: { fetch(...args: unknown[]): never };
+	channels: { fetch(...args: unknown[]): never };
+	users: { fetch(...args: unknown[]): never };
+}
+
+/** A light-client manager whose calls fail loud with guidance instead of crashing on `undefined.fetch`. */
+function unavailableManager(path: string): { fetch(...args: unknown[]): never } {
+	const fail = (): never => {
+		throw new TypeError(
+			`ctx.client.${path} is not available on mockCommandContext (the light unit harness resolves no entities). ` +
+				'For commands that fetch guilds/users/channels (or kick/ban), use createMockBot({ world, commands: [...] }).',
+		);
+	};
+	return { fetch: fail };
 }
 
 export function mockLogger(): MockLogger {
@@ -338,6 +353,9 @@ export function mockClient(options: MockClientOptions = {}): MockClient {
 		scheduler: options.scheduler ?? mockScheduler(),
 		botId: options.botId ?? 'slipher-test-bot',
 		applicationId: options.applicationId ?? 'slipher-test-application',
+		guilds: unavailableManager('guilds'),
+		channels: unavailableManager('channels'),
+		users: unavailableManager('users'),
 		...options.extra,
 	};
 }

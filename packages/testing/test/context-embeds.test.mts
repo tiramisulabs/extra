@@ -232,3 +232,33 @@ describe('lastReply (typed front door)', () => {
 		expect(() => empty.lastReply()).toThrow(/no responses were captured/);
 	});
 });
+
+describe('light harness directs collector/fetch flows to createMockBot (no silent hand-stub)', () => {
+	test('reply.createComponentCollector() throws a directed error, invisible to response comparison', async () => {
+		const ctx = mockCommandContext();
+		const reply = (await ctx.write({ content: 'x' })) as { createComponentCollector(): unknown };
+		expect(() => reply.createComponentCollector()).toThrow(/createMockBot/);
+		// non-enumerable: the verbatim responses log is unaffected
+		expect(ctx.responses).toEqual([{ content: 'x' }]);
+	});
+
+	test('ctx.client.guilds/channels/users.fetch throw a directed error', () => {
+		const ctx = mockCommandContext();
+		expect(() => ctx.client.guilds.fetch('1')).toThrow(/createMockBot/);
+		expect(() => ctx.client.channels.fetch('1')).toThrow(/createMockBot/);
+		expect(() => ctx.client.users.fetch('1')).toThrow(/createMockBot/);
+	});
+
+	test('createMockBot accepts a single command class (sugar)', async () => {
+		@Declare({ name: 'solo', description: 'one command' })
+		class SoloCommand extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.write({ content: 'solo' });
+			}
+		}
+		const bot = await createMockBot({ commands: SoloCommand });
+		const res = await bot.slash({ name: 'solo' });
+		expect(res.content).toBe('solo');
+		await bot.close();
+	});
+});
