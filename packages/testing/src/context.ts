@@ -93,32 +93,6 @@ function lastEmbedFrom(responses: MockContextResponse[], index: number): EmbedVi
 	return normalizeEmbed(embeds[index]);
 }
 
-export interface ReplyView {
-	content?: string;
-	embeds: EmbedView[];
-	components: InteractiveComponentView[];
-	/** Components-v2 TextDisplay (type 10) contents of the last reply — where text lives when not in `content`. */
-	texts: string[];
-	flags?: number;
-}
-
-function lastReplyFrom(responses: MockContextResponse[]): ReplyView {
-	const last = responses.at(-1);
-	if (last === undefined) {
-		throw new TypeError('lastReply: no responses were captured — the handler never replied.');
-	}
-	if (typeof last === 'string') return { content: last, embeds: [], components: [], texts: [] };
-	const content = (last as { content?: unknown }).content;
-	const flags = (last as { flags?: unknown }).flags;
-	return {
-		...(typeof content === 'string' ? { content } : {}),
-		embeds: lastEmbedsFrom(responses),
-		components: lastComponentsFrom(responses),
-		texts: lastTextsFrom(responses),
-		...(typeof flags === 'number' ? { flags } : {}),
-	};
-}
-
 export interface MockCommandContextOptions<TOptions extends Record<string, unknown> = Record<string, unknown>> {
 	commandName?: string;
 	fullCommandName?: string;
@@ -182,17 +156,14 @@ export interface MockCommandContext<TOptions extends Record<string, unknown> = R
 	 * `.options` works even when the handler passed seyfert builders (whose fields live under `.toJSON()`).
 	 */
 	lastComponents(): InteractiveComponentView[];
+	/** Components-v2 TextDisplay (type 10) contents of the last response; `[]` when none. */
+	lastTexts(): string[];
 	/** Every embed across ALL responses (not just the last), normalized — for flows whose embed isn't in the final reply. */
 	allEmbeds(): EmbedView[];
 	/** Every interactive component across ALL responses, flattened + normalized — e.g. a select rendered before a later timeout reply. */
 	allComponents(): InteractiveComponentView[];
 	/** Every Components-v2 TextDisplay (type 10) content across ALL responses. */
 	allTexts(): string[];
-	/**
-	 * The last reply as one typed object: `content` plus normalized `embeds`/`components`/`texts` (and `flags`).
-	 * The fluid front door for assertions — no casts, no optional chains. THROWS when no response was captured.
-	 */
-	lastReply(): ReplyView;
 	/**
 	 * Run the bound command's `run()` against this mock (skips the pipeline; the cast lives here, not in your
 	 * test). The command is bound at creation — `mockCommandContext(MyCommand)` / `mockComponentContext(MyButton)`
@@ -269,17 +240,14 @@ export interface MockInteractionContextBase {
 	 * `.options` works even when the handler passed seyfert builders (whose fields live under `.toJSON()`).
 	 */
 	lastComponents(): InteractiveComponentView[];
+	/** Components-v2 TextDisplay (type 10) contents of the last response; `[]` when none. */
+	lastTexts(): string[];
 	/** Every embed across ALL responses (not just the last), normalized — for flows whose embed isn't in the final reply. */
 	allEmbeds(): EmbedView[];
 	/** Every interactive component across ALL responses, flattened + normalized — e.g. a select rendered before a later timeout reply. */
 	allComponents(): InteractiveComponentView[];
 	/** Every Components-v2 TextDisplay (type 10) content across ALL responses. */
 	allTexts(): string[];
-	/**
-	 * The last reply as one typed object: `content` plus normalized `embeds`/`components`/`texts` (and `flags`).
-	 * The fluid front door for assertions — no casts, no optional chains. THROWS when no response was captured.
-	 */
-	lastReply(): ReplyView;
 	/**
 	 * Run the bound command's `run()` against this mock (skips the pipeline; the cast lives here, not in your
 	 * test). The command is bound at creation — `mockCommandContext(MyCommand)` / `mockComponentContext(MyButton)`
@@ -397,6 +365,9 @@ function mockInteractionBase(
 		lastComponents() {
 			return lastComponentsFrom(responses);
 		},
+		lastTexts() {
+			return lastTextsFrom(responses);
+		},
 		allEmbeds() {
 			return allEmbedsFrom(responses);
 		},
@@ -405,9 +376,6 @@ function mockInteractionBase(
 		},
 		allTexts() {
 			return allTextsFrom(responses);
-		},
-		lastReply() {
-			return lastReplyFrom(responses);
 		},
 		async run() {
 			if (typeof command?.run !== 'function') {

@@ -132,22 +132,22 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 	}
 
 	/**
-	 * The latest reply this dispatch rendered — content + normalized embeds/components — read from its recorded
-	 * REST actions. Works even while the dispatch is PARKED on a collector (not yet settled), so you can assert
-	 * what a flow already produced without awaiting it. Empty when it has rendered nothing yet.
+	 * What this dispatch has rendered so far — content + normalized embeds/components — read from its recorded
+	 * REST actions. Works even while PARKED on a collector (not yet settled), so the accessors below can assert
+	 * what a flow already produced without awaiting it.
 	 */
-	lastReply(): { content?: string; embeds: EmbedView[]; components: InteractiveComponentView[] } {
+	private rendered(): { content?: string; embeds: EmbedView[]; components: InteractiveComponentView[] } {
 		return renderedReply(this.rest.actions, this.dispatchId);
 	}
 
 	/** Normalized embeds of this dispatch's latest reply — also makes a parked flow an `expectEmbed(flow)` subject. */
 	lastEmbeds(): EmbedView[] {
-		return this.lastReply().embeds;
+		return this.rendered().embeds;
 	}
 
 	/** This dispatch's latest reply's embed at `index`; THROWS if it has rendered none or the index is out of range. */
 	lastEmbed(index = 0): EmbedView {
-		const embeds = this.lastReply().embeds;
+		const embeds = this.rendered().embeds;
 		if (embeds.length === 0) {
 			throw new TypeError('Dispatch.lastEmbed: this dispatch has not rendered any embed yet.');
 		}
@@ -159,7 +159,7 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 
 	/** Normalized components of this dispatch's latest reply — also makes a parked flow an `expectComponent(flow)` subject. */
 	lastComponents(): InteractiveComponentView[] {
-		return this.lastReply().components;
+		return this.rendered().components;
 	}
 
 	/**

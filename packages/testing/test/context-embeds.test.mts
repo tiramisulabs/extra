@@ -200,36 +200,24 @@ describe('assertion gaps (RegExp render, cross-response, TextDisplay)', () => {
 		expect(() => expectEmbed(e, { title: 'First' })).not.toThrow();
 	});
 
-	test('C: Components-v2 TextDisplay is surfaced via texts()/lastReply and scanned by expectContent', async () => {
+	test('C: Components-v2 TextDisplay is surfaced via lastTexts()/allTexts() and scanned by expectContent', async () => {
 		const ctx = mockCommandContext();
 		await ctx.write({ components: [{ type: 17, components: [{ type: 10, content: 'Found 2 payouts' }] }] });
 
 		expect(ctx.allTexts()).toContain('Found 2 payouts');
-		expect(ctx.lastReply().texts).toContain('Found 2 payouts');
+		expect(ctx.lastTexts()).toContain('Found 2 payouts');
 		expect(expectContent(ctx, /Found 2 payouts/)).toBe('Found 2 payouts');
 	});
 });
 
-describe('lastReply (typed front door)', () => {
-	test('returns content + typed embeds + components in one object, no casts', async () => {
+describe('lastTexts (last reply Components-v2 TextDisplay)', () => {
+	test('lastTexts is the last response only; allTexts spans every response', async () => {
 		const ctx = mockCommandContext();
-		await ctx.write({
-			content: 'done',
-			embeds: [new Embed().setTitle('Receipt')],
-			components: [
-				new ActionRow<Button>().setComponents([
-					new Button().setCustomId('ok').setLabel('OK').setStyle(ButtonStyle.Primary),
-				]),
-			],
-		});
+		await ctx.write({ components: [{ type: 17, components: [{ type: 10, content: 'Page 1' }] }] });
+		await ctx.write({ components: [{ type: 17, components: [{ type: 10, content: 'Page 2' }] }] });
 
-		const reply = ctx.lastReply();
-		expect(reply.content).toBe('done');
-		expect(reply.embeds[0]?.title).toBe('Receipt'); // EmbedView, typed
-		expect(reply.components[0]?.customId).toBe('ok'); // InteractiveComponentView, typed
-
-		const empty = mockCommandContext();
-		expect(() => empty.lastReply()).toThrow(/no responses were captured/);
+		expect(ctx.lastTexts()).toEqual(['Page 2']); // last response only (symmetric with lastEmbeds/lastComponents)
+		expect(ctx.allTexts()).toEqual(['Page 1', 'Page 2']); // across all responses
 	});
 });
 

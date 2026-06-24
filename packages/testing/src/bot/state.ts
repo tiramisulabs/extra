@@ -664,7 +664,7 @@ export function harvestComponents(components: unknown): {
 /**
  * The latest reply a dispatch rendered, extracted from its recorded REST actions — content + normalized
  * embeds/components. Handles both the interaction-callback body (`body.data.{...}`) and the webhook-edit body
- * (`body.{...}`). Powers `Dispatch.lastReply()`/`lastEmbeds()`/`lastComponents()` (assert a parked flow) and the
+ * (`body.{...}`). Powers `Dispatch.lastEmbeds()`/`lastComponents()` (assert a parked flow) and the
  * `untilComponent` "rendered X instead" diagnostic.
  */
 export function renderedReply(
