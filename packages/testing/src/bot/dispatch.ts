@@ -1,6 +1,7 @@
 import type { Client } from 'seyfert';
 import type { DispatchResult } from './bot';
 import type { MockApiHandler, RecordedAction, RouteMatcher } from './rest';
+import { type EmbedView, type InteractiveComponentView, renderedReply } from './state';
 import { modalRegistry } from './seyfert-internals';
 
 export interface ModalWaiter {
@@ -128,6 +129,37 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		// The awaiting test owns the dispatch promise; swallow a late rejection so this step never unhandles it.
 		this.execution!.catch(() => {});
 		return this.componentAwaiter(customId, this.dispatchId, this.execution!, timeoutMs);
+	}
+
+	/**
+	 * The latest reply this dispatch rendered — content + normalized embeds/components — read from its recorded
+	 * REST actions. Works even while the dispatch is PARKED on a collector (not yet settled), so you can assert
+	 * what a flow already produced without awaiting it. Empty when it has rendered nothing yet.
+	 */
+	lastReply(): { content?: string; embeds: EmbedView[]; components: InteractiveComponentView[] } {
+		return renderedReply(this.rest.actions, this.dispatchId);
+	}
+
+	/** Normalized embeds of this dispatch's latest reply — also makes a parked flow an `expectEmbed(flow)` subject. */
+	lastEmbeds(): EmbedView[] {
+		return this.lastReply().embeds;
+	}
+
+	/** This dispatch's latest reply's embed at `index`; THROWS if it has rendered none or the index is out of range. */
+	lastEmbed(index = 0): EmbedView {
+		const embeds = this.lastReply().embeds;
+		if (embeds.length === 0) {
+			throw new TypeError('Dispatch.lastEmbed: this dispatch has not rendered any embed yet.');
+		}
+		if (index < 0 || index >= embeds.length) {
+			throw new TypeError(`Dispatch.lastEmbed: index ${index} is out of range — rendered ${embeds.length} embed(s).`);
+		}
+		return embeds[index];
+	}
+
+	/** Normalized components of this dispatch's latest reply — also makes a parked flow an `expectComponent(flow)` subject. */
+	lastComponents(): InteractiveComponentView[] {
+		return this.lastReply().components;
 	}
 
 	/**

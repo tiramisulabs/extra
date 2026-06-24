@@ -6,9 +6,11 @@ import {
 	ComponentCommand,
 	type ComponentContext,
 	Declare,
+	Embed,
 } from 'seyfert';
 import { ButtonStyle } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
+import { expectComponent, expectEmbed } from '../../src';
 import { createMockBot } from '../../src/bot/bot';
 import { mockWorld } from '../../src/bot/world';
 
@@ -238,6 +240,90 @@ describe('#4 regression: defer -> non-REST gap -> render collector button', () =
 		await flow;
 
 		expect(events).toEqual(['confirmed']);
+		await bot.close();
+	});
+});
+
+describe('more click/flow DX', () => {
+	test('clickButton auto-synthesizes a source when a ComponentCommand matches the customId (no flag)', async () => {
+		const clicked: string[] = [];
+		class GoButton extends ComponentCommand {
+			componentType = 'Button' as const;
+			customId = 'go';
+			async run(ctx: ComponentContext<'Button'>) {
+				clicked.push(ctx.customId);
+				await ctx.write({ content: 'ok' });
+			}
+		}
+
+		const bot = await createMockBot({ components: [GoButton] });
+		const res = await bot.clickButton('go'); // no source, no allowSyntheticSource
+		expect(clicked).toEqual(['go']);
+		expect(res.content).toBe('ok');
+		await bot.close();
+	});
+
+	test('slash/clickButton accept a userId shorthand (mirrors mockComponentContext)', async () => {
+		const seen: (string | undefined)[] = [];
+		@Declare({ name: 'who', description: 'reports the caller' })
+		class WhoCommand extends Command {
+			async run(ctx: CommandContext) {
+				seen.push(ctx.author.id);
+				await ctx.write({ content: ctx.author.id });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [WhoCommand] });
+		await bot.slash({ name: 'who', userId: '99' });
+		expect(seen).toEqual(['99']);
+		await bot.close();
+	});
+
+	test('a parked flow exposes what it already rendered (flow.lastEmbed + expectComponent(flow))', async () => {
+		const events: string[] = [];
+		@Declare({ name: 'launch', description: 'replies then waits' })
+		class LaunchCommand extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.deferReply();
+				const row = new ActionRow<Button>().setComponents([
+					new Button().setCustomId('go').setLabel('Go').setStyle(ButtonStyle.Primary),
+				]);
+				const message = await ctx.editOrReply(
+					{ content: 'Ready?', embeds: [new Embed().setTitle('Launch')], components: [row] },
+					true,
+				);
+				const interaction = await message.createComponentCollector().waitFor('go', 30_000);
+				if (interaction) events.push('clicked');
+			}
+		}
+
+		const bot = await createMockBot({ commands: [LaunchCommand] });
+		const flow = bot.slash({ name: 'launch' });
+		await flow.untilComponent('go'); // parked on waitFor
+
+		// assert what the parked (not-yet-settled) flow already rendered:
+		expect(flow.lastEmbed().title).toBe('Launch');
+		expect(flow.lastComponents().map(component => component.customId)).toContain('go');
+		expectComponent(flow, { customId: 'go' });
+		expectEmbed(flow, { title: 'Launch' });
+
+		await bot.clickButton('go');
+		await flow;
+		expect(events).toEqual(['clicked']);
+		await bot.close();
+	});
+
+	test('untilComponent error names what was rendered instead', async () => {
+		@Declare({ name: 'reject', description: 'renders a rejection then settles' })
+		class RejectCommand extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.editOrReply({ embeds: [new Embed().setTitle('Not allowed')] }, true);
+			}
+		}
+
+		const bot = await createMockBot({ commands: [RejectCommand] });
+		const flow = bot.slash({ name: 'reject' });
+		await expect(flow.untilComponent('confirm-menu')).rejects.toThrow(/Not allowed/);
 		await bot.close();
 	});
 });

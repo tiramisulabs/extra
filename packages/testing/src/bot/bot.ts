@@ -107,6 +107,7 @@ import {
 	type GuildMemberView,
 	type GuildView,
 	harvestComponents,
+	renderedReply,
 	type InteractiveComponentView,
 	type MessageView,
 	normalizeEmbed,
@@ -924,6 +925,22 @@ export class MockBot {
 	}
 
 	/**
+	 * True when a registered ComponentCommand STATICALLY matches `customId` (by string or RegExp `customId` — not
+	 * a runtime `filter`, which needs a live context). Lets a source-less click auto-target it without the
+	 * `allowSyntheticSource` flag: with no source message there's no live collector, so the command is the only
+	 * unambiguous destination.
+	 */
+	private componentCommandMatches(customId: string): boolean {
+		return this.componentCommands().some(command => {
+			if (command instanceof ModalCommand) return false;
+			const id = (command as { customId?: string | RegExp }).customId;
+			if (typeof id === 'string') return id === customId;
+			if (id instanceof RegExp) return id.test(customId);
+			return false;
+		});
+	}
+
+	/**
 	 * Build a diagnostic for an unmatched component/modal dispatch that distinguishes the two failure modes:
 	 * (a) no handler of the right kind is registered at all, vs (b) one IS registered but its customId/filter
 	 * rejected this customId (e.g. a typo). Mirrors seyfert's `_filter`: the customId predicate is computed
@@ -1634,8 +1651,17 @@ export class MockBot {
 			action = outcome === COMPLETED ? this.rest.actions.find(matches) : (outcome as RecordedAction);
 		}
 		if (!action) {
+			const rendered = renderedReply(this.rest.actions, dispatchId);
+			const parts: string[] = [];
+			if (rendered.content) parts.push(`content ${JSON.stringify(rendered.content)}`);
+			for (const embed of rendered.embeds) {
+				parts.push(`embed ${JSON.stringify(embed.title ?? embed.description ?? '(no title)')}`);
+			}
+			const ids = rendered.components.map(component => component.customId).filter(Boolean);
+			if (ids.length > 0) parts.push(`components [${ids.join(', ')}]`);
+			const summary = parts.length > 0 ? parts.join(', ') : 'nothing';
 			throw new Error(
-				`untilComponent: this dispatch settled without rendering a component "${customId}". ` +
+				`untilComponent: this dispatch settled without rendering a component "${customId}" — it rendered ${summary} instead. ` +
 					`The handler must reply with the component (e.g. editOrReply({ components: [...] }, true)) before a collector can drive it.`,
 			);
 		}
@@ -2023,9 +2049,11 @@ export class MockBot {
 	): Dispatch<R> {
 		this.assertOpen(verb);
 		const prepared = this.applyWorldPermissions({
-			user: this.defaultUser,
 			applicationId: this.client.applicationId,
 			...options,
+			// Resolve the invoking user with explicit `user` > `userId` shorthand > default (computed AFTER the
+			// spread so it isn't clobbered by the default-user injection).
+			user: options.user ?? (options.userId !== undefined ? apiUser({ id: options.userId }) : this.defaultUser),
 		});
 		return this.dispatchInteraction(build(prepared)) as Dispatch<R>;
 	}
@@ -2151,20 +2179,23 @@ export class MockBot {
 		return this.dispatchVia('clickButton', opts, prepared => {
 			const message = this.resolveMessageSource(source);
 			this.assertNoConcurrentImplicitComponentSource('clickButton', customId, source !== undefined);
-			if (!message && !allowSyntheticSource) {
+			// Auto-synthesize when no source resolves but a registered ComponentCommand matches this customId —
+			// unambiguous (no message ⇒ no live collector), so no `allowSyntheticSource` flag needed.
+			const synthetic = allowSyntheticSource || (!message && this.componentCommandMatches(customId));
+			if (!message && !synthetic) {
 				throw new TypeError(
 					`clickButton: no source message resolved for "${customId}". Send the message first, pass source, ` +
 						`or set allowSyntheticSource: true for a ComponentCommand-only dispatch.`,
 				);
 			}
-			if (allowSyntheticSource && !message) this.assertSyntheticComponentAllowed('clickButton', customId);
+			if (synthetic && !message) this.assertSyntheticComponentAllowed('clickButton', customId);
 			const hydrated = message?.id ? this.hydrateSourceMessage(message, { verb: 'clickButton', customId }) : undefined;
 			let messageForInteraction: ApiMessage | undefined;
 			if (hydrated) {
 				this.requireComponentOnMessage('clickButton', customId, hydrated);
 				messageForInteraction = hydrated;
 			}
-			if (!messageForInteraction && allowSyntheticSource) this.assertSyntheticComponentAllowed('clickButton', customId);
+			if (!messageForInteraction && synthetic) this.assertSyntheticComponentAllowed('clickButton', customId);
 			const guildId = prepared.guildId === undefined ? hydrated?.guild_id : prepared.guildId;
 			return buttonInteraction({
 				...prepared,
@@ -2184,16 +2215,17 @@ export class MockBot {
 		return this.dispatchVia('selectMenu', opts, prepared => {
 			const message = this.resolveMessageSource(source);
 			this.assertNoConcurrentImplicitComponentSource('selectMenu', customId, source !== undefined);
-			if (!message && !allowSyntheticSource) {
+			const synthetic = allowSyntheticSource || (!message && this.componentCommandMatches(customId));
+			if (!message && !synthetic) {
 				throw new TypeError(
 					`selectMenu: no source message resolved for "${customId}". Send the message first, pass source, ` +
 						`or set allowSyntheticSource: true for a ComponentCommand-only dispatch.`,
 				);
 			}
-			if (allowSyntheticSource && !message) this.assertSyntheticComponentAllowed('selectMenu', customId);
+			if (synthetic && !message) this.assertSyntheticComponentAllowed('selectMenu', customId);
 			const hydrated = message?.id ? this.hydrateSourceMessage(message, { verb: 'selectMenu', customId }) : undefined;
 			const sourceComponent = hydrated ? this.requireComponentOnMessage('selectMenu', customId, hydrated) : undefined;
-			if (!sourceComponent && allowSyntheticSource) this.assertSyntheticComponentAllowed('selectMenu', customId);
+			if (!sourceComponent && synthetic) this.assertSyntheticComponentAllowed('selectMenu', customId);
 			if (sourceComponent) this.assertSelectValuesMatchSource(customId, values, sourceComponent);
 			const sourceType = selectTypeForInteraction(numberValue(sourceComponent?.type));
 			const preparedWithSourceType = sourceType ? { ...prepared, componentType: sourceType } : prepared;

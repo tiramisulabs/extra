@@ -43,7 +43,7 @@ import {
 	type ThreadMetadata,
 } from './payloads';
 import type { ChannelOverwriteLike } from './permissions';
-import { apiError, ErrorCode } from './rest';
+import { apiError, ErrorCode, type RecordedAction } from './rest';
 import type { MockWorld } from './world';
 
 export interface MessageQuery {
@@ -659,6 +659,35 @@ export function harvestComponents(components: unknown): {
 		if (type === 10 && typeof node.content === 'string') textDisplays.push(node.content);
 	});
 	return { components: interactiveComponents, componentTypes, textDisplays };
+}
+
+/**
+ * The latest reply a dispatch rendered, extracted from its recorded REST actions — content + normalized
+ * embeds/components. Handles both the interaction-callback body (`body.data.{...}`) and the webhook-edit body
+ * (`body.{...}`). Powers `Dispatch.lastReply()`/`lastEmbeds()`/`lastComponents()` (assert a parked flow) and the
+ * `untilComponent` "rendered X instead" diagnostic.
+ */
+export function renderedReply(
+	actions: readonly RecordedAction[],
+	dispatchId?: number,
+): { content?: string; embeds: EmbedView[]; components: InteractiveComponentView[] } {
+	for (let i = actions.length - 1; i >= 0; i--) {
+		const action = actions[i];
+		if (dispatchId !== undefined && action.dispatchId !== dispatchId) continue;
+		const body = asRecord(action.body);
+		const data = asRecord(body.data);
+		const rawEmbeds = Array.isArray(body.embeds) ? body.embeds : Array.isArray(data.embeds) ? data.embeds : undefined;
+		const rawComponents = body.components ?? data.components;
+		const content = stringValue(body.content) ?? stringValue(data.content);
+		if (rawEmbeds !== undefined || rawComponents !== undefined || content !== undefined) {
+			return {
+				...(content === undefined ? {} : { content }),
+				embeds: (rawEmbeds ?? []).map(normalizeEmbed),
+				components: harvestComponents(rawComponents).components,
+			};
+		}
+	}
+	return { embeds: [], components: [] };
 }
 
 export class WorldState implements WorldStateReader {

@@ -179,6 +179,8 @@ function encodeOptions(
 
 export interface BaseInteractionOptions {
 	user?: ApiUser;
+	/** Shorthand: the invoking user's id (builds the user). `user` wins if both are given. Mirrors mockComponentContext. */
+	userId?: string;
 	/**
 	 * The invoking guild member. Accepts either a loose options bag or a full {@link ApiMember} (so
 	 * `apiMember({ roles: ['r1'] })` can be passed directly, no cast). The `user` is owned by the
@@ -250,7 +252,7 @@ export interface ApiInteractionPayload {
 function baseInteraction(options: BaseInteractionOptions, type: number): ApiInteractionPayload {
 	const id = mockId();
 	// Clone so two dispatches built from the same `user` object never share a reference (mutation leak).
-	const user = { ...(options.user ?? apiUser()) };
+	const user = { ...(options.user ?? apiUser(options.userId === undefined ? {} : { id: options.userId })) };
 	const dm = options.guildId === null;
 	const guildId = dm ? undefined : (options.guildId ?? options.channel?.guild_id ?? TEST_GUILD_ID);
 	const channel = options.channel ?? apiChannel({ id: TEST_CHANNEL_ID, guildId: guildId ?? null });
