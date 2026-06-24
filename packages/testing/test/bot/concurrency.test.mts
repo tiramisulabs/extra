@@ -211,22 +211,13 @@ describe('concurrent dispatch isolation', () => {
 			}
 		}
 
-		class ClaimButton extends ComponentCommand {
-			componentType = 'Button' as const;
-			filter(ctx: ComponentContext<'Button'>) {
-				return ctx.customId === 'claim:123';
-			}
-			async run(ctx: ComponentContext<'Button'>) {
-				await ctx.write({ content: 'clicked' });
-			}
-		}
-
-		const bot = await createMockBot({ commands: [HoldSourceCommand], components: [ClaimButton] });
+		const bot = await createMockBot({ commands: [HoldSourceCommand] });
 		const active = bot.slash({ name: 'hold-source' });
 		await active.until(Routes.interactionCallback);
 
 		// One in-flight dispatch is no longer "ambiguous" (a source-less click resolves the most recent message);
-		// but here the owner's reply is still HELD at the gate, so nothing resolves — it must still fail loud.
+		// but here the owner's reply is still HELD at the gate, and no ComponentCommand matches to auto-synthesize,
+		// so nothing resolves — it must still fail loud.
 		expect(() => bot.clickButton('claim:123')).toThrow(/no source message resolved/);
 		release();
 		await active;
@@ -305,7 +296,7 @@ describe('concurrent dispatch isolation', () => {
 		await bot.close();
 	});
 
-	test('source-less ComponentCommand dispatch fails loud when no message has been sent yet', async () => {
+	test('source-less ComponentCommand dispatch auto-synthesizes even with another dispatch parked', async () => {
 		let release!: () => void;
 		const barrier = new Promise<void>(resolve => {
 			release = resolve;
@@ -333,8 +324,10 @@ describe('concurrent dispatch isolation', () => {
 		const parked = bot.slash({ name: 'park' });
 		void parked.until(action => action.route.includes('/never-release')).catch(() => {});
 
-		// The parked owner never sent a message, so there is nothing to resolve a source-less click against.
-		expect(() => bot.clickButton('claim:fresh')).toThrow(/no source message resolved/);
+		// No message resolves, but the registered ComponentCommand matches — so a source-less click auto-synthesizes
+		// and dispatches it, even with another dispatch parked in flight.
+		const result = await bot.clickButton('claim:fresh');
+		expect(result.reply?.body).toMatchObject({ data: { content: 'clicked' } });
 		release();
 		await parked;
 		await bot.close();

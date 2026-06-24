@@ -88,9 +88,10 @@ describe('component flows', () => {
 		await bot.close();
 	});
 
-	test('clickButton without a source fails by default for ComponentCommand-only dispatch', async () => {
+	test('clickButton without a source auto-synthesizes for a registered ComponentCommand (no flag)', async () => {
 		const bot = await createMockBot({ components: [ConfirmButton] });
-		expect(() => bot.clickButton('confirm')).toThrow(/no source message resolved/);
+		const result = await bot.clickButton('confirm');
+		expect(result.reply?.body).toMatchObject({ data: { content: 'Confirmed!' } });
 		await bot.close();
 	});
 
@@ -121,7 +122,7 @@ describe('component flows', () => {
 		await bot.close();
 	});
 
-	test('selectMenu without a source fails by default for ComponentCommand-only dispatch', async () => {
+	test('selectMenu without a source auto-synthesizes for a registered ComponentCommand (no flag)', async () => {
 		class PickComponent extends ComponentCommand {
 			componentType = 'StringSelect' as const;
 			filter(ctx: ComponentContext<'StringSelect'>) {
@@ -133,7 +134,8 @@ describe('component flows', () => {
 		}
 
 		const bot = await createMockBot({ components: [PickComponent] });
-		expect(() => bot.selectMenu('pick-synthetic', ['red'])).toThrow(/no source message resolved/);
+		const result = await bot.selectMenu('pick-synthetic', ['red']);
+		expect(result.reply?.body).toMatchObject({ data: { content: 'red' } });
 		await bot.close();
 	});
 

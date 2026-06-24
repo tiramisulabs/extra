@@ -925,18 +925,19 @@ export class MockBot {
 	}
 
 	/**
-	 * True when a registered ComponentCommand STATICALLY matches `customId` (by string or RegExp `customId` — not
-	 * a runtime `filter`, which needs a live context). Lets a source-less click auto-target it without the
-	 * `allowSyntheticSource` flag: with no source message there's no live collector, so the command is the only
-	 * unambiguous destination.
+	 * True when a registered ComponentCommand could handle `customId` — by a string/RegExp `customId`, or because
+	 * it has a `filter()` (which routes dynamically at dispatch, so it can't be ruled out statically). Lets a
+	 * source-less click auto-target it without the `allowSyntheticSource` flag: with no source there's no live
+	 * collector, so a ComponentCommand is the only destination; a customId that ultimately matches none fails loud
+	 * at dispatch ("no handler matched").
 	 */
 	private componentCommandMatches(customId: string): boolean {
 		return this.componentCommands().some(command => {
 			if (command instanceof ModalCommand) return false;
-			const id = (command as { customId?: string | RegExp }).customId;
-			if (typeof id === 'string') return id === customId;
-			if (id instanceof RegExp) return id.test(customId);
-			return false;
+			const handler = command as { customId?: string | RegExp; filter?: unknown };
+			if (typeof handler.customId === 'string') return handler.customId === customId;
+			if (handler.customId instanceof RegExp) return handler.customId.test(customId);
+			return typeof handler.filter === 'function';
 		});
 	}
 
@@ -2179,8 +2180,8 @@ export class MockBot {
 		return this.dispatchVia('clickButton', opts, prepared => {
 			const message = this.resolveMessageSource(source);
 			this.assertNoConcurrentImplicitComponentSource('clickButton', customId, source !== undefined);
-			// Auto-synthesize when no source resolves but a registered ComponentCommand matches this customId —
-			// unambiguous (no message ⇒ no live collector), so no `allowSyntheticSource` flag needed.
+			// Auto-synthesize when no source resolves but a ComponentCommand could handle this customId (incl.
+			// RegExp/filter handlers) — unambiguous (no message ⇒ no live collector), so no flag needed.
 			const synthetic = allowSyntheticSource || (!message && this.componentCommandMatches(customId));
 			if (!message && !synthetic) {
 				throw new TypeError(
