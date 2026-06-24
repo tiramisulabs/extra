@@ -1,3 +1,14 @@
+import {
+	Command,
+	type CommandContext,
+	ComponentCommand,
+	type ComponentContext,
+	createStringOption,
+	Declare,
+	ModalCommand,
+	type ModalContext,
+	Options,
+} from 'seyfert';
 import { assert, describe, expect, test } from 'vitest';
 import {
 	channelOption,
@@ -211,43 +222,111 @@ describe('mockCommandContext', () => {
 		assert.equal(ctx.scheduler.tasks.at(-1)?.name, 'reminder');
 	});
 
-	test('ctx.run() executes a command body against the mock without a call-site cast', async () => {
-		class BanCommand {
-			async run(context: { options: { user: { id: string } }; editOrReply(r: { content: string }): unknown }) {
-				await context.editOrReply({ content: `Banned ${context.options.user.id}` });
+	test('mockCommandContext(Command) infers typed options + name; ctx.run() executes it', async () => {
+		const banOptions = { reason: createStringOption({ description: 'why', required: true }) };
+		@Declare({ name: 'ban', description: 'bans a user' })
+		@Options(banOptions)
+		class BanCommand extends Command {
+			async run(ctx: CommandContext<typeof banOptions>) {
+				await ctx.editOrReply({ content: `Banned: ${ctx.options.reason}` });
 			}
 		}
 
-		const ctx = mockCommandContext({ commandName: 'ban', options: { user: { id: '123' } } });
-		await ctx.run(new BanCommand());
+		const ctx = mockCommandContext(BanCommand, { options: { reason: 'spam' } }); // options.reason autocompleted/typed
+		await ctx.run(); // no argument — the command is bound at creation
 
-		expect(ctx.lastResponse()).toMatchObject({ content: 'Banned 123' });
+		expect(ctx.command.name).toBe('ban'); // derived from @Declare, not the 'test' default
+		expect(ctx.lastResponse()).toMatchObject({ content: 'Banned: spam' });
 	});
 
-	test('ctx.run() surfaces errors thrown by the command body', async () => {
-		class BoomCommand {
+	test('ctx.run() surfaces errors thrown by the bound command', async () => {
+		@Declare({ name: 'boom', description: 'throws' })
+		class BoomCommand extends Command {
 			async run() {
 				throw new Error('boom');
 			}
 		}
 
-		const ctx = mockCommandContext();
-		await expect(ctx.run(new BoomCommand())).rejects.toThrow('boom');
+		const ctx = mockCommandContext(BoomCommand);
+		await expect(ctx.run()).rejects.toThrow('boom');
 	});
 
-	test('ctx.run() accepts commands whose run() takes extra parameters (no cast)', async () => {
-		// Guards the signature: a run() with a second param must still be assignable.
-		// If the param type narrows back to a single arg, this file fails to typecheck.
-		class WithMetadata {
-			async run(context: { editOrReply(r: { content: string }): unknown }, _metadata: { requestId: string }) {
-				await context.editOrReply({ content: 'ok' });
+	test('ctx.run() runs a bound command whose run() takes an extra parameter', async () => {
+		// Guards any-arity: a command whose run() has a second (optional) param still binds + runs. A REQUIRED
+		// second param can't override Command.run(ctx) — seyfert commands are 1-arg by contract — so optional is
+		// the only valid shape here, and it must stay assignable.
+		@Declare({ name: 'meta', description: 'extra run param' })
+		class WithMetadata extends Command {
+			async run(ctx: CommandContext, _metadata?: { requestId: string }) {
+				await ctx.editOrReply({ content: 'ok' });
 			}
 		}
 
-		const ctx = mockCommandContext();
-		await ctx.run(new WithMetadata());
+		const ctx = mockCommandContext(WithMetadata);
+		await ctx.run();
 
 		expect(ctx.lastResponse()).toMatchObject({ content: 'ok' });
+	});
+
+	test('ctx.run() throws when the context was built without a command (object form)', async () => {
+		const ctx = mockCommandContext({ commandName: 'sink' });
+		await expect(ctx.run()).rejects.toThrow(/no command bound/);
+	});
+
+	test('mockComponentContext(ComponentClass) derives componentType/customId and binds run()', async () => {
+		const seen: string[] = [];
+		class ConfirmButton extends ComponentCommand {
+			componentType = 'Button' as const;
+			customId = 'confirm';
+			async run(ctx: ComponentContext<'Button'>) {
+				seen.push(ctx.customId);
+				await ctx.write({ content: 'clicked' });
+			}
+		}
+
+		const ctx = mockComponentContext(ConfirmButton);
+		expect(ctx.componentType).toBe('Button'); // derived from the class
+		expect(ctx.customId).toBe('confirm');
+		await ctx.run();
+
+		expect(seen).toEqual(['confirm']);
+		expect(ctx.lastResponse()).toMatchObject({ content: 'clicked' });
+	});
+
+	test('mockModalContext(ModalClass) derives customId and binds run()', async () => {
+		const seen: string[] = [];
+		class FeedbackModal extends ModalCommand {
+			customId = 'feedback';
+			async run(ctx: ModalContext) {
+				seen.push(ctx.customId);
+				await ctx.write({ content: 'submitted' });
+			}
+		}
+
+		const ctx = mockModalContext(FeedbackModal);
+		expect(ctx.customId).toBe('feedback');
+		await ctx.run();
+
+		expect(seen).toEqual(['feedback']);
+		expect(ctx.lastResponse()).toMatchObject({ content: 'submitted' });
+	});
+
+	test('mockScene(Command) wires entities + a class-bound, typed-options ctx', async () => {
+		const banOptions = { reason: createStringOption({ description: 'why', required: true }) };
+		@Declare({ name: 'ban', description: 'bans' })
+		@Options(banOptions)
+		class BanCommand extends Command {
+			async run(ctx: CommandContext<typeof banOptions>) {
+				await ctx.editOrReply({ content: `Banned ${ctx.options.reason}` });
+			}
+		}
+
+		const scene = mockScene(BanCommand, { options: { reason: 'spam' }, guildId: '42' });
+		expect(scene.guild?.id).toBe('42');
+		await scene.ctx.run();
+
+		expect(scene.ctx.command.name).toBe('ban');
+		expect(scene.ctx.lastResponse()).toMatchObject({ content: 'Banned spam' });
 	});
 });
 

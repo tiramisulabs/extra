@@ -8,6 +8,8 @@ import {
 	mockMember,
 	mockUser,
 } from './factories';
+import type { ComponentCommand, ModalCommand } from 'seyfert';
+import type { SlashCommandClass, SlashOptionsOf } from './bot/bot';
 import { type EmbedView, harvestComponents, type InteractiveComponentView, normalizeEmbed } from './bot/state';
 import {
 	type MockClient,
@@ -21,6 +23,16 @@ import {
 } from './stubs';
 
 export type MockContextResponse = Record<string, unknown> | string;
+
+/** A concrete `ComponentCommand` subclass — the class-first arg of {@link mockComponentContext}. */
+export type ComponentCommandClass = new () => ComponentCommand;
+/** A concrete `ModalCommand` subclass — the class-first arg of {@link mockModalContext}. */
+export type ModalCommandClass = new () => ModalCommand;
+
+/** A command/component/modal instance bound to a context so `ctx.run()` needs no argument. `any[]` mirrors the
+ *  prior ctx.run signature so a handler whose `run` takes a typed ctx (or extra params) stays assignable; `run?`
+ *  tolerates seyfert typing `Command.run` as possibly-undefined (it always exists on a constructed instance). */
+type RunnableCommand = { run?(...args: any[]): unknown };
 
 /** Normalize a stored seyfert builder (Embed, ActionRow, …) to plain data — its fields live under `.toJSON()`. */
 function normalizeBuilder(value: unknown): Record<string, unknown> {
@@ -182,11 +194,11 @@ export interface MockCommandContext<TOptions extends Record<string, unknown> = R
 	 */
 	lastReply(): ReplyView;
 	/**
-	 * Run a command/component/modal's `run()` against this mock (skips the pipeline; the cast lives here,
-	 * not in your test). Only the context is passed, so a command that reads a second `run()` argument
-	 * should use the mock bot instead.
+	 * Run the bound command's `run()` against this mock (skips the pipeline; the cast lives here, not in your
+	 * test). The command is bound at creation — `mockCommandContext(MyCommand)` / `mockComponentContext(MyButton)`
+	 * / `mockModalContext(MyModal)` — so this takes no argument. Throws if the context was built without a command.
 	 */
-	run(command: { run(...args: any[]): unknown }): Promise<unknown>;
+	run(): Promise<unknown>;
 }
 
 export interface MockInteractionContextOptions {
@@ -269,11 +281,11 @@ export interface MockInteractionContextBase {
 	 */
 	lastReply(): ReplyView;
 	/**
-	 * Run a command/component/modal's `run()` against this mock (skips the pipeline; the cast lives here,
-	 * not in your test). Only the context is passed, so a command that reads a second `run()` argument
-	 * should use the mock bot instead.
+	 * Run the bound command's `run()` against this mock (skips the pipeline; the cast lives here, not in your
+	 * test). The command is bound at creation — `mockCommandContext(MyCommand)` / `mockComponentContext(MyButton)`
+	 * / `mockModalContext(MyModal)` — so this takes no argument. Throws if the context was built without a command.
 	 */
-	run(command: { run(...args: any[]): unknown }): Promise<unknown>;
+	run(): Promise<unknown>;
 }
 
 export interface MockComponentContext extends MockInteractionContextBase {
@@ -302,7 +314,10 @@ export interface MockModalContext extends MockInteractionContextBase {
 	};
 }
 
-function mockInteractionBase(options: MockInteractionContextOptions = {}): MockInteractionContextBase {
+function mockInteractionBase(
+	options: MockInteractionContextOptions = {},
+	command?: RunnableCommand,
+): MockInteractionContextBase {
 	const author = options.author ?? mockUser({ id: options.userId });
 	const guild = options.guild === null ? null : (options.guild ?? mockGuild({ id: options.guildId }));
 	const guildId = guild?.id;
@@ -394,29 +409,67 @@ function mockInteractionBase(options: MockInteractionContextOptions = {}): MockI
 		lastReply() {
 			return lastReplyFrom(responses);
 		},
-		async run(command) {
+		async run() {
+			if (typeof command?.run !== 'function') {
+				throw new TypeError(
+					'ctx.run(): no command bound to this context. Build it with its command class — ' +
+						'e.g. mockCommandContext(MyCommand) / mockComponentContext(MyButton) / mockModalContext(MyModal).',
+				);
+			}
 			return command.run(this as never);
 		},
 	};
 }
 
+/** Options for the class-first {@link mockCommandContext}: the context fields, with `options` typed to the command. */
+export type CommandClassOptions<C extends SlashCommandClass> = Omit<MockCommandContextOptions, 'options'> & {
+	options?: SlashOptionsOf<C>;
+};
+
+// Class-first (preferred): infers `options` from the command, derives the name from @Declare, binds `ctx.run()`.
+export function mockCommandContext<C extends SlashCommandClass>(
+	command: C,
+	options?: CommandClassOptions<C>,
+): MockCommandContext<SlashOptionsOf<C>>;
+// Object-form (escape, no command): a response sink / identity-only context. `ctx.run()` throws (nothing bound).
 export function mockCommandContext<TOptions extends Record<string, unknown> = Record<string, unknown>>(
-	options: MockCommandContextOptions<TOptions> = {},
-): MockCommandContext<TOptions> {
+	options?: MockCommandContextOptions<TOptions>,
+): MockCommandContext<TOptions>;
+export function mockCommandContext(
+	commandOrOptions: SlashCommandClass | MockCommandContextOptions = {},
+	classOptions?: MockCommandContextOptions,
+): MockCommandContext {
+	const isClass = typeof commandOrOptions === 'function';
+	const instance = isClass ? new (commandOrOptions as SlashCommandClass)() : undefined;
+	const options = (isClass ? classOptions : (commandOrOptions as MockCommandContextOptions)) ?? {};
+	const name = options.commandName ?? instance?.name ?? 'test';
 	// A command context is an interaction context plus command identity + typed options. Build on the shared base
 	// (as the component/modal contexts do) so the response surface lives in exactly one place.
 	return {
-		...mockInteractionBase(options),
-		command: { name: options.commandName ?? 'test' },
-		fullCommandName: options.fullCommandName ?? options.commandName ?? 'test',
-		options: options.options ?? ({} as TOptions),
+		...mockInteractionBase(options, instance),
+		command: { name },
+		fullCommandName: options.fullCommandName ?? name,
+		options: options.options ?? {},
 	};
 }
 
-export function mockComponentContext(options: MockComponentContextOptions = {}): MockComponentContext {
-	const base = mockInteractionBase(options);
-	const customId = options.customId ?? 'test-component';
-	const componentType = options.componentType ?? 'Button';
+// Class-first (preferred): derives componentType (+ customId when a plain string) from the class, binds ctx.run().
+export function mockComponentContext<C extends ComponentCommandClass>(
+	command: C,
+	options?: MockComponentContextOptions,
+): MockComponentContext;
+// Object-form (escape, no command): ctx.run() throws (nothing bound).
+export function mockComponentContext(options?: MockComponentContextOptions): MockComponentContext;
+export function mockComponentContext(
+	commandOrOptions: ComponentCommandClass | MockComponentContextOptions = {},
+	classOptions?: MockComponentContextOptions,
+): MockComponentContext {
+	const isClass = typeof commandOrOptions === 'function';
+	const instance = isClass ? new (commandOrOptions as ComponentCommandClass)() : undefined;
+	const options = (isClass ? classOptions : (commandOrOptions as MockComponentContextOptions)) ?? {};
+	const base = mockInteractionBase(options, instance);
+	const customId = options.customId ?? (typeof instance?.customId === 'string' ? instance.customId : 'test-component');
+	const componentType = options.componentType ?? instance?.componentType ?? 'Button';
 	const values = options.values ?? [];
 	let deferredUpdate = false;
 
@@ -442,9 +495,22 @@ export function mockComponentContext(options: MockComponentContextOptions = {}):
 	};
 }
 
-export function mockModalContext(options: MockModalContextOptions = {}): MockModalContext {
-	const base = mockInteractionBase(options);
-	const customId = options.customId ?? 'test-modal';
+// Class-first (preferred): derives customId (when a plain string) from the class, binds ctx.run().
+export function mockModalContext<C extends ModalCommandClass>(
+	command: C,
+	options?: MockModalContextOptions,
+): MockModalContext;
+// Object-form (escape, no command): ctx.run() throws (nothing bound).
+export function mockModalContext(options?: MockModalContextOptions): MockModalContext;
+export function mockModalContext(
+	commandOrOptions: ModalCommandClass | MockModalContextOptions = {},
+	classOptions?: MockModalContextOptions,
+): MockModalContext {
+	const isClass = typeof commandOrOptions === 'function';
+	const instance = isClass ? new (commandOrOptions as ModalCommandClass)() : undefined;
+	const options = (isClass ? classOptions : (commandOrOptions as MockModalContextOptions)) ?? {};
+	const base = mockInteractionBase(options, instance);
+	const customId = options.customId ?? (typeof instance?.customId === 'string' ? instance.customId : 'test-modal');
 	const fields = options.fields ?? {};
 	const components = Object.entries(fields).map(([fieldCustomId, value]) => ({
 		type: 18 as const,
@@ -484,19 +550,26 @@ export interface MockScene<TOptions extends Record<string, unknown> = Record<str
  * guild, the member wraps the user, and `ctx` is built from all of them. Removes the boilerplate of threading
  * ids between `mockUser`/`mockGuild`/`mockChannel`/`mockMember` and `mockCommandContext`.
  */
+export function mockScene<C extends SlashCommandClass>(
+	command: C,
+	options?: CommandClassOptions<C>,
+): MockScene<SlashOptionsOf<C>>;
 export function mockScene<TOptions extends Record<string, unknown> = Record<string, unknown>>(
-	options: MockCommandContextOptions<TOptions> = {},
-): MockScene<TOptions> {
+	options?: MockCommandContextOptions<TOptions>,
+): MockScene<TOptions>;
+export function mockScene(
+	commandOrOptions: SlashCommandClass | MockCommandContextOptions = {},
+	classOptions?: MockCommandContextOptions,
+): MockScene {
+	const isClass = typeof commandOrOptions === 'function';
+	const options = (isClass ? classOptions : (commandOrOptions as MockCommandContextOptions)) ?? {};
 	const user = options.author ?? mockUser({ id: options.userId });
 	const guild = options.guild === null ? null : (options.guild ?? mockGuild({ id: options.guildId }));
 	const channel = options.channel ?? mockChannel({ id: options.channelId, guildId: guild ? guild.id : null });
 	const member = guild ? (options.member ?? mockMember({ user })) : null;
-	const ctx = mockCommandContext<TOptions>({
-		...options,
-		author: user,
-		guild,
-		channel,
-		member: member ?? undefined,
-	});
+	const sceneOptions = { ...options, author: user, guild, channel, member: member ?? undefined };
+	const ctx = isClass
+		? mockCommandContext(commandOrOptions as SlashCommandClass, sceneOptions)
+		: mockCommandContext(sceneOptions);
 	return { user, guild, channel, member, ctx };
 }
