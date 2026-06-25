@@ -61,7 +61,7 @@ describe('entity factories', () => {
 		assert.equal(user.bot, true);
 		assert.equal(guild.name, 'Seyfert');
 		assert.equal(channel.guildId, null);
-		assert.deepEqual(member.roles, ['admin']);
+		assert.deepEqual([...member.roles.keys], ['admin']); // roles is seyfert's manager; .keys holds the ids
 		assert.equal(member.nick, 'Soc');
 	});
 
@@ -114,6 +114,52 @@ describe('entity factories', () => {
 
 		const nicked = mockMember({ user, nick: 'Trinity' });
 		assert.equal(nicked.displayName, 'Trinity'); // nick wins
+
+		// avatar URLs via seyfert's CDN router (no real rest client)
+		assert.match(user.defaultAvatarURL(), /cdn\.discordapp\.com\/embed\/avatars\/\d+\.png/);
+		const withAvatar = mockUser({ id: '5', avatar: 'abc' });
+		assert.equal(withAvatar.avatarURL(), 'https://cdn.discordapp.com/avatars/5/abc.png');
+
+		// message jump link from ids
+		assert.equal(mockMessage({ id: '5', channelId: '3', guildId: '9' }).url, 'https://discord.com/channels/9/3/5');
+		assert.equal(mockMessage({ id: '5', channelId: '3' }).url, 'https://discord.com/channels/@me/3/5');
+	});
+
+	test('member.roles is seyfert’s manager: keys pure, list/permissions data-backed, add/remove mutate', async () => {
+		const member = mockMember({
+			roles: ['r1', 'r2'],
+			guildId: 'g1',
+			roleData: [
+				{ id: 'r1', permissions: '8', position: 2 }, // Administrator bit
+				{ id: 'r2', permissions: '0', position: 5 },
+			],
+		});
+
+		assert.deepEqual([...member.roles.keys], ['r1', 'r2', 'g1']); // ids + @everyone (guild id)
+		assert.deepEqual(
+			(await member.roles.list()).map(r => r.id),
+			['r1', 'r2'],
+		);
+		assert.equal((await member.roles.highest())?.id, 'r2'); // highest position
+		assert.equal((await member.roles.permissions()).has('Administrator'), true);
+
+		await member.roles.add('r3');
+		assert.ok(member.roles.keys.includes('r3'));
+		await member.roles.remove('r1');
+		assert.ok(!member.roles.keys.includes('r1'));
+	});
+
+	test('member.roles.list() without roleData throws a directed error', async () => {
+		const member = mockMember({ roles: ['r1'] });
+		await expect(member.roles.list()).rejects.toThrow(/no role source/);
+	});
+
+	test('member.hasTimeout reflects communication_disabled_until', () => {
+		assert.equal(mockMember().hasTimeout, false); // no timeout
+		const future = new Date(Date.now() + 60_000).toISOString();
+		assert.equal(typeof mockMember({ communicationDisabledUntil: future }).hasTimeout, 'number');
+		const past = new Date(Date.now() - 60_000).toISOString();
+		assert.equal(mockMember({ communicationDisabledUntil: past }).hasTimeout, false); // expired
 	});
 
 	test('preserve an explicit null globalName', () => {

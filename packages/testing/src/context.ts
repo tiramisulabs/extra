@@ -316,7 +316,7 @@ function mockInteractionBase(
 	const guild = options.guild === null ? null : (options.guild ?? mockGuild({ id: options.guildId }));
 	const guildId = guild?.id;
 	const channel = resolveChannelOption(options.channel, { id: options.channelId, guildId: guildId ?? null });
-	const member = guild ? (options.member ?? mockMember({ user: author })) : null;
+	const member = guild ? (options.member ?? mockMember({ user: author, guildId: guild.id })) : null;
 	const logger = options.logger ?? options.client?.logger ?? mockLogger();
 	const queues = options.queues ?? options.client?.queues ?? mockQueues();
 	const scheduler = options.scheduler ?? options.client?.scheduler ?? mockScheduler();
@@ -568,7 +568,7 @@ export function mockScene(
 	const user = options.author ?? mockUser({ id: options.userId });
 	const guild = options.guild === null ? null : (options.guild ?? mockGuild({ id: options.guildId }));
 	const channel = resolveChannelOption(options.channel, { id: options.channelId, guildId: guild ? guild.id : null });
-	const member = guild ? (options.member ?? mockMember({ user })) : null;
+	const member = guild ? (options.member ?? mockMember({ user, guildId: guild.id })) : null;
 	const sceneOptions = { ...options, author: user, guild, channel, member: member ?? undefined };
 	const ctx = isClass
 		? mockCommandContext(commandOrOptions as SlashCommandClass, sceneOptions)

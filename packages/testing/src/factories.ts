@@ -1,6 +1,10 @@
-import { Formatter } from 'seyfert';
+import { CDNRouter, type CDNUrlOptions, calculateUserDefaultAvatarIndex, Formatter } from 'seyfert';
+import { PermissionsBitField } from 'seyfert/lib/structures/extra/Permissions';
 import { ChannelType } from 'seyfert/lib/types';
 import { mockId, timestampFrom } from './id';
+
+/** Pure, stateless CDN string builder — `CDNRouter.createProxy()` needs no rest client (mirrors `rest.cdn`). */
+const cdn = () => CDNRouter.createProxy();
 
 /** Derived from the snowflake `id`, mirroring seyfert's `DiscordBase` (so account-age/created-on logic works). */
 export interface SnowflakeDerived {
@@ -50,6 +54,35 @@ export interface MockMemberOptions {
 	roles?: string[];
 	nick?: string | null;
 	joinedAt?: string;
+	/** The member's guild id — used for `roles.keys` (the @everyone role == guild id). */
+	guildId?: string;
+	/** Role objects so `roles.list()/permissions()/sorted()/highest()` resolve; without it they throw a directed error. */
+	roleData?: ApiRoleLike[];
+	/** ISO timestamp the member's timeout expires; mirrors `communication_disabled_until`. Omitted/null = no timeout. */
+	communicationDisabledUntil?: string | null;
+}
+
+/** The raw role fields seyfert's `member.roles` resolution reads (a subset of APIRole). */
+export interface ApiRoleLike {
+	id: string;
+	permissions?: string;
+	position?: number;
+	name?: string;
+}
+
+/**
+ * seyfert's `GuildMember.roles` manager. `keys` is pure (`[...roleIds, guildId]`). `list`/`permissions`/`sorted`/
+ * `highest` resolve from {@link MockMemberOptions.roleData} and throw a directed error when it's absent (the light
+ * harness has no role source). `add`/`remove` mutate the member's local role set.
+ */
+export interface MockMemberRoles {
+	readonly keys: readonly string[];
+	list(force?: boolean): Promise<ApiRoleLike[]>;
+	permissions(force?: boolean): Promise<PermissionsBitField>;
+	sorted(force?: boolean): Promise<ApiRoleLike[]>;
+	highest(force?: boolean): Promise<ApiRoleLike | undefined>;
+	add(id: string): Promise<void>;
+	remove(id: string): Promise<void>;
 }
 
 /**
@@ -75,6 +108,10 @@ export interface MockUser extends SnowflakeDerived {
 	readonly tag: string;
 	/** `globalName ?? username`, mirroring seyfert's `User.name`. */
 	readonly name: string;
+	/** Default avatar CDN url (from id/discriminator), via seyfert's CDN router. */
+	defaultAvatarURL(): string;
+	/** Avatar CDN url (or the default when no avatar hash), via seyfert's CDN router. */
+	avatarURL(options?: CDNUrlOptions): string;
 }
 
 export interface MockGuild extends SnowflakeDerived {
@@ -141,7 +178,8 @@ export interface MockMember extends SnowflakeDerived {
 	/** The member's id — the same snowflake as its user, mirroring seyfert's `GuildMember.id`. */
 	id: string;
 	user: MockUser;
-	roles: string[];
+	/** seyfert's role manager — `roles.keys` are the ids; see {@link MockMemberRoles}. */
+	roles: MockMemberRoles;
 	nick: string | null;
 	/** Ergonomic accessor; mirrors {@link joined_at}. */
 	joinedAt: string;
@@ -164,6 +202,16 @@ export interface MockMember extends SnowflakeDerived {
 	readonly globalName: string | null;
 	/** Whether the member's user is a bot (seyfert's `GuildMember.bot`). */
 	readonly bot: boolean;
+	/** Guild-member avatar url; delegates to the user's avatar (seyfert's `GuildMember.avatarURL`). */
+	avatarURL(options?: CDNUrlOptions & { exclude?: boolean }): string | null;
+	/** Delegates to the user's default avatar (seyfert's `GuildMember.defaultAvatarURL`). */
+	defaultAvatarURL(): string;
+	/** Ergonomic accessor; mirrors {@link communication_disabled_until}. */
+	communicationDisabledUntil: string | null;
+	/** Wire field; mirrors {@link communicationDisabledUntil}. */
+	communication_disabled_until: string | null;
+	/** Milliseconds until the timeout expires, or `false` when not timed out — seyfert's `GuildMember.hasTimeout`. */
+	readonly hasTimeout: false | number;
 }
 
 export function mockUser(options: MockUserOptions = {}): MockUser {
@@ -171,6 +219,8 @@ export function mockUser(options: MockUserOptions = {}): MockUser {
 	const username = options.username ?? 'slipher-test-user';
 	const globalName = options.globalName === undefined ? (options.username ?? 'Slipher Test User') : options.globalName;
 	const discriminator = options.discriminator ?? '0';
+	const avatar = options.avatar ?? null;
+	const defaultAvatarURL = () => cdn().embed.avatars.get(calculateUserDefaultAvatarIndex(id, discriminator));
 	return {
 		id,
 		username,
@@ -178,7 +228,7 @@ export function mockUser(options: MockUserOptions = {}): MockUser {
 		global_name: globalName,
 		bot: options.bot ?? false,
 		discriminator,
-		avatar: options.avatar ?? null,
+		avatar,
 		toString: () => Formatter.userMention(id),
 		get tag() {
 			return globalName ?? `${username}#${discriminator}`;
@@ -186,6 +236,9 @@ export function mockUser(options: MockUserOptions = {}): MockUser {
 		get name() {
 			return globalName ?? username;
 		},
+		defaultAvatarURL,
+		avatarURL: (avatarOptions?: CDNUrlOptions) =>
+			avatar ? cdn().avatars(id).get(avatar, avatarOptions) : defaultAvatarURL(),
 		...snowflakeDerived(id),
 	};
 }
@@ -271,13 +324,50 @@ export function mockChannel(options: MockChannelOptions = {}): MockChannel {
 	};
 }
 
+// seyfert's `GuildMember.roles` manager (GuildMember.js:74). `keys` pure; resolution data-backed; mutators local.
+function memberRolesManager(
+	roleIds: string[],
+	guildId: string | undefined,
+	roleData: ApiRoleLike[] | undefined,
+): MockMemberRoles {
+	const resolve = (method: string): ApiRoleLike[] => {
+		if (!roleData) {
+			throw new TypeError(
+				`member.roles.${method}() can't resolve role objects on mockCommandContext (the light unit harness has ` +
+					'no role source). Pass mockMember({ roleData: [{ id, permissions, position }] }), or use createMockBot.',
+			);
+		}
+		return roleData.filter(role => roleIds.includes(role.id));
+	};
+	const byPosition = (method: string) => [...resolve(method)].sort((a, b) => (b.position ?? 0) - (a.position ?? 0));
+	return {
+		get keys() {
+			return Object.freeze(guildId ? [...roleIds, guildId] : [...roleIds]);
+		},
+		list: async () => resolve('list'),
+		permissions: async () =>
+			new PermissionsBitField(resolve('permissions').map(role => BigInt(role.permissions ?? '0'))),
+		sorted: async () => byPosition('sorted'),
+		highest: async () => byPosition('highest')[0],
+		add: async id => {
+			if (!roleIds.includes(id)) roleIds.push(id);
+		},
+		remove: async id => {
+			const index = roleIds.indexOf(id);
+			if (index !== -1) roleIds.splice(index, 1);
+		},
+	};
+}
+
 export function mockMember(options: MockMemberOptions = {}): MockMember {
 	const user = options.user ?? mockUser();
 	const joinedAt = options.joinedAt ?? new Date(0).toISOString();
+	const communicationDisabledUntil = options.communicationDisabledUntil ?? null;
+	const roles = memberRolesManager([...(options.roles ?? [])], options.guildId, options.roleData);
 	return {
 		id: user.id,
 		user,
-		roles: options.roles ?? [],
+		roles,
 		nick: options.nick ?? null,
 		joinedAt,
 		joined_at: joinedAt,
@@ -302,6 +392,17 @@ export function mockMember(options: MockMemberOptions = {}): MockMember {
 		},
 		get bot() {
 			return user.bot;
+		},
+		// No guild-avatar field is modelled, so this always takes seyfert's delegating branch (GuildMember.js:147).
+		avatarURL: avatarOptions => (avatarOptions?.exclude ? null : user.avatarURL(avatarOptions)),
+		defaultAvatarURL: () => user.defaultAvatarURL(),
+		communicationDisabledUntil,
+		communication_disabled_until: communicationDisabledUntil,
+		get hasTimeout() {
+			if (!communicationDisabledUntil) return false;
+			const parsed = Date.parse(communicationDisabledUntil);
+			const now = Date.now();
+			return parsed > now ? parsed - now : false;
 		},
 		...snowflakeDerived(user.id),
 	};
@@ -335,6 +436,8 @@ export interface MockMessage extends SnowflakeDerived {
 	tts: boolean;
 	pinned: boolean;
 	type: number;
+	/** Jump link `https://discord.com/channels/{guild|@me}/{channel}/{id}`, via seyfert's Formatter. */
+	readonly url: string;
 }
 
 /**
@@ -358,6 +461,9 @@ export function mockMessage(options: MockMessageOptions = {}): MockMessage {
 		tts: false,
 		pinned: false,
 		type: 0,
+		get url() {
+			return Formatter.messageLink(guildId ?? '@me', channelId, id);
+		},
 		...snowflakeDerived(id),
 	};
 }
