@@ -329,6 +329,30 @@ describe('mockCommandContext', () => {
 		expect(ctx.lastResponse()).toMatchObject({ content: 'submitted' });
 	});
 
+	test('asComponentContext()/asModalContext() feed a command filter/run directly', () => {
+		class GatedButton extends ComponentCommand {
+			componentType = 'Button' as const;
+			filter(ctx: ComponentContext<'Button'>) {
+				return ctx.customId === 'go';
+			}
+			async run() {}
+		}
+		class GatedModal extends ModalCommand {
+			filter(ctx: ModalContext) {
+				return ctx.customId === 'form';
+			}
+			async run() {}
+		}
+
+		const button = new GatedButton();
+		// The point: the mock is accepted where a seyfert ComponentContext is required, no `as unknown` in the test.
+		expect(button.filter(mockComponentContext({ customId: 'go' }).asComponentContext())).toBe(true);
+		expect(button.filter(mockComponentContext({ customId: 'nope' }).asComponentContext())).toBe(false);
+
+		const modal = new GatedModal();
+		expect(modal.filter(mockModalContext({ customId: 'form' }).asModalContext())).toBe(true);
+	});
+
 	test('mockScene(Command) wires entities + a class-bound, typed-options ctx', async () => {
 		const banOptions = { reason: createStringOption({ description: 'why', required: true }) };
 		@Declare({ name: 'ban', description: 'bans' })

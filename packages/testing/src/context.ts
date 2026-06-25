@@ -1,3 +1,6 @@
+import type { ComponentCommand, ComponentContext, ModalCommand, ModalContext } from 'seyfert';
+import type { SlashCommandClass, SlashOptionsOf } from './bot/bot';
+import { type EmbedView, harvestComponents, type InteractiveComponentView, normalizeEmbed } from './bot/state';
 import {
 	type MockChannel,
 	type MockGuild,
@@ -8,9 +11,6 @@ import {
 	mockMember,
 	mockUser,
 } from './factories';
-import type { ComponentCommand, ModalCommand } from 'seyfert';
-import type { SlashCommandClass, SlashOptionsOf } from './bot/bot';
-import { type EmbedView, harvestComponents, type InteractiveComponentView, normalizeEmbed } from './bot/state';
 import {
 	type MockClient,
 	type MockLogger,
@@ -268,6 +268,16 @@ export interface MockComponentContext extends MockInteractionContextBase {
 	deferredUpdate: boolean;
 	update(response: MockContextResponse): Promise<MockContextResponse>;
 	deferUpdate(): Promise<void>;
+	/**
+	 * View this mock as a seyfert {@link ComponentContext} for passing to a `ComponentCommand`'s `filter`/`run`
+	 * directly — `button.filter(ctx.asComponentContext())`. A typed cast: the mock is a friendly stand-in (string
+	 * `componentType`, simplified `interaction`) that can't be structurally a `ComponentContext`, so this names the
+	 * cast in one place instead of `as unknown as` in your test. Pass the component type (default `'Button'`) to
+	 * type the returned context's interaction; the value drives only the type.
+	 */
+	asComponentContext<T extends NonNullable<MockComponentContextOptions['componentType']> = 'Button'>(
+		type?: T,
+	): ComponentContext<T>;
 }
 
 export interface MockModalContext extends MockInteractionContextBase {
@@ -280,6 +290,11 @@ export interface MockModalContext extends MockInteractionContextBase {
 		getInputValue(customId: string, required: true): string | string[];
 		getInputValue(customId: string, required?: false): string | string[] | undefined;
 	};
+	/**
+	 * View this mock as a seyfert {@link ModalContext} for passing to a `ModalCommand`'s `run`/`filter` directly —
+	 * `modal.run(ctx.asModalContext())`. A typed cast in one place; see {@link MockComponentContext.asComponentContext}.
+	 */
+	asModalContext(): ModalContext;
 }
 
 function mockInteractionBase(
@@ -460,6 +475,11 @@ export function mockComponentContext(
 		async deferUpdate() {
 			deferredUpdate = true;
 		},
+		asComponentContext<T extends NonNullable<MockComponentContextOptions['componentType']> = 'Button'>(
+			_type?: T,
+		): ComponentContext<T> {
+			return this as unknown as ComponentContext<T>;
+		},
 	};
 }
 
@@ -501,6 +521,9 @@ export function mockModalContext(
 			custom_id: customId,
 			components,
 			getInputValue,
+		},
+		asModalContext(): ModalContext {
+			return this as unknown as ModalContext;
 		},
 	};
 }
