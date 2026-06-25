@@ -1,8 +1,8 @@
 import { ActionRow, Button, Command, type CommandContext, Declare, Embed } from 'seyfert';
 import { ButtonStyle } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
-import { createMockBot } from '../src/bot/bot';
 import { expectComponent, expectContent, expectEmbed, mockCommandContext, mockComponentContext } from '../src';
+import { createMockBot } from '../src/bot/bot';
 
 describe('context path: embed accessors kill the vacuous-pass footgun', () => {
 	test('lastEmbed normalizes a seyfert Embed builder (whose fields live under toJSON)', async () => {
@@ -64,6 +64,18 @@ describe('expectEmbed matcher', () => {
 
 		expectEmbed(ctx, { contains: /reopened/ });
 		expectEmbed(ctx, { fieldsInclude: [{ name: 'state', value: /reopen/ }] });
+	});
+
+	test('notContains passes when absent, throws when the pattern appears or no embed exists', async () => {
+		const ctx = mockCommandContext();
+		await ctx.write({ embeds: [{ title: 'Status', description: 'available' }] });
+
+		expectEmbed(ctx, { notContains: /currently owned by/ });
+		expect(() => expectEmbed(ctx, { notContains: /available/ })).toThrow(/no embed matched/);
+
+		const empty = mockCommandContext();
+		await empty.write({ content: 'no embed' });
+		expect(() => expectEmbed(empty, { notContains: /anything/ })).toThrow(/no embed was sent/);
 	});
 
 	test('throws (not vacuous) when no embed was sent or none matches', async () => {

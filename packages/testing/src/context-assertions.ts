@@ -16,6 +16,13 @@ export interface ExpectedEmbed {
 	footer?: string | RegExp;
 	/** Matches across title + description + author + footer + every field name/value (the safe stringify). */
 	contains?: string | RegExp;
+	/**
+	 * Negative of {@link contains}: fails if the pattern appears anywhere `contains` would scan. Because
+	 * {@link expectEmbed} first requires an embed to exist, this fails on both "no embed" and "pattern present" —
+	 * symmetric to the positive, with none of the `?? ''` vacuity of asserting on a raw field. With multiple
+	 * embeds it asserts at least one embed is clean (the any-of semantics `contains`/`fieldsInclude` already use).
+	 */
+	notContains?: string | RegExp;
 	/** Field name/value matchers; each entry must match at least one of the embed's fields. */
 	fieldsInclude?: { name?: string | RegExp; value?: string | RegExp }[];
 }
@@ -70,6 +77,7 @@ function embedMatches(embed: EmbedView, expected: ExpectedEmbed): boolean {
 	if (expected.author !== undefined && !matchText(embed.author?.name, expected.author)) return false;
 	if (expected.footer !== undefined && !matchText(embed.footer?.text, expected.footer)) return false;
 	if (expected.contains !== undefined && !matchText(embedText(embed), expected.contains)) return false;
+	if (expected.notContains !== undefined && matchText(embedText(embed), expected.notContains)) return false;
 	if (expected.fieldsInclude) {
 		for (const want of expected.fieldsInclude) {
 			const hit = embed.fields.some(
