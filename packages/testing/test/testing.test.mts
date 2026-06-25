@@ -8,10 +8,12 @@ import {
 	ModalCommand,
 	type ModalContext,
 	Options,
+	SubCommand,
 } from 'seyfert';
 import { assert, describe, expect, test } from 'vitest';
 import {
 	channelOption,
+	idAge,
 	mockChannel,
 	mockClient,
 	mockCommandContext,
@@ -25,7 +27,6 @@ import {
 	mockScene,
 	mockScheduler,
 	mockUser,
-	idAge,
 	resetMockIds,
 	setupSlipherTesting,
 	timestampFrom,
@@ -237,6 +238,23 @@ describe('mockCommandContext', () => {
 
 		expect(ctx.command.name).toBe('ban'); // derived from @Declare, not the 'test' default
 		expect(ctx.lastResponse()).toMatchObject({ content: 'Banned: spam' });
+	});
+
+	test('mockCommandContext(SubCommand) is accepted (SubCommand is a sibling of Command) and infers options', async () => {
+		const listOptions = { page: createStringOption({ description: 'page', required: true }) };
+		@Declare({ name: 'list', description: 'lists items' })
+		@Options(listOptions)
+		class ListSub extends SubCommand {
+			async run(ctx: CommandContext<typeof listOptions>) {
+				await ctx.editOrReply({ content: `page ${ctx.options.page}` });
+			}
+		}
+
+		const ctx = mockCommandContext(ListSub, { options: { page: '2' } }); // typed options on a SubCommand
+		await ctx.run();
+
+		expect(ctx.command.name).toBe('list');
+		expect(ctx.lastResponse()).toMatchObject({ content: 'page 2' });
 	});
 
 	test('ctx.run() surfaces errors thrown by the bound command', async () => {

@@ -8,6 +8,7 @@ import {
 	type EntryPointCommand,
 	ModalCommand,
 	type OptionsRecord,
+	type SubCommand,
 } from 'seyfert';
 import { CacheFrom } from 'seyfert/lib/cache';
 import {
@@ -608,8 +609,12 @@ export type MenuOptions<C extends MenuCommandClass> = Omit<
 export type MenuResultFor<C extends MenuCommandClass> =
 	TargetFor<C> extends ApiUser ? UserMenuResult : TargetFor<C> extends ApiMessage ? MessageMenuResult : DispatchResult;
 
-/** A chat-input command class, accepted by the class-first {@link MockBot.slash} overload. */
-export type SlashCommandClass = new () => Command;
+/**
+ * A chat-input command class, accepted by the class-first {@link MockBot.slash} overload. Includes `SubCommand`
+ * (a sibling of `Command` under `BaseCommand`, not a subclass), since a subcommand is unit-tested directly —
+ * `mockCommandContext(MySubCommand)` — like any leaf command.
+ */
+export type SlashCommandClass = new () => Command | SubCommand;
 
 /**
  * Extracts the seyfert {@link OptionsRecord} a chat-input command declares, by reading the generic of its
