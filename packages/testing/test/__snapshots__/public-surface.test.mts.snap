@@ -58,6 +58,7 @@ exports[`public API surface > exported names match the committed snapshot 1`] = 
   "expectDenied",
   "expectEmbed",
   "expectError",
+  "expectNoEmbed",
   "expectReply",
   "idAge",
   "memberAddEvent",

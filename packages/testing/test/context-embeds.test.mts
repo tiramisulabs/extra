@@ -1,7 +1,14 @@
 import { ActionRow, Button, Command, type CommandContext, Declare, Embed } from 'seyfert';
 import { ButtonStyle } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
-import { expectComponent, expectContent, expectEmbed, mockCommandContext, mockComponentContext } from '../src';
+import {
+	expectComponent,
+	expectContent,
+	expectEmbed,
+	expectNoEmbed,
+	mockCommandContext,
+	mockComponentContext,
+} from '../src';
 import { createMockBot } from '../src/bot/bot';
 
 describe('context path: embed accessors kill the vacuous-pass footgun', () => {
@@ -76,6 +83,18 @@ describe('expectEmbed matcher', () => {
 		const empty = mockCommandContext();
 		await empty.write({ content: 'no embed' });
 		expect(() => expectEmbed(empty, { notContains: /anything/ })).toThrow(/no embed was sent/);
+	});
+
+	test('expectNoEmbed: vacuous-pass on no embed, passes when none match, fails when one matches', async () => {
+		const success = mockCommandContext();
+		await success.write({ content: 'done' }); // success path emits no embed
+		expectNoEmbed(success); // no embed at all → passes (the bad thing didn't happen)
+		expectNoEmbed(success, { contains: /error/ }); // vacuously satisfied
+
+		const errored = mockCommandContext();
+		await errored.write({ embeds: [{ title: 'Error', description: 'currently owned by someone' }] });
+		expect(() => expectNoEmbed(errored, { contains: /owned by/ })).toThrow(/expectNoEmbed/);
+		expectNoEmbed(errored, { contains: /unrelated/ }); // embed exists but doesn't match → passes
 	});
 
 	test('throws (not vacuous) when no embed was sent or none matches', async () => {
