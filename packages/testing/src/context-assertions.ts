@@ -114,23 +114,6 @@ export function expectEmbed(subject: EmbedSource, expected?: ExpectedEmbed): Emb
 }
 
 /**
- * Assert that NO embed matches — the complement of {@link expectEmbed} for "the error embed did NOT appear" on a
- * success path that may emit no embed at all. VACUOUSLY satisfied by the absence of any embed (that's the point:
- * nothing was sent, so the bad thing didn't happen); fails only when an embed matches. With no `expected`, asserts
- * no embed was sent at all. This is the opposite of `expectEmbed(x, { notContains })`, which is anti-vacuous (it
- * requires an embed to exist and be clean) — use that when an embed MUST be present.
- */
-export function expectNoEmbed(subject: EmbedSource, expected?: ExpectedEmbed): void {
-	const embeds = embedsOf(subject);
-	const match = expected ? embeds.find(embed => embedMatches(embed, expected)) : embeds[0];
-	if (match) {
-		throw new MockAssertionError(
-			`expectNoEmbed: expected no embed${expected ? ` matching ${describeMatcher(expected)}` : ''}, but one was sent: ${JSON.stringify(match)}.`,
-		);
-	}
-}
-
-/**
  * Anything that carries user-visible reply text: a context fixture (via its `responses` + `texts()`) or a
  * bot-path `DispatchResult` (via `content` + `textDisplays`). One matcher serves both response paths.
  */
