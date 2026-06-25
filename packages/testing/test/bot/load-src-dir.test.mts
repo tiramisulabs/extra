@@ -45,6 +45,21 @@ describe('booting a full command directory from TS source', () => {
 		spy.mockRestore();
 	});
 
+	// only also accepts a directory-name string, for the case where the folder name differs from the @Declare name.
+	test('only:[string] loads a group whose folder name differs from the command name', async () => {
+		const bot = await makeBot({ commandsDir: COMMANDS_DIR, only: ['mass'] }); // folder mass/, command "mass-dm"
+		await expect(bot.slash({ name: 'mass-dm' })).resolves.toMatchObject({ content: 'mass' });
+		expect(() => bot.slash({ name: 'ping' })).toThrow(/not registered/); // other groups skipped
+		await bot.close();
+	});
+
+	test('only:[Class] whose @Declare name does not match its folder throws a guiding error', async () => {
+		const MassCommand = (await import('../fixtures/e2e-commands/mass/mass')).default;
+		await expect(makeBot({ commandsDir: COMMANDS_DIR, only: [MassCommand] })).rejects.toThrow(
+			/pass the (folder|directory) name as a string/,
+		);
+	});
+
 	// Files are imported sequentially, not via Promise.all: firing every import() concurrently deadlocks a
 	// Vite-style module runner when the command files share a barrel/circular graph (here: list.ts goes through
 	// a re-export hub while override.ts imports the same circular submodules directly).

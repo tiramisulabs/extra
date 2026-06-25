@@ -180,31 +180,47 @@ function installModuleLoader(client: Client, loadModule: (path: string) => Promi
  * seyfert's per-file `filter` hook (consumed by getFiles BEFORE any import), so only files under a directory or
  * flat file matching one of those names are transformed. Returns the requested names for post-load validation.
  */
-function installCommandFilter(client: Client, only: readonly MockCommandClass[]): Set<string> {
-	const names = new Set<string>();
-	for (const Command of only) {
-		const name = (new Command() as { name?: unknown }).name;
-		if (typeof name === 'string' && name.length > 0) names.add(name);
+function installCommandFilter(client: Client, only: readonly (MockCommandClass | string)[]): Set<string> {
+	const tokens = new Set<string>(); // dir/file names to keep (class @Declare names + literal strings)
+	const classNames = new Set<string>(); // only these are name-validated post-load
+	for (const entry of only) {
+		if (typeof entry === 'string') {
+			tokens.add(entry);
+			continue;
+		}
+		const name = (new entry() as { name?: unknown }).name;
+		if (typeof name === 'string' && name.length > 0) {
+			tokens.add(name);
+			classNames.add(name);
+		}
 	}
 	(client.commands as unknown as { filter: (path: string) => boolean }).filter = path => {
 		const segments = path.split(/[/\\]/);
 		const base = (segments.at(-1) ?? '').replace(/\.[cm]?[jt]s$/, '');
-		return segments.some(segment => names.has(segment)) || names.has(base);
+		return segments.some(segment => tokens.has(segment)) || tokens.has(base);
 	};
-	return names;
+	return classNames;
 }
 
-function assertOnlyLoaded(client: Client, names: Set<string>, commandsDir: string | undefined): void {
+function assertOnlyLoaded(client: Client, classNames: Set<string>, commandsDir: string | undefined): void {
 	const registered = new Set<string>();
 	for (const command of client.commands.values as unknown as { name?: unknown }[]) {
 		if (typeof command.name === 'string') registered.add(command.name);
 	}
-	for (const name of names) {
+	const where = commandsDir ?? '(commandsDir)';
+	if (registered.size === 0) {
+		throw new TypeError(
+			`createMockBot: only:[...] matched no command files under ${where}. A class entry filters by its @Declare ` +
+				"name; if the folder name differs (e.g. a `mass/` folder with @Declare name 'mass-dm'), pass the folder " +
+				"name as a string: only: ['mass'].",
+		);
+	}
+	for (const name of classNames) {
 		if (!registered.has(name)) {
 			throw new TypeError(
-				`createMockBot: only:[...] requested "${name}", but no command with that name loaded from ` +
-					`${commandsDir ?? '(commandsDir)'}. Loaded: ${[...registered].join(', ') || '(none)'}. ` +
-					"`only` matches a command's @Declare name against its directory name.",
+				`createMockBot: only:[...] requested "${name}", but no command with that name loaded from ${where}. ` +
+					`Loaded: ${[...registered].join(', ')}. A class entry matches its @Declare name against the directory ` +
+					'name — if they differ, pass the directory name as a string instead.',
 			);
 		}
 	}
@@ -741,12 +757,14 @@ export interface MockBotOptions {
 	commandsDir?: string;
 	/**
 	 * Load only the named command groups from `commandsDir`, instead of transforming the whole tree (which is
-	 * slow for a large bot). Pass the imported parent command class(es) — type-safe, autocomplete, rename-proof,
-	 * no fragile path strings. The filter runs before any file is imported, keeping only files under a directory
-	 * (or a flat file) whose name matches a class's `@Declare` name; @AutoLoad subtrees of a kept group survive.
-	 * Throws if a requested class loads no command (e.g. its directory isn't named after the command).
+	 * slow for a large bot). Pass the imported parent command class(es) — type-safe, autocomplete, rename-proof —
+	 * and/or a directory-name string for the case where the folder name differs from the `@Declare` name (e.g.
+	 * a `mass/` folder whose command is `@Declare({ name: 'mass-dm' })` → `only: ['mass']`). The filter runs before
+	 * any file is imported, keeping files under a directory (or a flat file) whose name matches a class's `@Declare`
+	 * name or a given string; @AutoLoad subtrees of a kept group survive. Throws if a requested class loads no
+	 * command, or if nothing loads at all (e.g. a mistyped directory string).
 	 */
-	only?: MockCommandClass[];
+	only?: (MockCommandClass | string)[];
 	/**
 	 * How command/component/event files are imported when loading from a directory (`commandsDir`, etc.).
 	 *
