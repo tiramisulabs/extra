@@ -491,3 +491,150 @@ export function mockMessage(options: MockMessageOptions = {}): MockMessage {
 		...snowflakeDerived(id),
 	};
 }
+
+export interface MockRoleOptions {
+	id?: string;
+	name?: string;
+	color?: number;
+	hoist?: boolean;
+	managed?: boolean;
+	mentionable?: boolean;
+	position?: number;
+	/** Raw permission bits (string or bigint), wrapped into a {@link PermissionsBitField} like seyfert's GuildRole. */
+	permissions?: string | bigint;
+}
+
+export interface MockRole extends SnowflakeDerived {
+	id: string;
+	name: string;
+	color: number;
+	hoist: boolean;
+	managed: boolean;
+	mentionable: boolean;
+	position: number;
+	permissions: PermissionsBitField;
+	/** `<@&id>` mention, via seyfert's Formatter. */
+	toString(): string;
+}
+
+/** A role entity, mirroring seyfert's `GuildRole` (permissions as a {@link PermissionsBitField}, `toString` mention). */
+export function mockRole(options: MockRoleOptions = {}): MockRole {
+	const id = options.id ?? mockId();
+	return {
+		id,
+		name: options.name ?? 'slipher-test-role',
+		color: options.color ?? 0,
+		hoist: options.hoist ?? false,
+		managed: options.managed ?? false,
+		mentionable: options.mentionable ?? false,
+		position: options.position ?? 0,
+		permissions: new PermissionsBitField(BigInt(options.permissions ?? 0)),
+		toString: () => Formatter.roleMention(id),
+		...snowflakeDerived(id),
+	};
+}
+
+export interface MockEmojiOptions {
+	id?: string;
+	name?: string;
+	animated?: boolean;
+}
+
+export interface MockEmoji extends SnowflakeDerived {
+	id: string;
+	name: string;
+	animated: boolean;
+	/** `<:name:id>` (or `<a:name:id>` when animated) mention, via seyfert's Formatter. */
+	toString(): string;
+	/** Emoji image CDN url, via seyfert's CDN router (seyfert's `Emoji.url`). */
+	url(options?: CDNUrlOptions): string;
+}
+
+/** A custom-emoji entity, mirroring seyfert's `Emoji` (`toString` mention + `url`). */
+export function mockEmoji(options: MockEmojiOptions = {}): MockEmoji {
+	const id = options.id ?? mockId();
+	const name = options.name ?? 'slipher_test_emoji';
+	const animated = options.animated ?? false;
+	return {
+		id,
+		name,
+		animated,
+		toString: () => Formatter.emojiMention(id, name, animated),
+		url: (urlOptions?: CDNUrlOptions) => cdn().emojis(id).get(urlOptions),
+		...snowflakeDerived(id),
+	};
+}
+
+export interface MockVoiceStateOptions {
+	userId?: string;
+	channelId?: string | null;
+	guildId?: string;
+	mute?: boolean;
+	deaf?: boolean;
+	selfMute?: boolean;
+	selfDeaf?: boolean;
+	selfVideo?: boolean;
+	selfStream?: boolean;
+	suppress?: boolean;
+}
+
+export interface MockVoiceState {
+	userId: string;
+	channelId: string | null;
+	guildId?: string;
+	mute: boolean;
+	deaf: boolean;
+	selfMute: boolean;
+	selfDeaf: boolean;
+	selfVideo: boolean;
+	selfStream: boolean;
+	suppress: boolean;
+	/** `mute || selfMute` (seyfert's `VoiceState.isMuted`). */
+	readonly isMuted: boolean;
+	/** `deaf || selfDeaf` (seyfert's `VoiceState.isDeafened`). */
+	readonly isDeafened: boolean;
+	/** `selfVideo` (seyfert's `VoiceState.isCameraOn`). */
+	readonly isCameraOn: boolean;
+	/** `selfStream` (seyfert's `VoiceState.isStreaming`). */
+	readonly isStreaming: boolean;
+	/** `suppress` (seyfert's `VoiceState.isSuppressed`). */
+	readonly isSuppressed: boolean;
+}
+
+/** A voice-state entity, with seyfert's derived `is*` getters computed from the mute/deaf/video/stream flags. */
+export function mockVoiceState(options: MockVoiceStateOptions = {}): MockVoiceState {
+	const mute = options.mute ?? false;
+	const deaf = options.deaf ?? false;
+	const selfMute = options.selfMute ?? false;
+	const selfDeaf = options.selfDeaf ?? false;
+	const selfVideo = options.selfVideo ?? false;
+	const selfStream = options.selfStream ?? false;
+	const suppress = options.suppress ?? false;
+	return {
+		userId: options.userId ?? mockId(),
+		channelId: options.channelId === undefined ? mockId() : options.channelId,
+		...(options.guildId === undefined ? {} : { guildId: options.guildId }),
+		mute,
+		deaf,
+		selfMute,
+		selfDeaf,
+		selfVideo,
+		selfStream,
+		suppress,
+		get isMuted() {
+			return mute || selfMute;
+		},
+		get isDeafened() {
+			return deaf || selfDeaf;
+		},
+		get isCameraOn() {
+			return selfVideo;
+		},
+		get isStreaming() {
+			return selfStream;
+		},
+		get isSuppressed() {
+			return suppress;
+		},
+	};
+}

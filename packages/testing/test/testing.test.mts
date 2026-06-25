@@ -21,15 +21,18 @@ import {
 	mockClient,
 	mockCommandContext,
 	mockComponentContext,
+	mockEmoji,
 	mockGuild,
 	mockId,
 	mockMember,
 	mockMessage,
 	mockModalContext,
 	mockQueues,
+	mockRole,
 	mockScene,
 	mockScheduler,
 	mockUser,
+	mockVoiceState,
 	resetMockIds,
 	setupSlipherTesting,
 	timestampFrom,
@@ -157,6 +160,23 @@ describe('entity factories', () => {
 	test('member.roles.list() without roleData throws a directed error', async () => {
 		const member = mockMember({ roles: ['r1'] });
 		await expect(member.roles.list()).rejects.toThrow(/no role source/);
+	});
+
+	test('mockRole / mockEmoji / mockVoiceState mirror seyfert entities (mention/url/derived getters)', () => {
+		const role = mockRole({ id: '5', permissions: '8' }); // 8 = Administrator
+		assert.equal(`${role}`, '<@&5>');
+		assert.equal(role.permissions.has('Administrator'), true);
+		assert.ok(role.createdAt instanceof Date);
+
+		const emoji = mockEmoji({ id: '5', name: 'smile' });
+		assert.equal(`${emoji}`, '<:smile:5>');
+		assert.equal(mockEmoji({ id: '5', name: 'wave', animated: true }).toString(), '<a:wave:5>');
+		assert.equal(emoji.url(), 'https://cdn.discordapp.com/emojis/5.png');
+
+		const voice = mockVoiceState({ selfMute: true, deaf: true });
+		assert.equal(voice.isMuted, true); // selfMute
+		assert.equal(voice.isDeafened, true); // deaf
+		assert.equal(voice.isStreaming, false);
 	});
 
 	test('member.hasTimeout reflects communication_disabled_until', () => {
