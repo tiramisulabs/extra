@@ -108,6 +108,12 @@ describe('entity factories', () => {
 		assert.equal(`${member}`, '<@900000000000000005>');
 		assert.equal(member.id, user.id); // member.id mirrors its user's id
 		assert.equal(member.tag, 'neo#7');
+		assert.equal(member.displayName, 'neo'); // no nick, no globalName → username
+		assert.equal(member.username, 'neo');
+		assert.equal(member.bot, false);
+
+		const nicked = mockMember({ user, nick: 'Trinity' });
+		assert.equal(nicked.displayName, 'Trinity'); // nick wins
 	});
 
 	test('preserve an explicit null globalName', () => {

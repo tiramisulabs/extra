@@ -154,6 +154,16 @@ export interface MockMember extends SnowflakeDerived {
 	toString(): string;
 	/** `globalName ?? username#discriminator` of the member's user, mirroring seyfert's `GuildMember.tag`. */
 	readonly tag: string;
+	/** `nick ?? globalName ?? username`, mirroring seyfert's `GuildMember.displayName`. */
+	readonly displayName: string;
+	/** `globalName ?? username` of the member's user (seyfert's `GuildMember.name`). */
+	readonly name: string;
+	/** The member's user's `username` (seyfert's `GuildMember.username`). */
+	readonly username: string;
+	/** The member's user's `globalName` (seyfert's `GuildMember.globalName`). */
+	readonly globalName: string | null;
+	/** Whether the member's user is a bot (seyfert's `GuildMember.bot`). */
+	readonly bot: boolean;
 }
 
 export function mockUser(options: MockUserOptions = {}): MockUser {
@@ -277,6 +287,21 @@ export function mockMember(options: MockMemberOptions = {}): MockMember {
 		toString: () => Formatter.userMention(user.id),
 		get tag() {
 			return user.tag;
+		},
+		get displayName() {
+			return options.nick ?? user.globalName ?? user.username;
+		},
+		get name() {
+			return user.name;
+		},
+		get username() {
+			return user.username;
+		},
+		get globalName() {
+			return user.globalName;
+		},
+		get bot() {
+			return user.bot;
 		},
 		...snowflakeDerived(user.id),
 	};
