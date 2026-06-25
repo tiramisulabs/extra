@@ -115,14 +115,19 @@ describe('entity factories', () => {
 		const nicked = mockMember({ user, nick: 'Trinity' });
 		assert.equal(nicked.displayName, 'Trinity'); // nick wins
 
-		// avatar URLs via seyfert's CDN router (no real rest client)
+		// avatar/banner/decoration URLs via seyfert's CDN router (no real rest client)
 		assert.match(user.defaultAvatarURL(), /cdn\.discordapp\.com\/embed\/avatars\/\d+\.png/);
-		const withAvatar = mockUser({ id: '5', avatar: 'abc' });
-		assert.equal(withAvatar.avatarURL(), 'https://cdn.discordapp.com/avatars/5/abc.png');
+		const withAssets = mockUser({ id: '5', avatar: 'abc', banner: 'bh', avatarDecorationData: { asset: 'deco' } });
+		assert.equal(withAssets.avatarURL(), 'https://cdn.discordapp.com/avatars/5/abc.png');
+		assert.equal(withAssets.bannerURL(), 'https://cdn.discordapp.com/banners/5/bh.png');
+		assert.equal(withAssets.avatarDecorationURL(), 'https://cdn.discordapp.com/avatar-decoration-presets/deco.png');
+		assert.equal(user.bannerURL(), undefined); // no banner → undefined, like seyfert
 
-		// message jump link from ids
-		assert.equal(mockMessage({ id: '5', channelId: '3', guildId: '9' }).url, 'https://discord.com/channels/9/3/5');
+		// message jump link from ids + user alias
+		const message = mockMessage({ id: '5', channelId: '3', guildId: '9', author: user });
+		assert.equal(message.url, 'https://discord.com/channels/9/3/5');
 		assert.equal(mockMessage({ id: '5', channelId: '3' }).url, 'https://discord.com/channels/@me/3/5');
+		assert.equal(message.user, message.author); // Message.user aliases author
 	});
 
 	test('member.roles is seyfert’s manager: keys pure, list/permissions data-backed, add/remove mutate', async () => {

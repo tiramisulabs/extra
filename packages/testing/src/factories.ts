@@ -28,6 +28,8 @@ export interface MockUserOptions {
 	bot?: boolean;
 	discriminator?: string;
 	avatar?: string | null;
+	banner?: string | null;
+	avatarDecorationData?: { asset: string } | null;
 }
 
 export interface MockGuildOptions {
@@ -102,6 +104,8 @@ export interface MockUser extends SnowflakeDerived {
 	bot: boolean;
 	discriminator: string;
 	avatar: string | null;
+	banner: string | null;
+	avatarDecorationData: { asset: string } | null;
 	/** `<@id>` mention — so `` `${user}` `` interpolates like seyfert, not `[object Object]`. */
 	toString(): string;
 	/** `globalName ?? username#discriminator`, mirroring seyfert's `User.tag`. */
@@ -112,6 +116,10 @@ export interface MockUser extends SnowflakeDerived {
 	defaultAvatarURL(): string;
 	/** Avatar CDN url (or the default when no avatar hash), via seyfert's CDN router. */
 	avatarURL(options?: CDNUrlOptions): string;
+	/** Banner CDN url, or `undefined` when no banner — mirrors seyfert's `User.bannerURL`. */
+	bannerURL(options?: CDNUrlOptions): string | undefined;
+	/** Avatar-decoration CDN url, or `undefined` when none — mirrors seyfert's `User.avatarDecorationURL`. */
+	avatarDecorationURL(options?: CDNUrlOptions): string | undefined;
 }
 
 export interface MockGuild extends SnowflakeDerived {
@@ -204,6 +212,8 @@ export interface MockMember extends SnowflakeDerived {
 	readonly bot: boolean;
 	/** Guild-member avatar url; delegates to the user's avatar (seyfert's `GuildMember.avatarURL`). */
 	avatarURL(options?: CDNUrlOptions & { exclude?: boolean }): string | null;
+	/** Guild-member banner url; delegates to the user's banner (seyfert's `GuildMember.bannerURL`). */
+	bannerURL(options?: CDNUrlOptions & { exclude?: boolean }): string | null | undefined;
 	/** Delegates to the user's default avatar (seyfert's `GuildMember.defaultAvatarURL`). */
 	defaultAvatarURL(): string;
 	/** Ergonomic accessor; mirrors {@link communication_disabled_until}. */
@@ -220,6 +230,8 @@ export function mockUser(options: MockUserOptions = {}): MockUser {
 	const globalName = options.globalName === undefined ? (options.username ?? 'Slipher Test User') : options.globalName;
 	const discriminator = options.discriminator ?? '0';
 	const avatar = options.avatar ?? null;
+	const banner = options.banner ?? null;
+	const avatarDecorationData = options.avatarDecorationData ?? null;
 	const defaultAvatarURL = () => cdn().embed.avatars.get(calculateUserDefaultAvatarIndex(id, discriminator));
 	return {
 		id,
@@ -229,6 +241,8 @@ export function mockUser(options: MockUserOptions = {}): MockUser {
 		bot: options.bot ?? false,
 		discriminator,
 		avatar,
+		banner,
+		avatarDecorationData,
 		toString: () => Formatter.userMention(id),
 		get tag() {
 			return globalName ?? `${username}#${discriminator}`;
@@ -239,6 +253,11 @@ export function mockUser(options: MockUserOptions = {}): MockUser {
 		defaultAvatarURL,
 		avatarURL: (avatarOptions?: CDNUrlOptions) =>
 			avatar ? cdn().avatars(id).get(avatar, avatarOptions) : defaultAvatarURL(),
+		bannerURL: (bannerOptions?: CDNUrlOptions) => (banner ? cdn().banners(id).get(banner, bannerOptions) : undefined),
+		avatarDecorationURL: (decorationOptions?: CDNUrlOptions) =>
+			avatarDecorationData
+				? cdn()['avatar-decoration-presets'](avatarDecorationData.asset).get(decorationOptions)
+				: undefined,
 		...snowflakeDerived(id),
 	};
 }
@@ -393,8 +412,9 @@ export function mockMember(options: MockMemberOptions = {}): MockMember {
 		get bot() {
 			return user.bot;
 		},
-		// No guild-avatar field is modelled, so this always takes seyfert's delegating branch (GuildMember.js:147).
+		// No guild-avatar/banner field is modelled, so these take seyfert's delegating branch (GuildMember.js:147,153).
 		avatarURL: avatarOptions => (avatarOptions?.exclude ? null : user.avatarURL(avatarOptions)),
+		bannerURL: bannerOptions => (bannerOptions?.exclude ? null : user.bannerURL(bannerOptions)),
 		defaultAvatarURL: () => user.defaultAvatarURL(),
 		communicationDisabledUntil,
 		communication_disabled_until: communicationDisabledUntil,
@@ -429,6 +449,8 @@ export interface MockMessage extends SnowflakeDerived {
 	/** Wire field; mirrors {@link guildId}. */
 	guild_id?: string;
 	author: MockUser;
+	/** Alias of {@link author}, mirroring seyfert's `Message.user`. */
+	readonly user: MockUser;
 	content: string;
 	embeds: unknown[];
 	components: unknown[];
@@ -448,12 +470,14 @@ export function mockMessage(options: MockMessageOptions = {}): MockMessage {
 	const id = options.id ?? mockId();
 	const channelId = options.channelId ?? mockId();
 	const guildId = options.guildId == null ? undefined : options.guildId;
+	const author = options.author ?? mockUser();
 	return {
 		id,
 		channelId,
 		channel_id: channelId,
 		...(guildId === undefined ? {} : { guildId, guild_id: guildId }),
-		author: options.author ?? mockUser(),
+		author,
+		user: author,
 		content: options.content ?? '',
 		embeds: options.embeds ?? [],
 		components: options.components ?? [],
