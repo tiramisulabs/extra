@@ -10,6 +10,7 @@ import {
 } from 'seyfert';
 import { ButtonStyle } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
+import { expectComponent } from '../../src';
 import { createMockBot } from '../../src/bot/bot';
 
 // A common real-world flow: defer -> editOrReply(fetchReply) -> collector on that message, with a DYNAMIC
@@ -107,6 +108,43 @@ describe('collector patterns', () => {
 		const res = await bot.clickButton('setup-continue');
 		expect(done).toEqual(['clicked']);
 		expect(res.reply?.body).toMatchObject({ data: { content: 'created channels' } });
+		await bot.close();
+	});
+
+	// A click whose handler opens a SECOND collector parks on it — so awaiting the click directly would hang.
+	// The click is a Dispatch, so it's parkable: untilComponent resolves when the nested component renders, while
+	// the handler stays parked on the nested waitFor (events stays empty).
+	test('a click that opens a nested collector is parkable with untilComponent', async () => {
+		const events: string[] = [];
+
+		@Declare({ name: 'wizard', description: 'Two-step nested collector flow' })
+		class WizardCommand extends Command {
+			async run(ctx: CommandContext) {
+				const row = new ActionRow<Button>().setComponents([
+					new Button().setCustomId('open').setLabel('Open').setStyle(ButtonStyle.Primary),
+				]);
+				const message = await ctx.write({ content: 'step 1', components: [row] }, true);
+				message.createComponentCollector().run('open', async interaction => {
+					const nested = new ActionRow<Button>().setComponents([
+						new Button().setCustomId('confirm-nested').setLabel('Confirm').setStyle(ButtonStyle.Primary),
+					]);
+					const second = await interaction.write({ content: 'step 2', components: [nested] }, true);
+					const nestedInteraction = await second.createComponentCollector().waitFor('confirm-nested');
+					events.push(`done:${nestedInteraction?.customId ?? 'none'}`);
+				});
+			}
+		}
+
+		const bot = await createMockBot({ commands: [WizardCommand] });
+		await bot.slash({ name: 'wizard' });
+
+		// Awaiting the click directly would hang — its handler parks on the nested collector. untilComponent
+		// resolves when the nested button renders, proving the click is parkable and the handler is still parked.
+		const click = bot.clickButton('open');
+		await click.untilComponent('confirm-nested');
+		expect(events).toEqual([]);
+		expectComponent(click, { customId: 'confirm-nested' });
+
 		await bot.close();
 	});
 });

@@ -322,6 +322,49 @@ describe('virtual clock', () => {
 		await bot.close();
 	});
 
+	// A collector-level { timeout } fires onStop('timeout') but does NOT resolve a pending bare `waitFor(id)`
+	// (seyfert only resolves waitFor on a matching component or its own per-call timeout). So the abort-by-timeout
+	// branch lives in onStop, not after the await — and the flow must NOT be awaited to completion (it parks
+	// forever on the unresolved waitFor). Drive it: park with untilComponent, advanceTime to fire onStop, assert.
+	test('advanceTime fires a collector-level timeout via onStop (bare waitFor never resolves)', async () => {
+		vi.useFakeTimers(FAKE_TIMER_OPTIONS);
+		const events: string[] = [];
+
+		@Declare({ name: 'confirmflow', description: 'Opens a confirm collector with a timeout' })
+		class ConfirmFlow extends Command {
+			async run(ctx: CommandContext) {
+				const row = new ActionRow<Button>().setComponents([
+					new Button().setCustomId('confirm').setLabel('Confirm').setStyle(ButtonStyle.Primary),
+				]);
+				const message = await ctx.write({ content: 'confirm?', components: [row] }, true);
+				const collector = message.createComponentCollector({
+					timeout: 20_000,
+					onStop: async reason => {
+						events.push(`stop:${reason}`);
+					},
+				});
+				const interaction = await collector.waitFor('confirm');
+				// Unreachable on a collector-level timeout — kept to prove the post-await branch never runs.
+				events.push(interaction ? 'confirmed' : 'after-await');
+			}
+		}
+
+		const bot = await createMockBot({
+			commands: [ConfirmFlow],
+			timers: { advance: ms => void vi.advanceTimersByTime(ms) },
+		});
+
+		const flow = bot.slash({ name: 'confirmflow' });
+		await flow.untilComponent('confirm');
+		expect(events).toEqual([]);
+
+		await bot.advanceTime(20_000);
+		// onStop fired; the awaited waitFor stayed unresolved, so nothing after the await ran.
+		expect(events).toEqual(['stop:timeout']);
+
+		await bot.close();
+	});
+
 	test('advanceTime fires a modal waitFor timeout (null branch)', async () => {
 		vi.useFakeTimers(FAKE_TIMER_OPTIONS);
 		const outcomes: ('submitted' | 'timed-out')[] = [];

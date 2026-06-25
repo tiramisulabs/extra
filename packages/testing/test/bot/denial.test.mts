@@ -1,6 +1,7 @@
 import { Command, type CommandContext, Declare, Middlewares } from 'seyfert';
 import { beforeEach, describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
+import { apiRole } from '../../src/bot/payloads';
 import { GreetCommand, testMiddlewares } from './_setup';
 
 describe('structured denial info on dispatch results', () => {
@@ -124,6 +125,48 @@ describe('structured denial info on dispatch results', () => {
 		expect(result.denial?.kind).toBe('pass');
 		expect(result.denial?.middleware).toBe('passer');
 		expect(bodyRan).toEqual([]);
+		await bot.close();
+	});
+
+	// A user-defined decorator (plugins/devs ship their own) that stamps requiredRoles onto the command.
+	// It enforces nothing on its own — a middleware reads the stamp and gates. The mock runs that middleware
+	// like any other, and memberRoles seeds the invoking member, so role gates are testable end to end.
+	function RequiredRoles(...roleIds: string[]) {
+		return <T extends abstract new (...args: never[]) => object>(target: T) => {
+			(target.prototype as { requiredRoles?: string[] }).requiredRoles = roleIds;
+		};
+	}
+
+	@Declare({ name: 'role-gated', description: 'Requires a role' })
+	@Middlewares(['requireRoles'])
+	@RequiredRoles('admin-role')
+	class RoleGated extends Command {
+		async run(ctx: CommandContext) {
+			bodyRan.push('role-gated');
+			await ctx.write({ content: 'role ok' });
+		}
+	}
+
+	const adminRole = apiRole({ id: 'admin-role' });
+
+	test('custom-decorator role gate denies when the member lacks the role', async () => {
+		const bot = await createMockBot({ commands: [RoleGated], middlewares: testMiddlewares });
+		const result = await bot.slash({ name: 'role-gated', memberRoles: [] });
+
+		expect(result.denied).toBe(true);
+		expect(result.denial?.kind).toBe('stop');
+		expect(result.denial?.reason).toBe('missing-role');
+		expect(bodyRan).toEqual([]);
+		await bot.close();
+	});
+
+	test('custom-decorator role gate passes when the member holds the role', async () => {
+		const bot = await createMockBot({ commands: [RoleGated], middlewares: testMiddlewares });
+		const result = await bot.slash({ name: 'role-gated', memberRoles: [adminRole] });
+
+		expect(result.denied).toBe(false);
+		expect(result.denial).toBeUndefined();
+		expect(bodyRan).toEqual(['role-gated']);
 		await bot.close();
 	});
 

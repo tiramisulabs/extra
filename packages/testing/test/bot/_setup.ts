@@ -140,7 +140,18 @@ export const slowDenier = createMiddleware<void>(middle => {
 	void ctx.client.channels.fetch(SLOW_DENIER_CHANNEL_ID).then(() => ctx.editOrReply({ content: 'denied' }));
 });
 
-export const testMiddlewares = { blocker, denier, globalCounter, guard, passer, slowDenier };
+// Custom-decorator gate pattern: a user decorator sets `requiredRoles` on the command; this middleware reads
+// it off ctx.command and stops the chain when the invoking member lacks every required role.
+export const requireRoles = createMiddleware<void>(middle => {
+	const required = (middle.context.command as { requiredRoles?: string[] }).requiredRoles;
+	if (required?.length) {
+		const held = middle.context.member?.roles.keys ?? [];
+		if (!required.some(roleId => held.includes(roleId))) return middle.stop('missing-role');
+	}
+	middle.next();
+});
+
+export const testMiddlewares = { blocker, denier, globalCounter, guard, passer, requireRoles, slowDenier };
 
 declare module 'seyfert' {
 	interface SeyfertRegistry {
