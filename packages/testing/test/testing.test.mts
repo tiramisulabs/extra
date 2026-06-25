@@ -191,8 +191,18 @@ describe('mockCommandContext', () => {
 		assert.equal(await ctx.guild(), guild);
 		assert.equal(ctx.guild() instanceof Promise, true);
 		assert.equal(typeof ctx.channel, 'function');
-		assert.equal(await ctx.channel(), channel);
+		assert.equal(await ctx.channel(), channel); // a full channel is returned by identity, not re-built
 		assert.equal(ctx.channel() instanceof Promise, true);
+	});
+
+	test('channel option accepts a partial (filled by the factory) with stubbed guards', async () => {
+		const ctx = mockCommandContext({ channel: { id: 'c1', extra: { isGuildTextable: () => true } } });
+		const channel = await ctx.channel();
+
+		assert.equal(channel.id, 'c1');
+		assert.equal(channel.position, 0); // filled by mockChannel from the partial
+		assert.equal(channel.nsfw, false);
+		assert.equal((channel.isGuildTextable as () => boolean)(), true);
 	});
 
 	test('guild method resolves null in direct-message-like contexts', async () => {

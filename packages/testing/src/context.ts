@@ -3,6 +3,7 @@ import type { SlashCommandClass, SlashOptionsOf } from './bot/bot';
 import { type EmbedView, harvestComponents, type InteractiveComponentView, normalizeEmbed } from './bot/state';
 import {
 	type MockChannel,
+	type MockChannelOptions,
 	type MockGuild,
 	type MockMember,
 	type MockUser,
@@ -103,7 +104,7 @@ export interface MockCommandContextOptions<TOptions extends Record<string, unkno
 	guildLocale?: string;
 	author?: MockUser;
 	guild?: MockGuild | null;
-	channel?: MockChannel;
+	channel?: MockChannelOptions;
 	member?: MockMember;
 	options?: TOptions;
 	metadata?: Record<string, unknown>;
@@ -180,7 +181,7 @@ export interface MockInteractionContextOptions {
 	guildLocale?: string;
 	author?: MockUser;
 	guild?: MockGuild | null;
-	channel?: MockChannel;
+	channel?: MockChannelOptions;
 	member?: MockMember;
 	metadata?: Record<string, unknown>;
 	logger?: MockLogger;
@@ -297,6 +298,16 @@ export interface MockModalContext extends MockInteractionContextBase {
 	asModalContext(): ModalContext;
 }
 
+/**
+ * Resolve the `channel` option to a full {@link MockChannel}. A partial ({@link MockChannelOptions}) is completed
+ * via {@link mockChannel} (filling position/permission_overwrites/nsfw and spreading any `extra` stubs); an
+ * already-built channel (detected by its output-only `position`) is returned as-is, preserving reference identity.
+ */
+function resolveChannelOption(input: MockChannelOptions | undefined, fallback: MockChannelOptions): MockChannel {
+	if (input && 'position' in input) return input as MockChannel;
+	return mockChannel({ ...fallback, ...input });
+}
+
 function mockInteractionBase(
 	options: MockInteractionContextOptions = {},
 	command?: RunnableCommand,
@@ -304,7 +315,7 @@ function mockInteractionBase(
 	const author = options.author ?? mockUser({ id: options.userId });
 	const guild = options.guild === null ? null : (options.guild ?? mockGuild({ id: options.guildId }));
 	const guildId = guild?.id;
-	const channel = options.channel ?? mockChannel({ id: options.channelId, guildId: guildId ?? null });
+	const channel = resolveChannelOption(options.channel, { id: options.channelId, guildId: guildId ?? null });
 	const member = guild ? (options.member ?? mockMember({ user: author })) : null;
 	const logger = options.logger ?? options.client?.logger ?? mockLogger();
 	const queues = options.queues ?? options.client?.queues ?? mockQueues();
@@ -556,7 +567,7 @@ export function mockScene(
 	const options = (isClass ? classOptions : (commandOrOptions as MockCommandContextOptions)) ?? {};
 	const user = options.author ?? mockUser({ id: options.userId });
 	const guild = options.guild === null ? null : (options.guild ?? mockGuild({ id: options.guildId }));
-	const channel = options.channel ?? mockChannel({ id: options.channelId, guildId: guild ? guild.id : null });
+	const channel = resolveChannelOption(options.channel, { id: options.channelId, guildId: guild ? guild.id : null });
 	const member = guild ? (options.member ?? mockMember({ user })) : null;
 	const sceneOptions = { ...options, author: user, guild, channel, member: member ?? undefined };
 	const ctx = isClass
