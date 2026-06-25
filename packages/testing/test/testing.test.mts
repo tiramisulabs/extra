@@ -12,6 +12,7 @@ import {
 	Options,
 	SubCommand,
 } from 'seyfert';
+import { ChannelType } from 'seyfert/lib/types';
 import { assert, describe, expect, test } from 'vitest';
 import {
 	channelOption,
@@ -64,13 +65,27 @@ describe('entity factories', () => {
 		assert.equal(member.nick, 'Soc');
 	});
 
-	test('mockChannel accepts stubbed channel guards via extra (no cast)', () => {
-		const channel = mockChannel({ id: 'c1', extra: { isGuildTextable: () => true, isThread: () => false } });
+	test('mockChannel implements seyfert type-guards from type (no stub needed)', () => {
+		const text = mockChannel({ type: ChannelType.GuildText });
+		assert.equal(text.isTextGuild(), true);
+		assert.equal(text.isGuildTextable(), true);
+		assert.equal(text.isVoice(), false);
 
-		assert.equal((channel.isGuildTextable as () => boolean)(), true);
-		assert.equal((channel.isThread as () => boolean)(), false);
-		assert.equal(channel.id, 'c1'); // base fields intact
-		assert.equal(channel.type, 0);
+		const voice = mockChannel({ type: ChannelType.GuildVoice });
+		assert.equal(voice.isVoice(), true);
+		assert.equal(voice.isTextGuild(), false);
+		assert.equal(voice.isGuildTextable(), true); // voice carries text in seyfert (AllGuildTextableChannels)
+
+		const category = mockChannel({ type: ChannelType.GuildCategory });
+		assert.equal(category.isGuildTextable(), false);
+		assert.equal(category.isTextGuild(), false);
+
+		const dm = mockChannel({ type: ChannelType.DM, guildId: null });
+		assert.equal(dm.isDM(), true);
+		assert.equal(dm.isGuildTextable(), false); // textable, but not a guild channel
+
+		assert.equal(text.is(['GuildText', 'GuildVoice']), true);
+		assert.equal(voice.is(['GuildText']), false);
 	});
 
 	test('preserve an explicit null globalName', () => {
@@ -195,14 +210,14 @@ describe('mockCommandContext', () => {
 		assert.equal(ctx.channel() instanceof Promise, true);
 	});
 
-	test('channel option accepts a partial (filled by the factory) with stubbed guards', async () => {
-		const ctx = mockCommandContext({ channel: { id: 'c1', extra: { isGuildTextable: () => true } } });
+	test('channel option accepts a partial; the factory fills fields and type-guards', async () => {
+		const ctx = mockCommandContext({ channel: { id: 'c1', type: ChannelType.GuildText } });
 		const channel = await ctx.channel();
 
 		assert.equal(channel.id, 'c1');
 		assert.equal(channel.position, 0); // filled by mockChannel from the partial
 		assert.equal(channel.nsfw, false);
-		assert.equal((channel.isGuildTextable as () => boolean)(), true);
+		assert.equal(channel.isGuildTextable(), true); // guard derived from type, no stub
 	});
 
 	test('guild method resolves null in direct-message-like contexts', async () => {

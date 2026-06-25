@@ -1,3 +1,4 @@
+import { ChannelType } from 'seyfert/lib/types';
 import { mockId } from './id';
 
 export interface MockUserOptions {
@@ -74,7 +75,30 @@ export interface MockGuild {
 	premium_tier: number;
 }
 
-export interface MockChannel extends Record<string, unknown> {
+/**
+ * seyfert's channel type-guards, implemented as pure functions of `type` (mirroring the real Channel classes).
+ * A test never stubs these — set the channel `type` and the guard answers correctly. Note `isGuildTextable` is
+ * true for voice/news/threads too (they carry text), per seyfert's `AllGuildTextableChannels`; `isTextGuild` is
+ * the text-only check (type 0).
+ */
+export interface ChannelGuards {
+	isStage(): boolean;
+	isMedia(): boolean;
+	isDM(): boolean;
+	isForum(): boolean;
+	isThread(): boolean;
+	isDirectory(): boolean;
+	isVoice(): boolean;
+	isTextGuild(): boolean;
+	isCategory(): boolean;
+	isNews(): boolean;
+	isTextable(): boolean;
+	isGuildTextable(): boolean;
+	isThreadOnly(): boolean;
+	is(channelTypes: readonly (keyof typeof ChannelType)[]): boolean;
+}
+
+export interface MockChannel extends Record<string, unknown>, ChannelGuards {
 	id: string;
 	/** Ergonomic accessor; mirrors {@link guild_id}. `null` for a DM channel. */
 	guildId: string | null;
@@ -133,17 +157,55 @@ export function mockGuild(options: MockGuildOptions = {}): MockGuild {
 	};
 }
 
+// seyfert's guards as pure functions of `type` — mirror lib/structures/channels.js exactly.
+function channelGuards(type: number): ChannelGuards {
+	const isDM = type === ChannelType.DM || type === ChannelType.GroupDM;
+	const isForum = type === ChannelType.GuildForum;
+	const isMedia = type === ChannelType.GuildMedia;
+	// `isTextable` mirrors seyfert's `'messages' in this`: AllTextableChannels = GuildText | Voice | DM | News | Thread.
+	const textable = [
+		ChannelType.GuildText,
+		ChannelType.DM,
+		ChannelType.GuildVoice,
+		ChannelType.GuildAnnouncement,
+		ChannelType.PublicThread,
+		ChannelType.PrivateThread,
+		ChannelType.AnnouncementThread,
+	].includes(type);
+	return {
+		isStage: () => type === ChannelType.GuildStageVoice,
+		isMedia: () => isMedia,
+		isDM: () => isDM,
+		isForum: () => isForum,
+		isThread: () =>
+			type === ChannelType.PublicThread ||
+			type === ChannelType.PrivateThread ||
+			type === ChannelType.AnnouncementThread,
+		isDirectory: () => type === ChannelType.GuildDirectory,
+		isVoice: () => type === ChannelType.GuildVoice,
+		isTextGuild: () => type === ChannelType.GuildText,
+		isCategory: () => type === ChannelType.GuildCategory,
+		isNews: () => type === ChannelType.GuildAnnouncement,
+		isTextable: () => textable,
+		isGuildTextable: () => !isDM && textable,
+		isThreadOnly: () => isForum || isMedia,
+		is: channelTypes => channelTypes.some(name => ChannelType[name] === type),
+	};
+}
+
 export function mockChannel(options: MockChannelOptions = {}): MockChannel {
 	const guildId = options.guildId === undefined ? mockId() : options.guildId;
+	const type = options.type ?? 0;
 	return {
 		id: options.id ?? mockId(),
 		guildId,
 		...(guildId === null ? {} : { guild_id: guildId }),
 		name: options.name ?? 'general',
-		type: options.type ?? 0,
+		type,
 		position: 0,
 		permission_overwrites: [],
 		nsfw: false,
+		...channelGuards(type),
 		...options.extra,
 	};
 }
