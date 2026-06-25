@@ -1,8 +1,8 @@
 import type { Client } from 'seyfert';
 import type { DispatchResult } from './bot';
 import type { MockApiHandler, RecordedAction, RouteMatcher } from './rest';
-import { type EmbedView, type InteractiveComponentView, renderedReply } from './state';
 import { modalRegistry } from './seyfert-internals';
+import { type EmbedView, type InteractiveComponentView, renderedReply } from './state';
 
 export interface ModalWaiter {
 	dispatchId: number;
@@ -233,6 +233,11 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		return await this;
 	}
 
+	/**
+	 * Awaiting a dispatch resolves when the handler RETURNS (with its result) — not when detached background work
+	 * settles. For background REST (DB writes, follow-up calls) the handler fire-and-forgets, add `await bot.settle()`;
+	 * if the handler parks on a nested collector, await `untilComponent('id')` instead (awaiting this would hang).
+	 */
 	then<TResult1 = T, TResult2 = never>(
 		onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | null,
 		onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,

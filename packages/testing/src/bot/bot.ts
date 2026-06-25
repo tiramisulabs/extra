@@ -174,6 +174,41 @@ function installModuleLoader(client: Client, loadModule: (path: string) => Promi
 	}
 }
 
+/**
+ * Restrict directory loading to the named command groups, reading each class's `@Declare` name and installing
+ * seyfert's per-file `filter` hook (consumed by getFiles BEFORE any import), so only files under a directory or
+ * flat file matching one of those names are transformed. Returns the requested names for post-load validation.
+ */
+function installCommandFilter(client: Client, only: readonly MockCommandClass[]): Set<string> {
+	const names = new Set<string>();
+	for (const Command of only) {
+		const name = (new Command() as { name?: unknown }).name;
+		if (typeof name === 'string' && name.length > 0) names.add(name);
+	}
+	(client.commands as unknown as { filter: (path: string) => boolean }).filter = path => {
+		const segments = path.split(/[/\\]/);
+		const base = (segments.at(-1) ?? '').replace(/\.[cm]?[jt]s$/, '');
+		return segments.some(segment => names.has(segment)) || names.has(base);
+	};
+	return names;
+}
+
+function assertOnlyLoaded(client: Client, names: Set<string>, commandsDir: string | undefined): void {
+	const registered = new Set<string>();
+	for (const command of client.commands.values as unknown as { name?: unknown }[]) {
+		if (typeof command.name === 'string') registered.add(command.name);
+	}
+	for (const name of names) {
+		if (!registered.has(name)) {
+			throw new TypeError(
+				`createMockBot: only:[...] requested "${name}", but no command with that name loaded from ` +
+					`${commandsDir ?? '(commandsDir)'}. Loaded: ${[...registered].join(', ') || '(none)'}. ` +
+					"`only` matches a command's @Declare name against its directory name.",
+			);
+		}
+	}
+}
+
 async function runMockClientStartup(client: Client, options: MockBotOptions): Promise<void> {
 	const lifecycle = clientLifecycle(client);
 	const loadFromConfig = options.loadFromConfig === true;
@@ -184,12 +219,14 @@ async function runMockClientStartup(client: Client, options: MockBotOptions): Pr
 	await client.cache.adapter.start();
 
 	if (options.loadModule) installModuleLoader(client, options.loadModule);
+	const onlyNames = options.only?.length ? installCommandFilter(client, options.only) : undefined;
 
 	if (loadFromConfig || options.langsDir) await client.loadLangs(options.langsDir);
 	if (options.defaultLang) client.langs.defaultLang = options.defaultLang;
 
 	await runPluginHooks(client, 'commands:beforeLoad', client, options.commandsDir);
 	if (loadFromConfig || options.commandsDir) await client.loadCommands(options.commandsDir);
+	if (onlyNames) assertOnlyLoaded(client, onlyNames, options.commandsDir);
 	await lifecycle.reloadPluginCommands();
 
 	if (loadFromConfig || options.componentsDir) await client.loadComponents(options.componentsDir);
@@ -678,6 +715,14 @@ export interface MockBotOptions {
 	loadFromConfig?: boolean;
 	/** Explicit commands directory; overrides config-resolved command locations. */
 	commandsDir?: string;
+	/**
+	 * Load only the named command groups from `commandsDir`, instead of transforming the whole tree (which is
+	 * slow for a large bot). Pass the imported parent command class(es) — type-safe, autocomplete, rename-proof,
+	 * no fragile path strings. The filter runs before any file is imported, keeping only files under a directory
+	 * (or a flat file) whose name matches a class's `@Declare` name; @AutoLoad subtrees of a kept group survive.
+	 * Throws if a requested class loads no command (e.g. its directory isn't named after the command).
+	 */
+	only?: MockCommandClass[];
 	/**
 	 * How command/component/event files are imported when loading from a directory (`commandsDir`, etc.).
 	 *
@@ -1611,6 +1656,13 @@ export class MockBot {
 	 *
 	 * It can only observe work that eventually touches REST (or a tracked timer); a purely in-memory continuation
 	 * that does no REST is invisible to any drain — there is no general signal for that.
+	 *
+	 * Relation to `await dispatch`: the two are orthogonal. `await dispatch` waits for the handler to RETURN
+	 * (carrying its result/parked accessors); `settle()` waits for detached background REST to QUIESCE across all
+	 * dispatches. Use `await dispatch` for a synchronous handler; add `await bot.settle()` when the handler
+	 * fire-and-forgets background work; use `dispatch.untilComponent('id')` instead of `await dispatch` when the
+	 * handler parks on a nested collector (awaiting it would hang). `await dispatch; await bot.settle()` is the
+	 * always-safe idiom — `settle()` is a no-op when there's no background work.
 	 */
 	async settle(): Promise<void> {
 		assertRealSetImmediate();

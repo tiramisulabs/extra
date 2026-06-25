@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { describe, expect, test, vi } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
+import CatalogParent from '../fixtures/e2e-commands/catalog/catalog';
 import * as catalogSource from '../fixtures/e2e-commands/catalog-source';
 
 // Integration boot: load the WHOLE command directory from TS source (as in production, but pointed at src), with
@@ -26,6 +27,20 @@ describe('booting a full command directory from TS source', () => {
 
 		expect(result.content).toBe('total: 42');
 		expect(spy).toHaveBeenCalledOnce();
+		await bot.close();
+		spy.mockRestore();
+	});
+
+	// only:[Class] loads just that group's subtree (type-safe via the imported parent class), skipping the rest
+	// of the tree — so a large bot doesn't transform every command to test one group.
+	test('only:[Class] loads just the named group and skips the rest', async () => {
+		const spy = vi.spyOn(catalogSource, 'totalItems').mockReturnValue(7);
+		const bot = await makeBot({ commandsDir: COMMANDS_DIR, only: [CatalogParent] });
+
+		await expect(bot.slash({ name: 'catalog', subcommand: 'list' })).resolves.toMatchObject({ content: 'total: 7' });
+		// `ping` lives at the dir root but outside the catalog group, so it was never loaded.
+		expect(() => bot.slash({ name: 'ping' })).toThrow(/not registered/);
+
 		await bot.close();
 		spy.mockRestore();
 	});
