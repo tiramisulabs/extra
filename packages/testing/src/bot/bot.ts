@@ -54,6 +54,7 @@ import {
 	type EntryPointInteractionOptions,
 	entryPointInteraction,
 	type MessageCommandInteractionOptions,
+	type ModalFields,
 	type ModalSubmitInteractionOptions,
 	messageCommandInteraction,
 	modalSubmitInteraction,
@@ -555,7 +556,7 @@ export interface Actor {
 	entryPoint(options?: EntryPointInteractionOptions): Dispatch<DispatchResult>;
 	fillModal(
 		customId: string,
-		fields?: Record<string, string>,
+		fields?: ModalFields,
 		options?: Omit<ModalSubmitInteractionOptions, 'customId' | 'fields'>,
 	): Dispatch<DispatchResult>;
 	clickButton(customId: string, options?: Parameters<MockBot['clickButton']>[1]): Dispatch<DispatchResult>;
@@ -1257,7 +1258,7 @@ export class MockBot {
 	 * field key must correspond to a real input on the modal. Skipped when no displayed modal was captured (e.g. a
 	 * ModalCommand-only flow), so it never blocks the registry path that {@link assertModalHandleable} already guards.
 	 */
-	private assertModalMatchesDisplayed(customId: string, fields: Record<string, string>, userId: string): void {
+	private assertModalMatchesDisplayed(customId: string, fields: ModalFields, userId: string): void {
 		const displayed = this.displayedModals.get(userId);
 		if (!displayed) return;
 		if (displayed.customId !== undefined && displayed.customId !== customId) {
@@ -2444,7 +2445,7 @@ export class MockBot {
 
 	fillModal(
 		customId: string,
-		fields: Record<string, string> = {},
+		fields: ModalFields = {},
 		extra: Omit<ModalSubmitInteractionOptions, 'customId' | 'fields'> = {},
 	): Dispatch<DispatchResult> {
 		const opts: ModalSubmitInteractionOptions = { ...extra, customId, fields };

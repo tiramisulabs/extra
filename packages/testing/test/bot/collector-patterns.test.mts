@@ -4,14 +4,18 @@ import {
 	Command,
 	type CommandContext,
 	Declare,
+	FileUpload,
+	Label,
 	Modal,
 	ModalCommand,
 	type ModalContext,
+	TextInput,
 } from 'seyfert';
-import { ButtonStyle } from 'seyfert/lib/types';
+import { ButtonStyle, TextInputStyle } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
 import { expectComponent, expectEmbed } from '../../src';
 import { createMockBot } from '../../src/bot/bot';
+import { apiAttachment } from '../../src/bot/payloads';
 
 // A common real-world flow: defer -> editOrReply(fetchReply) -> collector on that message, with a DYNAMIC
 // customId matched by regex (parameterized customIds are very common).
@@ -108,6 +112,42 @@ describe('collector patterns', () => {
 		const res = await bot.clickButton('setup-continue');
 		expect(done).toEqual(['clicked']);
 		expect(res.reply?.body).toMatchObject({ data: { content: 'created channels' } });
+		await bot.close();
+	});
+
+	// fillModal fills a FileUpload input with attachments, so the handler's interaction.getFiles(customId) (and any
+	// content-type validation) sees them — not just text inputs.
+	test('fillModal fills a FileUpload input so getFiles sees the attachments', async () => {
+		const seen: string[] = [];
+
+		@Declare({ name: 'upload', description: 'Upload flow with a file input' })
+		class UploadCommand extends Command {
+			async run(ctx: CommandContext) {
+				const modal = new Modal()
+					.setCustomId('upload-modal')
+					.setTitle('Upload')
+					.setComponents([
+						new Label()
+							.setLabel('Note')
+							.setComponent(new TextInput({ custom_id: 'note', style: TextInputStyle.Short })),
+						new Label().setLabel('File').setComponent(new FileUpload({ custom_id: 'attachment' })),
+					]);
+				const submit = await ctx.interaction.modal(modal, { waitFor: 30_000 });
+				if (!submit) return;
+				const files = submit.getFiles('attachment') ?? [];
+				seen.push(files.map(f => f.filename).join(','));
+				await submit.write({ content: `note:${submit.getInputValue('note')} files:${files.length}` });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [UploadCommand] });
+		const res = await bot.slash({ name: 'upload' }).fillModal('upload-modal', {
+			note: 'hello',
+			attachment: [apiAttachment({ filename: 'evidence.pdf', contentType: 'application/pdf' })],
+		});
+
+		expect(res.content).toBe('note:hello files:1');
+		expect(seen[0]).toContain('evidence.pdf');
 		await bot.close();
 	});
 

@@ -313,6 +313,7 @@ export interface ApiInteractionPayload {
 		components?: (
 			| { type: 1; components: { type: 4; custom_id: string; value: string }[] }
 			| { type: 18; component: { type: 4; custom_id: string; value: string } }
+			| { type: 18; component: { type: 19; custom_id: string; values: string[] } }
 		)[];
 	};
 	message?: ApiMessage;
@@ -546,20 +547,32 @@ export function selectMenuInteraction(options: SelectMenuInteractionOptions): Ap
 	return payload;
 }
 
+/**
+ * Modal submit values keyed by input custom_id. A string fills a TextInput; an attachment array fills a
+ * FileUpload input — so a command's `interaction.getFiles(customId)` (content-type validation, etc.) sees them.
+ */
+export type ModalFields = Record<string, string | ApiAttachment[]>;
+
 export interface ModalSubmitInteractionOptions extends BaseInteractionOptions {
 	customId: string;
-	/** TextInput values keyed by their custom_id. */
-	fields?: Record<string, string>;
+	fields?: ModalFields;
 }
 
 export function modalSubmitInteraction(options: ModalSubmitInteractionOptions): ApiInteractionPayload {
 	const payload = baseInteraction(options, 5);
+	const attachments: Record<string, ApiAttachment> = {};
+	const components = Object.entries(options.fields ?? {}).map(([customId, value]) => {
+		if (Array.isArray(value)) {
+			// FileUpload (19): seyfert's getFiles reads data.resolved.attachments after finding this component.
+			for (const file of value) attachments[file.id] = file;
+			return { type: 18 as const, component: { type: 19 as const, custom_id: customId, values: value.map(f => f.id) } };
+		}
+		return { type: 18 as const, component: { type: 4 as const, custom_id: customId, value } };
+	});
 	payload.data = {
 		custom_id: options.customId,
-		components: Object.entries(options.fields ?? {}).map(([customId, value]) => ({
-			type: 18 as const,
-			component: { type: 4 as const, custom_id: customId, value },
-		})),
+		components,
+		...(Object.keys(attachments).length ? { resolved: { attachments } } : {}),
 	};
 	return payload;
 }

@@ -1,5 +1,6 @@
 import type { Client } from 'seyfert';
 import type { DispatchResult } from './bot';
+import type { ModalFields } from './interactions';
 import type { MockApiHandler, RecordedAction, RouteMatcher } from './rest';
 import { modalRegistry } from './seyfert-internals';
 import { type EmbedView, type InteractiveComponentView, renderedReply } from './state';
@@ -35,7 +36,7 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		 */
 		readonly dispatchId?: number,
 		/** Submits a modal as this dispatch's user; supplied by MockBot so {@link fillModal} needs no bot handle. */
-		private readonly modalFiller?: (customId: string, fields: Record<string, string>) => Dispatch<DispatchResult>,
+		private readonly modalFiller?: (customId: string, fields: ModalFields) => Dispatch<DispatchResult>,
 		/** Clears same-user modal ownership after timeoutModal consumes the registry entry. */
 		private readonly modalCleaner?: (userId: string) => void,
 		/**
@@ -203,7 +204,7 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 	 * settles the opener so its post-`modal()` continuation (e.g. `submit.write(...)`) runs, returning the
 	 * modal-submit result. The whole open → submit → settle handshake is internal; the user only writes this.
 	 */
-	async fillModal(customId: string, fields: Record<string, string> = {}): Promise<DispatchResult> {
+	async fillModal(customId: string, fields: ModalFields = {}): Promise<DispatchResult> {
 		if (!this.modalFiller) {
 			throw new TypeError('Dispatch.fillModal: this dispatch type cannot open modals.');
 		}
