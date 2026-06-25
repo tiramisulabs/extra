@@ -16,6 +16,7 @@ import { describe, expect, test } from 'vitest';
 import { expectComponent, expectEmbed } from '../../src';
 import { createMockBot } from '../../src/bot/bot';
 import { apiAttachment } from '../../src/bot/payloads';
+import { mockWorld } from '../../src/bot/world';
 
 // A common real-world flow: defer -> editOrReply(fetchReply) -> collector on that message, with a DYNAMIC
 // customId matched by regex (parameterized customIds are very common).
@@ -148,6 +149,54 @@ describe('collector patterns', () => {
 
 		expect(res.content).toBe('note:hello files:1');
 		expect(seen[0]).toContain('evidence.pdf');
+		await bot.close();
+	});
+
+	// A collector that lives in a DM (the command DMs the author, then collects). Register the author as a world
+	// user so the DM channel opens; then untilComponent sees the DM message's button and clickButton drives it.
+	test('a collector on a DM is driveable once the recipient is a registered world user', async () => {
+		const events: string[] = [];
+
+		@Declare({ name: 'massdm', description: 'DM the author with a confirm button' })
+		class MassDmCommand extends Command {
+			async run(ctx: CommandContext) {
+				const row = new ActionRow<Button>().setComponents([
+					new Button().setCustomId('confirm-mass-dm').setLabel('Confirm').setStyle(ButtonStyle.Primary),
+				]);
+				const dm = await ctx.author.write({ content: 'Confirm the mass DM?', components: [row] });
+				dm.createComponentCollector().run('confirm-mass-dm', async i => {
+					events.push('confirmed');
+					await i.write({ content: 'sent' });
+				});
+			}
+		}
+
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'g1' });
+		const author = world.registerUser({ id: 'author-1' }); // so author.write can open the DM
+		const bot = await createMockBot({ commands: [MassDmCommand], world });
+
+		const flow = bot.slash({ name: 'massdm', guildId: guild.id, user: author });
+		await flow.untilComponent('confirm-mass-dm'); // the DM button is visible across the dispatch's actions
+		await bot.clickButton('confirm-mass-dm');
+		await flow;
+
+		expect(events).toEqual(['confirmed']);
+		await bot.close();
+	});
+
+	test('a DM to an unregistered recipient fails with a directed error', async () => {
+		@Declare({ name: 'dm-unknown', description: 'DM an unregistered user' })
+		class DmUnknownCommand extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.author.write({ content: 'hi' });
+			}
+		}
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'g1' });
+		const bot = await createMockBot({ commands: [DmUnknownCommand], world });
+		// default dispatch user isn't registered → createDm guides toward world.registerUser
+		await expect(bot.slash({ name: 'dm-unknown', guildId: guild.id })).rejects.toThrow(/world\.registerUser/);
 		await bot.close();
 	});
 

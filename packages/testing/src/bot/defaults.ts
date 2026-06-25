@@ -533,7 +533,16 @@ export function registerWorldDefaults(
 	rest.intercept(Routes.createDm, pending => {
 		const recipientId = String(bodyRecord(pending.body).recipient_id ?? '');
 		const user = world?.users.find(entry => entry.id === recipientId);
-		if (world && !user) apiError(404, ErrorCode.UnknownUser, 'Unknown User');
+		// A DM flow (user.write / member.dm) opens a DM channel for the recipient. With a seeded world the recipient
+		// must be a known user; guide toward registering it instead of a bare "Unknown User"/"Unknown Channel".
+		if (world && !user) {
+			apiError(
+				404,
+				ErrorCode.UnknownUser,
+				`Unknown User: no user "${recipientId}" to open a DM with. Register the recipient first — ` +
+					`world.registerUser({ id: "${recipientId}" }) (and dispatch as that user) — to enable DM flows.`,
+			);
+		}
 		const recipient = user ?? apiUser({ id: recipientId });
 		const channel = hooks.state.registerDm(recipientId, {
 			...apiChannel({ guildId: null, type: 1 }),
