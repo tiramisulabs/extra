@@ -3,11 +3,15 @@ import { mockId } from '../id';
 import { TEST_APPLICATION_ID, TEST_CHANNEL_ID, TEST_GUILD_ID } from './constants';
 import {
 	type ApiAttachment,
+	type ApiAttachmentOptions,
 	type ApiChannel,
+	type ApiChannelOptions,
 	type ApiMember,
 	type ApiMessage,
 	type ApiRole,
+	type ApiRoleOptions,
 	type ApiUser,
+	type ApiUserOptions,
 	apiAttachment,
 	apiChannel,
 	apiMember,
@@ -51,7 +55,14 @@ export interface EncodedOption {
 	};
 }
 
-export type OptionInput = string | number | boolean | EncodedOption;
+/**
+ * A resolved entity (user/channel/role/attachment) passed directly as an option value. The matching builder
+ * is applied automatically from the command's declared option type, so `{ options: { user: { id, username } } }`
+ * needs no `userOption(...)` wrapper. A loose `{ id }` is completed with api* defaults; a full api object passes
+ * through unchanged.
+ */
+export type EntityOptionInput = ApiUser | ApiChannel | ApiRole | ApiAttachment | { id: string; [key: string]: unknown };
+export type OptionInput = string | number | boolean | EncodedOption | EntityOptionInput;
 export interface NamedOptionInput {
 	name: string;
 	value: OptionInput;
@@ -136,6 +147,55 @@ function isEncodedOption(value: OptionInput): value is EncodedOption {
 	return typeof value === 'object' && value !== null && '__slipherOption' in value;
 }
 
+export function isEntityInput(value: OptionInput): value is EntityOptionInput {
+	return typeof value === 'object' && value !== null && !isEncodedOption(value) && 'id' in value;
+}
+
+/**
+ * Replace any plain entity object in an option bag with its coerced {@link EncodedOption}, keyed off the
+ * declared option types. Runs before validation so a `{ id, username }` user option is accepted exactly like a
+ * `userOption(...)` result. Non-entity option types and non-object values are left untouched.
+ */
+export function coerceOptionBag(
+	options: OptionInputBag,
+	optionTypes: Record<string, number | undefined>,
+): OptionInputBag {
+	const coerce = (name: string, value: OptionInput): OptionInput =>
+		isEntityInput(value) ? (coerceEntityOption(optionTypes[name], value) ?? value) : value;
+	return Array.isArray(options)
+		? options.map(entry => ({ name: entry.name, value: coerce(entry.name, entry.value) }))
+		: Object.fromEntries(Object.entries(options).map(([name, value]) => [name, coerce(name, value)]));
+}
+
+/**
+ * Coerce a plain entity object passed directly as an option value into the right resolved envelope, keyed off
+ * the command's declared option type. Mirrors {@link resolvedRole}'s factory+spread idiom: a loose `{ id }` is
+ * completed with api* defaults while a full api object passes through unchanged. Returns undefined for
+ * non-entity declared types, so the caller falls back to the scalar ladder (and its validator error).
+ */
+export function coerceEntityOption(
+	declaredType: number | undefined,
+	raw: EntityOptionInput,
+): EncodedOption | undefined {
+	const fullUser = () => ({ ...apiUser(raw as ApiUserOptions), ...raw }) as ApiUser;
+	const fullRole = () => ({ ...apiRole(raw as ApiRoleOptions), ...raw }) as ApiRole;
+	const userShaped = 'username' in raw || 'discriminator' in raw;
+	switch (declaredType) {
+		case OptionType.User:
+			return userOption(fullUser());
+		case OptionType.Channel:
+			return channelOption({ ...apiChannel(raw as ApiChannelOptions), ...raw } as ApiChannel);
+		case OptionType.Role:
+			return roleOption(fullRole());
+		case OptionType.Mentionable:
+			return mentionableOption(userShaped ? fullUser() : fullRole());
+		case OptionType.Attachment:
+			return attachmentOption({ ...apiAttachment(raw as ApiAttachmentOptions), ...raw } as ApiAttachment);
+		default:
+			return undefined;
+	}
+}
+
 function optionEntries(options: OptionInputBag): [string, OptionInput][] {
 	return Array.isArray(options) ? options.map(option => [option.name, option.value]) : Object.entries(options);
 }
@@ -151,16 +211,25 @@ function encodeOptions(
 	const resolved: ResolvedData = {};
 
 	for (const [name, value] of optionEntries(options)) {
-		if (isEncodedOption(value)) {
-			encoded.push({ name, type: value.type, value: value.value });
+		const declaredType = optionTypes[name];
+		// Both an explicit builder result and an auto-coerced entity object resolve to an EncodedOption; merge
+		// either the same way.
+		if (isEncodedOption(value) || isEntityInput(value)) {
+			const envelope = isEncodedOption(value) ? value : coerceEntityOption(declaredType, value);
+			if (!envelope) {
+				throw new TypeError(
+					`Option "${name}" received an entity object, but its declared type is not a ` +
+						'user/channel/role/mentionable/attachment option. Pass a scalar value instead.',
+				);
+			}
+			encoded.push({ name, type: envelope.type, value: envelope.value });
 			for (const key of ['users', 'members', 'channels', 'roles', 'attachments'] as const) {
-				const entries = value.resolved?.[key];
+				const entries = envelope.resolved?.[key];
 				if (entries) resolved[key] = { ...resolved[key], ...entries };
 			}
 			continue;
 		}
 
-		const declaredType = optionTypes[name];
 		if (typeof value === 'string') {
 			encoded.push({ name, type: OptionType.String, value });
 		} else if (typeof value === 'boolean') {

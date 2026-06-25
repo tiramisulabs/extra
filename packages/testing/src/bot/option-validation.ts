@@ -1,10 +1,11 @@
 import { ApplicationCommandType } from 'seyfert';
 import { ApplicationCommandOptionType } from 'seyfert/lib/types';
-import type {
-	AutocompleteInteractionOptions,
-	ChatInputInteractionOptions,
-	OptionInput,
-	OptionInputBag,
+import {
+	type AutocompleteInteractionOptions,
+	type ChatInputInteractionOptions,
+	coerceOptionBag,
+	type OptionInput,
+	type OptionInputBag,
 } from './interactions';
 
 /** Discord application-command option types, single-sourced from seyfert's enum. */
@@ -268,12 +269,14 @@ export function prepareChatInputOptions(
 ): ChatInputInteractionOptions {
 	assertSubcommandTarget(commands, options, 'slash');
 	const definitions = optionDefinitionsFor(commands, options);
-	if (validate) validateChatInputOptions(options, definitions);
+	const optionTypes = optionTypesFor(definitions);
+	const prepared = options.options ? { ...options, options: coerceOptionBag(options.options, optionTypes) } : options;
+	if (validate) validateChatInputOptions(prepared, definitions);
 	return {
-		...options,
+		...prepared,
 		optionTypes: {
 			...(options.optionTypes ?? {}),
-			...optionTypesFor(definitions),
+			...optionTypes,
 		},
 	};
 }

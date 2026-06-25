@@ -6,6 +6,7 @@ import {
 	createIntegerOption,
 	createMentionableOption,
 	createNumberOption,
+	createUserOption,
 	Declare,
 	EntryPointCommand,
 	Label,
@@ -154,6 +155,18 @@ describe('additional command surfaces', () => {
 		}
 	}
 
+	const userOptions = {
+		who: createUserOption({ description: 'A user', required: true }),
+	};
+
+	@Declare({ name: 'user-check', description: 'Checks user option coercion' })
+	@Options(userOptions)
+	class UserCheckCommand extends Command {
+		async run(ctx: CommandContext<typeof userOptions>) {
+			await ctx.write({ content: `${ctx.options.who.id}:${ctx.options.who.username}` });
+		}
+	}
+
 	test('attachment options resolve through the real option resolver', async () => {
 		const bot = await createMockBot({ commands: [AttachmentCheckCommand] });
 		const result = await bot.slash({
@@ -193,6 +206,41 @@ describe('additional command surfaces', () => {
 		expect(() => bot.slash({ name: 'mentionable-check', options: { target: 'mention-user' } })).toThrow(
 			/mentionableOption/,
 		);
+		await bot.close();
+	});
+
+	test('a plain entity object is coerced to the right option by declared type', async () => {
+		const bot = await createMockBot({ commands: [UserCheckCommand, ChannelCheckCommand] });
+
+		// The headline ergonomic: no userOption(...) wrapper — a loose { id, username } is completed and resolved.
+		await expect(
+			bot.slash({ name: 'user-check', options: { who: { id: 'u1', username: 'bob' } } }),
+		).resolves.toMatchObject({ content: 'u1:bob' });
+
+		// A loose { id } works too; missing fields fall back to api* defaults.
+		await expect(bot.slash({ name: 'channel-check', options: { room: { id: 'c1' } } })).resolves.toMatchObject({
+			content: 'c1',
+		});
+		await bot.close();
+	});
+
+	test('mentionable coercion routes objects to user vs role by shape', async () => {
+		const bot = await createMockBot({ commands: [MentionableCheckCommand] });
+
+		await expect(
+			bot.slash({ name: 'mentionable-check', options: { target: { id: 'u9', username: 'eve' } } }),
+		).resolves.toMatchObject({ content: 'user:u9' });
+		await expect(
+			bot.slash({ name: 'mentionable-check', options: { target: { id: 'r9', name: 'admin' } } }),
+		).resolves.toMatchObject({ content: 'role:r9' });
+		await bot.close();
+	});
+
+	test('a full api entity object passes through coercion unchanged', async () => {
+		const bot = await createMockBot({ commands: [AttachmentCheckCommand] });
+		await expect(
+			bot.slash({ name: 'attachment-check', options: { file: apiAttachment({ filename: 'proof.pdf' }) } }),
+		).resolves.toMatchObject({ content: 'proof.pdf' });
 		await bot.close();
 	});
 
