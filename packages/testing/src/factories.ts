@@ -232,7 +232,10 @@ export function mockUser(options: MockUserOptions = {}): MockUser {
 	const avatar = options.avatar ?? null;
 	const banner = options.banner ?? null;
 	const avatarDecorationData = options.avatarDecorationData ?? null;
-	const defaultAvatarURL = () => cdn().embed.avatars.get(calculateUserDefaultAvatarIndex(id, discriminator));
+	// calculateUserDefaultAvatarIndex does BigInt(id) for the new (discriminator '0') system — guard non-snowflake
+	// test ids (e.g. 'u1') the same way snowflakeDerived does, so a friendly-id user's avatarURL() won't throw.
+	const defaultAvatarURL = () =>
+		cdn().embed.avatars.get(/^\d+$/.test(id) ? calculateUserDefaultAvatarIndex(id, discriminator) : 0);
 	return {
 		id,
 		username,

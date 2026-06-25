@@ -125,6 +125,8 @@ describe('entity factories', () => {
 		assert.equal(withAssets.bannerURL(), 'https://cdn.discordapp.com/banners/5/bh.png');
 		assert.equal(withAssets.avatarDecorationURL(), 'https://cdn.discordapp.com/avatar-decoration-presets/deco.png');
 		assert.equal(user.bannerURL(), undefined); // no banner → undefined, like seyfert
+		// friendly (non-snowflake) ids must not throw in defaultAvatarURL's BigInt(id) path
+		assert.match(mockUser({ id: 'u1' }).avatarURL(), /embed\/avatars\/0\.png/);
 
 		// message jump link from ids + user alias
 		const message = mockMessage({ id: '5', channelId: '3', guildId: '9', author: user });
