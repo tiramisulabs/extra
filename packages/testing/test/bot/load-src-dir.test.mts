@@ -29,4 +29,19 @@ describe('booting a full command directory from TS source', () => {
 		await bot.close();
 		spy.mockRestore();
 	});
+
+	// Files are imported sequentially, not via Promise.all: firing every import() concurrently deadlocks a
+	// Vite-style module runner when the command files share a barrel/circular graph (here: list.ts goes through
+	// a re-export hub while override.ts imports the same circular submodules directly).
+	test('loads a directory whose commands share a circular/barrel dependency graph', async () => {
+		const bot = await makeBot({ commandsDir: join(process.cwd(), 'test/fixtures/circular-commands/cmd') });
+
+		await expect(bot.slash({ name: 'circ', subcommand: 'list' })).resolves.toMatchObject({
+			content: 'fmt:x:store',
+		});
+		await expect(bot.slash({ name: 'circ', subcommand: 'override' })).resolves.toMatchObject({
+			content: 'fmt-store|fmt:y:store',
+		});
+		await bot.close();
+	});
 });

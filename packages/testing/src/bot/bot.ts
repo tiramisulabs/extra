@@ -142,22 +142,34 @@ interface FileLoadingHandler {
  * Function('return import(...)')` pair that escapes the test runner's transform, so a directory of TS source won't
  * parse and `vi.mock` can't reach a command's deps. Routing through a `path => import(path)` thunk defined in the
  * user's test file keeps the loaded modules in the runner's graph.
+ *
+ * Imports run SEQUENTIALLY, not via `Promise.all`. Firing every file's `import()` concurrently makes a Vite-style
+ * module runner deadlock when the command files share a barrel/circular dependency graph: two in-flight dynamic
+ * imports each await a half-initialized module the other holds, and the runner never resolves them. Loading one
+ * file at a time lets each entry into the shared graph settle before the next begins. Directory loading is a
+ * one-time setup cost, so the lost parallelism is irrelevant.
  */
 function installModuleLoader(client: Client, loadModule: (path: string) => Promise<unknown>): void {
 	const handlers = [client.commands, client.components, client.events] as unknown as FileLoadingHandler[];
 	for (const handler of handlers) {
 		if (typeof handler.loadFiles === 'function') {
-			handler.loadFiles = paths =>
-				Promise.all(
-					paths.map(async path => {
-						const mod = (await loadModule(path)) as { default?: unknown };
-						return mod?.default ?? mod;
-					}),
-				);
+			handler.loadFiles = async paths => {
+				const files: unknown[] = [];
+				for (const path of paths) {
+					const mod = (await loadModule(path)) as { default?: unknown };
+					files.push(mod?.default ?? mod);
+				}
+				return files;
+			};
 		}
 		if (typeof handler.loadFilesK === 'function') {
-			handler.loadFilesK = paths =>
-				Promise.all(paths.map(async path => ({ name: basename(path), file: await loadModule(path), path })));
+			handler.loadFilesK = async paths => {
+				const files: unknown[] = [];
+				for (const path of paths) {
+					files.push({ name: basename(path), file: await loadModule(path), path });
+				}
+				return files;
+			};
 		}
 	}
 }
