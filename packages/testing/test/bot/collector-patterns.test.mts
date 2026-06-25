@@ -10,7 +10,7 @@ import {
 } from 'seyfert';
 import { ButtonStyle } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
-import { expectComponent } from '../../src';
+import { expectComponent, expectEmbed } from '../../src';
 import { createMockBot } from '../../src/bot/bot';
 
 // A common real-world flow: defer -> editOrReply(fetchReply) -> collector on that message, with a DYNAMIC
@@ -145,6 +145,32 @@ describe('collector patterns', () => {
 		expect(events).toEqual([]);
 		expectComponent(click, { customId: 'confirm-nested' });
 
+		await bot.close();
+	});
+
+	// The bot-level accessors scan all recorded actions (unscoped), so a reply emitted inside a collector handler
+	// is assertable via bot.lastEmbed()/expectEmbed(bot) — no reaching into raw bot.actions, and no need to pick
+	// which dispatch (the flow or the click) captured it (a handler followup can record under neither).
+	test('bot-level lastEmbed/expectEmbed see a reply emitted inside a collector handler', async () => {
+		@Declare({ name: 'reopen', description: 'Confirm then reopen' })
+		class ReopenCommand extends Command {
+			async run(ctx: CommandContext) {
+				const row = new ActionRow<Button>().setComponents([
+					new Button().setCustomId('confirm').setLabel('Confirm').setStyle(ButtonStyle.Primary),
+				]);
+				const message = await ctx.write({ content: 'Confirm?', components: [row] }, true);
+				message.createComponentCollector().run('confirm', async i => {
+					await i.write({ embeds: [{ title: 'Reopened', description: 'has been reopened' }] });
+				});
+			}
+		}
+
+		const bot = await createMockBot({ commands: [ReopenCommand] });
+		await bot.slash({ name: 'reopen' });
+		await bot.clickButton('confirm');
+
+		expect(bot.lastEmbed().title).toBe('Reopened');
+		expectEmbed(bot, { contains: /reopened/ });
 		await bot.close();
 	});
 });

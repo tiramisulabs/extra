@@ -845,7 +845,7 @@ export class MockBot {
 	private canDetectModalCollector = false;
 
 	constructor(
-		readonly client: Client,
+		readonly client: Client<true>,
 		readonly rest: MockApiHandler,
 		readonly gateway: MockGateway,
 		protected readonly _world: MockWorld | undefined,
@@ -1339,6 +1339,38 @@ export class MockBot {
 
 	get actions(): readonly RecordedAction[] {
 		return this.rest.actions;
+	}
+
+	/**
+	 * The latest reply rendered by ANY dispatch — scanned UNSCOPED across all recorded actions. Unlike a
+	 * `DispatchResult` (scoped to one dispatch) or `Dispatch.lastEmbed` (scoped to that flow), this also sees a
+	 * reply written inside a collector handler: that followup runs after the dispatch's async context is gone, so
+	 * it records under no dispatch and is invisible to the scoped accessors. Implements {@link EmbedSource} /
+	 * {@link ComponentSource}, so `expectEmbed(bot, …)` / `expectComponent(bot, …)` work directly. Last-write-wins:
+	 * it reflects the most recent rendering dispatch, regardless of which produced it — use a flow's own
+	 * `flow.lastEmbed()` to assert a specific dispatch.
+	 */
+	private renderedAcrossDispatches(): { embeds: EmbedView[]; components: InteractiveComponentView[] } {
+		return renderedReply(this.rest.actions);
+	}
+
+	lastEmbeds(): EmbedView[] {
+		return this.renderedAcrossDispatches().embeds;
+	}
+
+	lastEmbed(index = 0): EmbedView {
+		const embeds = this.renderedAcrossDispatches().embeds;
+		if (embeds.length === 0) {
+			throw new TypeError('MockBot.lastEmbed: no embed has been sent.');
+		}
+		if (index < 0 || index >= embeds.length) {
+			throw new TypeError(`MockBot.lastEmbed: index ${index} is out of range — sent ${embeds.length} embed(s).`);
+		}
+		return embeds[index];
+	}
+
+	lastComponents(): InteractiveComponentView[] {
+		return this.renderedAcrossDispatches().components;
 	}
 
 	/**
