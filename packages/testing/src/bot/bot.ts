@@ -1,3 +1,4 @@
+import { basename } from 'node:path';
 import {
 	Client,
 	type Command,
@@ -27,6 +28,13 @@ import {
 	InteractionType,
 } from 'seyfert/lib/types';
 import { resetMockIds } from '../id';
+import {
+	actionRendersComponent,
+	collectComponentCustomIds,
+	findComponentNode,
+	findComponentType,
+	selectTypeForInteraction,
+} from './component-tree';
 import { TEST_APPLICATION_ID, TEST_BOT_ID, TEST_CHANNEL_ID, TEST_GUILD_ID, TEST_USER_ID } from './constants';
 import { registerWorldDefaults } from './defaults';
 import { Dispatch, type ModalWaiter, type ModalWaitRegistration } from './dispatch';
@@ -81,13 +89,6 @@ import {
 	type TypedMatchedAction,
 } from './rest';
 import { FOLLOWUP_ROUTE, Routes, WEBHOOK_MESSAGE_ROUTE } from './routes';
-import {
-	actionRendersComponent,
-	collectComponentCustomIds,
-	findComponentNode,
-	findComponentType,
-	selectTypeForInteraction,
-} from './component-tree';
 import { resolveSelectResolved } from './select-resolved';
 import {
 	asClientGateway,
@@ -107,12 +108,12 @@ import {
 	type GuildMemberView,
 	type GuildView,
 	harvestComponents,
-	renderedReply,
 	type InteractiveComponentView,
 	type MessageView,
 	normalizeEmbed,
 	numberValue,
 	type RoleView,
+	renderedReply,
 	stringValue,
 	type WorldDiff,
 	type WorldSnapshot,
@@ -130,6 +131,37 @@ type ClientOptions = NonNullable<ClientConstructorOptions>;
 type MockClientOptions = Omit<ClientOptions, 'plugins'>;
 type ServicesOptions = Parameters<Client['setServices']>[0];
 
+interface FileLoadingHandler {
+	loadFiles?: (paths: string[]) => Promise<unknown[]>;
+	loadFilesK?: (paths: string[]) => Promise<unknown[]>;
+}
+
+/**
+ * Replace the command/component/event handlers' file loaders with the user-supplied {@link MockBotOptions.loadModule}
+ * importer. See that option's docs for why: seyfert's default `magicImport` reaches files via a `require`/`new
+ * Function('return import(...)')` pair that escapes the test runner's transform, so a directory of TS source won't
+ * parse and `vi.mock` can't reach a command's deps. Routing through a `path => import(path)` thunk defined in the
+ * user's test file keeps the loaded modules in the runner's graph.
+ */
+function installModuleLoader(client: Client, loadModule: (path: string) => Promise<unknown>): void {
+	const handlers = [client.commands, client.components, client.events] as unknown as FileLoadingHandler[];
+	for (const handler of handlers) {
+		if (typeof handler.loadFiles === 'function') {
+			handler.loadFiles = paths =>
+				Promise.all(
+					paths.map(async path => {
+						const mod = (await loadModule(path)) as { default?: unknown };
+						return mod?.default ?? mod;
+					}),
+				);
+		}
+		if (typeof handler.loadFilesK === 'function') {
+			handler.loadFilesK = paths =>
+				Promise.all(paths.map(async path => ({ name: basename(path), file: await loadModule(path), path })));
+		}
+	}
+}
+
 async function runMockClientStartup(client: Client, options: MockBotOptions): Promise<void> {
 	const lifecycle = clientLifecycle(client);
 	const loadFromConfig = options.loadFromConfig === true;
@@ -138,6 +170,8 @@ async function runMockClientStartup(client: Client, options: MockBotOptions): Pr
 	lifecycle.refreshPluginContributions();
 	await runPluginHooks(client, 'plugins:ready', client);
 	await client.cache.adapter.start();
+
+	if (options.loadModule) installModuleLoader(client, options.loadModule);
 
 	if (loadFromConfig || options.langsDir) await client.loadLangs(options.langsDir);
 	if (options.defaultLang) client.langs.defaultLang = options.defaultLang;
@@ -632,6 +666,28 @@ export interface MockBotOptions {
 	loadFromConfig?: boolean;
 	/** Explicit commands directory; overrides config-resolved command locations. */
 	commandsDir?: string;
+	/**
+	 * How command/component/event files are imported when loading from a directory (`commandsDir`, etc.).
+	 *
+	 * Why this exists: a test runner (vitest/jest/bun) only transforms TypeScript in the modules IT evaluates —
+	 * your test files and your `src`. Dependencies in `node_modules` are "externalized": run as-is by Node.
+	 * Seyfert's own loader lives in `node_modules`, so when it imports your command files it does so from OUTSIDE
+	 * the runner's transform — Node then chokes on the `.ts` syntax. That is why pointing a directory at TypeScript
+	 * source fails with "Invalid or unexpected token", and why a command loaded from a compiled `dist` can't have
+	 * its deps stubbed (the loaded module is a different instance than the `src` one your `vi.mock` targets).
+	 *
+	 * `loadModule` closes that gap: pass `path => import(path)` DEFINED IN YOUR TEST FILE. Because the thunk lives
+	 * in a module the runner transforms, the imported command files (and their dependencies) stay in the runner's
+	 * graph — so a directory can point at TS source, `@AutoLoad`'s real filesystem scan runs, and `vi.mock` /
+	 * `vi.spyOn` reach the commands' deps, with no compiled build and no `require.cache` surgery. Wrap it once:
+	 *
+	 *   const makeBot = opts => createMockBot({ loadModule: p => import(p), ...opts });
+	 *
+	 * Runner-agnostic by design — mirrors the `timers.advance` bridge: the package never imports a runner; you
+	 * supply the import. Omit it to use seyfert's default importer (compiled `.js` directories only). To load TS
+	 * source without the thunk, instead inline this package in your runner (e.g. vitest `server.deps.inline`).
+	 */
+	loadModule?: (path: string) => Promise<unknown>;
 	/** Explicit components directory; overrides config-resolved component locations. */
 	componentsDir?: string;
 	/** Explicit events directory; overrides config-resolved event locations. */
@@ -1589,6 +1645,12 @@ export class MockBot {
 	 * callbacks (collector idle/timeout onStop, ctx.modal waitFor) and any mock dispatch they trigger settle
 	 * before assertions. Delegates the actual clock advance to the runner-supplied `timers.advance` callback —
 	 * the package source imports no vitest/jest. Throws clearly if no fake timers were configured.
+	 *
+	 * Note on collectors: a collector-level `{ timeout }`/`{ idle }` fires `onStop(reason)`, but seyfert does NOT
+	 * resolve a pending bare `collector.waitFor(customId)` on that timeout — only a matching component or a
+	 * per-call `waitFor(customId, ms)` timeout resolves it. So the abort-by-timeout branch lives in `onStop`, and
+	 * a flow parked on a bare `waitFor` must NOT be awaited to completion (it would hang). Drive it: park with
+	 * `dispatch.untilComponent(...)`, call `advanceTime(ms)`, then assert the `onStop` effects.
 	 */
 	async advanceTime(ms: number, scope?: Dispatch<unknown> | number): Promise<void> {
 		if (!this.timers) {
