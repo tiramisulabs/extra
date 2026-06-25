@@ -88,6 +88,28 @@ describe('entity factories', () => {
 		assert.equal(voice.is(['GuildText']), false);
 	});
 
+	test('entities derive seyfert getters from their data (toString/tag/name/url/createdAt)', () => {
+		const user = mockUser({ id: '900000000000000005', username: 'neo', globalName: null, discriminator: '7' });
+		assert.equal(`${user}`, '<@900000000000000005>'); // toString → mention (was [object Object])
+		assert.equal(user.tag, 'neo#7'); // no globalName → username#discriminator
+		assert.equal(user.name, 'neo');
+		assert.ok(user.createdAt instanceof Date);
+		assert.equal(typeof user.createdTimestamp, 'number');
+
+		const withGlobal = mockUser({ username: 'neo', globalName: 'Neo' });
+		assert.equal(withGlobal.tag, 'Neo'); // globalName wins
+		assert.equal(withGlobal.name, 'Neo');
+
+		const channel = mockChannel({ id: '5', guildId: '9' });
+		assert.equal(`${channel}`, '<#5>');
+		assert.equal(channel.url, 'https://discord.com/channels/9/5');
+
+		const member = mockMember({ user });
+		assert.equal(`${member}`, '<@900000000000000005>');
+		assert.equal(member.id, user.id); // member.id mirrors its user's id
+		assert.equal(member.tag, 'neo#7');
+	});
+
 	test('preserve an explicit null globalName', () => {
 		const user = mockUser({ username: 'socram', globalName: null });
 

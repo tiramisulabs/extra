@@ -1,5 +1,21 @@
+import { Formatter } from 'seyfert';
 import { ChannelType } from 'seyfert/lib/types';
-import { mockId } from './id';
+import { mockId, timestampFrom } from './id';
+
+/** Derived from the snowflake `id`, mirroring seyfert's `DiscordBase` (so account-age/created-on logic works). */
+export interface SnowflakeDerived {
+	createdTimestamp: number;
+	createdAt: Date;
+}
+
+/**
+ * Compute the {@link SnowflakeDerived} fields for an entity whose snowflake is `id` (id is immutable). Test ids
+ * aren't always real snowflakes (e.g. `'c1'`), so a non-numeric id falls back to the epoch instead of throwing.
+ */
+function snowflakeDerived(id: string): SnowflakeDerived {
+	const createdTimestamp = /^\d+$/.test(id) ? timestampFrom(id) : 0;
+	return { createdTimestamp, createdAt: new Date(createdTimestamp) };
+}
 
 export interface MockUserOptions {
 	id?: string;
@@ -43,7 +59,7 @@ export interface MockMemberOptions {
  * the ergonomic accessor for assertions, while the snake_case field lets the factory output be dropped
  * straight into wire-shaped payloads (resolved option data, gateway `d`). Both are part of the contract.
  */
-export interface MockUser {
+export interface MockUser extends SnowflakeDerived {
 	id: string;
 	username: string;
 	/** Ergonomic accessor; mirrors {@link global_name}. */
@@ -53,9 +69,15 @@ export interface MockUser {
 	bot: boolean;
 	discriminator: string;
 	avatar: string | null;
+	/** `<@id>` mention — so `` `${user}` `` interpolates like seyfert, not `[object Object]`. */
+	toString(): string;
+	/** `globalName ?? username#discriminator`, mirroring seyfert's `User.tag`. */
+	readonly tag: string;
+	/** `globalName ?? username`, mirroring seyfert's `User.name`. */
+	readonly name: string;
 }
 
-export interface MockGuild {
+export interface MockGuild extends SnowflakeDerived {
 	id: string;
 	name: string;
 	/** Ergonomic accessor; mirrors {@link preferred_locale}. */
@@ -98,7 +120,7 @@ export interface ChannelGuards {
 	is(channelTypes: readonly (keyof typeof ChannelType)[]): boolean;
 }
 
-export interface MockChannel extends Record<string, unknown>, ChannelGuards {
+export interface MockChannel extends Record<string, unknown>, ChannelGuards, SnowflakeDerived {
 	id: string;
 	/** Ergonomic accessor; mirrors {@link guild_id}. `null` for a DM channel. */
 	guildId: string | null;
@@ -109,9 +131,15 @@ export interface MockChannel extends Record<string, unknown>, ChannelGuards {
 	position: number;
 	permission_overwrites: never[];
 	nsfw: boolean;
+	/** `<#id>` mention, via seyfert's Formatter. */
+	toString(): string;
+	/** `https://discord.com/channels/{guild}/{id}`, via seyfert's Formatter. */
+	readonly url: string;
 }
 
-export interface MockMember {
+export interface MockMember extends SnowflakeDerived {
+	/** The member's id — the same snowflake as its user, mirroring seyfert's `GuildMember.id`. */
+	id: string;
 	user: MockUser;
 	roles: string[];
 	nick: string | null;
@@ -122,26 +150,42 @@ export interface MockMember {
 	deaf: boolean;
 	mute: boolean;
 	flags: number;
+	/** `<@id>` mention, via seyfert's Formatter. */
+	toString(): string;
+	/** `globalName ?? username#discriminator` of the member's user, mirroring seyfert's `GuildMember.tag`. */
+	readonly tag: string;
 }
 
 export function mockUser(options: MockUserOptions = {}): MockUser {
+	const id = options.id ?? mockId();
+	const username = options.username ?? 'slipher-test-user';
 	const globalName = options.globalName === undefined ? (options.username ?? 'Slipher Test User') : options.globalName;
+	const discriminator = options.discriminator ?? '0';
 	return {
-		id: options.id ?? mockId(),
-		username: options.username ?? 'slipher-test-user',
+		id,
+		username,
 		globalName,
 		global_name: globalName,
 		bot: options.bot ?? false,
-		discriminator: options.discriminator ?? '0',
+		discriminator,
 		avatar: options.avatar ?? null,
+		toString: () => Formatter.userMention(id),
+		get tag() {
+			return globalName ?? `${username}#${discriminator}`;
+		},
+		get name() {
+			return globalName ?? username;
+		},
+		...snowflakeDerived(id),
 	};
 }
 
 export function mockGuild(options: MockGuildOptions = {}): MockGuild {
+	const id = options.id ?? mockId();
 	const ownerId = options.ownerId ?? mockId();
 	const preferredLocale = options.preferredLocale ?? 'en-US';
 	return {
-		id: options.id ?? mockId(),
+		id,
 		name: options.name ?? 'Slipher Test Guild',
 		preferredLocale,
 		preferred_locale: preferredLocale,
@@ -154,6 +198,7 @@ export function mockGuild(options: MockGuildOptions = {}): MockGuild {
 		verification_level: 0,
 		nsfw_level: 0,
 		premium_tier: 0,
+		...snowflakeDerived(id),
 	};
 }
 
@@ -194,10 +239,11 @@ function channelGuards(type: number): ChannelGuards {
 }
 
 export function mockChannel(options: MockChannelOptions = {}): MockChannel {
+	const id = options.id ?? mockId();
 	const guildId = options.guildId === undefined ? mockId() : options.guildId;
 	const type = options.type ?? 0;
 	return {
-		id: options.id ?? mockId(),
+		id,
 		guildId,
 		...(guildId === null ? {} : { guild_id: guildId }),
 		name: options.name ?? 'general',
@@ -205,15 +251,22 @@ export function mockChannel(options: MockChannelOptions = {}): MockChannel {
 		position: 0,
 		permission_overwrites: [],
 		nsfw: false,
+		toString: () => Formatter.channelMention(id),
+		get url() {
+			return Formatter.channelLink(id, guildId ?? undefined);
+		},
 		...channelGuards(type),
+		...snowflakeDerived(id),
 		...options.extra,
 	};
 }
 
 export function mockMember(options: MockMemberOptions = {}): MockMember {
+	const user = options.user ?? mockUser();
 	const joinedAt = options.joinedAt ?? new Date(0).toISOString();
 	return {
-		user: options.user ?? mockUser(),
+		id: user.id,
+		user,
 		roles: options.roles ?? [],
 		nick: options.nick ?? null,
 		joinedAt,
@@ -221,6 +274,11 @@ export function mockMember(options: MockMemberOptions = {}): MockMember {
 		deaf: false,
 		mute: false,
 		flags: 0,
+		toString: () => Formatter.userMention(user.id),
+		get tag() {
+			return user.tag;
+		},
+		...snowflakeDerived(user.id),
 	};
 }
 
@@ -234,7 +292,7 @@ export interface MockMessageOptions {
 	components?: unknown[];
 }
 
-export interface MockMessage {
+export interface MockMessage extends SnowflakeDerived {
 	id: string;
 	/** Ergonomic accessor; mirrors {@link channel_id}. */
 	channelId: string;
@@ -259,10 +317,11 @@ export interface MockMessage {
  * camelCase + snake_case contract of the other factories.
  */
 export function mockMessage(options: MockMessageOptions = {}): MockMessage {
+	const id = options.id ?? mockId();
 	const channelId = options.channelId ?? mockId();
 	const guildId = options.guildId == null ? undefined : options.guildId;
 	return {
-		id: options.id ?? mockId(),
+		id,
 		channelId,
 		channel_id: channelId,
 		...(guildId === undefined ? {} : { guildId, guild_id: guildId }),
@@ -274,5 +333,6 @@ export function mockMessage(options: MockMessageOptions = {}): MockMessage {
 		tts: false,
 		pinned: false,
 		type: 0,
+		...snowflakeDerived(id),
 	};
 }
