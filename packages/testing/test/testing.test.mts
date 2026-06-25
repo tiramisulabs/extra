@@ -64,6 +64,15 @@ describe('entity factories', () => {
 		assert.equal(member.nick, 'Soc');
 	});
 
+	test('mockChannel accepts stubbed channel guards via extra (no cast)', () => {
+		const channel = mockChannel({ id: 'c1', extra: { isGuildTextable: () => true, isThread: () => false } });
+
+		assert.equal((channel.isGuildTextable as () => boolean)(), true);
+		assert.equal((channel.isThread as () => boolean)(), false);
+		assert.equal(channel.id, 'c1'); // base fields intact
+		assert.equal(channel.type, 0);
+	});
+
 	test('preserve an explicit null globalName', () => {
 		const user = mockUser({ username: 'socram', globalName: null });
 

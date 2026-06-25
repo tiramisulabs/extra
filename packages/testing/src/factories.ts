@@ -21,6 +21,11 @@ export interface MockChannelOptions {
 	guildId?: string | null;
 	name?: string;
 	type?: number;
+	/**
+	 * Extra fields merged onto the channel — stub the seyfert channel type-guards/methods a command calls
+	 * (`isGuildTextable`, `isThread`, `isVoice`, …) without a cast. Mirrors {@link MockClientOptions.extra}.
+	 */
+	extra?: Record<string, unknown>;
 }
 
 export interface MockMemberOptions {
@@ -69,7 +74,7 @@ export interface MockGuild {
 	premium_tier: number;
 }
 
-export interface MockChannel {
+export interface MockChannel extends Record<string, unknown> {
 	id: string;
 	/** Ergonomic accessor; mirrors {@link guild_id}. `null` for a DM channel. */
 	guildId: string | null;
@@ -139,6 +144,7 @@ export function mockChannel(options: MockChannelOptions = {}): MockChannel {
 		position: 0,
 		permission_overwrites: [],
 		nsfw: false,
+		...options.extra,
 	};
 }
 
