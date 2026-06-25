@@ -643,8 +643,27 @@ export type OptionsRecordOf<C extends SlashCommandClass> = InstanceType<C>['run'
  * you pass to `slash(Class, { options })` and, transitively, the author's `ctx.options`. Degrades to an empty
  * record (`Record<string, never>`) when the class does not declare a typed options record.
  */
+/**
+ * Loosen a resolved option value so a test can pass a minimal mock. seyfert resolves a user/channel/role/
+ * attachment option to a rich structure (`User`, `Attachment`, …), but a test passes a stand-in like
+ * `{ id: 'u1' }` / `{ url: '…' }` — which is exactly what the light harness puts on `ctx.options` at runtime.
+ * Scalars stay exact; for entity values we accept a partial of their DATA properties only — methods are dropped
+ * because a plain object can't satisfy seyfert's branded method signatures (e.g. `User.toString(): `<@${id}>``),
+ * which is what made a plain `Partial<User>` reject `{ id }`. A full resolved value is still assignable too.
+ */
+type DataKeys<V> = { [K in keyof V]: V[K] extends (...args: never[]) => unknown ? never : K }[keyof V];
+type DataPartial<V> = Partial<Pick<V, DataKeys<V>>>;
+type LooseOptionValue<V> = V extends string | number | boolean | bigint | undefined | null
+	? V
+	: V extends unknown
+		? DataPartial<V>
+		: never;
+type LooseResolvedOptions<T> = { [K in keyof T]: LooseOptionValue<T[K]> };
+
 export type SlashOptionsOf<C extends SlashCommandClass> =
-	OptionsRecordOf<C> extends OptionsRecord ? ContextOptions<OptionsRecordOf<C>> : Record<string, never>;
+	OptionsRecordOf<C> extends OptionsRecord
+		? LooseResolvedOptions<ContextOptions<OptionsRecordOf<C>>>
+		: Record<string, never>;
 
 /**
  * Options accepted by the class-first {@link MockBot.slash} overload: every {@link ChatInputInteractionOptions}

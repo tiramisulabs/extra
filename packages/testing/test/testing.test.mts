@@ -3,7 +3,9 @@ import {
 	type CommandContext,
 	ComponentCommand,
 	type ComponentContext,
+	createAttachmentOption,
 	createStringOption,
+	createUserOption,
 	Declare,
 	ModalCommand,
 	type ModalContext,
@@ -238,6 +240,28 @@ describe('mockCommandContext', () => {
 
 		expect(ctx.command.name).toBe('ban'); // derived from @Declare, not the 'test' default
 		expect(ctx.lastResponse()).toMatchObject({ content: 'Banned: spam' });
+	});
+
+	test('entity options accept minimal mocks ({id}/{url}), not just full resolved types', async () => {
+		const opts = {
+			who: createUserOption({ description: 'a user', required: true }),
+			file: createAttachmentOption({ description: 'a file', required: true }),
+		};
+		@Declare({ name: 'report', description: 'reports' })
+		@Options(opts)
+		class ReportCommand extends Command {
+			async run(ctx: CommandContext<typeof opts>) {
+				await ctx.editOrReply({ content: `${ctx.options.who.id}:${ctx.options.file.url}` });
+			}
+		}
+
+		// minimal stand-ins — no userOption()/attachmentOption() wrapping, no cast
+		const ctx = mockCommandContext(ReportCommand, {
+			options: { who: { id: 'u1' }, file: { url: 'https://cdn/x.png' } },
+		});
+		await ctx.run();
+
+		expect(ctx.lastResponse()).toMatchObject({ content: 'u1:https://cdn/x.png' });
 	});
 
 	test('mockCommandContext(SubCommand) is accepted (SubCommand is a sibling of Command) and infers options', async () => {
