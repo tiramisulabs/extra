@@ -192,20 +192,8 @@ export interface ComponentSource {
 	allComponents?(): InteractiveComponentView[];
 	/** Context last-response accessor. */
 	lastComponents?(): InteractiveComponentView[];
-	/** Bot-path `DispatchResult.components` array, raw Discord rows, or Seyfert component builders. */
+	/** Bot-path `DispatchResult.components` array. */
 	components?: unknown;
-}
-
-/** Normalize stored Seyfert builders, whose raw Discord fields live under `.toJSON()`. */
-function normalizeComponentCarrier(value: unknown): unknown {
-	if (value && typeof (value as { toJSON?: unknown }).toJSON === 'function') {
-		return (value as { toJSON(): unknown }).toJSON();
-	}
-	return value;
-}
-
-function normalizeComponentInput(components: unknown): unknown {
-	return Array.isArray(components) ? components.map(normalizeComponentCarrier) : normalizeComponentCarrier(components);
 }
 
 function componentsOf(subject: ComponentSource): InteractiveComponentView[] {
@@ -213,9 +201,8 @@ function componentsOf(subject: ComponentSource): InteractiveComponentView[] {
 	if (typeof subject.allComponents === 'function') return subject.allComponents();
 	if (typeof subject.lastComponents === 'function') return subject.lastComponents();
 	if (subject.components === undefined) return [];
-	const componentInput = normalizeComponentInput(subject.components);
-	const alreadyNormalized = Array.isArray(componentInput)
-		? componentInput.filter((component): component is InteractiveComponentView => {
+	const alreadyNormalized = Array.isArray(subject.components)
+		? subject.components.filter((component): component is InteractiveComponentView => {
 				if (component === null || typeof component !== 'object') return false;
 				const view = component as Partial<InteractiveComponentView>;
 				return (
@@ -227,7 +214,7 @@ function componentsOf(subject: ComponentSource): InteractiveComponentView[] {
 				);
 			})
 		: [];
-	return [...alreadyNormalized, ...harvestComponents(componentInput).components];
+	return [...alreadyNormalized, ...harvestComponents(subject.components).components];
 }
 
 const isSelectType = (type: number): boolean => type === 3 || (type >= 5 && type <= 8);

@@ -155,16 +155,6 @@ describe('context path: component accessors + expectComponent', () => {
 		expectComponent({ components }, { customId: 'join-clip-money', label: /Join Clip Money/ });
 	});
 
-	test('expectComponent normalizes builder component rows passed directly', () => {
-		const components = [
-			new ActionRow<Button>().setComponents([
-				new Button().setCustomId('join-clip-money').setLabel('Join Clip Money').setStyle(ButtonStyle.Success),
-			]),
-		];
-
-		expectComponent({ components }, { customId: 'join-clip-money', label: /Join Clip Money/ });
-	});
-
 	test('expectComponent throws (not vacuous) when no component was sent', async () => {
 		const ctx = mockCommandContext();
 		await ctx.write({ content: 'no components here' });
