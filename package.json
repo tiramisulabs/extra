@@ -13,11 +13,13 @@
 		"check": "turbo run --concurrency 32 lint format build test checkb"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "2.3.11",
-		"turbo": "^2.7.5",
-		"vitest": "^4.0.18"
+		"@biomejs/biome": "2.5.1",
+		"@types/node": "^26.0.1",
+		"typescript": "^6.0.3",
+		"turbo": "^2.10.0",
+		"vitest": "^4.1.9"
 	},
-	"packageManager": "pnpm@10.17.1",
+	"packageManager": "pnpm@11.9.0",
 	"engines": {
 		"node": ">=18"
 	}
