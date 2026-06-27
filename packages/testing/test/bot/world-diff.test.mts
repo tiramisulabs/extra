@@ -29,9 +29,9 @@ describe('world snapshot and diff', () => {
 		}
 
 		const bot = await createMockBot({ commands: [MutateWorld], world });
-		const before = bot.worldSnapshot();
+		const before = bot.world.snapshot();
 		await bot.slash({ name: 'mutate-world', guildId: guild.id, channel, user: actor.user });
-		const diff = bot.worldDiff(before);
+		const diff = bot.world.diff(before);
 
 		const changedMember = diff.members.changed.find(entry => entry.after.userId === 'diff-target');
 		expect(changedMember?.fields).toContain('roles');
@@ -61,7 +61,7 @@ describe('world snapshot and diff', () => {
 		}
 
 		const bot = await createMockBot({ commands: [GrantRole], world });
-		const before = bot.worldSnapshot();
+		const before = bot.world.snapshot();
 		const targetBefore = before.members.find(entry => entry.userId === 'immutable-target');
 		expect(targetBefore?.roles).toEqual([]);
 
@@ -70,7 +70,7 @@ describe('world snapshot and diff', () => {
 		expect(Object.isFrozen(before)).toBe(true);
 		expect(Object.isFrozen(targetBefore)).toBe(true);
 		expect(targetBefore?.roles).toEqual([]);
-		expect(bot.worldMember(guild.id, 'immutable-target')?.roles).toContain(role.id);
+		expect(bot.world.query.member({ guildId: guild.id, userId: 'immutable-target' })?.roles).toContain(role.id);
 		await bot.close();
 	});
 
@@ -88,9 +88,9 @@ describe('world snapshot and diff', () => {
 		}
 
 		const bot = await createMockBot({ commands: [NoOp], world });
-		const before = bot.worldSnapshot();
+		const before = bot.world.snapshot();
 		await bot.slash({ name: 'noop', guildId: guild.id, channel, user: actor.user });
-		const diff = bot.worldDiff(before);
+		const diff = bot.world.diff(before);
 
 		for (const entity of [
 			diff.members,
@@ -136,9 +136,9 @@ describe('world snapshot and diff', () => {
 		}
 
 		const bot = await createMockBot({ commands: [ExtraMutate], world });
-		const before = bot.worldSnapshot();
+		const before = bot.world.snapshot();
 		await bot.slash({ name: 'extra-mutate', guildId: guild.id, channel, user: actor.user });
-		const diff = bot.worldDiff(before);
+		const diff = bot.world.diff(before);
 
 		expect(diff.emojis.added.map(entry => entry.name)).toContain('sparkle');
 		expect(diff.invites.removed.map(entry => entry.code)).toContain('revoke-me');
@@ -171,9 +171,9 @@ describe('world snapshot and diff', () => {
 		}
 
 		const bot = await createMockBot({ commands: [Cov], world });
-		const before = bot.worldSnapshot();
+		const before = bot.world.snapshot();
 		await bot.slash({ name: 'cov', guildId: guild.id, channel, user: actor.user });
-		const diff = bot.worldDiff(before);
+		const diff = bot.world.diff(before);
 
 		expect(diff.reactions.added.map(r => r.emoji)).toContain('👍');
 		expect(diff.messages.changed.some(c => c.fields.includes('components'))).toBe(true);
@@ -198,9 +198,9 @@ describe('world snapshot and diff', () => {
 		}
 
 		const bot = await createMockBot({ commands: [Tune], world });
-		const before = bot.worldSnapshot();
+		const before = bot.world.snapshot();
 		await bot.slash({ name: 'tune', guildId: guild.id, channel, user: actor.user });
-		const diff = bot.worldDiff(before);
+		const diff = bot.world.diff(before);
 
 		expect(diff.channels.changed.some(c => c.fields.includes('bitrate'))).toBe(true);
 		expect(diff.roles.changed.some(c => c.fields.includes('color'))).toBe(true);

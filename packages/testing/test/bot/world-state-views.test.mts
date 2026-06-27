@@ -44,7 +44,7 @@ describe('world state views', () => {
 
 		const bot = await createMockBot({ commands: [BuildCampaign], world });
 		await bot.slash({ name: 'build-campaign', guildId: guild.id, channel: dispatchChannel, user: actor.user });
-		const channel = bot.worldGuild(guild.id)?.channel('acme-s1');
+		const channel = bot.world.get.channel({ guildId: guild.id, name: 'acme-s1' });
 		expect(channel?.lastMessage?.content).toContain('Welcome Acme S1');
 		expect(channel?.lastMessage?.interactiveComponents).toMatchObject([{ customId: 'approve', label: 'Approve' }]);
 		expect(channel?.lastMessage?.embeds[0]).toMatchObject({
@@ -75,10 +75,10 @@ describe('world state views', () => {
 
 		const bot = await createMockBot({ commands: [ReplyState], world });
 		await bot.slash({ name: 'reply-state', guildId: guild.id, channel, user: actor.user });
-		const messages = bot.worldGuild(guild.id)?.channel(channel.id)?.messages;
+		const messages = bot.world.query.channel({ guildId: guild.id, id: channel.id })?.messages;
 		expect(messages?.map(message => message.content)).toEqual(['edited', 'followup']);
 		expect(messages?.[0]?.id).toBe(fetchedOriginalId);
-		expect(bot.worldDm(actor.user.id)?.lastMessage?.content).toBe('dm hi');
+		expect(bot.world.query.dm({ userId: actor.user.id })?.lastMessage?.content).toBe('dm hi');
 		await bot.close();
 	});
 
@@ -104,9 +104,12 @@ describe('world state views', () => {
 		const bot = await createMockBot({ commands: [FetchHistory], world });
 		const result = await bot.slash({ name: 'fetch-history', guildId: guild.id, channel: second, user: actor.user });
 		expect(result.content).toBe('new-message,old-message');
-		expect(bot.worldGuild(guild.id)?.channel('dupe')?.id).toBe(first.id);
-		expect(bot.worldGuild(guild.id)?.bans).toEqual([]);
-		expect(bot.worldGuild(guild.id)).not.toBe(bot.worldGuild(guild.id));
+		expect(bot.world.all.channel({ guildId: guild.id, name: 'dupe' }).map(channel => channel.id)).toEqual([
+			first.id,
+			second.id,
+		]);
+		expect(bot.world.query.guild({ id: guild.id })?.bans).toEqual([]);
+		expect(bot.world.query.guild({ id: guild.id })).not.toBe(bot.world.query.guild({ id: guild.id }));
 		await bot.close();
 	});
 
@@ -134,10 +137,7 @@ describe('world state views', () => {
 
 		expect(followupId).toBeDefined();
 		expect(
-			bot
-				.worldGuild(guild.id)
-				?.channel(channel.id)
-				?.messages.map(message => message.content),
+			bot.world.query.channel({ guildId: guild.id, id: channel.id })?.messages.map(message => message.content),
 		).toEqual(['original edited']);
 		await bot.close();
 	});
@@ -157,7 +157,7 @@ describe('emit bridges into world views', () => {
 			},
 			{ allowNoHandler: true },
 		);
-		expect(bot.worldGuild(guild.id)?.member('joiner')?.roles).toEqual(['r1']);
+		expect(bot.world.query.member({ guildId: guild.id, userId: 'joiner' })?.roles).toEqual(['r1']);
 
 		await bot.emit(
 			'GUILD_MEMBER_UPDATE',
@@ -169,17 +169,17 @@ describe('emit bridges into world views', () => {
 			},
 			{ allowNoHandler: true },
 		);
-		expect(bot.worldGuild(guild.id)?.member('joiner')?.roles).toEqual(['r1', 'r2']);
-		expect(bot.worldGuild(guild.id)?.member('joiner')?.nick).toBe('Joey');
+		expect(bot.world.query.member({ guildId: guild.id, userId: 'joiner' })?.roles).toEqual(['r1', 'r2']);
+		expect(bot.world.query.member({ guildId: guild.id, userId: 'joiner' })?.nick).toBe('Joey');
 
 		await bot.emit(
 			'GUILD_MEMBER_REMOVE',
 			{ guild_id: guild.id, user: apiUser({ id: 'joiner' }) },
 			{ allowNoHandler: true },
 		);
-		expect(bot.worldGuild(guild.id)?.member('joiner')).toBeUndefined();
-		expect(bot.worldGuild(guild.id)?.bans).toEqual([]);
-		expect(bot.worldMember(guild.id, 'joiner')).toBeUndefined();
+		expect(bot.world.query.member({ guildId: guild.id, userId: 'joiner' })).toBeUndefined();
+		expect(bot.world.query.guild({ id: guild.id })?.bans).toEqual([]);
+		expect(bot.world.query.member({ guildId: guild.id, userId: 'joiner' })).toBeUndefined();
 		await bot.close();
 	});
 
@@ -193,20 +193,20 @@ describe('emit bridges into world views', () => {
 			{ id: 'c1', guild_id: guild.id, name: 'new-chan', type: 0 },
 			{ allowNoHandler: true },
 		);
-		expect(bot.worldGuild(guild.id)?.channel('new-chan')?.id).toBe('c1');
+		expect(bot.world.query.channel({ guildId: guild.id, name: 'new-chan' })?.id).toBe('c1');
 
 		await bot.emit(
 			'MESSAGE_CREATE',
 			{ id: 'm1', channel_id: 'c1', author: apiUser({ id: 'u1' }), content: 'hi' },
 			{ allowNoHandler: true },
 		);
-		expect(bot.worldGuild(guild.id)?.channel('c1')?.lastMessage?.content).toBe('hi');
+		expect(bot.world.query.channel({ guildId: guild.id, id: 'c1' })?.lastMessage?.content).toBe('hi');
 
 		await bot.emit('MESSAGE_DELETE', { id: 'm1', channel_id: 'c1' }, { allowNoHandler: true });
-		expect(bot.worldGuild(guild.id)?.channel('c1')?.messages).toEqual([]);
+		expect(bot.world.query.channel({ guildId: guild.id, id: 'c1' })?.messages).toEqual([]);
 
 		await bot.emit('CHANNEL_DELETE', { id: 'c1', guild_id: guild.id }, { allowNoHandler: true });
-		expect(bot.worldGuild(guild.id)?.channel('new-chan')).toBeUndefined();
+		expect(bot.world.query.channel({ guildId: guild.id, name: 'new-chan' })).toBeUndefined();
 		await bot.close();
 	});
 
@@ -221,11 +221,11 @@ describe('emit bridges into world views', () => {
 			{ updateCache: false, allowNoHandler: true },
 		);
 
-		expect(bot.worldGuild(guild.id)?.member('ghost')).toBeUndefined();
+		expect(bot.world.query.member({ guildId: guild.id, userId: 'ghost' })).toBeUndefined();
 		await bot.close();
 	});
 
-	test('worldMember reflects role mutations applied through REST', async () => {
+	test('world member reader reflects role mutations applied through REST', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'cached-guild' });
 		const role = world.registerRole(guild.id, { id: 'cached-role' });
@@ -242,12 +242,12 @@ describe('emit bridges into world views', () => {
 		}
 
 		const bot = await createMockBot({ commands: [Grant], world });
-		expect(bot.worldMember(guild.id, 'cached-target')?.roles).toEqual([]);
+		expect(bot.world.query.member({ guildId: guild.id, userId: 'cached-target' })?.roles).toEqual([]);
 
 		await bot.slash({ name: 'grant', guildId: guild.id, channel, user: actor.user });
 
-		expect(bot.worldMember(guild.id, 'cached-target')?.roles).toContain('cached-role');
-		expect(bot.worldMember(guild.id, 'absent')).toBeUndefined();
+		expect(bot.world.query.member({ guildId: guild.id, userId: 'cached-target' })?.roles).toContain('cached-role');
+		expect(bot.world.query.member({ guildId: guild.id, userId: 'absent' })).toBeUndefined();
 		await bot.close();
 	});
 
@@ -291,12 +291,10 @@ describe('emit bridges into world views', () => {
 			{ updateCache: true, allowNoHandler: true },
 		);
 
-		expect(bot.world.reactionUsers(channel.id, message.id, '👍')).toEqual(['reactor']);
-		const view = bot
-			.worldGuild(guild.id)
-			?.channel(channel.id)
-			?.messages.find(entry => entry.id === message.id)
-			?.reaction('👍');
+		expect(
+			bot.world.query.reaction({ channelId: channel.id, messageId: message.id, emoji: '👍' })?.users ?? [],
+		).toEqual(['reactor']);
+		const view = bot.world.query.message({ channelId: channel.id, id: message.id })?.reaction('👍');
 		expect(view).toMatchObject({ emoji: '👍', count: 1 });
 		await bot.close();
 	});
@@ -330,7 +328,9 @@ describe('emit bridges into world views', () => {
 			{ updateCache: true, allowNoHandler: true },
 		);
 
-		expect(bot.world.reactionUsers(channel.id, message.id, '🔥')).toEqual([TEST_BOT_ID, 'event-reactor']);
+		expect(
+			bot.world.query.reaction({ channelId: channel.id, messageId: message.id, emoji: '🔥' })?.users ?? [],
+		).toEqual([TEST_BOT_ID, 'event-reactor']);
 		await bot.close();
 	});
 
@@ -345,14 +345,14 @@ describe('emit bridges into world views', () => {
 			{ guild_id: guild.id, user_id: 'speaker', channel_id: channel.id },
 			{ updateCache: true, allowNoHandler: true },
 		);
-		expect(bot.worldVoiceState(guild.id, 'speaker')?.channel_id).toBe(channel.id);
+		expect(bot.world.query.voiceState({ guildId: guild.id, userId: 'speaker' })?.channel_id).toBe(channel.id);
 
 		await bot.emit(
 			'VOICE_STATE_UPDATE',
 			{ guild_id: guild.id, user_id: 'speaker', channel_id: null },
 			{ updateCache: true, allowNoHandler: true },
 		);
-		expect(bot.worldVoiceState(guild.id, 'speaker')).toBeUndefined();
+		expect(bot.world.query.voiceState({ guildId: guild.id, userId: 'speaker' })).toBeUndefined();
 		await bot.close();
 	});
 
@@ -373,12 +373,12 @@ describe('emit bridges into world views', () => {
 			},
 			{ allowNoHandler: true },
 		);
-		const thread = bot.worldGuild(guild.id)?.thread('event-thread');
+		const thread = bot.world.query.thread({ guildId: guild.id, id: 'event-thread' });
 		expect(thread?.id).toBe('event-thread');
 		expect(thread?.parentId).toBe(parent.id);
 
 		await bot.emit('THREAD_DELETE', { id: 'event-thread', guild_id: guild.id }, { allowNoHandler: true });
-		expect(bot.worldGuild(guild.id)?.thread('event-thread')).toBeUndefined();
+		expect(bot.world.query.thread({ guildId: guild.id, id: 'event-thread' })).toBeUndefined();
 		await bot.close();
 	});
 });

@@ -62,7 +62,7 @@ describe('worldData passthrough store', () => {
 			{ allowNoHandler: true },
 		);
 
-		expect(bot.worldMember(guild.id, 'wd-user')?.roles).toEqual(['r1']);
+		expect(bot.world.query.member({ guildId: guild.id, userId: 'wd-user' })?.roles).toEqual(['r1']);
 		expect(bot.worldData('custom')).toEqual(payload);
 	});
 });

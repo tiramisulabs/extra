@@ -18,9 +18,9 @@ export function permissionBits(input: PermissionInput): string {
 	return bits.toString();
 }
 
-export function combineRolePermissions(roles: { permissions: string }[]): string {
+export function combineRolePermissions(roles: { permissions?: string }[]): string {
 	let bits = 0n;
-	for (const role of roles) bits |= BigInt(role.permissions);
+	for (const role of roles) bits |= BigInt(role.permissions ?? '0');
 	return bits.toString();
 }
 

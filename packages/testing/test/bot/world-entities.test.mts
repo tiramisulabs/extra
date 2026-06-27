@@ -25,17 +25,17 @@ describe('world threads', () => {
 		expect(thread.thread_metadata).toMatchObject({ archived: false, auto_archive_duration: 1440, locked: false });
 
 		await using bot = await createMockBot({ world });
-		const view = bot.worldGuild(guild.id);
+		const view = bot.world.query.guild({ id: guild.id });
 
-		const threadView = view?.thread('sprint-planning');
+		const threadView = bot.world.query.thread({ guildId: guild.id, name: 'sprint-planning' });
 		expect(threadView?.id).toBe(thread.id);
 		expect(threadView?.parentId).toBe(parent.id);
 		expect(threadView?.threadMetadata).toMatchObject({ archived: false, locked: false });
 
 		expect(view?.threads.map(t => t.id)).toEqual([thread.id]);
 		expect(view?.channels.map(c => c.id)).toEqual([parent.id]);
-		expect(view?.channel('general')?.threadMetadata).toBeUndefined();
-		expect(view?.thread(parent.id)).toBeUndefined();
+		expect(bot.world.query.channel({ guildId: guild.id, name: 'general' })?.threadMetadata).toBeUndefined();
+		expect(bot.world.query.thread({ guildId: guild.id, id: parent.id })).toBeUndefined();
 	});
 
 	test('a command can fetch a seeded thread and read its parent + metadata', async () => {
@@ -89,16 +89,16 @@ describe('world threads', () => {
 		await using bot = await createMockBot({ commands: [SpawnThread], world });
 		await bot.slash({ name: 'spawn-thread', guildId: guild.id, channel: parent, user: actor.user });
 
-		const threads = bot.worldGuild(guild.id)?.threads ?? [];
+		const threads = bot.world.query.guild({ id: guild.id })?.threads ?? [];
 		expect(threads.map(t => t.name).sort()).toEqual(['runtime-thread', 'seeded-thread']);
-		const runtime = bot.worldGuild(guild.id)?.thread('runtime-thread');
+		const runtime = bot.world.query.thread({ guildId: guild.id, name: 'runtime-thread' });
 		expect(runtime?.parentId).toBe(parent.id);
 		expect(runtime?.threadMetadata).toMatchObject({ archived: false, locked: false });
 	});
 });
 
 describe('world voice states', () => {
-	test('registers a voice state readable via bot.worldVoiceState and the cache', async () => {
+	test('registers a voice state readable via bot.world and the cache', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'voice-guild' });
 		const member = world.registerMember(guild.id, { user: apiUser({ id: 'voice-user' }) });
@@ -112,7 +112,7 @@ describe('world voice states', () => {
 
 		await using bot = await createMockBot({ world });
 
-		const voice = bot.worldVoiceState(guild.id, member.user.id);
+		const voice = bot.world.query.voiceState({ guildId: guild.id, userId: member.user.id });
 		expect(voice?.channel_id).toBe(channel.id);
 		expect(voice?.user_id).toBe(member.user.id);
 		expect(voice?.self_mute).toBe(true);
@@ -121,9 +121,9 @@ describe('world voice states', () => {
 		const cached = await bot.client.cache.voiceStates?.get(member.user.id, guild.id);
 		expect(cached?.channelId).toBe(channel.id);
 
-		expect(bot.worldVoiceState(guild.id, 'absent-user')).toBeUndefined();
+		expect(bot.world.query.voiceState({ guildId: guild.id, userId: 'absent-user' })).toBeUndefined();
 
-		expect(bot.worldVoiceState(guild.id, member.user.id)).toEqual(voice);
+		expect(bot.world.query.voiceState({ guildId: guild.id, userId: member.user.id })).toEqual(voice);
 	});
 
 	test('a command reads a seeded voice state from the cache', async () => {

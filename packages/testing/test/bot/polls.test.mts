@@ -23,10 +23,7 @@ describe('polls', () => {
 
 		const bot = await createMockBot({ commands: [MakePoll], world });
 		const res = await bot.slash({ name: 'make-poll', guildId: guild.id, channel, user: actor.user });
-		const view = bot
-			.worldGuild(guild.id)
-			?.channel('poll-chan')
-			?.messages.find(message => message.id === res.content);
+		const view = bot.world.query.message({ channelId: channel.id, id: res.content ?? '' });
 		expect(view?.poll?.question).toBe('Best color?');
 		expect(view?.poll?.answers).toHaveLength(2);
 		expect(view?.poll?.answers[0]).toMatchObject({ answerId: 1, text: 'Red' });
@@ -50,7 +47,7 @@ describe('polls', () => {
 			},
 		})) as { id: string };
 
-		const raw = bot.world.rawMessage(channel.id, created.id);
+		const raw = bot.world.query.rawMessage({ channelId: channel.id, id: created.id });
 		expect(raw?.poll?.expiry).toBeDefined();
 		expect(Date.parse(raw?.poll?.expiry ?? '') - Date.parse(raw?.timestamp ?? '')).toBe(2 * 60 * 60 * 1000);
 		await bot.close();
@@ -73,7 +70,9 @@ describe('polls', () => {
 
 		const bot = await createMockBot({ commands: [Voters], world });
 		bot.seedPollVote(channel.id, 'poll-msg', 1, 'voter-a');
-		expect(bot.world.pollVoters(channel.id, 'poll-msg', 1)).toEqual(['voter-a']);
+		expect(
+			bot.world.all.pollVote({ channelId: channel.id, messageId: 'poll-msg', answerId: 1 }).map(vote => vote.userId),
+		).toEqual(['voter-a']);
 		const res = await bot.slash({ name: 'voters', guildId: guild.id, channel, user: actor.user });
 		expect(res.content).toBe('voter-a');
 		await bot.close();
@@ -93,9 +92,19 @@ describe('polls', () => {
 		bot.seedPollVote(channel.id, 'revote-poll-msg', 1, botId);
 		bot.seedPollVote(channel.id, 'revote-poll-msg', 2, botId);
 
-		expect(bot.world.pollVoters(channel.id, 'revote-poll-msg', 1)).toEqual([]);
-		expect(bot.world.pollVoters(channel.id, 'revote-poll-msg', 2)).toEqual([botId]);
-		expect(bot.world.rawMessage(channel.id, 'revote-poll-msg')?.poll?.results.answer_counts).toEqual([
+		expect(
+			bot.world.all
+				.pollVote({ channelId: channel.id, messageId: 'revote-poll-msg', answerId: 1 })
+				.map(vote => vote.userId),
+		).toEqual([]);
+		expect(
+			bot.world.all
+				.pollVote({ channelId: channel.id, messageId: 'revote-poll-msg', answerId: 2 })
+				.map(vote => vote.userId),
+		).toEqual([botId]);
+		expect(
+			bot.world.query.rawMessage({ channelId: channel.id, id: 'revote-poll-msg' })?.poll?.results.answer_counts,
+		).toEqual([
 			{ id: 1, count: 0, me_voted: false },
 			{ id: 2, count: 1, me_voted: true },
 		]);
@@ -119,10 +128,7 @@ describe('polls', () => {
 
 		const bot = await createMockBot({ commands: [Finish], world });
 		await bot.slash({ name: 'finish', guildId: guild.id, channel, user: actor.user });
-		const view = bot
-			.worldGuild(guild.id)
-			?.channel('end-chan')
-			?.messages.find(message => message.id === 'end-poll-msg');
+		const view = bot.world.query.message({ channelId: channel.id, id: 'end-poll-msg' });
 		expect(view?.poll?.isFinalized).toBe(true);
 		await bot.close();
 	});

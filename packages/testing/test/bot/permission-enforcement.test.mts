@@ -153,8 +153,8 @@ describe('role-assignment & bulk-ban edge enforcement', () => {
 		await bot.slash({ name: 'bulk', guildId: guild.id, channel, user: actor.user });
 		expect(result?.banned_users).toEqual(['bannable']);
 		expect(result?.failed_users).toEqual(['owner-id']);
-		expect(bot.world.isBanned(guild.id, 'bannable')).toBe(true);
-		expect(bot.world.isBanned(guild.id, 'owner-id')).toBe(false);
+		expect(bot.world.query.ban({ guildId: guild.id, userId: 'bannable' }) !== undefined).toBe(true);
+		expect(bot.world.query.ban({ guildId: guild.id, userId: 'owner-id' }) !== undefined).toBe(false);
 		await bot.close();
 	});
 });
@@ -222,12 +222,14 @@ describe('expanded management-route enforcement (+ channel overwrites)', () => {
 		const bot = await createMockBot({ world });
 
 		await expect(bot.rest.request('PUT', `/channels/${thread.id}/thread-members/@me`)).resolves.toEqual({});
-		expect(bot.world.threadMembers(thread.id)).toContain(TEST_BOT_ID);
+		expect(bot.world.all.threadMember({ channelId: thread.id }).map(member => member.userId)).toContain(TEST_BOT_ID);
 		await expect(bot.rest.request('PUT', `/channels/${thread.id}/thread-members/user-1`)).rejects.toThrow(
 			/Missing Permissions/,
 		);
 		await expect(bot.rest.request('DELETE', `/channels/${thread.id}/thread-members/@me`)).resolves.toEqual({});
-		expect(bot.world.threadMembers(thread.id)).not.toContain(TEST_BOT_ID);
+		expect(bot.world.all.threadMember({ channelId: thread.id }).map(member => member.userId)).not.toContain(
+			TEST_BOT_ID,
+		);
 		await bot.close();
 	});
 

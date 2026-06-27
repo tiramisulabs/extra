@@ -5,6 +5,8 @@ import {
 	type ContainerView,
 	createMockBot,
 	type DispatchResult,
+	type GuildMemberView,
+	type MessageView,
 	mockCommandContext,
 	mockLogger,
 	mockQueues,
@@ -15,6 +17,7 @@ import {
 	outcome,
 	type RegisteredCommand,
 	type RegisteredCommandFound,
+	type RoleView,
 	rendered,
 } from '../src';
 
@@ -136,3 +139,19 @@ outcome(result).get.denial({ kind: 'permission' });
 
 // @ts-expect-error - unknown error query keys are rejected.
 outcome(result).get.error({ message: /timeout/i });
+
+expectType<MessageView>(bot.world.get.message({ channelId: 'c', id: 'm' }));
+expectType<MessageView | undefined>(bot.world.query.message({ id: 'm' }));
+expectType<MessageView[]>(bot.world.all.message({ channelId: 'c' }));
+expectType<GuildMemberView>(bot.world.get.member({ guildId: 'g', userId: 'u' }));
+expectType<RoleView | undefined>(bot.world.query.role({ id: 'r' }));
+expectType<string | undefined>(bot.world.query.rawMessage({ channelId: 'c', id: 'm' })?.content);
+
+// @ts-expect-error - world queries require at least one known key.
+bot.world.get.channel({});
+
+// @ts-expect-error - unknown world query keys are rejected.
+bot.world.get.channel({ channelID: 'c' });
+
+// @ts-expect-error - member query uses userId, not memberId.
+bot.world.query.member({ guildId: 'g', memberId: 'u' });

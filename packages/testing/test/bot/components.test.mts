@@ -102,6 +102,41 @@ describe('component flows', () => {
 		await bot.close();
 	});
 
+	test('component dispatch exposes seeded member role objects through ctx.member.roles.list()', async () => {
+		const seen: string[][] = [];
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'component-role-list-guild' });
+		const role = world.registerRole(guild.id, { id: 'component-role-list-role', name: 'Component Role' });
+		const actor = world.registerMember(guild.id, {
+			user: apiUser({ id: 'component-role-list-user' }),
+			roles: [role.id],
+		});
+		const channel = world.registerChannel(guild.id);
+
+		class RoleListButton extends ComponentCommand {
+			componentType = 'Button' as const;
+			filter(ctx: ComponentContext<'Button'>) {
+				return ctx.customId === 'role-list';
+			}
+			async run(ctx: ComponentContext<'Button'>) {
+				const roles = await ctx.member!.roles.list();
+				seen.push(roles.map(entry => entry.id));
+				await ctx.write({ content: roles.map(entry => entry.name).join(',') });
+			}
+		}
+
+		const bot = await createMockBot({ components: [RoleListButton], world });
+		const result = await bot.clickButton('role-list', {
+			guildId: guild.id,
+			channel,
+			user: actor.user,
+			allowSyntheticSource: true,
+		});
+		expect(seen.at(-1)).toContain(role.id);
+		expect(result.content).toContain(role.name);
+		await bot.close();
+	});
+
 	test('disabled source components cannot be dispatched', async () => {
 		const bot = await createMockBot({ components: [ConfirmButton] });
 		await bot.rest.request('POST', '/channels/disabled-channel/messages', {

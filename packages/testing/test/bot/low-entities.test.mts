@@ -22,8 +22,8 @@ describe('stickers', () => {
 
 		const bot = await createMockBot({ commands: [Sticker], world });
 		await bot.slash({ name: 'sticker', guildId: guild.id, channel, user: actor.user });
-		expect(bot.worldGuild(guild.id)?.sticker('sticker-1')).toMatchObject({ name: 'new' });
-		expect(bot.world.stickers(guild.id)).toHaveLength(1);
+		expect(bot.world.query.sticker({ guildId: guild.id, id: 'sticker-1' })).toMatchObject({ name: 'new' });
+		expect(bot.world.all.sticker({ guildId: guild.id })).toHaveLength(1);
 		await bot.close();
 	});
 });
@@ -48,7 +48,9 @@ describe('guild templates', () => {
 		const res = await bot.slash({ name: 'tmpl', guildId: guild.id, channel, user: actor.user });
 		const [code] = (res.content ?? '').split(':');
 		expect(res.content).toBe(`${code}:1`);
-		expect(bot.world.guildTemplates(guild.id).map(template => template.name)).toContain('starter');
+		expect(bot.world.all.guildTemplate({ sourceGuildId: guild.id }).map(template => template.name)).toContain(
+			'starter',
+		);
 		await bot.close();
 	});
 });
@@ -59,8 +61,8 @@ describe('scheduled events, stage, soundboard and audit logs (seedable reads)', 
 		const guild = world.registerGuild({ id: 'se-guild' });
 		world.registerScheduledEvent(guild.id, { id: 'event-1', name: 'launch' });
 		const bot = await createMockBot({ world });
-		expect(bot.worldGuild(guild.id)?.scheduledEvents.map(event => event.name)).toContain('launch');
-		expect(bot.world.scheduledEvent(guild.id, 'event-1')).toMatchObject({ name: 'launch' });
+		expect(bot.world.query.guild({ id: guild.id })?.scheduledEvents.map(event => event.name)).toContain('launch');
+		expect(bot.world.query.scheduledEvent({ guildId: guild.id, id: 'event-1' })).toMatchObject({ name: 'launch' });
 		await bot.close();
 	});
 
@@ -73,10 +75,10 @@ describe('scheduled events, stage, soundboard and audit logs (seedable reads)', 
 		world.registerAuditLogEntry(guild.id, { id: 'log-1', actionType: 20, reason: 'cleanup' });
 
 		const bot = await createMockBot({ world });
-		expect(bot.world.stageInstance('stage-chan')).toMatchObject({ topic: 'town hall' });
-		expect(bot.world.soundboardSounds(guild.id).map(sound => sound.name)).toContain('airhorn');
-		expect(bot.world.auditLogEntries(guild.id)).toHaveLength(1);
-		expect(bot.world.auditLogEntries(guild.id)[0]).toMatchObject({ action_type: 20, reason: 'cleanup' });
+		expect(bot.world.query.stageInstance({ channelId: 'stage-chan' })).toMatchObject({ topic: 'town hall' });
+		expect(bot.world.all.soundboardSound({ guildId: guild.id }).map(sound => sound.name)).toContain('airhorn');
+		expect(bot.world.all.auditLogEntry({ guildId: guild.id })).toHaveLength(1);
+		expect(bot.world.all.auditLogEntry({ guildId: guild.id })[0]).toMatchObject({ action_type: 20, reason: 'cleanup' });
 		await bot.close();
 	});
 });

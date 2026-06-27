@@ -71,7 +71,6 @@ import {
 	type ApiMember,
 	type ApiMessage,
 	type ApiUser,
-	type ApiVoiceState,
 	apiMember,
 	apiMessage,
 	apiUser,
@@ -106,20 +105,13 @@ import {
 import {
 	arrayValue,
 	asRecord,
-	type ChannelView,
 	type EmbedView,
-	type GuildMemberView,
-	type GuildView,
 	harvestComponents,
 	type InteractiveComponentView,
-	type MessageView,
 	normalizeEmbed,
 	numberValue,
-	type RoleView,
 	renderedReply,
 	stringValue,
-	type WorldDiff,
-	type WorldSnapshot,
 	WorldState,
 	type WorldStateReader,
 } from './state';
@@ -1844,47 +1836,9 @@ export class MockBot {
 		) as TypedMatchedAction<TBody>[];
 	}
 
-	worldGuild(guildId: string): GuildView | undefined {
-		return this._state.guild(guildId);
-	}
-
-	/**
-	 * The current world member for a guild/user as a {@link GuildMemberView}, or undefined when absent (e.g.
-	 * after a kick) or the guild is not in the world. Returns the SAME camelCase View that
-	 * `worldGuild(guildId)?.member(userId)` returns, so switching between the two accessors reads identical
-	 * field names (`communicationDisabledUntil`, not the raw `communication_disabled_until`).
-	 */
-	worldMember(guildId: string, userId: string): GuildMemberView | undefined {
-		return this._state.guild(guildId)?.member(userId);
-	}
-
-	worldDm(userId: string): ChannelView | undefined {
-		return this._state.dm(userId);
-	}
-
-	/** A channel view by id alone — the symmetric partner of `worldGuild(guildId)?.channel(id)`, no guildId needed. */
-	worldChannel(channelId: string): ChannelView | undefined {
-		return this._state.channelById(channelId);
-	}
-
-	/** A role view by id alone (carries permissions/color) — the partner of `worldGuild(guildId)?.role(id)`. */
-	worldRole(roleId: string): RoleView | undefined {
-		return this._state.roleById(roleId);
-	}
-
-	/** The view of a stored message by channel + id — collapses the worldGuild→channel→find chain. */
-	worldMessage(channelId: string, messageId: string): MessageView | undefined {
-		return this._state.messageView(channelId, messageId);
-	}
-
 	/** Seed a vote on a poll answer (poll voters are not part of the message body), then read it via getAnswerVoters. */
 	seedPollVote(channelId: string, messageId: string, answerId: number, userId: string): void {
 		this._state.addPollVoter(channelId, messageId, answerId, userId);
-	}
-
-	/** The seeded voice state for a guild/user, or undefined when the user is not in voice. */
-	worldVoiceState(guildId: string, userId: string): ApiVoiceState | undefined {
-		return this._state.voiceState(guildId, userId);
 	}
 
 	/**
@@ -1894,25 +1848,6 @@ export class MockBot {
 	 */
 	worldData<T = unknown>(key: string): T | undefined {
 		return this._world?.data?.[key] as T | undefined;
-	}
-
-	/**
-	 * Capture the current world as an immutable, plain-data snapshot: members, channels, messages, roles,
-	 * bans, emojis, invites, automod rules, stickers, scheduled events, webhooks, and pins. Pair with
-	 * {@link worldDiff} to assert state mutations declaratively. The snapshot is deeply frozen, so later
-	 * dispatches never alter it.
-	 */
-	worldSnapshot(): WorldSnapshot {
-		return this._state.snapshot();
-	}
-
-	/**
-	 * Compare a prior {@link worldSnapshot} against the current world and return a structured changeset
-	 * (added/removed/changed per entity type), so a test can assert e.g.
-	 * `diff.members.changed[0].fields` contains `'roles'` instead of querying field by field.
-	 */
-	worldDiff(before: WorldSnapshot): WorldDiff {
-		return this._state.diff(before);
 	}
 
 	/**

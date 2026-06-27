@@ -21,6 +21,7 @@ exports[`public API surface > exported names match the committed snapshot 1`] = 
   "TEST_USER_ID",
   "WORLD_EVENT_NAMES",
   "WorldBuilder",
+  "WorldStateError",
   "apiAttachment",
   "apiAuditLogEntry",
   "apiAutoModRule",

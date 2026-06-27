@@ -17,11 +17,11 @@ describe('automod rules', () => {
 			actions: [{ type: 1 }],
 		});
 		const bot = await createMockBot({ world });
-		const rule = bot.worldGuild(guild.id)?.autoModRule('rule-1');
+		const rule = bot.world.query.autoModRule({ guildId: guild.id, id: 'rule-1' });
 		expect(rule).toMatchObject({ name: 'block-spam', trigger_type: 1 });
 		expect(rule?.trigger_metadata.keyword_filter).toEqual(['spam']);
 		expect(rule?.actions[0]?.type).toBe(1);
-		expect(bot.worldGuild(guild.id)?.autoModRules).toHaveLength(1);
+		expect(bot.world.query.guild({ id: guild.id })?.autoModRules).toHaveLength(1);
 		await bot.close();
 	});
 
@@ -48,7 +48,10 @@ describe('automod rules', () => {
 		const bot = await createMockBot({ commands: [Am], world });
 		const res = await bot.slash({ name: 'am', guildId: guild.id, channel, user: actor.user });
 		const id = res.content ?? '';
-		expect(bot.world.autoModRule(guild.id, id)).toMatchObject({ name: 'no-links', enabled: false });
+		expect(bot.world.query.autoModRule({ guildId: guild.id, id: id })).toMatchObject({
+			name: 'no-links',
+			enabled: false,
+		});
 
 		@Declare({ name: 'am-del', description: 'deletes the rule' })
 		class AmDel extends Command {
@@ -59,7 +62,7 @@ describe('automod rules', () => {
 		}
 		const bot2 = await createMockBot({ commands: [AmDel], world });
 		await bot2.slash({ name: 'am-del', guildId: guild.id, channel, user: actor.user });
-		expect(bot2.world.autoModRule(guild.id, id)).toBeUndefined();
+		expect(bot2.world.query.autoModRule({ guildId: guild.id, id })).toBeUndefined();
 		await bot.close();
 		await bot2.close();
 	});
@@ -85,7 +88,12 @@ describe('thread membership', () => {
 
 		const bot = await createMockBot({ commands: [JoinThread], world });
 		await bot.slash({ name: 'join-thread', guildId: guild.id, channel: parent, user: actor.user });
-		expect(bot.world.threadMembers(thread.id).sort()).toEqual([TEST_BOT_ID, 'user-7'].sort());
+		expect(
+			bot.world.all
+				.threadMember({ channelId: thread.id })
+				.map(member => member.userId)
+				.sort(),
+		).toEqual([TEST_BOT_ID, 'user-7'].sort());
 		await bot.close();
 	});
 
@@ -107,7 +115,9 @@ describe('thread membership', () => {
 
 		const bot = await createMockBot({ commands: [LeaveThread], world });
 		await bot.slash({ name: 'leave-thread', guildId: guild.id, channel: parent, user: actor.user });
-		expect(bot.world.threadMembers(thread.id)).not.toContain(TEST_BOT_ID);
+		expect(bot.world.all.threadMember({ channelId: thread.id }).map(member => member.userId)).not.toContain(
+			TEST_BOT_ID,
+		);
 		await bot.close();
 	});
 });
@@ -132,7 +142,7 @@ describe('active threads', () => {
 		const bot = await createMockBot({ commands: [Active], world });
 		const res = await bot.slash({ name: 'active', guildId: guild.id, channel: parent, user: actor.user });
 		expect(res.content).toBe('at-active');
-		expect(bot.world.activeThreads(guild.id)).toHaveLength(1);
+		expect(bot.world.all.thread({ guildId: guild.id, archived: false })).toHaveLength(1);
 		await bot.close();
 	});
 });

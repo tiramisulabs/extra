@@ -332,7 +332,7 @@ describe('additional command surfaces', () => {
 		const bot = await createMockBot({ commands: [CloneBanCommand], world });
 		await bot.slash({ name: 'clone-ban', guildId: guild.id, channel, user: actor.user });
 
-		expect(bot.worldGuild(guild.id)?.member('clone-target')).toBeUndefined();
+		expect(bot.world.query.member({ guildId: guild.id, userId: 'clone-target' })).toBeUndefined();
 		expect(world.build().members.some(entry => entry.member.user.id === 'clone-target')).toBe(true);
 		await bot.close();
 	});

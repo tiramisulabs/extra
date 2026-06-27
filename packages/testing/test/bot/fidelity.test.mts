@@ -32,7 +32,7 @@ describe('fidelity fixes', () => {
 			{ allowNoHandler: true },
 		);
 
-		const raw = bot.world.rawMessage(channel.id, 'mention-msg');
+		const raw = bot.world.query.rawMessage({ channelId: channel.id, id: 'mention-msg' });
 		expect(raw).toBeDefined();
 		const mentions = raw?.mentions as { id: string; username: string }[];
 		expect(mentions.map(user => user.id)).toContain('123');
@@ -52,7 +52,7 @@ describe('fidelity fixes', () => {
 			},
 			{ allowNoHandler: true },
 		);
-		const limited = bot.world.rawMessage(channel.id, 'limited-msg');
+		const limited = bot.world.query.rawMessage({ channelId: channel.id, id: 'limited-msg' });
 		expect((limited?.mentions as { id: string }[]).map(user => user.id)).toEqual(['123']);
 		expect(limited?.mention_roles).toEqual([]);
 		expect(limited?.mention_everyone).toBe(false);
@@ -72,7 +72,7 @@ describe('fidelity fixes', () => {
 		});
 
 		const bot = await createMockBot({ botId, world });
-		expect(bot.world.rawMessage(channel.id, 'edit-mention-msg')?.edited_timestamp).toBeNull();
+		expect(bot.world.query.rawMessage({ channelId: channel.id, id: 'edit-mention-msg' })?.edited_timestamp).toBeNull();
 
 		await bot.rest.request('PATCH', `/channels/${channel.id}/messages/edit-mention-msg`, {
 			body: {
@@ -81,7 +81,7 @@ describe('fidelity fixes', () => {
 			},
 		});
 
-		const raw = bot.world.rawMessage(channel.id, 'edit-mention-msg');
+		const raw = bot.world.query.rawMessage({ channelId: channel.id, id: 'edit-mention-msg' });
 		const mentions = raw?.mentions as { id: string; username: string }[] | undefined;
 		expect(raw?.edited_timestamp).toEqual(expect.any(String));
 		expect(Date.parse(raw?.edited_timestamp ?? '')).toBeGreaterThan(Date.parse(raw?.timestamp ?? ''));

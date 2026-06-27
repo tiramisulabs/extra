@@ -91,8 +91,8 @@ describe('stateful world defaults', () => {
 		).resolves.toMatchObject({
 			content: 'banned',
 		});
-		expect(bot.worldGuild(guild.id)?.member(target.user.id)).toBeUndefined();
-		expect(bot.worldGuild(guild.id)?.bans).toContain(target.user.id);
+		expect(bot.world.query.member({ guildId: guild.id, userId: target.user.id })).toBeUndefined();
+		expect(bot.world.query.guild({ id: guild.id })?.bans).toContain(target.user.id);
 		await expect(Promise.resolve(bot.client.cache.members?.get(target.user.id, guild.id))).resolves.toBeUndefined();
 		await expect(
 			bot.slash({ name: 'fetch-banned', guildId: guild.id, channel, user: actor.user }),
@@ -134,9 +134,43 @@ describe('stateful world defaults', () => {
 		const bot = await createMockBot({ commands: [MutateMember], events: [onUpdate], world, simulateGateway: false });
 		const result = await bot.slash({ name: 'mutate-member', guildId: guild.id, channel, user: actor.user });
 		expect(result.content).toBe(`${role.id}:${timeoutAt}`);
-		expect(bot.worldGuild(guild.id)?.member(target.user.id)?.roles).toEqual([role.id]);
-		expect(bot.worldGuild(guild.id)?.member(target.user.id)?.communicationDisabledUntil).toBe(timeoutAt);
+		expect(bot.world.query.member({ guildId: guild.id, userId: target.user.id })?.roles).toEqual([role.id]);
+		expect(bot.world.query.member({ guildId: guild.id, userId: target.user.id })?.communicationDisabledUntil).toBe(
+			timeoutAt,
+		);
 		expect(updates).toEqual([]);
+		await bot.close();
+	});
+
+	test('ctx.member role manager add/remove mutates the world state', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'member-manager-guild' });
+		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'member-manager-actor' }) });
+		const role = world.registerRole(guild.id, { id: 'member-manager-role' });
+		const channel = world.registerChannel(guild.id);
+
+		@Declare({ name: 'add-self-role', description: 'Adds a role through ctx.member.roles' })
+		class AddSelfRole extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.member!.roles.add(role.id);
+				await ctx.write({ content: 'added' });
+			}
+		}
+
+		@Declare({ name: 'remove-self-role', description: 'Removes a role through ctx.member.roles' })
+		class RemoveSelfRole extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.member!.roles.remove(role.id);
+				await ctx.write({ content: 'removed' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [AddSelfRole, RemoveSelfRole], world });
+		await bot.slash({ name: 'add-self-role', guildId: guild.id, channel, user: actor.user });
+		expect(bot.world.query.member({ guildId: guild.id, userId: actor.user.id })?.roles).toContain(role.id);
+
+		await bot.slash({ name: 'remove-self-role', guildId: guild.id, channel, user: actor.user });
+		expect(bot.world.query.member({ guildId: guild.id, userId: actor.user.id })?.roles).not.toContain(role.id);
 		await bot.close();
 	});
 
@@ -190,12 +224,12 @@ describe('stateful world defaults', () => {
 		await expect(
 			bot.slash({ name: 'ban-then-list', guildId: guild.id, channel, user: actor.user }),
 		).resolves.toMatchObject({ content: target.user.id });
-		expect(bot.worldGuild(guild.id)?.bans).toContain(target.user.id);
+		expect(bot.world.query.guild({ id: guild.id })?.bans).toContain(target.user.id);
 		await expect(
 			bot.slash({ name: 'unban-then-list', guildId: guild.id, channel, user: actor.user }),
 		).resolves.toMatchObject({ content: 'none' });
-		expect(bot.worldGuild(guild.id), 'guild must exist in the world').toBeDefined();
-		expect(bot.worldGuild(guild.id)?.bans).not.toContain(target.user.id);
+		expect(bot.world.query.guild({ id: guild.id }), 'guild must exist in the world').toBeDefined();
+		expect(bot.world.query.guild({ id: guild.id })?.bans).not.toContain(target.user.id);
 		await bot.close();
 	});
 
@@ -217,7 +251,7 @@ describe('stateful world defaults', () => {
 		await expect(
 			bot.slash({ name: 'rename-channel', guildId: guild.id, channel, user: actor.user }),
 		).resolves.toMatchObject({ content: 'after' });
-		expect(bot.worldGuild(guild.id)?.channel(channel.id)?.name).toBe('after');
+		expect(bot.world.query.channel({ guildId: guild.id, id: channel.id })?.name).toBe('after');
 		await bot.close();
 	});
 

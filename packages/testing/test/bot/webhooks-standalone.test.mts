@@ -46,7 +46,7 @@ describe('standalone webhooks', () => {
 		const bot = await createMockBot({ commands: [EditWebhook], world });
 		const res = await bot.slash({ name: 'edit-webhook', guildId: guild.id, channel, user: actor.user });
 		expect(res.content).toBe('old');
-		expect(bot.world.webhookById('real-wh')?.name).toBe('new');
+		expect(bot.world.query.webhook({ id: 'real-wh' })?.name).toBe('new');
 
 		@Declare({ name: 'del-webhook', description: 'deletes a webhook' })
 		class DelWebhook extends Command {
@@ -57,7 +57,7 @@ describe('standalone webhooks', () => {
 		}
 		const bot2 = await createMockBot({ commands: [DelWebhook], world });
 		await bot2.slash({ name: 'del-webhook', guildId: guild.id, channel, user: actor.user });
-		expect(bot2.world.webhookById('real-wh')).toBeUndefined();
+		expect(bot2.world.query.webhook({ id: 'real-wh' })).toBeUndefined();
 		await bot.close();
 		await bot2.close();
 	});
@@ -86,10 +86,9 @@ describe('standalone webhooks', () => {
 		const bot = await createMockBot({ commands: [ExecWebhook], world });
 		const res = await bot.slash({ name: 'exec-webhook', guildId: guild.id, channel, user: actor.user });
 		expect(res.content).not.toBe('null');
-		const landed = bot
-			.worldGuild(guild.id)
-			?.channel('wh-exec-chan')
-			?.messages.find(message => (message.embeds[0] as { title?: string } | undefined)?.title === 'X');
+		const landed = bot.world.all
+			.message({ channelId: channel.id })
+			.find(message => (message.embeds[0] as { title?: string } | undefined)?.title === 'X');
 		expect(landed?.embeds[0]).toMatchObject({ title: 'X' });
 		expect(landed?.content).toBe('edited');
 		await bot.close();

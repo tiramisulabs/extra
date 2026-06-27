@@ -95,8 +95,8 @@ describe('type DX: public bot.world is a read-only surface', () => {
 	test('@internal mutators are NOT part of the public bot.world type', async () => {
 		const bot = await createMockBot();
 		// Read methods are part of the public WorldStateReader and compile.
-		void bot.world.reactionUsers('c', 'm', '👍');
-		void bot.world.rawMessage('c', 'm');
+		void (bot.world.query.reaction({ channelId: 'c', messageId: 'm', emoji: '👍' })?.users ?? []);
+		void bot.world.query.rawMessage({ channelId: 'c', id: 'm' });
 		void bot.world.snapshot();
 		// @ts-expect-error addReaction is an @internal mutator, absent from the public bot.world type.
 		bot.world.addReaction;

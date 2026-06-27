@@ -21,7 +21,7 @@ describe('world-mode existence enforcement', () => {
 			status: 404,
 			code: DiscordErrors.UnknownGuild.code,
 		});
-		expect(bot.world.isBanned('ghost-guild', 'victim')).toBe(false);
+		expect(bot.world.query.ban({ guildId: 'ghost-guild', userId: 'victim' }) !== undefined).toBe(false);
 		await bot.close();
 	});
 
@@ -42,7 +42,7 @@ describe('world-mode existence enforcement', () => {
 		).rejects.toMatchObject({
 			code: DiscordErrors.UnknownChannel.code,
 		});
-		expect(bot.worldChannel('ghost-channel')).toBeUndefined();
+		expect(bot.world.query.channel({ id: 'ghost-channel' })).toBeUndefined();
 		await bot.close();
 	});
 
@@ -62,7 +62,7 @@ describe('world-mode existence enforcement', () => {
 		await expect(
 			bot.slash({ name: 'edit-foreign', guildId: guild.id, channel, user: actor.user }),
 		).rejects.toMatchObject({ status: 403, code: DiscordErrors.CannotEditAnotherUsersMessage.code });
-		expect(bot.worldMessage(channel.id, 'human-msg')?.content).toBe('theirs');
+		expect(bot.world.query.message({ channelId: channel.id, id: 'human-msg' })?.content).toBe('theirs');
 		await bot.close();
 	});
 
@@ -181,7 +181,9 @@ describe('world-mode existence enforcement', () => {
 		await expect(
 			bot.rest.request('PUT', `/guilds/${guild.id}/members/${actor.user.id}/roles/ghost-role`),
 		).rejects.toMatchObject({ code: DiscordErrors.UnknownRole.code });
-		expect(bot.worldMember(guild.id, actor.user.id)?.roles ?? []).not.toContain('ghost-role');
+		expect(bot.world.query.member({ guildId: guild.id, userId: actor.user.id })?.roles ?? []).not.toContain(
+			'ghost-role',
+		);
 		await bot.close();
 	});
 

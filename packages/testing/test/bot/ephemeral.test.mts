@@ -22,9 +22,14 @@ describe('ephemeral replies do not leak into channel reads (F17)', () => {
 		expect(result.ephemeral).toBe(true);
 
 		// But it is NOT part of the channel — absent from both the view and GET /channels/{id}/messages.
-		expect(bot.worldChannel(channel.id), 'channel must exist in the world').toBeDefined();
-		expect(bot.worldChannel(channel.id)?.messages.map(message => message.content)).not.toContain('top-secret');
-		expect(bot.world.channelMessages(channel.id).map(message => message.content)).not.toContain('top-secret');
+		expect(bot.world.query.channel({ id: channel.id }), 'channel must exist in the world').toBeDefined();
+		expect(bot.world.query.channel({ id: channel.id })?.messages.map(message => message.content)).not.toContain(
+			'top-secret',
+		);
+		expect(bot.world.all.message({ channelId: channel.id }).map(message => message.content)).not.toContain(
+			'top-secret',
+		);
+		expect(bot.world.query.rawMessage({ channelId: channel.id, content: 'top-secret' })).toBeUndefined();
 		await bot.close();
 	});
 
@@ -41,7 +46,9 @@ describe('ephemeral replies do not leak into channel reads (F17)', () => {
 		const bot = await createMockBot({ commands: [Public], world });
 		await bot.slash({ name: 'public', guildId: guild.id, channel, user: actor.user });
 
-		expect(bot.worldChannel(channel.id)?.messages.map(message => message.content)).toContain('everyone-sees-this');
+		expect(bot.world.query.channel({ id: channel.id })?.messages.map(message => message.content)).toContain(
+			'everyone-sees-this',
+		);
 		await bot.close();
 	});
 });

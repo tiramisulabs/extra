@@ -75,6 +75,8 @@ export interface InteractiveComponentView {
 }
 
 export interface ReactionView {
+	channelId: string;
+	messageId: string;
 	emoji: string;
 	count: number;
 	me: boolean;
@@ -98,6 +100,7 @@ export interface MessageReferenceView {
 export interface MessageView {
 	id: string;
 	channelId: string;
+	guildId?: string;
 	authorId?: string;
 	content?: string;
 	embeds: EmbedView[];
@@ -118,6 +121,7 @@ export interface MessageView {
 
 export interface ChannelView {
 	id: string;
+	guildId?: string;
 	name?: string;
 	type: number;
 	parentId?: string;
@@ -135,6 +139,7 @@ export interface ChannelView {
 }
 
 export interface GuildMemberView {
+	guildId: string;
 	userId: string;
 	roles: string[];
 	nick?: string | null;
@@ -143,6 +148,7 @@ export interface GuildMemberView {
 
 /** Role projection returned by guild/role readers; carries the stored permissions and color, not just identity. */
 export interface RoleView {
+	guildId: string;
 	id: string;
 	name: string;
 	position: number;
@@ -154,20 +160,14 @@ export interface GuildView {
 	id: string;
 	name?: string;
 	channels: ChannelView[];
-	channel(nameOrId: string): ChannelView | undefined;
 	threads: ChannelView[];
-	thread(nameOrId: string): ChannelView | undefined;
 	members: GuildMemberView[];
-	member(userId: string): GuildMemberView | undefined;
-	role(nameOrId: string): RoleView | undefined;
+	roles: RoleView[];
 	bans: string[];
 	emojis: { id: string; name: string }[];
-	emoji(nameOrId: string): { id: string; name: string } | undefined;
 	invites: { code: string; channelId: string; uses: number }[];
 	autoModRules: ApiAutoModRule[];
-	autoModRule(id: string): ApiAutoModRule | undefined;
 	stickers: { id: string; name: string }[];
-	sticker(nameOrId: string): { id: string; name: string } | undefined;
 	scheduledEvents: ApiScheduledEvent[];
 }
 
@@ -377,6 +377,274 @@ export interface WorldStateOptions {
 	botId?: string;
 }
 
+type RequireAtLeastOne<T extends object> = {
+	[K in keyof T]-?: Required<Pick<T, K>> & Partial<Omit<T, K>>;
+}[keyof T];
+
+export interface WorldStateCandidate {
+	path: string;
+	summary?: string;
+}
+
+export interface WorldGuildFilter {
+	id?: string;
+	name?: string;
+}
+export type WorldGuildQuery = RequireAtLeastOne<WorldGuildFilter>;
+
+export interface WorldChannelFilter {
+	id?: string;
+	guildId?: string;
+	name?: string;
+	parentId?: string;
+	type?: number;
+	archived?: boolean;
+	locked?: boolean;
+}
+export type WorldChannelQuery = RequireAtLeastOne<WorldChannelFilter>;
+export type WorldThreadFilter = WorldChannelFilter;
+export type WorldThreadQuery = RequireAtLeastOne<WorldThreadFilter>;
+
+export interface WorldDmFilter {
+	channelId?: string;
+	userId?: string;
+}
+export type WorldDmQuery = RequireAtLeastOne<WorldDmFilter>;
+
+export interface WorldMemberFilter {
+	guildId?: string;
+	userId?: string;
+	roleId?: string;
+	nick?: string | null;
+}
+export type WorldMemberQuery = RequireAtLeastOne<WorldMemberFilter>;
+
+export interface WorldRoleFilter {
+	guildId?: string;
+	id?: string;
+	name?: string;
+}
+export type WorldRoleQuery = RequireAtLeastOne<WorldRoleFilter>;
+
+export interface WorldMessageFilter {
+	channelId?: string;
+	id?: string;
+	authorId?: string;
+	content?: string;
+}
+export type WorldMessageQuery = RequireAtLeastOne<WorldMessageFilter>;
+
+export interface WorldVoiceStateFilter {
+	guildId?: string;
+	userId?: string;
+	channelId?: string | null;
+}
+export type WorldVoiceStateQuery = RequireAtLeastOne<WorldVoiceStateFilter>;
+
+export interface WorldBanFilter {
+	guildId?: string;
+	userId?: string;
+}
+export type WorldBanQuery = RequireAtLeastOne<WorldBanFilter>;
+
+export interface WorldReactionFilter {
+	channelId?: string;
+	messageId?: string;
+	emoji?: string;
+	userId?: string;
+}
+export type WorldReactionQuery = RequireAtLeastOne<WorldReactionFilter>;
+
+export interface WorldPinFilter {
+	channelId?: string;
+	messageId?: string;
+}
+export type WorldPinQuery = RequireAtLeastOne<WorldPinFilter>;
+
+export interface WorldPollVoteFilter {
+	channelId?: string;
+	messageId?: string;
+	answerId?: number;
+	userId?: string;
+}
+export type WorldPollVoteQuery = RequireAtLeastOne<WorldPollVoteFilter>;
+
+export interface WorldThreadMemberFilter {
+	channelId?: string;
+	userId?: string;
+}
+export type WorldThreadMemberQuery = RequireAtLeastOne<WorldThreadMemberFilter>;
+
+export interface WorldEmojiFilter {
+	guildId?: string;
+	id?: string;
+	name?: string;
+}
+export type WorldEmojiQuery = RequireAtLeastOne<WorldEmojiFilter>;
+
+export interface WorldInviteFilter {
+	code?: string;
+	guildId?: string;
+	channelId?: string;
+}
+export type WorldInviteQuery = RequireAtLeastOne<WorldInviteFilter>;
+
+export interface WorldAutoModRuleFilter {
+	guildId?: string;
+	id?: string;
+	name?: string;
+}
+export type WorldAutoModRuleQuery = RequireAtLeastOne<WorldAutoModRuleFilter>;
+
+export interface WorldStickerFilter {
+	guildId?: string;
+	id?: string;
+	name?: string;
+}
+export type WorldStickerQuery = RequireAtLeastOne<WorldStickerFilter>;
+
+export interface WorldScheduledEventFilter {
+	guildId?: string;
+	id?: string;
+	name?: string;
+	channelId?: string | null;
+}
+export type WorldScheduledEventQuery = RequireAtLeastOne<WorldScheduledEventFilter>;
+
+export interface WorldWebhookFilter {
+	id?: string;
+	guildId?: string;
+	channelId?: string;
+	name?: string;
+}
+export type WorldWebhookQuery = RequireAtLeastOne<WorldWebhookFilter>;
+
+export interface WorldGuildTemplateFilter {
+	code?: string;
+	sourceGuildId?: string;
+	name?: string;
+}
+export type WorldGuildTemplateQuery = RequireAtLeastOne<WorldGuildTemplateFilter>;
+
+export interface WorldSoundboardSoundFilter {
+	guildId?: string;
+	soundId?: string;
+	name?: string;
+}
+export type WorldSoundboardSoundQuery = RequireAtLeastOne<WorldSoundboardSoundFilter>;
+
+export interface WorldStageInstanceFilter {
+	guildId?: string;
+	channelId?: string;
+	id?: string;
+}
+export type WorldStageInstanceQuery = RequireAtLeastOne<WorldStageInstanceFilter>;
+
+export interface WorldAuditLogEntryFilter {
+	guildId?: string;
+	id?: string;
+	actionType?: number;
+	targetId?: string | null;
+	userId?: string | null;
+}
+export type WorldAuditLogEntryQuery = RequireAtLeastOne<WorldAuditLogEntryFilter>;
+
+export interface WorldGetReader {
+	guild(query: WorldGuildQuery): GuildView;
+	channel(query: WorldChannelQuery): ChannelView;
+	thread(query: WorldThreadQuery): ChannelView;
+	dm(query: WorldDmQuery): ChannelView;
+	member(query: WorldMemberQuery): GuildMemberView;
+	role(query: WorldRoleQuery): RoleView;
+	message(query: WorldMessageQuery): MessageView;
+	rawMessage(query: WorldMessageQuery): RawMessage;
+	voiceState(query: WorldVoiceStateQuery): ApiVoiceState;
+	ban(query: WorldBanQuery): BanSnapshot;
+	reaction(query: WorldReactionQuery): ReactionView;
+	pin(query: WorldPinQuery): MessageView;
+	pollVote(query: WorldPollVoteQuery): PollVoterSnapshot;
+	threadMember(query: WorldThreadMemberQuery): ThreadMemberSnapshot;
+	emoji(query: WorldEmojiQuery): ApiEmoji;
+	invite(query: WorldInviteQuery): ApiInvite;
+	autoModRule(query: WorldAutoModRuleQuery): ApiAutoModRule;
+	sticker(query: WorldStickerQuery): ApiSticker;
+	scheduledEvent(query: WorldScheduledEventQuery): ApiScheduledEvent;
+	webhook(query: WorldWebhookQuery): ApiWebhook;
+	guildTemplate(query: WorldGuildTemplateQuery): ApiGuildTemplate;
+	soundboardSound(query: WorldSoundboardSoundQuery): ApiSoundboardSound;
+	stageInstance(query: WorldStageInstanceQuery): ApiStageInstance;
+	auditLogEntry(query: WorldAuditLogEntryQuery): ApiAuditLogEntry;
+}
+
+export interface WorldQueryReader {
+	guild(query: WorldGuildQuery): GuildView | undefined;
+	channel(query: WorldChannelQuery): ChannelView | undefined;
+	thread(query: WorldThreadQuery): ChannelView | undefined;
+	dm(query: WorldDmQuery): ChannelView | undefined;
+	member(query: WorldMemberQuery): GuildMemberView | undefined;
+	role(query: WorldRoleQuery): RoleView | undefined;
+	message(query: WorldMessageQuery): MessageView | undefined;
+	rawMessage(query: WorldMessageQuery): RawMessage | undefined;
+	voiceState(query: WorldVoiceStateQuery): ApiVoiceState | undefined;
+	ban(query: WorldBanQuery): BanSnapshot | undefined;
+	reaction(query: WorldReactionQuery): ReactionView | undefined;
+	pin(query: WorldPinQuery): MessageView | undefined;
+	pollVote(query: WorldPollVoteQuery): PollVoterSnapshot | undefined;
+	threadMember(query: WorldThreadMemberQuery): ThreadMemberSnapshot | undefined;
+	emoji(query: WorldEmojiQuery): ApiEmoji | undefined;
+	invite(query: WorldInviteQuery): ApiInvite | undefined;
+	autoModRule(query: WorldAutoModRuleQuery): ApiAutoModRule | undefined;
+	sticker(query: WorldStickerQuery): ApiSticker | undefined;
+	scheduledEvent(query: WorldScheduledEventQuery): ApiScheduledEvent | undefined;
+	webhook(query: WorldWebhookQuery): ApiWebhook | undefined;
+	guildTemplate(query: WorldGuildTemplateQuery): ApiGuildTemplate | undefined;
+	soundboardSound(query: WorldSoundboardSoundQuery): ApiSoundboardSound | undefined;
+	stageInstance(query: WorldStageInstanceQuery): ApiStageInstance | undefined;
+	auditLogEntry(query: WorldAuditLogEntryQuery): ApiAuditLogEntry | undefined;
+}
+
+export interface WorldAllReader {
+	guild(query?: WorldGuildFilter): GuildView[];
+	channel(query?: WorldChannelFilter): ChannelView[];
+	thread(query?: WorldThreadFilter): ChannelView[];
+	dm(query?: WorldDmFilter): ChannelView[];
+	member(query?: WorldMemberFilter): GuildMemberView[];
+	role(query?: WorldRoleFilter): RoleView[];
+	message(query?: WorldMessageFilter): MessageView[];
+	rawMessage(query?: WorldMessageFilter): RawMessage[];
+	voiceState(query?: WorldVoiceStateFilter): ApiVoiceState[];
+	ban(query?: WorldBanFilter): BanSnapshot[];
+	reaction(query?: WorldReactionFilter): ReactionView[];
+	pin(query?: WorldPinFilter): MessageView[];
+	pollVote(query?: WorldPollVoteFilter): PollVoterSnapshot[];
+	threadMember(query?: WorldThreadMemberFilter): ThreadMemberSnapshot[];
+	emoji(query?: WorldEmojiFilter): ApiEmoji[];
+	invite(query?: WorldInviteFilter): ApiInvite[];
+	autoModRule(query?: WorldAutoModRuleFilter): ApiAutoModRule[];
+	sticker(query?: WorldStickerFilter): ApiSticker[];
+	scheduledEvent(query?: WorldScheduledEventFilter): ApiScheduledEvent[];
+	webhook(query?: WorldWebhookFilter): ApiWebhook[];
+	guildTemplate(query?: WorldGuildTemplateFilter): ApiGuildTemplate[];
+	soundboardSound(query?: WorldSoundboardSoundFilter): ApiSoundboardSound[];
+	stageInstance(query?: WorldStageInstanceFilter): ApiStageInstance[];
+	auditLogEntry(query?: WorldAuditLogEntryFilter): ApiAuditLogEntry[];
+}
+
+export class WorldStateError extends Error {
+	readonly name = 'WorldStateError';
+
+	constructor(
+		readonly entity: string,
+		readonly query: Record<string, unknown>,
+		readonly matches: WorldStateCandidate[],
+		readonly candidates: WorldStateCandidate[],
+	) {
+		const shown = matches.length > 0 ? matches : candidates;
+		const suffix = shown.length ? ` Candidates: ${shown.slice(0, 8).map(formatCandidate).join(', ')}.` : '';
+		super(`Expected exactly one world ${entity} matching ${formatQuery(query)}, found ${matches.length}.${suffix}`);
+	}
+}
+
 /**
  * The read-only view of {@link WorldState} exposed publicly as `bot.world`. Exposes only the query
  * methods test authors call to assert on world state; the internal mutators that the mock drives
@@ -386,48 +654,32 @@ export interface WorldStateOptions {
 export interface WorldStateReader {
 	snapshot(): WorldSnapshot;
 	diff(before: WorldSnapshot): WorldDiff;
-	guild(guildId: string): GuildView | undefined;
-	/** A channel view by id alone (Discord keys channels globally) — the symmetric partner of worldGuild(g).channel(id). */
-	channelById(channelId: string): ChannelView | undefined;
-	/** A role view by id alone, carrying permissions/color — the symmetric partner of worldGuild(g).role(id). */
-	roleById(roleId: string): RoleView | undefined;
-	/** The stored voice state for a member, or undefined. */
-	voiceState(guildId: string, userId: string): ApiVoiceState | undefined;
-	dm(userId: string): ChannelView | undefined;
-	channelMessages(channelId: string, options?: MessageQuery): RawMessage[];
-	messageView(channelId: string, messageId: string): MessageView | undefined;
-	rawMessage(channelId: string, messageId: string): RawMessage | undefined;
-	rawMessageById(messageId: string): RawMessage | undefined;
-	messageForToken(token: string): RawMessage | undefined;
-	webhookMessage(token: string, messageId: string): RawMessage | undefined;
-	channelForToken(token: string): string | undefined;
-	reactionUsers(channelId: string, messageId: string, emoji: string): string[];
-	bans(guildId: string): string[];
-	isBanned(guildId: string, userId: string): boolean;
-	pins(channelId: string): RawMessage[];
-	archivedThreads(channelId: string, type: 'public' | 'private'): ApiChannel[];
-	pollVoters(channelId: string, messageId: string, answerId: number): string[];
-	emojis(guildId: string): ApiEmoji[];
-	emoji(guildId: string, emojiId: string): ApiEmoji | undefined;
-	invites(): ApiInvite[];
-	invite(code: string): ApiInvite | undefined;
-	channelInvites(channelId: string): ApiInvite[];
-	guildInvites(guildId: string): ApiInvite[];
-	autoModRules(guildId: string): ApiAutoModRule[];
-	autoModRule(guildId: string, ruleId: string): ApiAutoModRule | undefined;
-	threadMembers(channelId: string): string[];
-	activeThreads(guildId: string): ApiChannel[];
-	webhookById(id: string): ApiWebhook | undefined;
-	webhooksForGuild(guildId: string): ApiWebhook[];
-	webhooksForChannel(channelId: string): ApiWebhook[];
-	stickers(guildId: string): ApiSticker[];
-	sticker(guildId: string, stickerId: string): ApiSticker | undefined;
-	scheduledEvents(guildId: string): ApiScheduledEvent[];
-	scheduledEvent(guildId: string, eventId: string): ApiScheduledEvent | undefined;
-	guildTemplates(guildId: string): ApiGuildTemplate[];
-	soundboardSounds(guildId: string): ApiSoundboardSound[];
-	stageInstance(channelId: string): ApiStageInstance | undefined;
-	auditLogEntries(guildId: string): ApiAuditLogEntry[];
+	readonly get: WorldGetReader;
+	readonly query: WorldQueryReader;
+	readonly all: WorldAllReader;
+}
+
+interface WorldCandidate<T> extends WorldStateCandidate {
+	value: T;
+}
+
+function queryMatches<T extends Record<string, unknown>>(fields: T, query: Partial<T> | undefined): boolean {
+	if (!query) return true;
+	for (const [key, expected] of Object.entries(query)) {
+		if (expected === undefined) continue;
+		if (fields[key] !== expected) return false;
+	}
+	return true;
+}
+
+function formatQuery(query: Record<string, unknown>): string {
+	const entries = Object.entries(query).filter(([, value]) => value !== undefined);
+	if (!entries.length) return '{}';
+	return `{ ${entries.map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join(', ')} }`;
+}
+
+function formatCandidate(candidate: WorldStateCandidate): string {
+	return candidate.summary ? `${candidate.path} (${candidate.summary})` : candidate.path;
 }
 
 const EMPTY_WORLD = (): MockWorld => ({ guilds: [], channels: [], users: [], members: [], roles: [], messages: [] });
@@ -561,8 +813,18 @@ function normalizeAttachments(value: unknown): ApiAttachment[] {
 	});
 }
 
-function roleView(role: { id: string; name: string; position: number; permissions: string; color: number }): RoleView {
-	return { id: role.id, name: role.name, position: role.position, permissions: role.permissions, color: role.color };
+function roleView(
+	guildId: string,
+	role: { id: string; name: string; position: number; permissions: string; color: number },
+): RoleView {
+	return {
+		guildId,
+		id: role.id,
+		name: role.name,
+		position: role.position,
+		permissions: role.permissions,
+		color: role.color,
+	};
 }
 
 export function normalizeEmbed(value: unknown): EmbedView {
@@ -709,6 +971,105 @@ export class WorldState implements WorldStateReader {
 	private readonly pollVotersByMessage = new Map<string, Map<number, Set<string>>>();
 	private readonly threadMembersByChannel = new Map<string, Set<string>>();
 
+	readonly get: WorldGetReader = {
+		guild: query => this.expectOne('guild', query, this.guildCandidates(), this.guildCandidates(query)),
+		channel: query => this.expectOne('channel', query, this.channelCandidates(), this.channelCandidates(query)),
+		thread: query => this.expectOne('thread', query, this.threadCandidates(), this.threadCandidates(query)),
+		dm: query => this.expectOne('dm', query, this.dmCandidates(), this.dmCandidates(query)),
+		member: query => this.expectOne('member', query, this.memberCandidates(), this.memberCandidates(query)),
+		role: query => this.expectOne('role', query, this.roleCandidates(), this.roleCandidates(query)),
+		message: query => this.expectOne('message', query, this.messageCandidates(), this.messageCandidates(query)),
+		rawMessage: query =>
+			this.expectOne('rawMessage', query, this.rawMessageCandidates(), this.rawMessageCandidates(query)),
+		voiceState: query =>
+			this.expectOne('voiceState', query, this.voiceStateCandidates(), this.voiceStateCandidates(query)),
+		ban: query => this.expectOne('ban', query, this.banCandidates(), this.banCandidates(query)),
+		reaction: query => this.expectOne('reaction', query, this.reactionCandidates(), this.reactionCandidates(query)),
+		pin: query => this.expectOne('pin', query, this.pinCandidates(), this.pinCandidates(query)),
+		pollVote: query => this.expectOne('pollVote', query, this.pollVoteCandidates(), this.pollVoteCandidates(query)),
+		threadMember: query =>
+			this.expectOne('threadMember', query, this.threadMemberCandidates(), this.threadMemberCandidates(query)),
+		emoji: query => this.expectOne('emoji', query, this.emojiCandidates(), this.emojiCandidates(query)),
+		invite: query => this.expectOne('invite', query, this.inviteCandidates(), this.inviteCandidates(query)),
+		autoModRule: query =>
+			this.expectOne('autoModRule', query, this.autoModRuleCandidates(), this.autoModRuleCandidates(query)),
+		sticker: query => this.expectOne('sticker', query, this.stickerCandidates(), this.stickerCandidates(query)),
+		scheduledEvent: query =>
+			this.expectOne('scheduledEvent', query, this.scheduledEventCandidates(), this.scheduledEventCandidates(query)),
+		webhook: query => this.expectOne('webhook', query, this.webhookCandidates(), this.webhookCandidates(query)),
+		guildTemplate: query =>
+			this.expectOne('guildTemplate', query, this.guildTemplateCandidates(), this.guildTemplateCandidates(query)),
+		soundboardSound: query =>
+			this.expectOne('soundboardSound', query, this.soundboardSoundCandidates(), this.soundboardSoundCandidates(query)),
+		stageInstance: query =>
+			this.expectOne('stageInstance', query, this.stageInstanceCandidates(), this.stageInstanceCandidates(query)),
+		auditLogEntry: query =>
+			this.expectOne('auditLogEntry', query, this.auditLogEntryCandidates(), this.auditLogEntryCandidates(query)),
+	};
+
+	readonly query: WorldQueryReader = {
+		guild: query => this.queryOne('guild', query, this.guildCandidates(), this.guildCandidates(query)),
+		channel: query => this.queryOne('channel', query, this.channelCandidates(), this.channelCandidates(query)),
+		thread: query => this.queryOne('thread', query, this.threadCandidates(), this.threadCandidates(query)),
+		dm: query => this.queryOne('dm', query, this.dmCandidates(), this.dmCandidates(query)),
+		member: query => this.queryOne('member', query, this.memberCandidates(), this.memberCandidates(query)),
+		role: query => this.queryOne('role', query, this.roleCandidates(), this.roleCandidates(query)),
+		message: query => this.queryOne('message', query, this.messageCandidates(), this.messageCandidates(query)),
+		rawMessage: query =>
+			this.queryOne('rawMessage', query, this.rawMessageCandidates(), this.rawMessageCandidates(query)),
+		voiceState: query =>
+			this.queryOne('voiceState', query, this.voiceStateCandidates(), this.voiceStateCandidates(query)),
+		ban: query => this.queryOne('ban', query, this.banCandidates(), this.banCandidates(query)),
+		reaction: query => this.queryOne('reaction', query, this.reactionCandidates(), this.reactionCandidates(query)),
+		pin: query => this.queryOne('pin', query, this.pinCandidates(), this.pinCandidates(query)),
+		pollVote: query => this.queryOne('pollVote', query, this.pollVoteCandidates(), this.pollVoteCandidates(query)),
+		threadMember: query =>
+			this.queryOne('threadMember', query, this.threadMemberCandidates(), this.threadMemberCandidates(query)),
+		emoji: query => this.queryOne('emoji', query, this.emojiCandidates(), this.emojiCandidates(query)),
+		invite: query => this.queryOne('invite', query, this.inviteCandidates(), this.inviteCandidates(query)),
+		autoModRule: query =>
+			this.queryOne('autoModRule', query, this.autoModRuleCandidates(), this.autoModRuleCandidates(query)),
+		sticker: query => this.queryOne('sticker', query, this.stickerCandidates(), this.stickerCandidates(query)),
+		scheduledEvent: query =>
+			this.queryOne('scheduledEvent', query, this.scheduledEventCandidates(), this.scheduledEventCandidates(query)),
+		webhook: query => this.queryOne('webhook', query, this.webhookCandidates(), this.webhookCandidates(query)),
+		guildTemplate: query =>
+			this.queryOne('guildTemplate', query, this.guildTemplateCandidates(), this.guildTemplateCandidates(query)),
+		soundboardSound: query =>
+			this.queryOne('soundboardSound', query, this.soundboardSoundCandidates(), this.soundboardSoundCandidates(query)),
+		stageInstance: query =>
+			this.queryOne('stageInstance', query, this.stageInstanceCandidates(), this.stageInstanceCandidates(query)),
+		auditLogEntry: query =>
+			this.queryOne('auditLogEntry', query, this.auditLogEntryCandidates(), this.auditLogEntryCandidates(query)),
+	};
+
+	readonly all: WorldAllReader = {
+		guild: query => this.guildCandidates(query).map(candidate => candidate.value),
+		channel: query => this.channelCandidates(query).map(candidate => candidate.value),
+		thread: query => this.threadCandidates(query).map(candidate => candidate.value),
+		dm: query => this.dmCandidates(query).map(candidate => candidate.value),
+		member: query => this.memberCandidates(query).map(candidate => candidate.value),
+		role: query => this.roleCandidates(query).map(candidate => candidate.value),
+		message: query => this.messageCandidates(query).map(candidate => candidate.value),
+		rawMessage: query => this.rawMessageCandidates(query).map(candidate => candidate.value),
+		voiceState: query => this.voiceStateCandidates(query).map(candidate => candidate.value),
+		ban: query => this.banCandidates(query).map(candidate => candidate.value),
+		reaction: query => this.reactionCandidates(query).map(candidate => candidate.value),
+		pin: query => this.pinCandidates(query).map(candidate => candidate.value),
+		pollVote: query => this.pollVoteCandidates(query).map(candidate => candidate.value),
+		threadMember: query => this.threadMemberCandidates(query).map(candidate => candidate.value),
+		emoji: query => this.emojiCandidates(query).map(candidate => candidate.value),
+		invite: query => this.inviteCandidates(query).map(candidate => candidate.value),
+		autoModRule: query => this.autoModRuleCandidates(query).map(candidate => candidate.value),
+		sticker: query => this.stickerCandidates(query).map(candidate => candidate.value),
+		scheduledEvent: query => this.scheduledEventCandidates(query).map(candidate => candidate.value),
+		webhook: query => this.webhookCandidates(query).map(candidate => candidate.value),
+		guildTemplate: query => this.guildTemplateCandidates(query).map(candidate => candidate.value),
+		soundboardSound: query => this.soundboardSoundCandidates(query).map(candidate => candidate.value),
+		stageInstance: query => this.stageInstanceCandidates(query).map(candidate => candidate.value),
+		auditLogEntry: query => this.auditLogEntryCandidates(query).map(candidate => candidate.value),
+	};
+
 	constructor(seed?: MockWorld, options: WorldStateOptions = {}) {
 		this.world = seed ?? EMPTY_WORLD();
 		this.botId = options.botId ?? TEST_BOT_ID;
@@ -721,6 +1082,406 @@ export class WorldState implements WorldStateReader {
 		for (const channel of this.world.channels) {
 			if (channel.type === 1 && channel.id) this.dmChannelByUser.set(channel.id, channel.id);
 		}
+	}
+
+	private candidate<T>(value: T, path: string, summary?: string): WorldCandidate<T> {
+		return { value, path, ...(summary === undefined ? {} : { summary }) };
+	}
+
+	private expectOne<T>(
+		entity: string,
+		query: Record<string, unknown>,
+		candidates: WorldCandidate<T>[],
+		matches: WorldCandidate<T>[],
+	): T {
+		if (matches.length !== 1) {
+			throw new WorldStateError(entity, query, matches.map(this.toDiagnostic), candidates.map(this.toDiagnostic));
+		}
+		return matches[0].value;
+	}
+
+	private queryOne<T>(
+		entity: string,
+		query: Record<string, unknown>,
+		candidates: WorldCandidate<T>[],
+		matches: WorldCandidate<T>[],
+	): T | undefined {
+		if (matches.length === 0) return undefined;
+		return this.expectOne(entity, query, candidates, matches);
+	}
+
+	private toDiagnostic(candidate: WorldStateCandidate): WorldStateCandidate {
+		return {
+			path: candidate.path,
+			...(candidate.summary === undefined ? {} : { summary: candidate.summary }),
+		};
+	}
+
+	private guildCandidates(query?: WorldGuildFilter): WorldCandidate<GuildView>[] {
+		return this.world.guilds
+			.map(guild => this.candidate(this.guild(guild.id)!, `guild:${guild.id}`, `name=${guild.name}`))
+			.filter(candidate => queryMatches({ id: candidate.value.id, name: candidate.value.name }, query));
+	}
+
+	private channelCandidates(query?: WorldChannelFilter): WorldCandidate<ChannelView>[] {
+		return this.world.channels
+			.map(channel => this.candidate(this.channelView(channel), `channel:${channel.id}`, `name=${channel.name}`))
+			.filter(candidate =>
+				queryMatches(
+					{
+						id: candidate.value.id,
+						guildId: candidate.value.guildId,
+						name: candidate.value.name,
+						parentId: candidate.value.parentId,
+						type: candidate.value.type,
+						archived: candidate.value.archived,
+						locked: candidate.value.locked,
+					},
+					query,
+				),
+			);
+	}
+
+	private threadCandidates(query?: WorldThreadFilter): WorldCandidate<ChannelView>[] {
+		return this.world.channels
+			.filter(channel => channel.thread_metadata !== undefined || channel.type === 11 || channel.type === 12)
+			.map(channel => this.candidate(this.channelView(channel), `thread:${channel.id}`, `name=${channel.name}`))
+			.filter(candidate =>
+				queryMatches(
+					{
+						id: candidate.value.id,
+						guildId: candidate.value.guildId,
+						name: candidate.value.name,
+						parentId: candidate.value.parentId,
+						type: candidate.value.type,
+						archived: candidate.value.archived,
+						locked: candidate.value.locked,
+					},
+					query,
+				),
+			);
+	}
+
+	private dmCandidates(query?: WorldDmFilter): WorldCandidate<ChannelView>[] {
+		const channelIdForUser = query?.userId === undefined ? undefined : this.dmChannelByUser.get(query.userId);
+		return this.world.channels
+			.filter(channel => channel.type === 1)
+			.map(channel => this.candidate(this.channelView(channel), `dm:${channel.id}`))
+			.filter(candidate => {
+				if (query?.userId !== undefined && candidate.value.id !== channelIdForUser) return false;
+				return queryMatches({ channelId: candidate.value.id }, { channelId: query?.channelId });
+			});
+	}
+
+	private memberCandidates(query?: WorldMemberFilter): WorldCandidate<GuildMemberView>[] {
+		return this.world.members
+			.map(entry =>
+				this.candidate(
+					this.memberView(entry.guildId, entry.member),
+					`member:${entry.guildId}/${entry.member.user.id}`,
+					`roles=${entry.member.roles.join(',') || '(none)'}`,
+				),
+			)
+			.filter(candidate => {
+				if (query?.roleId !== undefined && !candidate.value.roles.includes(query.roleId)) return false;
+				return queryMatches(
+					{
+						guildId: candidate.value.guildId,
+						userId: candidate.value.userId,
+						nick: candidate.value.nick,
+					},
+					{ guildId: query?.guildId, userId: query?.userId, nick: query?.nick },
+				);
+			});
+	}
+
+	private roleCandidates(query?: WorldRoleFilter): WorldCandidate<RoleView>[] {
+		return this.world.roles
+			.map(entry =>
+				this.candidate(roleView(entry.guildId, entry.role), `role:${entry.guildId}/${entry.role.id}`, entry.role.name),
+			)
+			.filter(candidate =>
+				queryMatches(
+					{
+						guildId: candidate.value.guildId,
+						id: candidate.value.id,
+						name: candidate.value.name,
+					},
+					query,
+				),
+			);
+	}
+
+	private messageCandidates(query?: WorldMessageFilter): WorldCandidate<MessageView>[] {
+		return this.world.messages
+			.filter(entry => !isEphemeral(entry.message))
+			.map(entry =>
+				this.candidate(
+					this.buildMessageView(entry.message),
+					`message:${entry.channelId}/${entry.message.id}`,
+					entry.message.content,
+				),
+			)
+			.filter(candidate =>
+				queryMatches(
+					{
+						channelId: candidate.value.channelId,
+						id: candidate.value.id,
+						authorId: candidate.value.authorId,
+						content: candidate.value.content,
+					},
+					query,
+				),
+			);
+	}
+
+	private rawMessageCandidates(query?: WorldMessageFilter): WorldCandidate<RawMessage>[] {
+		return this.world.messages
+			.filter(entry => !isEphemeral(entry.message))
+			.map(entry =>
+				this.candidate(
+					this.withReactions(entry.channelId, entry.message),
+					`rawMessage:${entry.channelId}/${entry.message.id}`,
+					entry.message.content,
+				),
+			)
+			.filter(candidate =>
+				queryMatches(
+					{
+						channelId: candidate.value.channel_id,
+						id: candidate.value.id,
+						authorId: candidate.value.author.id,
+						content: candidate.value.content,
+					},
+					query,
+				),
+			);
+	}
+
+	private voiceStateCandidates(query?: WorldVoiceStateFilter): WorldCandidate<ApiVoiceState>[] {
+		return (this.world.voiceStates ?? [])
+			.filter(entry =>
+				queryMatches(
+					{ guildId: entry.guildId, userId: entry.voiceState.user_id, channelId: entry.voiceState.channel_id },
+					query,
+				),
+			)
+			.map(entry =>
+				this.candidate(
+					entry.voiceState,
+					`voiceState:${entry.guildId}/${entry.voiceState.user_id}`,
+					[`guildId=${entry.guildId}`, `channelId=${entry.voiceState.channel_id}`].join(' '),
+				),
+			);
+	}
+
+	private banCandidates(query?: WorldBanFilter): WorldCandidate<BanSnapshot>[] {
+		return [...this.bansByGuild].flatMap(([guildId, users]) =>
+			[...users]
+				.map(userId => this.candidate({ guildId, userId }, `ban:${guildId}/${userId}`))
+				.filter(candidate => queryMatches(candidate.value, query)),
+		);
+	}
+
+	private reactionCandidates(query?: WorldReactionFilter): WorldCandidate<ReactionView>[] {
+		const normalizedQuery = query?.emoji === undefined ? query : { ...query, emoji: decodeEmoji(query.emoji) };
+		return this.world.messages
+			.flatMap(entry => this.reactionViews(entry.channelId, entry.message.id))
+			.map(reaction =>
+				this.candidate(
+					reaction,
+					`reaction:${reaction.channelId}/${reaction.messageId}/${reaction.emoji}`,
+					[`count=${reaction.count}`, `users=${reaction.users.join(',') || '(none)'}`].join(' '),
+				),
+			)
+			.filter(candidate => {
+				if (normalizedQuery?.userId !== undefined && !candidate.value.users.includes(normalizedQuery.userId)) {
+					return false;
+				}
+				return queryMatches(
+					{
+						channelId: candidate.value.channelId,
+						messageId: candidate.value.messageId,
+						emoji: candidate.value.emoji,
+					},
+					{
+						channelId: normalizedQuery?.channelId,
+						messageId: normalizedQuery?.messageId,
+						emoji: normalizedQuery?.emoji,
+					},
+				);
+			});
+	}
+
+	private pinCandidates(query?: WorldPinFilter): WorldCandidate<MessageView>[] {
+		return [...this.pinnedByChannel].flatMap(([channelId, messageIds]) =>
+			messageIds
+				.map(messageId => {
+					const message = this.messageView(channelId, messageId);
+					return message ? this.candidate(message, `pin:${channelId}/${messageId}`, message.content) : undefined;
+				})
+				.filter((candidate): candidate is WorldCandidate<MessageView> => !!candidate)
+				.filter(candidate =>
+					queryMatches({ channelId: candidate.value.channelId, messageId: candidate.value.id }, query),
+				),
+		);
+	}
+
+	private pollVoteCandidates(query?: WorldPollVoteFilter): WorldCandidate<PollVoterSnapshot>[] {
+		return [...this.pollVotersByMessage].flatMap(([key, byAnswer]) => {
+			const [channelId, messageId] = key.split(':');
+			return [...byAnswer].flatMap(([answerId, users]) =>
+				[...users]
+					.map(userId =>
+						this.candidate(
+							{ channelId, messageId, answerId, userId },
+							`pollVote:${channelId}/${messageId}/${answerId}/${userId}`,
+						),
+					)
+					.filter(candidate => queryMatches(candidate.value, query)),
+			);
+		});
+	}
+
+	private threadMemberCandidates(query?: WorldThreadMemberFilter): WorldCandidate<ThreadMemberSnapshot>[] {
+		return [...this.threadMembersByChannel].flatMap(([channelId, users]) =>
+			[...users]
+				.map(userId => this.candidate({ channelId, userId }, `threadMember:${channelId}/${userId}`))
+				.filter(candidate => queryMatches(candidate.value, query)),
+		);
+	}
+
+	private emojiCandidates(query?: WorldEmojiFilter): WorldCandidate<ApiEmoji>[] {
+		return (this.world.guildEmojis ?? [])
+			.filter(entry => queryMatches({ guildId: entry.guildId, id: entry.emoji.id, name: entry.emoji.name }, query))
+			.map(entry => this.candidate(entry.emoji, `emoji:${entry.guildId}/${entry.emoji.id}`, entry.emoji.name));
+	}
+
+	private inviteCandidates(query?: WorldInviteFilter): WorldCandidate<ApiInvite>[] {
+		return [...this.invitesByCode.values()]
+			.map(invite => this.candidate(invite, `invite:${invite.code}`, `channelId=${invite.channel_id}`))
+			.filter(candidate =>
+				queryMatches(
+					{
+						code: candidate.value.code,
+						guildId: candidate.value.guild_id,
+						channelId: candidate.value.channel_id,
+					},
+					query,
+				),
+			);
+	}
+
+	private autoModRuleCandidates(query?: WorldAutoModRuleFilter): WorldCandidate<ApiAutoModRule>[] {
+		return (this.world.autoModRules ?? [])
+			.filter(entry => queryMatches({ guildId: entry.guildId, id: entry.rule.id, name: entry.rule.name }, query))
+			.map(entry => this.candidate(entry.rule, `autoModRule:${entry.guildId}/${entry.rule.id}`, entry.rule.name));
+	}
+
+	private stickerCandidates(query?: WorldStickerFilter): WorldCandidate<ApiSticker>[] {
+		return (this.world.guildStickers ?? [])
+			.filter(entry => queryMatches({ guildId: entry.guildId, id: entry.sticker.id, name: entry.sticker.name }, query))
+			.map(entry => this.candidate(entry.sticker, `sticker:${entry.guildId}/${entry.sticker.id}`, entry.sticker.name));
+	}
+
+	private scheduledEventCandidates(query?: WorldScheduledEventFilter): WorldCandidate<ApiScheduledEvent>[] {
+		return (this.world.scheduledEvents ?? [])
+			.filter(entry =>
+				queryMatches(
+					{
+						guildId: entry.guildId,
+						id: entry.event.id,
+						name: entry.event.name,
+						channelId: entry.event.channel_id,
+					},
+					query,
+				),
+			)
+			.map(entry => this.candidate(entry.event, `scheduledEvent:${entry.guildId}/${entry.event.id}`, entry.event.name));
+	}
+
+	private webhookCandidates(query?: WorldWebhookFilter): WorldCandidate<ApiWebhook>[] {
+		return [...this.webhooksById.values()]
+			.map(webhook => this.candidate(webhook, `webhook:${webhook.id}`, webhook.name))
+			.filter(candidate =>
+				queryMatches(
+					{
+						id: candidate.value.id,
+						guildId: candidate.value.guild_id,
+						channelId: candidate.value.channel_id,
+						name: candidate.value.name,
+					},
+					query,
+				),
+			);
+	}
+
+	private guildTemplateCandidates(query?: WorldGuildTemplateFilter): WorldCandidate<ApiGuildTemplate>[] {
+		return (this.world.guildTemplates ?? [])
+			.filter(entry =>
+				queryMatches(
+					{
+						code: entry.template.code,
+						sourceGuildId: entry.guildId,
+						name: entry.template.name,
+					},
+					query,
+				),
+			)
+			.map(entry =>
+				this.candidate(entry.template, `guildTemplate:${entry.guildId}/${entry.template.code}`, entry.template.name),
+			);
+	}
+
+	private soundboardSoundCandidates(query?: WorldSoundboardSoundFilter): WorldCandidate<ApiSoundboardSound>[] {
+		return (this.world.soundboardSounds ?? [])
+			.filter(entry =>
+				queryMatches(
+					{
+						guildId: entry.guildId,
+						soundId: entry.sound.sound_id,
+						name: entry.sound.name,
+					},
+					query,
+				),
+			)
+			.map(entry =>
+				this.candidate(entry.sound, `soundboardSound:${entry.guildId}/${entry.sound.sound_id}`, entry.sound.name),
+			);
+	}
+
+	private stageInstanceCandidates(query?: WorldStageInstanceFilter): WorldCandidate<ApiStageInstance>[] {
+		return (this.world.stageInstances ?? [])
+			.map(stage => this.candidate(stage, `stageInstance:${stage.channel_id}`, stage.topic))
+			.filter(candidate =>
+				queryMatches(
+					{
+						guildId: candidate.value.guild_id,
+						channelId: candidate.value.channel_id,
+						id: candidate.value.id,
+					},
+					query,
+				),
+			);
+	}
+
+	private auditLogEntryCandidates(query?: WorldAuditLogEntryFilter): WorldCandidate<ApiAuditLogEntry>[] {
+		return (this.world.auditLogEntries ?? [])
+			.filter(entry =>
+				queryMatches(
+					{
+						guildId: entry.guildId,
+						id: entry.entry.id,
+						actionType: entry.entry.action_type,
+						targetId: entry.entry.target_id,
+						userId: entry.entry.user_id,
+					},
+					query,
+				),
+			)
+			.map(entry =>
+				this.candidate(entry.entry, `auditLogEntry:${entry.guildId}/${entry.entry.id}`, `guildId=${entry.guildId}`),
+			);
 	}
 
 	/**
@@ -912,8 +1673,10 @@ export class WorldState implements WorldStateReader {
 		const threads = guildChannels.filter(channel => channel.thread_metadata).map(channel => this.channelView(channel));
 		const members = this.world.members
 			.filter(entry => entry.guildId === guild.id)
-			.map(entry => this.memberView(entry.member));
-		const roles = this.world.roles.filter(entry => entry.guildId === guild.id).map(entry => entry.role);
+			.map(entry => this.memberView(entry.guildId, entry.member));
+		const roles = this.world.roles
+			.filter(entry => entry.guildId === guild.id)
+			.map(entry => roleView(entry.guildId, entry.role));
 		const bans = [...(this.bansByGuild.get(guild.id) ?? new Set<string>())];
 		const guildEmojis = (this.world.guildEmojis ?? [])
 			.filter(entry => entry.guildId === guild.id)
@@ -933,29 +1696,14 @@ export class WorldState implements WorldStateReader {
 			id: guild.id,
 			name: guild.name,
 			channels,
-			channel: nameOrId => channels.find(channel => channel.id === nameOrId || channel.name === nameOrId),
 			threads,
-			thread: nameOrId => threads.find(channel => channel.id === nameOrId || channel.name === nameOrId),
 			members,
-			member: userId => members.find(entry => entry.userId === userId),
-			role: nameOrId => {
-				const role = roles.find(entry => entry.id === nameOrId || entry.name === nameOrId);
-				return role ? roleView(role) : undefined;
-			},
+			roles,
 			bans,
 			emojis: guildEmojis.map(emoji => ({ id: emoji.id, name: emoji.name })),
-			emoji: nameOrId => {
-				const emoji = guildEmojis.find(entry => entry.id === nameOrId || entry.name === nameOrId);
-				return emoji ? { id: emoji.id, name: emoji.name } : undefined;
-			},
 			invites: guildInvites.map(invite => ({ code: invite.code, channelId: invite.channel_id, uses: invite.uses })),
 			autoModRules: guildAutoModRules,
-			autoModRule: id => guildAutoModRules.find(rule => rule.id === id),
 			stickers: guildStickers.map(sticker => ({ id: sticker.id, name: sticker.name })),
-			sticker: nameOrId => {
-				const sticker = guildStickers.find(entry => entry.id === nameOrId || entry.name === nameOrId);
-				return sticker ? { id: sticker.id, name: sticker.name } : undefined;
-			},
 			scheduledEvents: guildScheduledEvents,
 		};
 	}
@@ -966,8 +1714,8 @@ export class WorldState implements WorldStateReader {
 	}
 
 	roleById(roleId: string): RoleView | undefined {
-		const role = this.world.roles.find(entry => entry.role.id === roleId)?.role;
-		return role ? roleView(role) : undefined;
+		const entry = this.world.roles.find(entry => entry.role.id === roleId);
+		return entry ? roleView(entry.guildId, entry.role) : undefined;
 	}
 
 	voiceState(guildId: string, userId: string): ApiVoiceState | undefined {
@@ -1398,6 +2146,8 @@ export class WorldState implements WorldStateReader {
 		const byEmoji = this.reactionsByMessage.get(this.reactionKey(channelId, messageId));
 		if (!byEmoji) return [];
 		return [...byEmoji].map(([emoji, users]) => ({
+			channelId,
+			messageId,
 			emoji,
 			count: users.size,
 			me: users.has(this.botId),
@@ -2067,6 +2817,7 @@ export class WorldState implements WorldStateReader {
 			.map(entry => this.buildMessageView(entry.message));
 		return {
 			id: channel.id,
+			...(channel.guild_id === undefined ? {} : { guildId: channel.guild_id }),
 			name: channel.name,
 			type: channel.type,
 			parentId: channel.parent_id,
@@ -2089,12 +2840,46 @@ export class WorldState implements WorldStateReader {
 	}
 
 	private memberView(member: {
-		user: ApiUser;
-		roles: string[];
-		nick?: string | null;
-		communication_disabled_until?: string | null;
-	}): GuildMemberView {
+		guildId: string;
+		member: {
+			user: ApiUser;
+			roles: string[];
+			nick?: string | null;
+			communication_disabled_until?: string | null;
+		};
+	}): GuildMemberView;
+	private memberView(
+		guildId: string,
+		member: {
+			user: ApiUser;
+			roles: string[];
+			nick?: string | null;
+			communication_disabled_until?: string | null;
+		},
+	): GuildMemberView;
+	private memberView(
+		guildOrEntry:
+			| string
+			| {
+					guildId: string;
+					member: {
+						user: ApiUser;
+						roles: string[];
+						nick?: string | null;
+						communication_disabled_until?: string | null;
+					};
+			  },
+		maybeMember?: {
+			user: ApiUser;
+			roles: string[];
+			nick?: string | null;
+			communication_disabled_until?: string | null;
+		},
+	): GuildMemberView {
+		const guildId = typeof guildOrEntry === 'string' ? guildOrEntry : guildOrEntry.guildId;
+		const member = typeof guildOrEntry === 'string' ? maybeMember! : guildOrEntry.member;
 		return {
+			guildId,
 			userId: member.user.id,
 			roles: [...member.roles],
 			nick: member.nick,
@@ -2108,6 +2893,7 @@ export class WorldState implements WorldStateReader {
 		return {
 			id: message.id,
 			channelId: message.channel_id,
+			...(message.guild_id === undefined ? {} : { guildId: message.guild_id }),
 			authorId: message.author.id,
 			content: message.content,
 			embeds: message.embeds.map(normalizeEmbed),

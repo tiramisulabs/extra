@@ -516,6 +516,12 @@ const timedOut = await bot.clickButton('open-feedback', { user }).timeoutModal()
 expect(timedOut.content).toBe('timed out');
 ```
 
+The `DispatchResult` returned by `.fillModal(...)` is scoped to the modal-submit
+interaction. If the opener resumes after `await interaction.modal(...)` and writes
+visible output from that continuation, assert through `rendered(bot)` or another
+bot-level state reader when that cross-dispatch output is the contract. Use
+`rendered(flow)` for the modal that the opener displayed before submission.
+
 Awaiting a modal-opener directly (without `.fillModal()`/`.timeoutModal()`) fails loud,
 since in real seyfert it would stall on the `waitFor` timer and silently take the
 timeout branch.
@@ -625,6 +631,10 @@ const mod = apiRole({ id: 'mod', permissions: permissionBits(['BanMembers']) });
 await bot.slash({ name: 'ban', memberRoles: [mod] });
 ```
 
+`memberRoles` also accepts minimal role objects. Missing `permissions` default to
+`"0"`, so `{ id: 'viewer', name: 'Viewer' }` seeds membership without granting
+extra permission bits.
+
 For Discord-like permission tests, seed the world and dispatch as a registered
 member. The mock computes `member.permissions` and `app_permissions` from
 `@everyone`, member roles, the bot member, and channel overwrites:
@@ -673,14 +683,27 @@ error classes should test that real parse path separately.
 Recorded actions prove calls happened. World state proves what the bot built:
 
 ```ts
-const channel = bot.worldGuild(guild.id)?.channel('acme-s1');
+const channel = bot.world.get.channel({ guildId: guild.id, name: 'acme-s1' });
 
-expect(channel?.lastMessage?.content).toContain('Welcome');
-expect(channel?.lastMessage?.button('Approve')).toMatchObject({ customId: 'approve' });
-expect(channel?.lastMessage?.embeds[0]).toMatchObject({
+expect(channel.lastMessage?.content).toContain('Welcome');
+expect(channel.lastMessage?.component('Approve')).toMatchObject({ customId: 'approve' });
+expect(channel.lastMessage?.embeds[0]).toMatchObject({
 	title: 'Acme S1',
 	fields: [{ name: 'Budget', value: '$5,000' }],
 });
+```
+
+Use `get.*` when the entity must exist exactly once; it throws a
+`WorldStateError` with candidate paths when nothing or too much matches. Use
+`query.*` for optional reads, and `all.*` when the assertion is about a
+collection:
+
+```ts
+expect(bot.world.query.member({ guildId: guild.id, userId: 'ghost' })).toBeUndefined();
+expect(bot.world.all.message({ channelId: channel.id }).map(message => message.content)).toEqual([
+	'edited',
+	'followup',
+]);
 ```
 
 State includes seeded entities and writes made during the test: created
@@ -688,15 +711,15 @@ channels/threads, messages, interaction replies, edits, followups, DMs, bans,
 role changes, timeouts, and channel overwrites. DMs are queryable by user:
 
 ```ts
-expect(bot.worldDm(user.id)?.lastMessage?.content).toBe('Check your inbox');
+expect(bot.world.query.dm({ userId: user.id })?.lastMessage?.content).toBe('Check your inbox');
 ```
 
 Channels and roles also resolve by id alone — no guild id needed — mirroring how
 Discord keys them. The role view carries `permissions` and `color`, not just identity:
 
 ```ts
-expect(bot.worldChannel(channel.id)?.name).toBe('general');
-expect(bot.worldRole(role.id)?.permissions).toBe('4'); // BanMembers
+expect(bot.world.query.channel({ id: channel.id })?.name).toBe('general');
+expect(bot.world.query.role({ id: role.id })?.permissions).toBe('4'); // BanMembers
 ```
 
 Seed message history with `registerMessage`; `bot.client.channels.fetchMessages()`

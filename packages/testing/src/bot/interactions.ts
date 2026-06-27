@@ -100,15 +100,21 @@ function resolvedMember(member: MemberInput): Omit<ApiMember, 'user'> {
 	};
 }
 
-function resolvedRole(role: ApiRole | { id: string; name: string }): ApiRole {
-	const raw = role as Partial<ApiRole> & { id: string; name: string };
+export type ApiRoleInput = ApiRole | (ApiRoleOptions & { id: string });
+
+function resolvedRole(role: ApiRoleInput): ApiRole {
+	const raw = role as Partial<ApiRole> & { id: string };
+	const base = apiRole({ id: raw.id, name: raw.name, permissions: raw.permissions, position: raw.position });
 	return {
-		...apiRole({ id: raw.id, name: raw.name, permissions: raw.permissions, position: raw.position }),
+		...base,
 		...raw,
+		name: raw.name ?? base.name,
+		permissions: raw.permissions ?? base.permissions,
+		position: raw.position ?? base.position,
 	};
 }
 
-export function roleOption(role: ApiRole | { id: string; name: string }): EncodedOption {
+export function roleOption(role: ApiRoleInput): EncodedOption {
 	const rolePayload = resolvedRole(role);
 	return option(OptionType.Role, rolePayload.id, { roles: { [rolePayload.id]: rolePayload } });
 }
@@ -266,8 +272,8 @@ export interface BaseInteractionOptions {
 	permissions?: PermissionInput;
 	/** Invoking member's permissions. Defaults to a non-admin set; pass 'all' for ALL_PERMISSIONS. */
 	memberPermissions?: PermissionInput | 'all';
-	/** Convenience: roles whose permissions are OR-combined into memberPermissions. */
-	memberRoles?: ApiRole[];
+	/** Convenience: roles whose permissions are OR-combined into memberPermissions. Missing permissions default to "0". */
+	memberRoles?: ApiRoleInput[];
 	/** Discord interaction context: 0 = guild, 1 = bot DM, 2 = private channel. Defaults from guildId. */
 	context?: number;
 	integrationOwners?: Record<string, string>;
@@ -329,6 +335,7 @@ function baseInteraction(options: BaseInteractionOptions, type: number): ApiInte
 	const channel = options.channel ?? apiChannel({ id: TEST_CHANNEL_ID, guildId: guildId ?? null });
 	const permissions = permissionBits(options.permissions ?? DEFAULT_PERMISSIONS);
 	const memberOptions = options.member ? memberOptionsFrom(options.member) : undefined;
+	const memberRolePayloads = options.memberRoles?.map(resolvedRole);
 	const memberPermissions =
 		options.memberPermissions !== undefined
 			? options.memberPermissions === 'all'
@@ -336,10 +343,10 @@ function baseInteraction(options: BaseInteractionOptions, type: number): ApiInte
 				: permissionBits(options.memberPermissions)
 			: memberOptions?.permissions !== undefined
 				? permissionBits(memberOptions.permissions)
-				: options.memberRoles !== undefined
-					? combineRolePermissions(options.memberRoles)
+				: memberRolePayloads !== undefined
+					? combineRolePermissions(memberRolePayloads)
 					: DEFAULT_MEMBER_PERMISSIONS_STRING;
-	const memberRoleIds = options.memberRoles?.map(role => role.id) ?? [];
+	const memberRoleIds = memberRolePayloads?.map(role => role.id) ?? [];
 	const memberRoles = [...new Set([...(memberOptions?.roles ?? []), ...memberRoleIds])];
 	const member = dm
 		? undefined

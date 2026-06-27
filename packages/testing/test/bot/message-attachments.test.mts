@@ -24,10 +24,7 @@ describe('message attachments', () => {
 
 		const bot = await createMockBot({ commands: [Upload], world });
 		await bot.slash({ name: 'upload', guildId: guild.id, channel, user: actor.user });
-		const sent = bot
-			.worldGuild(guild.id)
-			?.channel('att-chan')
-			?.messages.find(message => message.content === 'see file');
+		const sent = bot.world.all.message({ channelId: channel.id }).find(message => message.content === 'see file');
 		expect(sent?.attachments).toHaveLength(1);
 		expect(sent?.attachments[0]).toMatchObject({ filename: 'report.pdf' });
 		expect(sent?.attachments[0]?.url).toBeDefined();
@@ -53,7 +50,7 @@ describe('message attachments', () => {
 
 		const bot = await createMockBot({ commands: [Reupload], world });
 		await bot.slash({ name: 'reupload', guildId: guild.id, channel, user: actor.user });
-		const messages = bot.worldGuild(guild.id)?.channel('att-edit-chan')?.messages ?? [];
+		const messages = bot.world.all.message({ channelId: channel.id });
 		const edited = messages.find(message => message.attachments.length === 0 && message.content === '');
 		expect(edited).toBeDefined();
 		await bot.close();
@@ -106,7 +103,9 @@ describe('message attachments', () => {
 		await expect(
 			bot.slash({ name: 'edit-ref-ok', guildId: guild.id, channel, user: actor.user }),
 		).resolves.toMatchObject({ content: 'done' });
-		expect(bot.worldMessage(channel.id, editedId ?? '')?.embeds[0]?.image?.url).toBe('attachment://logo.png');
+		expect(bot.world.query.message({ channelId: channel.id, id: editedId ?? '' })?.embeds[0]?.image?.url).toBe(
+			'attachment://logo.png',
+		);
 		await bot.close();
 	});
 
@@ -165,10 +164,7 @@ describe('message references (replies and forwards)', () => {
 
 		const bot = await createMockBot({ commands: [Reply], world });
 		await bot.slash({ name: 'reply', guildId: guild.id, channel, user: actor.user });
-		const reply = bot
-			.worldGuild(guild.id)
-			?.channel('ref-chan')
-			?.messages.find(message => message.content === 'replying');
+		const reply = bot.world.all.message({ channelId: channel.id }).find(message => message.content === 'replying');
 		expect(reply?.reference?.messageId).toBe('target-msg');
 		expect(reply?.referencedMessage?.content).toBe('original');
 		await bot.close();
@@ -193,10 +189,7 @@ describe('message references (replies and forwards)', () => {
 
 		const bot = await createMockBot({ commands: [Forward], world });
 		const res = await bot.slash({ name: 'forward', guildId: guild.id, channel, user: actor.user });
-		const view = bot
-			.worldGuild(guild.id)
-			?.channel('fwd-chan')
-			?.messages.find(message => message.id === res.content);
+		const view = bot.world.query.message({ channelId: channel.id, id: res.content ?? '' });
 		expect(view?.reference?.type).toBe(1);
 		expect(view?.snapshots[0]?.content).toBe('forward me');
 		await bot.close();

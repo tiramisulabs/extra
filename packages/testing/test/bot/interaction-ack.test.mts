@@ -118,7 +118,7 @@ describe('interaction acknowledgement (fail loud before ack)', () => {
 			code: 40060,
 		});
 		// only the first reply materialized — no phantom second message
-		expect(bot.worldChannel(channel.id)?.messages.map(m => m.content)).toEqual(['one']);
+		expect(bot.world.query.channel({ id: channel.id })?.messages.map(m => m.content)).toEqual(['one']);
 		await bot.close();
 	});
 
@@ -190,11 +190,11 @@ describe('interaction acknowledgement (fail loud before ack)', () => {
 		}
 
 		const bot = await createMockBot({ components: [NextButton], world });
-		const before = bot.worldGuild(guild.id)?.channel('du-chan')?.messages.length ?? 0;
+		const before = bot.world.query.channel({ guildId: guild.id, id: 'du-chan' })?.messages.length ?? 0;
 		await bot.clickButton('next', { source: 'src-msg', user: actor.user });
-		const after = bot.worldGuild(guild.id)?.channel('du-chan')?.messages ?? [];
+		const after = bot.world.query.channel({ guildId: guild.id, id: 'du-chan' })?.messages ?? [];
 		expect(after).toHaveLength(before); // edited in place, no new message minted
-		expect(bot.worldMessage(channel.id, 'src-msg')?.content).toBe('page 2');
+		expect(bot.world.query.message({ channelId: channel.id, id: 'src-msg' })?.content).toBe('page 2');
 		await bot.close();
 	});
 
@@ -221,11 +221,11 @@ describe('interaction acknowledgement (fail loud before ack)', () => {
 		}
 
 		const bot = await createMockBot({ components: [GoButton], world });
-		const before = bot.worldChannel('up-chan')?.messages.length ?? 0;
+		const before = bot.world.query.channel({ id: 'up-chan' })?.messages.length ?? 0;
 		await bot.clickButton('go', { source: 'up-src', user: actor.user });
-		const after = bot.worldChannel('up-chan')?.messages ?? [];
+		const after = bot.world.query.channel({ id: 'up-chan' })?.messages ?? [];
 		expect(after).toHaveLength(before); // no phantom message minted by the trailing editResponse
-		expect(bot.worldMessage(channel.id, 'up-src')?.content).toBe('page 3');
+		expect(bot.world.query.message({ channelId: channel.id, id: 'up-src' })?.content).toBe('page 3');
 		await bot.close();
 	});
 });

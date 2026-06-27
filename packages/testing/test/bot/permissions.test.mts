@@ -37,6 +37,12 @@ describe('permission helpers', () => {
 		).toBe((PermissionFlagsBits.BanMembers | PermissionFlagsBits.KickMembers).toString());
 	});
 
+	test('combineRolePermissions treats missing permissions as an empty bitfield', () => {
+		expect(combineRolePermissions([{}, { permissions: permissionBits(['BanMembers']) }])).toBe(
+			PermissionFlagsBits.BanMembers.toString(),
+		);
+	});
+
 	test('computeChannelPermissions follows owner, admin, overwrite, and timeout rules', () => {
 		const guild = { id: 'guild', owner_id: 'owner' };
 		const everyone = {
@@ -184,6 +190,50 @@ describe('permission emulation', () => {
 		const bot = await createMockBot({ commands: [MemberRolePass] });
 		const result = await bot.slash({ name: 'member-role-pass', memberRoles: [banRole] });
 		expect(result.content).toBe('member ok');
+		await bot.close();
+	});
+
+	test('memberRoles accepts minimal role objects with default permissions', async () => {
+		const plainRole = { id: 'plain-role', name: 'Plain Role' };
+
+		@Declare({ name: 'minimal-member-role', description: 'Reads the invoking member roles' })
+		class MinimalMemberRole extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.write({ content: ctx.member?.roles.keys.includes(plainRole.id) ? 'role present' : 'role missing' });
+			}
+		}
+
+		const payload = chatInputInteraction({ name: 'minimal-member-role', memberRoles: [plainRole] });
+		expect(payload.member?.roles).toContain(plainRole.id);
+		expect(payload.member?.permissions).toBe('0');
+
+		const bot = await createMockBot({ commands: [MinimalMemberRole] });
+		const result = await bot.slash({ name: 'minimal-member-role', memberRoles: [plainRole] });
+		expect(result.content).toBe('role present');
+		await bot.close();
+	});
+
+	test('command dispatch exposes seeded member role objects through ctx.member.roles.list()', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'command-role-list-guild' });
+		const role = world.registerRole(guild.id, { id: 'command-role-list-role', name: 'Command Role' });
+		const member = world.registerMember(guild.id, {
+			user: apiUser({ id: 'command-role-list-user' }),
+			roles: [role.id],
+		});
+		const channel = world.registerChannel(guild.id);
+
+		@Declare({ name: 'list-member-roles', description: 'Lists member roles' })
+		class ListMemberRoles extends Command {
+			async run(ctx: CommandContext) {
+				const roles = await ctx.member!.roles.list();
+				await ctx.write({ content: roles.map(entry => entry.id).join(',') });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [ListMemberRoles], world });
+		const result = await bot.slash({ name: 'list-member-roles', guildId: guild.id, channel, user: member.user });
+		expect(result.content?.split(',')).toContain(role.id);
 		await bot.close();
 	});
 

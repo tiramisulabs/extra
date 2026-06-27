@@ -97,7 +97,7 @@ describe('emit result and factories', () => {
 			.actor({ member: alice, guildId: guild.id })
 			.emit('GUILD_MEMBER_UPDATE', { roles: ['r1'] }, { allowNoHandler: true });
 
-		expect(bot.worldMember(guild.id, 'alice')?.roles).toEqual(['r1']);
+		expect(bot.world.query.member({ guildId: guild.id, userId: 'alice' })?.roles).toEqual(['r1']);
 		await bot.close();
 	});
 
@@ -115,7 +115,7 @@ describe('emit result and factories', () => {
 			},
 		);
 
-		expect(bot.worldMember(guild.id, 'actor-emit-alice')?.roles).toEqual(['r2']);
+		expect(bot.world.query.member({ guildId: guild.id, userId: 'actor-emit-alice' })?.roles).toEqual(['r2']);
 		await bot.close();
 	});
 
@@ -150,7 +150,7 @@ describe('emit result and factories', () => {
 			bot.emit('GUILD_MEMBER_ADD', { guild_id: guild.id, ...apiMember({ user: apiUser({ id: 'ghost' }) }) }),
 		).rejects.toThrow(/no handler ran/);
 		// guard runs BEFORE the world bridge, so the member was never added
-		expect(bot.worldMember(guild.id, 'ghost')).toBeUndefined();
+		expect(bot.world.query.member({ guildId: guild.id, userId: 'ghost' })).toBeUndefined();
 		await bot.close();
 	});
 
@@ -165,7 +165,10 @@ describe('emit result and factories', () => {
 			{ allowNoHandler: true },
 		);
 
-		expect(bot.worldMember(guild.id, 'ghost-member')).toMatchObject({ roles: ['r1'], nick: 'Ghost' });
+		expect(bot.world.query.member({ guildId: guild.id, userId: 'ghost-member' })).toMatchObject({
+			roles: ['r1'],
+			nick: 'Ghost',
+		});
 		await expect(Promise.resolve(bot.client.cache.members?.raw('ghost-member', guild.id))).resolves.toMatchObject({
 			roles: ['r1'],
 			nick: 'Ghost',
@@ -186,12 +189,12 @@ describe('emit result and factories', () => {
 				{ allowNoHandler: true },
 			),
 		).rejects.toThrow(/MESSAGE_CREATE requires id, channel_id, and author\.id/);
-		expect(bot.worldMessage(channel.id, 'invalid-message')).toBeUndefined();
+		expect(bot.world.query.message({ channelId: channel.id, id: 'invalid-message' })).toBeUndefined();
 
 		await expect(
 			bot.emit('THREAD_CREATE', { id: 'guildless-thread', parent_id: channel.id, type: 11 }, { allowNoHandler: true }),
 		).rejects.toThrow(/THREAD_CREATE requires guild_id/);
-		expect(bot.worldChannel('guildless-thread')).toBeUndefined();
+		expect(bot.world.query.channel({ id: 'guildless-thread' })).toBeUndefined();
 		await bot.close();
 	});
 
@@ -228,28 +231,28 @@ describe('emit result and factories', () => {
 			messageCreateEvent({ id: 'builder-message', channelId: channel.id, guildId: guild.id, content: 'created' }),
 			{ allowNoHandler: true },
 		);
-		expect(bot.worldMessage(channel.id, 'builder-message')?.content).toBe('created');
+		expect(bot.world.query.message({ channelId: channel.id, id: 'builder-message' })?.content).toBe('created');
 
 		await bot.emit(
 			'CHANNEL_CREATE',
 			channelCreateEvent({ id: 'builder-created-channel', guildId: guild.id, name: 'created-channel' }),
 			{ allowNoHandler: true },
 		);
-		expect(bot.worldChannel('builder-created-channel')?.name).toBe('created-channel');
+		expect(bot.world.query.channel({ id: 'builder-created-channel' })?.name).toBe('created-channel');
 
 		await bot.emit(
 			'THREAD_CREATE',
 			threadCreateEvent({ id: 'builder-thread', parentId: channel.id, guildId: guild.id, name: 'thread' }),
 			{ allowNoHandler: true },
 		);
-		expect(bot.worldChannel('builder-thread')?.parentId).toBe(channel.id);
+		expect(bot.world.query.channel({ id: 'builder-thread' })?.parentId).toBe(channel.id);
 
 		await bot.emit(
 			'VOICE_STATE_UPDATE',
 			voiceStateUpdateEvent({ userId: 'voice-user', channelId: channel.id }, { guildId: guild.id }),
 			{ allowNoHandler: true },
 		);
-		expect(bot.worldVoiceState(guild.id, 'voice-user')?.channel_id).toBe(channel.id);
+		expect(bot.world.query.voiceState({ guildId: guild.id, userId: 'voice-user' })?.channel_id).toBe(channel.id);
 
 		await bot.emit(
 			'MESSAGE_REACTION_ADD',
@@ -261,7 +264,9 @@ describe('emit result and factories', () => {
 			}),
 			{ allowNoHandler: true },
 		);
-		expect(bot.worldMessage(channel.id, 'builder-message')?.reaction('ok:123')?.users).toContain('reactor');
+		expect(
+			bot.world.query.message({ channelId: channel.id, id: 'builder-message' })?.reaction('ok:123')?.users,
+		).toContain('reactor');
 		await bot.emit(
 			'MESSAGE_REACTION_REMOVE',
 			messageReactionRemoveEvent({
@@ -272,7 +277,9 @@ describe('emit result and factories', () => {
 			}),
 			{ allowNoHandler: true },
 		);
-		expect(bot.worldMessage(channel.id, 'builder-message')?.reaction('ok:123')).toBeUndefined();
+		expect(
+			bot.world.query.message({ channelId: channel.id, id: 'builder-message' })?.reaction('ok:123'),
+		).toBeUndefined();
 		await bot.close();
 	});
 });
