@@ -84,6 +84,41 @@ export interface MockWorld {
 	data?: Record<string, unknown>;
 }
 
+type GuildRelatedCacheResource = {
+	namespace?: string;
+	adapter?: {
+		bulkSet?: (entries: [string, unknown][]) => unknown;
+	};
+	parse?: (data: Record<string, unknown>, id: string, guildId: string) => unknown;
+};
+
+function needsNamespaceAlias(
+	resource: GuildRelatedCacheResource | undefined,
+	id: string,
+): resource is GuildRelatedCacheResource {
+	const namespace = resource?.namespace;
+	return typeof namespace === 'string' && id.startsWith(namespace);
+}
+
+async function writeNamespaceAlias(
+	resource: GuildRelatedCacheResource | undefined,
+	id: string,
+	guildId: string,
+	data: Record<string, unknown>,
+): Promise<void> {
+	if (!needsNamespaceAlias(resource, id)) return;
+	const aliasKey = `${resource.namespace}.${id}`;
+	const parsed = resource.parse?.({ ...data }, id, guildId) ?? { ...data, id, guild_id: guildId };
+	await Promise.resolve(resource.adapter?.bulkSet?.([[aliasKey, parsed]]));
+}
+
+export async function seedCachedRole(client: UsingClient, guildId: string, role: ApiRole): Promise<void> {
+	await client.cache.roles?.set(CacheFrom.Test, role.id, guildId, role);
+	await writeNamespaceAlias(client.cache.roles as GuildRelatedCacheResource | undefined, role.id, guildId, {
+		...(role as unknown as Record<string, unknown>),
+	});
+}
+
 export type ChannelOverwriteInput = {
 	id: string;
 	type: 'role' | 'member';
@@ -347,7 +382,7 @@ export async function seedWorld(client: UsingClient, world: MockWorld): Promise<
 		}
 	}
 	for (const entry of world.roles) {
-		await client.cache.roles?.set(CacheFrom.Test, entry.role.id, entry.guildId, entry.role);
+		await seedCachedRole(client, entry.guildId, entry.role);
 	}
 	for (const user of world.users) {
 		await client.cache.users?.set(CacheFrom.Test, user.id, user);

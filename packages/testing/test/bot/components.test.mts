@@ -106,7 +106,7 @@ describe('component flows', () => {
 		const seen: string[][] = [];
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'component-role-list-guild' });
-		const role = world.registerRole(guild.id, { id: 'component-role-list-role', name: 'Component Role' });
+		const role = world.registerRole(guild.id, { id: 'role-allowed', name: 'Component Role' });
 		const actor = world.registerMember(guild.id, {
 			user: apiUser({ id: 'component-role-list-user' }),
 			roles: [role.id],
@@ -130,7 +130,6 @@ describe('component flows', () => {
 			guildId: guild.id,
 			channel,
 			user: actor.user,
-			allowSyntheticSource: true,
 		});
 		expect(seen.at(-1)).toContain(role.id);
 		expect(result.content).toContain(role.name);

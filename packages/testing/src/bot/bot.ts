@@ -70,6 +70,7 @@ import {
 	type ApiChannel,
 	type ApiMember,
 	type ApiMessage,
+	type ApiRole,
 	type ApiUser,
 	apiMember,
 	apiMessage,
@@ -115,7 +116,7 @@ import {
 	WorldState,
 	type WorldStateReader,
 } from './state';
-import { type MockWorld, seedWorld, type WorldBuilder } from './world';
+import { type MockWorld, seedCachedRole, seedWorld, type WorldBuilder } from './world';
 import { applyWorldEvent, WORLD_EVENT_NAMES } from './world-events';
 
 export { Dispatch } from './dispatch';
@@ -3301,6 +3302,15 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 			await client.cache.members?.set(CacheFrom.Test, userId, guildId, member);
 		},
 		cacheSet: async (resource, id, guildId, data) => {
+			if (
+				resource === 'roles' &&
+				data &&
+				typeof data === 'object' &&
+				typeof (data as { id?: unknown }).id === 'string'
+			) {
+				await seedCachedRole(asUsingClient(client), guildId, data as ApiRole);
+				return;
+			}
 			await cacheStore(client, resource)?.set?.(CacheFrom.Test, id, guildId, data);
 		},
 		cacheRemove: async (resource, id, guildId) => {
