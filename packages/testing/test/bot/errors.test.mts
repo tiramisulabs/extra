@@ -1,9 +1,19 @@
-import { Command, type CommandContext, Declare, Middlewares } from 'seyfert';
-import { describe, expect, test } from 'vitest';
+import { join } from 'node:path';
+import { Command, type CommandContext, createPlugin, Declare, MessageFlags, Middlewares } from 'seyfert';
+import { describe, expect, test, vi } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
-import { GreetCommand, globalCalls, testMiddlewares } from './_setup';
+import { GreetCommand, globalCalls, seedGuildFixture, testMiddlewares } from './_setup';
 
 const englishLang = { greeting: 'Hello!' };
+const missingVideoMessage = {
+	flags: MessageFlags.IsComponentsV2,
+	components: [
+		{
+			type: 12,
+			items: [{ media: { url: 'attachment://vid7.mp4', content_type: 'video/mp4' } }],
+		},
+	],
+};
 
 declare module 'seyfert' {
 	interface SeyfertRegistry {
@@ -95,6 +105,74 @@ describe('middlewares and error hooks', () => {
 
 		expect(result.content).toBe('default handled');
 		await bot.close();
+	});
+
+	test('onCommandError capture covers plugin-loaded command REST validation failures without fatal noise', async () => {
+		const { world, guild, actor, channel } = seedGuildFixture('plugin-rest-capture');
+		const logs: unknown[][] = [];
+		const logSpy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+			logs.push(args);
+		});
+
+		@Declare({ name: 'plugin-broken-video', description: 'Sends a missing attachment reference through proxy REST' })
+		class PluginBrokenVideo extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.proxy.channels(channel.id).messages.post({ body: missingVideoMessage });
+			}
+		}
+
+		const plugin = createPlugin({
+			name: 'plugin-rest-capture',
+			register(api) {
+				api.commands.add(PluginBrokenVideo);
+			},
+		});
+
+		const bot = await createMockBot({ plugins: [plugin], world, onCommandError: 'capture' });
+		try {
+			const result = await bot.slash({
+				name: 'plugin-broken-video',
+				guildId: guild.id,
+				channel,
+				user: actor.user,
+			});
+			expect(result.error).toBeInstanceOf(Error);
+			expect(bot.created('message')[0]?.error).toBeInstanceOf(Error);
+			expect(logs.flat().some(value => String(value).includes('FATAL'))).toBe(false);
+		} finally {
+			await bot.close();
+			logSpy.mockRestore();
+		}
+	});
+
+	test('onCommandError capture covers commandsDir REST validation failures without fatal noise', async () => {
+		const { world, guild, actor, channel } = seedGuildFixture('dir-rest-capture');
+		const logs: unknown[][] = [];
+		const logSpy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+			logs.push(args);
+		});
+
+		const bot = await createMockBot({
+			commandsDir: join(process.cwd(), 'test/fixtures/e2e-commands'),
+			only: ['rest-capture'],
+			loadModule: path => import(path),
+			world,
+			onCommandError: 'capture',
+		});
+		try {
+			const result = await bot.slash({
+				name: 'dir-broken-video',
+				guildId: guild.id,
+				channel,
+				user: actor.user,
+			});
+			expect(result.error).toBeInstanceOf(Error);
+			expect(bot.created('message')[0]?.error).toBeInstanceOf(Error);
+			expect(logs.flat().some(value => String(value).includes('FATAL'))).toBe(false);
+		} finally {
+			await bot.close();
+			logSpy.mockRestore();
+		}
 	});
 
 	test('close is idempotent and reset clears recorded REST actions for reuse', async () => {

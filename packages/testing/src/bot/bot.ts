@@ -227,12 +227,43 @@ function assertOnlyLoaded(client: Client, classNames: Set<string>, commandsDir: 
 	}
 }
 
+function installRunErrorCaptureDefaults(client: Client, options: MockBotOptions): void {
+	// Capture unhandled run() errors into the active dispatch context. seyfert binds a noisy built-in onRunError
+	// default that only logs and swallows, so without this a command that throws (e.g. a second ctx.write) would
+	// let a happy-path test pass green. Re-apply this after plugin option refreshes too: Seyfert recomposes
+	// client.options during startup, and commands loaded from commandsDir/plugins bind whatever default is current
+	// at load time. A command with its OWN onRunError keeps it (seyfert's `??=` skips our default), so that path
+	// never reaches here. When the AUTHOR supplied a client-level default, delegate and mark it handled (no throw);
+	// otherwise replace seyfert's logger and let the dispatch fail loud / expose result.error under capture.
+	const userClientOptions = options.clientOptions as
+		| Record<string, { defaults?: { onRunError?: (context: unknown, error: unknown) => unknown } } | undefined>
+		| undefined;
+	const install = (scope: 'commands' | 'components' | 'modals'): void => {
+		const authorHandler = userClientOptions?.[scope]?.defaults?.onRunError;
+		const clientOpts = client.options as Record<string, { defaults?: { onRunError?: unknown } } | undefined>;
+		const target = (clientOpts[scope] ??= {});
+		const defaults = (target.defaults ??= {});
+		defaults.onRunError = (context: unknown, error: unknown) => {
+			const ctx = dispatchStore.getStore();
+			if (ctx && ctx.error === undefined) {
+				ctx.error = error;
+				if (authorHandler) ctx.errorHandled = true;
+			}
+			return authorHandler?.(context, error);
+		};
+	};
+	install('commands');
+	install('components');
+	install('modals');
+}
+
 async function runMockClientStartup(client: Client, options: MockBotOptions): Promise<void> {
 	const lifecycle = clientLifecycle(client);
 	const loadFromConfig = options.loadFromConfig === true;
 
 	await lifecycle.setupPlugins();
 	lifecycle.refreshPluginContributions();
+	installRunErrorCaptureDefaults(client, options);
 	await runPluginHooks(client, 'plugins:ready', client);
 	await client.cache.adapter.start();
 
@@ -2959,32 +2990,7 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 				}
 			: clientOptionsBase;
 	const client = options.client ?? new Client(clientOptions);
-	// Capture unhandled run() errors into the active dispatch context. seyfert binds a noisy built-in onRunError
-	// default that only logs and swallows, so without this a command that throws (e.g. a second ctx.write) would
-	// let a happy-path test pass green. Installed before commands/components load so seyfert's `??=` default
-	// binding picks it up. A command with its OWN onRunError keeps it (the `??=` skips our default), so that path
-	// never reaches here. When the AUTHOR supplied a client-level default, we delegate and mark it handled (no
-	// throw); otherwise we replace seyfert's logger and let the dispatch fail loud.
-	const userClientOptions = options.clientOptions as
-		| Record<string, { defaults?: { onRunError?: (context: unknown, error: unknown) => unknown } } | undefined>
-		| undefined;
-	const installRunErrorCapture = (scope: 'commands' | 'components' | 'modals'): void => {
-		const authorHandler = userClientOptions?.[scope]?.defaults?.onRunError;
-		const clientOpts = client.options as Record<string, { defaults?: { onRunError?: unknown } } | undefined>;
-		const target = (clientOpts[scope] ??= {});
-		const defaults = (target.defaults ??= {});
-		defaults.onRunError = (context: unknown, error: unknown) => {
-			const ctx = dispatchStore.getStore();
-			if (ctx && ctx.error === undefined) {
-				ctx.error = error;
-				if (authorHandler) ctx.errorHandled = true;
-			}
-			return authorHandler?.(context, error);
-		};
-	};
-	installRunErrorCapture('commands');
-	installRunErrorCapture('components');
-	installRunErrorCapture('modals');
+	installRunErrorCaptureDefaults(client, options);
 	// Events use a different seam (reportEventFailure, not an options hook). Wrap it to capture a thrown event
 	// handler error into the active dispatch context so emit fails loud too, instead of seyfert swallowing it.
 	const eventsHandler = eventsInternals(client);
