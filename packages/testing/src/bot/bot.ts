@@ -1423,10 +1423,9 @@ export class MockBot {
 	 * The latest reply rendered by ANY dispatch — scanned UNSCOPED across all recorded actions. Unlike a
 	 * `DispatchResult` (scoped to one dispatch) or `Dispatch.lastEmbed` (scoped to that flow), this also sees a
 	 * reply written inside a collector handler: that followup runs after the dispatch's async context is gone, so
-	 * it records under no dispatch and is invisible to the scoped accessors. Implements {@link EmbedSource} /
-	 * {@link ComponentSource}, so `expectEmbed(bot, …)` / `expectComponent(bot, …)` work directly. Last-write-wins:
-	 * it reflects the most recent rendering dispatch, regardless of which produced it — use a flow's own
-	 * `flow.lastEmbed()` to assert a specific dispatch.
+	 * it records under no dispatch and is invisible to the scoped accessors. Last-write-wins: it reflects the most
+	 * recent rendering dispatch, regardless of which produced it — use `rendered(bot)` for a full rendered-output
+	 * reader, or a flow's own `flow.lastEmbed()` to assert a specific dispatch.
 	 */
 	private renderedAcrossDispatches(): { embeds: EmbedView[]; components: InteractiveComponentView[] } {
 		return renderedReply(this.rest.actions);

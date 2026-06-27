@@ -141,7 +141,7 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		return renderedReply(this.rest.actions, this.dispatchId);
 	}
 
-	/** Normalized embeds of this dispatch's latest reply — also makes a parked flow an `expectEmbed(flow)` subject. */
+	/** Normalized embeds of this dispatch's latest reply; `rendered(flow)` reads the same parked-flow output. */
 	lastEmbeds(): EmbedView[] {
 		return this.rendered().embeds;
 	}
@@ -158,7 +158,7 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		return embeds[index];
 	}
 
-	/** Normalized components of this dispatch's latest reply — also makes a parked flow an `expectComponent(flow)` subject. */
+	/** Normalized components of this dispatch's latest reply; `rendered(flow)` reads the same parked-flow output. */
 	lastComponents(): InteractiveComponentView[] {
 		return this.rendered().components;
 	}

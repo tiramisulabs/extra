@@ -1,6 +1,14 @@
-import { Command, type CommandContext, createStringOption, Declare, Options } from 'seyfert';
 import type { LoggerLike, QueueLike, SchedulerLike } from '@slipher/types';
-import { mockCommandContext, mockLogger, mockQueues, mockScheduler } from '../src';
+import { Command, type CommandContext, createStringOption, Declare, Options } from 'seyfert';
+import {
+	type ButtonView,
+	type ContainerView,
+	mockCommandContext,
+	mockLogger,
+	mockQueues,
+	mockScheduler,
+	rendered,
+} from '../src';
 
 declare function expectType<T>(value: T): void;
 
@@ -36,3 +44,16 @@ expectType<string>(inferredContext.options.reason);
 mockCommandContext(BanTypeCommand, { options: { wrongKey: 1 } });
 // @ts-expect-error — a wrong option value type is rejected.
 mockCommandContext(BanTypeCommand, { options: { reason: 123 } });
+
+const reader = rendered({ content: 'x' });
+expectType<ButtonView>(reader.get.button('save'));
+expectType<ButtonView | undefined>(reader.query.button('save'));
+expectType<readonly ButtonView[]>(reader.all.button('save'));
+expectType<ContainerView>(reader.get.component('container', { content: /settings/i }));
+
+// @ts-expect-error — component kinds are closed over the supported reader map.
+reader.get.component('not-real', {});
+// @ts-expect-error — embeds do not have string shorthand; use { title } / { contains }.
+reader.get.embed('Campaign');
+// @ts-expect-error — query object misspellings are rejected for object literals.
+reader.get.button({ customID: 'save' });

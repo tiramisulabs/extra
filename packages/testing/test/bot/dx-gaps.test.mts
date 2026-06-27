@@ -10,7 +10,7 @@ import {
 } from 'seyfert';
 import { ButtonStyle } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
-import { expectComponent, expectEmbed } from '../../src';
+import { rendered } from '../../src';
 import { createMockBot } from '../../src/bot/bot';
 import { mockWorld } from '../../src/bot/world';
 
@@ -281,7 +281,7 @@ describe('more click/flow DX', () => {
 		await bot.close();
 	});
 
-	test('a parked flow exposes what it already rendered (flow.lastEmbed + expectComponent(flow))', async () => {
+	test('a parked flow exposes what it already rendered through rendered(flow)', async () => {
 		const events: string[] = [];
 		@Declare({ name: 'launch', description: 'replies then waits' })
 		class LaunchCommand extends Command {
@@ -306,8 +306,8 @@ describe('more click/flow DX', () => {
 		// assert what the parked (not-yet-settled) flow already rendered:
 		expect(flow.lastEmbed().title).toBe('Launch');
 		expect(flow.lastComponents().map(component => component.customId)).toContain('go');
-		expectComponent(flow, { customId: 'go' });
-		expectEmbed(flow, { title: 'Launch' });
+		rendered(flow).get.button('go');
+		rendered(flow).get.embed({ title: 'Launch' });
 
 		await bot.clickButton('go');
 		await flow;

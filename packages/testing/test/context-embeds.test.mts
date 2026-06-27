@@ -1,7 +1,7 @@
 import { ActionRow, Button, Command, type CommandContext, Declare, Embed } from 'seyfert';
 import { ButtonStyle } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
-import { expectComponent, expectContent, expectEmbed, mockCommandContext, mockComponentContext } from '../src';
+import { mockCommandContext, mockComponentContext, rendered } from '../src';
 import { createMockBot } from '../src/bot/bot';
 
 describe('context path: embed accessors kill the vacuous-pass footgun', () => {
@@ -44,47 +44,47 @@ describe('context path: embed accessors kill the vacuous-pass footgun', () => {
 	});
 });
 
-describe('expectEmbed matcher', () => {
+describe('rendered embed reader', () => {
 	test('matches normalized fields and returns the matched embed', async () => {
 		const ctx = mockCommandContext();
 		await ctx.write({
 			embeds: [new Embed().setTitle('Order #12').setDescription('shipped today').setFooter({ text: 'logistics' })],
 		});
 
-		expect(() => expectEmbed(ctx, { title: /Order/, description: 'shipped' })).not.toThrow();
-		expect(expectEmbed(ctx, { footer: 'logistics' }).title).toBe('Order #12');
-		expect(expectEmbed(ctx).title).toBe('Order #12'); // no criteria = "an embed was sent"
+		expect(() => rendered(ctx).get.embed({ title: /Order/, description: /shipped/ })).not.toThrow();
+		expect(rendered(ctx).get.embed({ footer: 'logistics' }).title).toBe('Order #12');
+		expect(rendered(ctx).get.embed().title).toBe('Order #12');
 	});
 
-	test('contains scans title + description + fields, fieldsInclude matches a field', async () => {
+	test('contains scans title + description + fields, field matches a field', async () => {
 		const ctx = mockCommandContext();
 		await ctx.write({
 			embeds: [{ title: 'Status', fields: [{ name: 'state', value: 'reopened' }] }],
 		});
 
-		expectEmbed(ctx, { contains: /reopened/ });
-		expectEmbed(ctx, { fieldsInclude: [{ name: 'state', value: /reopen/ }] });
+		rendered(ctx).get.embed({ contains: /reopened/ });
+		rendered(ctx).get.embed({ field: { name: 'state', value: /reopen/ } });
 	});
 
-	test('notContains passes when absent, throws when the pattern appears or no embed exists', async () => {
+	test('absence checks stay in the test runner', async () => {
 		const ctx = mockCommandContext();
 		await ctx.write({ embeds: [{ title: 'Status', description: 'available' }] });
 
-		expectEmbed(ctx, { notContains: /currently owned by/ });
-		expect(() => expectEmbed(ctx, { notContains: /available/ })).toThrow(/no embed matched/);
+		expect(rendered(ctx).all.embed({ contains: /currently owned by/ })).toHaveLength(0);
+		expect(rendered(ctx).all.embed({ contains: /available/ })).toHaveLength(1);
 
 		const empty = mockCommandContext();
 		await empty.write({ content: 'no embed' });
-		expect(() => expectEmbed(empty, { notContains: /anything/ })).toThrow(/no embed was sent/);
+		expect(rendered(empty).all.embed({ contains: /anything/ })).toHaveLength(0);
 	});
 
 	test('throws (not vacuous) when no embed was sent or none matches', async () => {
 		const ctx = mockCommandContext();
 		await ctx.write({ content: 'no embed' });
-		expect(() => expectEmbed(ctx)).toThrow(/no embed was sent/);
+		expect(() => rendered(ctx).get.embed()).toThrow(/found 0 embeds/);
 
 		await ctx.write({ embeds: [{ title: 'real' }] });
-		expect(() => expectEmbed(ctx, { title: 'imaginary' })).toThrow(/no embed matched/);
+		expect(() => rendered(ctx).get.embed({ title: 'imaginary' })).toThrow(/found 0 embeds/);
 	});
 
 	test('same matcher works on a bot-path DispatchResult', async () => {
@@ -97,12 +97,12 @@ describe('expectEmbed matcher', () => {
 
 		const bot = await createMockBot({ commands: [CardCommand] });
 		const res = await bot.slash({ name: 'card' });
-		expectEmbed(res, { title: 'Card', description: /body/ });
+		rendered(res).get.embed({ title: 'Card', description: /body/ });
 		await bot.close();
 	});
 });
 
-describe('context path: component accessors + expectComponent', () => {
+describe('context path: component accessors + rendered component reader', () => {
 	test('lastComponents flattens + normalizes builder action rows', async () => {
 		const ctx = mockCommandContext();
 		await ctx.write({
@@ -124,15 +124,16 @@ describe('context path: component accessors + expectComponent', () => {
 		expect(button.type).toBe(2);
 	});
 
-	test('expectComponent matches customId/type/disabled, select options, and throws when none match', async () => {
+	test('rendered component readers match customId/type/disabled, select options, and throw when none match', async () => {
 		const ctx = mockCommandContext();
 		await ctx.write({
 			components: [
 				{ type: 1, components: [{ type: 2, custom_id: 'delete_item_menu', label: 'Delete', disabled: true }] },
 			],
 		});
-		expectComponent(ctx, { customId: 'delete_item_menu', type: 'button', disabled: true });
-		expect(() => expectComponent(ctx, { customId: 'nope' })).toThrow(/no component matched/);
+		const button = rendered(ctx).get.button({ customId: 'delete_item_menu', disabled: true });
+		expect(button.customId).toBe('delete_item_menu');
+		expect(() => rendered(ctx).get.button('nope')).toThrow(/found 0 buttons/);
 
 		const select = mockCommandContext();
 		await select.write({
@@ -140,23 +141,23 @@ describe('context path: component accessors + expectComponent', () => {
 				{ type: 1, components: [{ type: 3, custom_id: 'pick', options: [{ label: 'Display c1', value: 'c1' }] }] },
 			],
 		});
-		expectComponent(select, { type: 'select', options: [{ label: /Display/, value: 'c1' }] });
+		rendered(select).get.select({ type: 'string', option: { label: /Display/, value: 'c1' } });
 	});
 
-	test('expectComponent normalizes raw component payloads passed directly', () => {
+	test('rendered normalizes raw component payloads passed directly', () => {
 		const components = [
 			new ActionRow<Button>()
 				.setComponents([new Button().setCustomId('sample-action').setLabel('Run Action').setStyle(ButtonStyle.Success)])
 				.toJSON(),
 		];
 
-		expectComponent({ components }, { customId: 'sample-action', label: /Run Action/ });
+		expect(rendered({ components }).get.button('sample-action').label).toBe('Run Action');
 	});
 
-	test('expectComponent throws (not vacuous) when no component was sent', async () => {
+	test('rendered throws (not vacuous) when no component was sent', async () => {
 		const ctx = mockCommandContext();
 		await ctx.write({ content: 'no components here' });
-		expect(() => expectComponent(ctx)).toThrow(/no interactive component/);
+		expect(() => rendered(ctx).get.button()).toThrow(/found 0 buttons/);
 	});
 
 	test('same matcher works on a bot-path DispatchResult', async () => {
@@ -175,36 +176,36 @@ describe('context path: component accessors + expectComponent', () => {
 
 		const bot = await createMockBot({ commands: [MenuCommand] });
 		const res = await bot.slash({ name: 'menu' });
-		expectComponent(res, { customId: /sample:link/ });
+		rendered(res).get.button({ customId: /sample:link/ });
 		await bot.close();
 	});
 });
 
-describe('expectContent', () => {
+describe('rendered message content reader', () => {
 	test('matches content (anti-vacuous) on context, bare strings, and DispatchResult', async () => {
 		const ctx = mockCommandContext();
 		await ctx.write({ content: 'reopened record' });
-		expect(expectContent(ctx, /reopened/)).toBe('reopened record');
-		expect(() => expectContent(ctx, 'closed')).toThrow(/no reply text matched/);
+		expect(rendered(ctx).get.message({ content: /reopened/ }).content).toBe('reopened record');
+		expect(() => rendered(ctx).get.message({ content: 'closed' })).toThrow(/found 0 messages/);
 
 		const bare = mockCommandContext();
 		await bare.write('bare string reply');
-		expectContent(bare, /bare/);
+		rendered(bare).get.message({ content: /bare/ });
 
 		const noContent = mockCommandContext();
 		await noContent.write({ embeds: [{ title: 'x' }] });
-		expect(() => expectContent(noContent, /x/)).toThrow(/no reply with text/);
+		expect(() => rendered(noContent).get.message({ content: /x/ })).toThrow(/found 0 messages/);
 	});
 });
 
 describe('assertion gaps (RegExp render, cross-response, TextDisplay)', () => {
-	test('A: expect* error renders the RegExp pattern, not {}', async () => {
+	test('A: rendered error renders the RegExp pattern, not {}', async () => {
 		const ctx = mockCommandContext();
 		await ctx.write({ embeds: [{ title: 'real' }] });
-		expect(() => expectEmbed(ctx, { contains: /needle/ })).toThrow(/\/needle\//);
+		expect(() => rendered(ctx).get.embed({ contains: /needle/ })).toThrow(/\/needle\//);
 	});
 
-	test('B: expectComponent/components() span ALL responses, not just the last', async () => {
+	test('B: rendered spans ALL responses, not just the last', async () => {
 		const ctx = mockCommandContext();
 		await ctx.write({
 			components: [{ type: 1, components: [{ type: 3, custom_id: 'delete_item_menu', options: [] }] }],
@@ -213,22 +214,26 @@ describe('assertion gaps (RegExp render, cross-response, TextDisplay)', () => {
 
 		expect(ctx.lastComponents()).toEqual([]); // last response: nothing
 		expect(ctx.allComponents().map(component => component.customId)).toContain('delete_item_menu');
-		expect(() => expectComponent(ctx, { customId: 'delete_item_menu' })).not.toThrow();
+		expect(() => rendered(ctx).get.select('delete_item_menu')).not.toThrow();
 
 		const e = mockCommandContext();
 		await e.write({ embeds: [{ title: 'First' }] });
 		await e.write({ content: 'plain last' });
 		expect(e.allEmbeds().map(embed => embed.title)).toContain('First');
-		expect(() => expectEmbed(e, { title: 'First' })).not.toThrow();
+		expect(() => rendered(e).get.embed({ title: 'First' })).not.toThrow();
 	});
 
-	test('C: Components-v2 TextDisplay is surfaced via lastTexts()/allTexts() and scanned by expectContent', async () => {
+	test('C: Components-v2 TextDisplay is surfaced via lastTexts()/allTexts() and container-first rendered', async () => {
 		const ctx = mockCommandContext();
 		await ctx.write({ components: [{ type: 17, components: [{ type: 10, content: 'Found 2 records' }] }] });
 
 		expect(ctx.allTexts()).toContain('Found 2 records');
 		expect(ctx.lastTexts()).toContain('Found 2 records');
-		expect(expectContent(ctx, /Found 2 records/)).toBe('Found 2 records');
+		expect(
+			rendered(ctx)
+				.get.container({ content: /Found 2 records/ })
+				.get.content().text,
+		).toBe('Found 2 records');
 	});
 });
 

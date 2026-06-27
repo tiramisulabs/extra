@@ -4,7 +4,7 @@ import { describe, expect, test } from 'vitest';
 
 // Guardrail: `expect(x?.y).not.toContain(z)` passes VACUOUSLY when `x` is undefined (undefined contains nothing),
 // so a typo'd accessor or a refactored lookup silently turns a real assertion into a green no-op. This is the
-// exact footgun the expect* helpers and the lastEmbed/lastComponents throwing accessors exist to remove. Fail at
+// exact footgun the rendered reader and the lastEmbed/lastComponents throwing accessors exist to remove. Fail at
 // author time: guard the accessor (`expect(x).toBeDefined()` first) or assert on a non-optional value.
 
 const TEST_DIR = join(process.cwd(), 'test');

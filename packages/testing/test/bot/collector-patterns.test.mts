@@ -13,7 +13,7 @@ import {
 } from 'seyfert';
 import { ButtonStyle, TextInputStyle } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
-import { expectComponent, expectEmbed } from '../../src';
+import { rendered } from '../../src';
 import { createMockBot } from '../../src/bot/bot';
 import { apiAttachment } from '../../src/bot/payloads';
 import { mockWorld } from '../../src/bot/world';
@@ -232,15 +232,14 @@ describe('collector patterns', () => {
 		const click = bot.clickButton('open');
 		await click.untilComponent('confirm-nested');
 		expect(events).toEqual([]);
-		expectComponent(click, { customId: 'confirm-nested' });
+		rendered(click).get.button('confirm-nested');
 
 		await bot.close();
 	});
 
-	// The bot-level accessors scan all recorded actions (unscoped), so a reply emitted inside a collector handler
-	// is assertable via bot.lastEmbed()/expectEmbed(bot) — no reaching into raw bot.actions, and no need to pick
-	// which dispatch (the flow or the click) captured it (a handler followup can record under neither).
-	test('bot-level lastEmbed/expectEmbed see a reply emitted inside a collector handler', async () => {
+	// The bot-level rendered reader scans all recorded actions (unscoped), so a reply emitted inside a collector
+	// handler is assertable without reaching into raw bot.actions or picking which dispatch captured it.
+	test('bot-level rendered sees a reply emitted inside a collector handler', async () => {
 		@Declare({ name: 'reopen', description: 'Confirm then reopen' })
 		class ReopenCommand extends Command {
 			async run(ctx: CommandContext) {
@@ -259,7 +258,7 @@ describe('collector patterns', () => {
 		await bot.clickButton('confirm');
 
 		expect(bot.lastEmbed().title).toBe('Reopened');
-		expectEmbed(bot, { contains: /reopened/ });
+		rendered(bot).get.embed({ contains: /reopened/ });
 		await bot.close();
 	});
 
