@@ -40,8 +40,9 @@ describe('introspection helpers (DX-2)', () => {
 
 	test('registeredCommands lists commands with name and derived type', async () => {
 		const bot = await createMockBot({ commands: [PingCommand, ProfileMenu] });
+		const found = bot.registeredCommands().flatMap(entry => entry.found);
 
-		expect(bot.registeredCommands()).toEqual(
+		expect(found).toEqual(
 			expect.arrayContaining([
 				{ name: 'ping', type: 'chatInput' },
 				{ name: 'profile', type: 'user' },

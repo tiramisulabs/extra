@@ -1,8 +1,9 @@
 import type { LoggerLike, QueueLike, SchedulerLike } from '@slipher/types';
-import { Command, type CommandContext, createStringOption, Declare, Options } from 'seyfert';
+import { Command, type CommandContext, createStringOption, Declare, Options, SubCommand } from 'seyfert';
 import {
 	type ButtonView,
 	type ContainerView,
+	createMockBot,
 	type DispatchResult,
 	mockCommandContext,
 	mockLogger,
@@ -12,6 +13,8 @@ import {
 	type OutcomeDenial,
 	type OutcomeResponse,
 	outcome,
+	type RegisteredCommand,
+	type RegisteredCommandFound,
 	rendered,
 } from '../src';
 
@@ -50,6 +53,26 @@ mockCommandContext(BanTypeCommand, { options: { wrongKey: 1 } });
 // @ts-expect-error — a wrong option value type is rejected.
 mockCommandContext(BanTypeCommand, { options: { reason: 123 } });
 
+const subOptions = { value: createStringOption({ description: 'value', required: true }) };
+@Declare({ name: 'set', description: 'sets a value' })
+@Options(subOptions)
+class SetTypeSub extends SubCommand {
+	async run(ctx: CommandContext<typeof subOptions>) {
+		expectType<string>(ctx.options.value);
+	}
+}
+
+@Declare({ name: 'config', description: 'configures things' })
+@Options([SetTypeSub])
+class ConfigTypeCommand extends Command {}
+
+createMockBot({ commands: [ConfigTypeCommand, SetTypeSub] });
+
+declare const bot: Awaited<ReturnType<typeof createMockBot>>;
+bot.slash(SetTypeSub, { options: { value: 'x' } });
+// @ts-expect-error — subcommand class dispatch keeps the inferred option value type.
+bot.slash(SetTypeSub, { options: { value: 123 } });
+
 const reader = rendered({ content: 'x' });
 expectType<ButtonView>(reader.get.button('save'));
 expectType<ButtonView | undefined>(reader.query.button('save'));
@@ -71,6 +94,11 @@ expectType<OutcomeResponse | undefined>(state.query.response());
 expectType<readonly OutcomeResponse[]>(state.all.response());
 expectType<OutcomeDenial>(state.get.denial());
 expectType<OutcomeCapturedError>(state.get.error());
+
+declare const registeredCommand: RegisteredCommand;
+expectType<string | undefined>(registeredCommand.path);
+expectType<boolean>(registeredCommand.loaded);
+expectType<readonly RegisteredCommandFound[]>(registeredCommand.found);
 
 const response = state.get.response();
 response.events;

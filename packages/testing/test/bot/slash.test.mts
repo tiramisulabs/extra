@@ -7,6 +7,7 @@ import { apiMember, apiUser } from '../../src/bot/payloads';
 import { mockWorld } from '../../src/bot/world';
 import {
 	ConfigCommand,
+	ConfigSetSub,
 	ConfirmButton,
 	DeniedCommand,
 	deniedBodyRan,
@@ -15,6 +16,7 @@ import {
 	GreetCommand,
 	GuardedCommand,
 	guardCalls,
+	InventoryAddSub,
 	InventoryCommand,
 	SLOW_DENIER_CHANNEL_ID,
 	SlowCommand,
@@ -224,6 +226,34 @@ describe('createMockBot', () => {
 	test('dispatches a grouped subcommand and reports the group leaf', async () => {
 		const bot = await createMockBot({ commands: [InventoryCommand] });
 		const res = await bot.slash({ name: 'inventory', group: 'items', subcommand: 'add' });
+		expect(res.content).toBe('added');
+		expect(res.command).toEqual({ name: 'inventory', group: 'items', subcommand: 'add' });
+		await bot.close();
+	});
+
+	test('dispatches a subcommand by class through its registered parent', async () => {
+		const bot = await createMockBot({ commands: [ConfigCommand] });
+		const res = await bot.slash(ConfigSetSub);
+		expect(res.content).toBe('set');
+		expect(res.command).toEqual({ name: 'config', subcommand: 'set' });
+		await bot.close();
+	});
+
+	test('accepts a directly-listed subcommand when its parent is also loaded', async () => {
+		const bot = await createMockBot({ commands: [ConfigCommand, ConfigSetSub] });
+		const res = await bot.slash(ConfigSetSub);
+		expect(res.content).toBe('set');
+		expect(res.command).toEqual({ name: 'config', subcommand: 'set' });
+		await bot.close();
+	});
+
+	test('rejects a directly-listed subcommand when its parent is not loaded', async () => {
+		await expect(createMockBot({ commands: [ConfigSetSub] })).rejects.toThrow(/parent command/);
+	});
+
+	test('dispatches a grouped subcommand by class through its registered parent', async () => {
+		const bot = await createMockBot({ commands: [InventoryCommand] });
+		const res = await bot.slash(InventoryAddSub);
 		expect(res.content).toBe('added');
 		expect(res.command).toEqual({ name: 'inventory', group: 'items', subcommand: 'add' });
 		await bot.close();

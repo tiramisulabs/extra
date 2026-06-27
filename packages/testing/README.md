@@ -180,6 +180,20 @@ Use `bot.slash(GreetCommand, { options })` when you want option inference from
 the command class. Use `bot.slash({ name, ... })` for concise raw by-name
 payload dispatch.
 
+Subcommands can use the same class-first form once their parent command is
+registered or loaded. The mock resolves the parent from Seyfert's loaded command
+registry, including `@AutoLoad` command trees:
+
+```ts
+await using bot = await createMockBot({ commands: [ConfigCommand] });
+const result = await bot.slash(ConfigSetSub, { options: { key: 'prefix' } });
+
+expect(result.command).toEqual({ name: 'config', subcommand: 'set' });
+```
+
+For ambiguous subcommand names, use the explicit payload form:
+`bot.slash({ name: 'config', group: 'admin', subcommand: 'set' })`.
+
 The raw interaction response stays available as `result.reply?.body` (`{ type, data }`)
 for the rare assertion where the Discord wire shape itself is the contract. Prefer
 `result.content`, `result.deferred`, and `result.edits` for normal behavior checks.
@@ -200,7 +214,7 @@ wire-shape assertions.
 - `onUnhandledRest` - throw by default, or warn/stay silent for explicitly allowed fallback reads
 - `plugins` - Seyfert plugins loaded through the mock client lifecycle
 - `clientOptions` - forwarded to the Seyfert `Client` constructor, excluding plugin loading
-- `loadFromConfig`, `commandsDir`, `componentsDir`, `eventsDir`, `langsDir` - load the real bot through Seyfert's loaders
+- `loadFromConfig`, `commandsDir`, `componentsDir`, `eventsDir`, `langsDir` - load the real bot through Seyfert's loaders; command dirs are imported on first dispatch by default
 - `shards`, `shardLatency` - shape the in-process `MockGateway`
 - `botId`, `applicationId`
 - `prefixes`, `mentionAsPrefix` - enable prefix/message-command dispatch with `say()`
@@ -243,6 +257,25 @@ await using bot = await createMockBot({
 	commandsDir: join(process.cwd(), 'dist/commands'),
 });
 ```
+
+`commandsDir` keeps startup light: the mock catalogs command file paths first,
+then imports the matching group on `slash()`, `autocomplete()`, `userMenu()`, or
+`messageMenu()`. Dispatch by class still works:
+
+```ts
+await using bot = await createMockBot({
+	commandsDir: join(process.cwd(), 'src/commands'),
+	loadModule: path => import(path),
+});
+
+await bot.slash(PingCommand);
+await bot.slash(ConfigSetSub, { options: { key: 'prefix' } });
+```
+
+Use `bot.registeredCommands()` to inspect the current catalog. Each entry has a
+`path`, `loaded`, and `found` array, so before dispatch you can see discovered
+files and after dispatch you can see which command or subcommand materialized
+from that path.
 
 ### Execution model
 
@@ -793,8 +826,9 @@ in tests.
 
 - Use one fresh bot per test by default. Boot is in-process and cheap, and state
   isolation comes free.
-- Hand-pick classes for focused specs (`commands: [BanCommand]`). Reserve
-  `loadFromConfig: true` for broad smoke specs such as "every command registers".
+- Hand-pick classes for focused specs (`commands: [BanCommand]`). Use
+  `loadFromConfig: true` or `commandsDir` for broad smoke specs, then inspect
+  `registeredCommands()` or dispatch the command groups the spec cares about.
 - Share fixtures as functions. `createMockBot` deep-clones the world, but
   module-level state in your command files still persists within a worker.
 - Prefer `await using bot = ...`; use `afterEach(() => bot.close())` only when
@@ -804,8 +838,8 @@ in tests.
 ### Troubleshooting
 
 - **"command X is not registered"** - check `@Declare({ name })`, the dispatch
-  name, and whether the class reached `commands` or compiled `loadFromConfig`
-  output.
+  name, and `registeredCommands()` to see whether the file path was discovered
+  and whether a command was found after import.
 - **My collector never fires** - send a real message first, click as the same
   user, and avoid passing a stale `source`.
 - **My modal flow hangs** - `waitFor` uses real timers; the usual cause is a

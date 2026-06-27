@@ -154,7 +154,6 @@ describe('middlewares and error hooks', () => {
 
 		const bot = await createMockBot({
 			commandsDir: join(process.cwd(), 'test/fixtures/e2e-commands'),
-			only: ['rest-capture'],
 			loadModule: path => import(path),
 			world,
 			onCommandError: 'capture',

@@ -1,4 +1,5 @@
-import { basename } from 'node:path';
+import { readdir } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import {
 	Client,
 	type Command,
@@ -8,7 +9,7 @@ import {
 	type EntryPointCommand,
 	ModalCommand,
 	type OptionsRecord,
-	type SubCommand,
+	SubCommand,
 } from 'seyfert';
 import { CacheFrom } from 'seyfert/lib/cache';
 import {
@@ -134,8 +135,102 @@ type MockClientOptions = Omit<ClientOptions, 'plugins'>;
 type ServicesOptions = Parameters<Client['setServices']>[0];
 
 interface FileLoadingHandler {
+	filter?: (path: string) => boolean;
+	getFiles?: (dir: string) => Promise<string[]>;
 	loadFiles?: (paths: string[]) => Promise<unknown[]>;
 	loadFilesK?: (paths: string[]) => Promise<unknown[]>;
+}
+
+interface CommandPathState {
+	path: string;
+	loaded: boolean;
+}
+
+class CommandPathCatalog {
+	private readonly byPath = new Map<string, CommandPathState>();
+
+	constructor(
+		private readonly rootDir: string,
+		paths: readonly string[],
+	) {
+		for (const path of paths) this.add(path);
+	}
+
+	add(path: string): CommandPathState {
+		let entry = this.byPath.get(path);
+		if (!entry) {
+			entry = { path, loaded: false };
+			this.byPath.set(path, entry);
+		}
+		return entry;
+	}
+
+	markLoaded(path: string): void {
+		this.add(path).loaded = true;
+	}
+
+	entries(): CommandPathState[] {
+		return [...this.byPath.values()].sort((a, b) => a.path.localeCompare(b.path));
+	}
+
+	allPaths(): string[] {
+		return this.entries().map(entry => entry.path);
+	}
+
+	pathsForCommandName(name: string, includeRootSiblings = false): string[] {
+		const paths = this.allPaths();
+		const selected = new Set<string>();
+		for (const path of paths) {
+			const segments = path.split(/[/\\]/);
+			const base = (segments.at(-1) ?? '').replace(/\.[cm]?[jt]s$/, '');
+			if (!segments.includes(name) && base !== name) continue;
+			selected.add(path);
+			const dir = dirname(path);
+			if (dir === this.rootDir && !includeRootSiblings) continue;
+			for (const sibling of paths) {
+				if (dirname(sibling) === dir) selected.add(sibling);
+			}
+		}
+		return [...selected];
+	}
+}
+
+function isCommandFile(path: string): boolean {
+	return path.endsWith('.js') || (!path.endsWith('.d.ts') && path.endsWith('.ts'));
+}
+
+function pathIsInsideDir(path: string, dir: string): boolean {
+	const rel = relative(dir, path);
+	return rel.length > 0 && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+async function discoverCommandPaths(dir: string): Promise<string[]> {
+	const paths: string[] = [];
+	for (const entry of await readdir(dir, { withFileTypes: true })) {
+		const path = join(dir, entry.name);
+		if (entry.isDirectory()) {
+			paths.push(...(await discoverCommandPaths(path)));
+			continue;
+		}
+		if (isCommandFile(path)) paths.push(path);
+	}
+	return paths.sort((a, b) => a.localeCompare(b));
+}
+
+async function resolveCommandsDir(client: Client, options: MockBotOptions): Promise<string | undefined> {
+	if (options.commandsDir !== undefined) return options.commandsDir;
+	if (options.loadFromConfig !== true) return undefined;
+	const config = (await client.getRC()) as { locations?: { commands?: string } };
+	return config.locations?.commands;
+}
+
+async function createCommandPathCatalog(
+	client: Client,
+	options: MockBotOptions,
+): Promise<CommandPathCatalog | undefined> {
+	if (options.commandsDir === undefined && options.loadFromConfig !== true) return undefined;
+	const dir = await resolveCommandsDir(client, options);
+	return dir ? new CommandPathCatalog(dir, await discoverCommandPaths(dir)) : undefined;
 }
 
 /**
@@ -176,55 +271,33 @@ function installModuleLoader(client: Client, loadModule: (path: string) => Promi
 	}
 }
 
-/**
- * Restrict directory loading to the named command groups, reading each class's `@Declare` name and installing
- * seyfert's per-file `filter` hook (consumed by getFiles BEFORE any import), so only files under a directory or
- * flat file matching one of those names are transformed. Returns the requested names for post-load validation.
- */
-function installCommandFilter(client: Client, only: readonly (MockCommandClass | string)[]): Set<string> {
-	const tokens = new Set<string>(); // dir/file names to keep (class @Declare names + literal strings)
-	const classNames = new Set<string>(); // only these are name-validated post-load
-	for (const entry of only) {
-		if (typeof entry === 'string') {
-			tokens.add(entry);
-			continue;
-		}
-		const name = (new entry() as { name?: unknown }).name;
-		if (typeof name === 'string' && name.length > 0) {
-			tokens.add(name);
-			classNames.add(name);
-		}
-	}
-	(client.commands as unknown as { filter: (path: string) => boolean }).filter = path => {
-		const segments = path.split(/[/\\]/);
-		const base = (segments.at(-1) ?? '').replace(/\.[cm]?[jt]s$/, '');
-		return segments.some(segment => tokens.has(segment)) || tokens.has(base);
+function installCommandPathTracker(client: Client, catalog: CommandPathCatalog): void {
+	const handler = client.commands as unknown as FileLoadingHandler;
+	if (typeof handler.loadFilesK !== 'function') return;
+	const loadFilesK = handler.loadFilesK.bind(handler);
+	handler.loadFilesK = async paths => {
+		const files = await loadFilesK(paths);
+		for (const path of paths) catalog.markLoaded(path);
+		return files;
 	};
-	return classNames;
 }
 
-function assertOnlyLoaded(client: Client, classNames: Set<string>, commandsDir: string | undefined): void {
-	const registered = new Set<string>();
-	for (const command of client.commands.values as unknown as { name?: unknown }[]) {
-		if (typeof command.name === 'string') registered.add(command.name);
+function splitCommandClasses(commands: readonly MockCommandClass[]): {
+	topLevel: MockTopLevelCommandClass[];
+	subcommands: MockSubCommandClass[];
+} {
+	const topLevel: MockTopLevelCommandClass[] = [];
+	const subcommands: MockSubCommandClass[] = [];
+	for (const command of commands) {
+		const instance = new command();
+		if (instance instanceof SubCommand) subcommands.push(command as MockSubCommandClass);
+		else topLevel.push(command as MockTopLevelCommandClass);
 	}
-	const where = commandsDir ?? '(commandsDir)';
-	if (registered.size === 0) {
-		throw new TypeError(
-			`createMockBot: only:[...] matched no command files under ${where}. A class entry filters by its @Declare ` +
-				"name; if the folder name differs (e.g. a `mass/` folder with @Declare name 'mass-dm'), pass the folder " +
-				"name as a string: only: ['mass'].",
-		);
-	}
-	for (const name of classNames) {
-		if (!registered.has(name)) {
-			throw new TypeError(
-				`createMockBot: only:[...] requested "${name}", but no command with that name loaded from ${where}. ` +
-					`Loaded: ${[...registered].join(', ')}. A class entry matches its @Declare name against the directory ` +
-					'name — if they differ, pass the directory name as a string instead.',
-			);
-		}
-	}
+	return { topLevel, subcommands };
+}
+
+function shouldDeferCommandLoading(options: MockBotOptions): boolean {
+	return options.loadFromConfig === true || options.commandsDir !== undefined;
 }
 
 function installRunErrorCaptureDefaults(client: Client, options: MockBotOptions): void {
@@ -257,7 +330,11 @@ function installRunErrorCaptureDefaults(client: Client, options: MockBotOptions)
 	install('modals');
 }
 
-async function runMockClientStartup(client: Client, options: MockBotOptions): Promise<void> {
+async function runMockClientStartup(
+	client: Client,
+	options: MockBotOptions,
+	commandCatalog?: CommandPathCatalog,
+): Promise<void> {
 	const lifecycle = clientLifecycle(client);
 	const loadFromConfig = options.loadFromConfig === true;
 
@@ -268,26 +345,14 @@ async function runMockClientStartup(client: Client, options: MockBotOptions): Pr
 	await client.cache.adapter.start();
 
 	if (options.loadModule) installModuleLoader(client, options.loadModule);
-
-	const lazyCommands = options.lazy === true;
-	if (lazyCommands && options.only?.length) {
-		throw new TypeError(
-			'createMockBot: `lazy` and `only` both narrow command loading — use one. `lazy` loads each command on first dispatch; `only` loads a fixed set up front.',
-		);
-	}
-	if (lazyCommands && !loadFromConfig && !options.commandsDir) {
-		throw new TypeError(
-			'createMockBot: `lazy` needs a `commandsDir` (or `loadFromConfig`) to load commands from on dispatch.',
-		);
-	}
-	const onlyNames = options.only?.length ? installCommandFilter(client, options.only) : undefined;
+	if (commandCatalog) installCommandPathTracker(client, commandCatalog);
+	const deferCommandLoading = shouldDeferCommandLoading(options);
 
 	if (loadFromConfig || options.langsDir) await client.loadLangs(options.langsDir);
 	if (options.defaultLang) client.langs.defaultLang = options.defaultLang;
 
 	await runPluginHooks(client, 'commands:beforeLoad', client, options.commandsDir);
-	if (!lazyCommands && (loadFromConfig || options.commandsDir)) await client.loadCommands(options.commandsDir);
-	if (onlyNames) assertOnlyLoaded(client, onlyNames, options.commandsDir);
+	if (!deferCommandLoading && (loadFromConfig || options.commandsDir)) await client.loadCommands(options.commandsDir);
 	await lifecycle.reloadPluginCommands();
 
 	if (loadFromConfig || options.componentsDir) await client.loadComponents(options.componentsDir);
@@ -495,10 +560,26 @@ export interface EmitEventOptions {
 	allowNoHandler?: boolean;
 }
 
-/** Read-only descriptor of a registered application command, surfaced by {@link MockBot.registeredCommands}. */
-export interface RegisteredCommand {
+export interface RegisteredCommandFound {
 	name: string;
-	type: 'chatInput' | 'user' | 'message' | 'entryPoint';
+	type: 'chatInput' | 'user' | 'message' | 'entryPoint' | 'subcommand';
+	/** Parent chat-input command for `type: 'subcommand'`. */
+	parentName?: string;
+	/** Subcommand group for `type: 'subcommand'`, when the parent groups it. */
+	group?: string;
+}
+
+/**
+ * Read-only command catalog entry, surfaced by {@link MockBot.registeredCommands}. For `commandsDir`/
+ * `loadFromConfig` this includes every discovered command file path, even before lazy loading imports it.
+ */
+export interface RegisteredCommand {
+	/** Command file path, when the command came from a directory loader. Direct/plugin commands may not have one. */
+	path?: string;
+	/** True once that file path has been imported by Seyfert's command loader. */
+	loaded: boolean;
+	/** Commands/subcommands materialized from this path. Empty means the path has not loaded or exported no command. */
+	found: readonly RegisteredCommandFound[];
 }
 
 /** Read-only descriptor of a registered component/modal handler, surfaced by {@link MockBot.registeredComponents}. */
@@ -637,7 +718,11 @@ export const DISPATCHER_VERBS = [
 	'entryPoint',
 ] as const satisfies readonly (keyof MockBot)[];
 
-export type MockCommandClass = new () => Command | ContextMenuCommand | EntryPointCommand;
+export type MockTopLevelCommandClass = new () => Command | ContextMenuCommand | EntryPointCommand;
+
+export type MockSubCommandClass = new () => SubCommand;
+
+export type MockCommandClass = MockTopLevelCommandClass | MockSubCommandClass;
 
 export type MenuCommandClass = new () => ContextMenuCommand;
 
@@ -739,7 +824,10 @@ export type MockEvent = Omit<ClientEvent, 'data'> & {
 
 /** Options used to boot an in-process Seyfert client without network transport. */
 export interface MockBotOptions {
-	/** Command class(es) to register directly — a single class or an array. */
+	/**
+	 * Command class(es) to register directly — a single class or an array. `SubCommand` classes are accepted as
+	 * class-first dispatch handles, but their parent command must also be registered or loaded from a command dir.
+	 */
 	commands?: MockCommandClass | MockCommandClass[];
 	/** Component and modal command classes to register directly. */
 	components?: Parameters<Client['components']['set']>[0];
@@ -797,35 +885,11 @@ export interface MockBotOptions {
 	 * Load the real bot from its seyfert.config locations before plugin setup.
 	 */
 	loadFromConfig?: boolean;
-	/** Explicit commands directory; overrides config-resolved command locations. */
+	/**
+	 * Explicit commands directory; overrides config-resolved command locations. Command files are cataloged at boot
+	 * and imported on first dispatch by default.
+	 */
 	commandsDir?: string;
-	/**
-	 * Load only the named command groups from `commandsDir`, instead of transforming the whole tree (which is
-	 * slow for a large bot). Pass the imported parent command class(es) — type-safe, autocomplete, rename-proof —
-	 * and/or a directory-name string for the case where the folder name differs from the `@Declare` name (e.g.
-	 * a `mass/` folder whose command is `@Declare({ name: 'mass-dm' })` → `only: ['mass']`). The filter runs before
-	 * any file is imported, keeping files under a directory (or a flat file) whose name matches a class's `@Declare`
-	 * name or a given string; @AutoLoad subtrees of a kept group survive. Throws if a requested class loads no
-	 * command, or if nothing loads at all (e.g. a mistyped directory string).
-	 */
-	only?: (MockCommandClass | string)[];
-	/**
-	 * Defer command transformation: instead of loading the whole `commandsDir` at startup (slow for a large bot),
-	 * load a command's group the first time you dispatch it — anchored to the `name` you pass to {@link MockBot.slash}
-	 * (or `userMenu`/`messageMenu`/`autocomplete`). Point `commandsDir` at your real command root, pass nothing else;
-	 * only what you dispatch is transformed.
-	 *
-	 * Resolution is two-tier: path-first (a folder/file whose name equals the command `name` — no import for the
-	 * rest), then a fallback full scan when the folder name differs from the `@Declare` name (e.g. a `mass/` folder
-	 * whose command is `mass-dm`). The fallback imports the remaining tree once, then caches it. Each dispatch's load
-	 * is serialized, and previously-loaded groups accumulate.
-	 *
-	 * Covers command-resolving dispatches (slash/menu/autocomplete) loaded from `commandsDir`. Component/modal
-	 * handlers (ComponentCommand/ModalCommand) resolve from `client.components` and still load eagerly — pass them via
-	 * `components`/`componentsDir`. Mutually exclusive with {@link only} (both narrow loading); requires a
-	 * `commandsDir` or `loadFromConfig`.
-	 */
-	lazy?: boolean;
 	/**
 	 * How command/component/event files are imported when loading from a directory (`commandsDir`, etc.).
 	 *
@@ -928,10 +992,26 @@ function assertRealSetImmediate(): void {
 	);
 }
 
+interface SubcommandClassRoute {
+	commandClass: Function;
+	parentName: string;
+	group?: string;
+	subcommand: string;
+}
+
+type CommandRuntime = (Command | ContextMenuCommand | EntryPointCommand) & {
+	__filePath?: string;
+	__autoload?: true;
+	name: string;
+	type: number;
+	options?: unknown[];
+};
+
 export class MockBot {
 	readonly defaultUser: ApiUser = apiUser({ id: TEST_USER_ID, username: 'slipher-tester' });
 	private readonly unregisteredMemberWarnings = new Set<string>();
 	private readonly dispatches: Dispatch<unknown>[] = [];
+	private subcommandRoutes: SubcommandClassRoute[] = [];
 	/** Pending modal waiters keyed by userId; resolved when seyfert registers a modal via components.modals.set. */
 	private readonly modalWaiters = new Map<string, ModalWaiter[]>();
 	/** The dispatch that owns the currently registered waitFor modal for a user. */
@@ -940,9 +1020,9 @@ export class MockBot {
 	private readonly displayedModals = new Map<string, { customId?: string; inputIds: Set<string> }>();
 	private virtualNowMs = Date.now();
 	private closed = false;
-	/** Set once the fallback full scan has run, so no further lazy load is attempted (see {@link MockBotOptions.lazy}). */
+	/** Set once the fallback full scan has run, so no further on-demand command load is attempted. */
 	private loadedAllCommands = false;
-	/** Serializes lazy loads so concurrent dispatches don't clobber the handler's per-file filter. */
+	/** Serializes on-demand loads so concurrent dispatches don't clobber the handler's per-file filter. */
 	private lazyLoadLock: Promise<void> = Promise.resolve();
 	/** The most recent interaction-original message, used to resolve a collector source for an immediate reply. */
 	private lastInteractionMessage?: { id: string; channel_id?: string };
@@ -963,9 +1043,12 @@ export class MockBot {
 		private readonly validateOptions = true,
 		private readonly timers?: { advance(ms: number): void | Promise<void> },
 		private readonly onCommandError: 'throw' | 'capture' = 'throw',
-		/** When set, commands load on first dispatch from this dir (undefined dir → seyfert config). See {@link MockBotOptions.lazy}. */
+		/** When set, commands load on first dispatch from this dir (undefined dir → seyfert config). */
 		private readonly lazyCommands?: { commandsDir?: string },
-	) {}
+		private readonly commandCatalog?: CommandPathCatalog,
+	) {
+		this.refreshSubcommandRoutes();
+	}
 
 	/**
 	 * Read-only view of the simulated world for assertions — the full entity-query surface behind the
@@ -979,6 +1062,73 @@ export class MockBot {
 
 	private assertOpen(verb: string): void {
 		if (this.closed) throw new Error(`${verb}: MockBot is closed.`);
+	}
+
+	private refreshSubcommandRoutes(): void {
+		const routes: SubcommandClassRoute[] = [];
+		for (const parent of this.client.commands.values as unknown as {
+			name?: unknown;
+			type?: unknown;
+			options?: unknown;
+		}[]) {
+			if (parent.type !== ApplicationCommandType.ChatInput || typeof parent.name !== 'string') continue;
+			if (!Array.isArray(parent.options)) continue;
+			for (const option of parent.options) {
+				if (!(option instanceof SubCommand)) continue;
+				routes.push({
+					commandClass: option.constructor,
+					parentName: parent.name,
+					...(option.group ? { group: option.group } : {}),
+					subcommand: option.name,
+				});
+			}
+		}
+		this.subcommandRoutes = routes;
+	}
+
+	private subcommandRouteLabel(route: SubcommandClassRoute): string {
+		return `${route.parentName}${route.group ? ` ${route.group}` : ''} ${route.subcommand}`;
+	}
+
+	private matchingSubcommandRoutes(command: MockSubCommandClass, instance: SubCommand): SubcommandClassRoute[] {
+		const exact = this.subcommandRoutes.filter(route => route.commandClass === command);
+		if (exact.length) return exact;
+		return this.subcommandRoutes.filter(route => route.subcommand === instance.name && route.group === instance.group);
+	}
+
+	private subcommandRouteFor(
+		command: MockSubCommandClass,
+		instance: SubCommand,
+		verb: string,
+	): SubcommandClassRoute | undefined {
+		const matches = this.matchingSubcommandRoutes(command, instance);
+		if (matches.length <= 1) return matches[0];
+		throw new TypeError(
+			`${verb}: subcommand "${instance.name}" is ambiguous; it is registered under ${matches
+				.map(route => `"${this.subcommandRouteLabel(route)}"`)
+				.join(', ')}. Use bot.slash({ name, group, subcommand }) to choose the parent command.`,
+		);
+	}
+
+	private requireSubcommandRoute(
+		command: MockSubCommandClass,
+		instance: SubCommand,
+		verb: string,
+	): SubcommandClassRoute {
+		const route = this.subcommandRouteFor(command, instance, verb);
+		if (route) return route;
+		throw new TypeError(
+			`${verb}: subcommand "${instance.name}" is not registered under any loaded parent command. ` +
+				'Pass the parent command to createMockBot({ commands: [ParentCommand] }), load it through commandsDir/loadFromConfig, ' +
+				'or dispatch explicitly with bot.slash({ name, group, subcommand }).',
+		);
+	}
+
+	/** @internal createMockBot uses this after all eager command sources have loaded. */
+	validateSubcommandClasses(commands: readonly MockSubCommandClass[]): void {
+		for (const command of commands) {
+			this.requireSubcommandRoute(command, new command(), 'createMockBot({ commands })');
+		}
 	}
 
 	private track<T>(dispatch: Dispatch<T>): Dispatch<T> {
@@ -1491,11 +1641,11 @@ export class MockBot {
 	}
 
 	/**
-	 * Read-only list of the application commands registered on the client. Pure read of
-	 * `client.commands.values`; no mutation or side effects.
+	 * Read-only command catalog. For directory-loaded commands this includes discovered paths before lazy import,
+	 * then fills `found` once Seyfert materializes the command or subcommand from that path. Pure read; no imports.
 	 */
 	registeredCommands(): readonly RegisteredCommand[] {
-		const typeName = (type: ApplicationCommandType): RegisteredCommand['type'] => {
+		const typeName = (type: ApplicationCommandType): RegisteredCommandFound['type'] => {
 			switch (type) {
 				case ApplicationCommandType.User:
 					return 'user';
@@ -1507,10 +1657,55 @@ export class MockBot {
 					return 'chatInput';
 			}
 		};
-		return this.client.commands.values.map(command => ({
-			name: command.name,
-			type: typeName(command.type as ApplicationCommandType),
-		}));
+		const foundByPath = new Map<string, RegisteredCommandFound[]>();
+		const runtimeEntries: RegisteredCommand[] = [];
+		const push = (path: string | undefined, found: RegisteredCommandFound): void => {
+			if (!path) {
+				runtimeEntries.push({ loaded: true, found: [found] });
+				return;
+			}
+			const entry = foundByPath.get(path);
+			if (entry) entry.push(found);
+			else foundByPath.set(path, [found]);
+		};
+		const commands = [...(this.client.commands.values as unknown as CommandRuntime[])];
+		const entryPoint = (this.client.commands as unknown as { entryPoint?: CommandRuntime | null }).entryPoint;
+		if (entryPoint) commands.push(entryPoint);
+		for (const command of commands) {
+			const path = command.__filePath;
+			push(path, {
+				name: command.name,
+				type: typeName(command.type as ApplicationCommandType),
+			});
+			if (command.type !== ApplicationCommandType.ChatInput || !Array.isArray(command.options)) continue;
+			for (const option of command.options) {
+				if (!(option instanceof SubCommand)) continue;
+				const subcommand = option as SubCommand & { __filePath?: string };
+				push(subcommand.__filePath ?? path, {
+					name: subcommand.name,
+					type: 'subcommand',
+					parentName: command.name,
+					...(subcommand.group ? { group: subcommand.group } : {}),
+				});
+			}
+		}
+
+		const rows: RegisteredCommand[] = [];
+		const seenPaths = new Set<string>();
+		for (const entry of this.commandCatalog?.entries() ?? []) {
+			seenPaths.add(entry.path);
+			rows.push({
+				path: entry.path,
+				loaded: entry.loaded || foundByPath.has(entry.path),
+				found: foundByPath.get(entry.path) ?? [],
+			});
+		}
+		for (const [path, found] of foundByPath) {
+			if (seenPaths.has(path)) continue;
+			rows.push({ path, loaded: true, found });
+		}
+		rows.push(...runtimeEntries);
+		return rows;
 	}
 
 	/**
@@ -1893,6 +2088,34 @@ export class MockBot {
 		return this.loadedAllCommands || this.client.commands.values.some(command => command.name === name);
 	}
 
+	private chatInputCommand(name: string): CommandRuntime | undefined {
+		return this.client.commands.values.find(
+			command => command.type === ApplicationCommandType.ChatInput && command.name === name,
+		) as CommandRuntime | undefined;
+	}
+
+	private chatInputSubcommandIsLoaded(
+		options: Pick<ChatInputInteractionOptions, 'name' | 'group' | 'subcommand'>,
+	): boolean {
+		if (!options.subcommand) return true;
+		const command = this.chatInputCommand(options.name);
+		if (!Array.isArray(command?.options)) return false;
+		return command.options.some(
+			option =>
+				option instanceof SubCommand &&
+				option.name === options.subcommand &&
+				(options.group ? option.group === options.group : !option.group),
+		);
+	}
+
+	private async ensureChatInputCommandLoaded(
+		options: Pick<ChatInputInteractionOptions, 'name' | 'group' | 'subcommand'>,
+	): Promise<void> {
+		await this.ensureCommandLoaded(options.name, options.subcommand !== undefined);
+		if (this.chatInputSubcommandIsLoaded(options)) return;
+		if (!this.loadedAllCommands) await this.ensureAllCommandsLoaded();
+	}
+
 	/**
 	 * Lazily load the command group that answers to `name`, serialized against other in-flight loads. Path-first:
 	 * narrow the loader to files/dirs named `name` and reload — cheap, transforms only that group when the folder
@@ -1900,14 +2123,14 @@ export class MockBot {
 	 * once. Each load reuses seyfert's `loadCommands` (which resets the handler's values) and merges the result back
 	 * onto the previously-loaded set, so groups accumulate across dispatches.
 	 */
-	private ensureCommandLoaded(name: string): Promise<void> {
+	private ensureCommandLoaded(name: string, includeRootSiblings = false): Promise<void> {
 		if (!this.lazyEnabled || this.commandIsLoaded(name)) return Promise.resolve();
 		const next = this.lazyLoadLock.then(async () => {
 			if (this.commandIsLoaded(name)) return;
-			await this.lazyLoad(this.commandPathFilter(name));
+			await this.lazyLoad(this.commandPathsFor(name, includeRootSiblings));
 			if (this.client.commands.values.some(command => command.name === name)) return;
 			if (this.loadedAllCommands) return;
-			await this.lazyLoad(() => true);
+			await this.lazyLoad();
 			this.loadedAllCommands = true;
 		});
 		this.lazyLoadLock = next.then(
@@ -1917,8 +2140,26 @@ export class MockBot {
 		return next;
 	}
 
-	/** A per-file filter (seyfert reads it in getFiles before importing) matching a dir/file segment equal to `name`. */
-	private commandPathFilter(name: string): (path: string) => boolean {
+	private ensureAllCommandsLoaded(): Promise<void> {
+		if (!this.lazyEnabled || this.loadedAllCommands) return Promise.resolve();
+		const next = this.lazyLoadLock.then(async () => {
+			if (this.loadedAllCommands) return;
+			await this.lazyLoad();
+			this.loadedAllCommands = true;
+		});
+		this.lazyLoadLock = next.then(
+			() => {},
+			() => {},
+		);
+		return next;
+	}
+
+	/**
+	 * Candidate command files for a dispatch name. The path catalog expands non-root matches to their sibling files so
+	 * Seyfert's @AutoLoad sees the parent and children in the same CommandHandler.load() batch.
+	 */
+	private commandPathsFor(name: string, includeRootSiblings = false): readonly string[] | ((path: string) => boolean) {
+		if (this.commandCatalog) return this.commandCatalog.pathsForCommandName(name, includeRootSiblings);
 		return path => {
 			const segments = path.split(/[/\\]/);
 			const base = (segments.at(-1) ?? '').replace(/\.[cm]?[jt]s$/, '');
@@ -1926,19 +2167,36 @@ export class MockBot {
 		};
 	}
 
-	/** Reload commands through `filter`, merging the freshly-loaded set onto what was already loaded (by type+name). */
-	private async lazyLoad(filter: (path: string) => boolean): Promise<void> {
-		const handler = this.client.commands as unknown as {
+	/** Reload commands through selected paths/filter, merging the freshly-loaded set onto what was already loaded. */
+	private async lazyLoad(pathsOrFilter?: readonly string[] | ((path: string) => boolean)): Promise<void> {
+		const handler = this.client.commands as unknown as FileLoadingHandler & {
 			filter: (path: string) => boolean;
 			values: { name: string; type: number }[];
 		};
-		handler.filter = filter;
+		const previousFilter = handler.filter;
+		const previousGetFiles = handler.getFiles;
+		if (typeof pathsOrFilter === 'function') {
+			handler.filter = pathsOrFilter;
+		} else if (pathsOrFilter || this.commandCatalog) {
+			const paths = pathsOrFilter ?? this.commandCatalog?.allPaths() ?? [];
+			handler.filter = () => true;
+			handler.getFiles = async dir => paths.filter(path => pathIsInsideDir(path, dir));
+		} else {
+			handler.filter = () => true;
+		}
 		const previous = [...handler.values];
-		await this.client.loadCommands(this.lazyCommands?.commandsDir);
-		const merged = new Map<string, { name: string; type: number }>();
-		for (const command of previous) merged.set(`${command.type}:${command.name}`, command);
-		for (const command of handler.values) merged.set(`${command.type}:${command.name}`, command);
-		handler.values = [...merged.values()];
+		try {
+			await this.client.loadCommands(this.lazyCommands?.commandsDir);
+			const merged = new Map<string, { name: string; type: number }>();
+			for (const command of previous) merged.set(`${command.type}:${command.name}`, command);
+			for (const command of handler.values) merged.set(`${command.type}:${command.name}`, command);
+			handler.values = [...merged.values()];
+			this.refreshSubcommandRoutes();
+		} finally {
+			handler.filter = previousFilter;
+			if (previousGetFiles) handler.getFiles = previousGetFiles;
+			else delete handler.getFiles;
+		}
 	}
 
 	/**
@@ -2445,18 +2703,63 @@ export class MockBot {
 		commandOrOptions: C | ChatInputInteractionOptions,
 		classOptions?: SlashClassOptions<C>,
 	): Dispatch<DispatchResult> {
-		const options: ChatInputInteractionOptions =
-			typeof commandOrOptions === 'function'
-				? ({ ...(classOptions ?? {}), name: new commandOrOptions().name } as ChatInputInteractionOptions)
-				: commandOrOptions;
-		return this.dispatchSlash(options);
+		if (typeof commandOrOptions === 'function') return this.dispatchSlashClass(commandOrOptions, classOptions);
+		return this.dispatchSlash(commandOrOptions);
+	}
+
+	private dispatchSlashClass<C extends SlashCommandClass>(
+		command: C,
+		classOptions?: SlashClassOptions<C>,
+	): Dispatch<DispatchResult> {
+		const instance = new command();
+		if (instance instanceof SubCommand) {
+			return this.dispatchSubcommandClass(command as MockSubCommandClass, instance, classOptions);
+		}
+		return this.dispatchSlash({ ...(classOptions ?? {}), name: instance.name } as ChatInputInteractionOptions);
+	}
+
+	private subcommandRouteOptions<C extends SlashCommandClass>(
+		route: SubcommandClassRoute,
+		classOptions?: SlashClassOptions<C>,
+	): ChatInputInteractionOptions {
+		return {
+			...(classOptions ?? {}),
+			name: route.parentName,
+			group: route.group,
+			subcommand: route.subcommand,
+		} as ChatInputInteractionOptions;
+	}
+
+	private dispatchSubcommandClass<C extends SlashCommandClass>(
+		command: MockSubCommandClass,
+		instance: SubCommand,
+		classOptions?: SlashClassOptions<C>,
+	): Dispatch<DispatchResult> {
+		const route = this.subcommandRouteFor(command, instance, 'slash');
+		if (route) return this.dispatchSlash(this.subcommandRouteOptions(route, classOptions));
+		if (!this.lazyEnabled || this.loadedAllCommands) {
+			return this.dispatchSlash(
+				this.subcommandRouteOptions(this.requireSubcommandRoute(command, instance, 'slash'), classOptions),
+			);
+		}
+		const user = this.resolveInvoker(classOptions ?? {});
+		return this.dispatchDeferred(user, async () => {
+			await this.ensureAllCommandsLoaded();
+			const loadedRoute = this.requireSubcommandRoute(command, instance, 'slash');
+			const options = this.subcommandRouteOptions(loadedRoute, classOptions);
+			this.assertCommandRegistered(options.name, ApplicationCommandType.ChatInput, 'slash');
+			const prepared = prepareChatInputOptions(this.client.commands.values, options, this.validateOptions);
+			return chatInputInteraction(
+				this.applyWorldPermissions({ applicationId: this.client.applicationId, ...prepared, user }),
+			);
+		});
 	}
 
 	private dispatchSlash(options: ChatInputInteractionOptions): Dispatch<DispatchResult> {
-		if (this.lazyEnabled && !this.commandIsLoaded(options.name)) {
+		if (this.lazyEnabled && (!this.commandIsLoaded(options.name) || !this.chatInputSubcommandIsLoaded(options))) {
 			const user = this.resolveInvoker(options);
 			return this.dispatchDeferred(user, async () => {
-				await this.ensureCommandLoaded(options.name);
+				await this.ensureChatInputCommandLoaded(options);
 				this.assertCommandRegistered(options.name, ApplicationCommandType.ChatInput, 'slash');
 				const prepared = prepareChatInputOptions(this.client.commands.values, options, this.validateOptions);
 				return chatInputInteraction(
@@ -2485,11 +2788,11 @@ export class MockBot {
 				this.applyWorldPermissions({ user: this.defaultUser, applicationId: this.client.applicationId, ...prepared }),
 			);
 		};
-		if (this.lazyEnabled && !this.commandIsLoaded(options.name)) {
+		if (this.lazyEnabled && (!this.commandIsLoaded(options.name) || !this.chatInputSubcommandIsLoaded(options))) {
 			return this.dispatchDeferred<AutocompleteResult>(
 				this.resolveInvoker(options),
 				async () => {
-					await this.ensureCommandLoaded(options.name);
+					await this.ensureChatInputCommandLoaded(options);
 					return buildPayload();
 				},
 				withChoices,
@@ -3033,10 +3336,14 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	client.botId = options.botId ?? ((options.client && client.botId) || botId);
 	client.applicationId = options.applicationId ?? ((options.client && client.applicationId) || TEST_APPLICATION_ID);
 
+	let requestedSubcommands: MockSubCommandClass[] = [];
 	if (options.commands) {
 		const commands = Array.isArray(options.commands) ? options.commands : [options.commands];
+		const split = splitCommandClasses(commands);
+		requestedSubcommands = split.subcommands;
 		// Seyfert's command handler accepts constructor arrays at runtime, but its type expects loaded command metadata.
-		client.commands.set(commands as unknown as Parameters<Client['commands']['set']>[0]);
+		if (split.topLevel.length)
+			client.commands.set(split.topLevel as unknown as Parameters<Client['commands']['set']>[0]);
 	}
 	if (options.components) client.components.set(options.components);
 	if (options.events) {
@@ -3044,8 +3351,9 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 		// Tests pass public event definitions; Seyfert fills the internal loader-only fields when executing.
 		client.events.set(events as Parameters<Client['events']['set']>[0]);
 	}
+	const commandCatalog = await createCommandPathCatalog(client, options);
 	// Drive the production startup plugin lifecycle without opening a gateway connection or requiring a token/config.
-	await runMockClientStartup(client, options);
+	await runMockClientStartup(client, options, commandCatalog);
 	// seedWorld only needs the UsingClient cache/rest surface already installed above.
 	if (world) await seedWorld(asUsingClient(client), world);
 	const state = new WorldState(world, { botId: client.botId });
@@ -3079,8 +3387,10 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 		options.validateOptions ?? true,
 		options.timers,
 		options.onCommandError ?? 'throw',
-		options.lazy ? { commandsDir: options.commandsDir } : undefined,
+		shouldDeferCommandLoading(options) ? { commandsDir: options.commandsDir } : undefined,
+		commandCatalog,
 	);
 	bot.installDispatchHooks();
+	bot.validateSubcommandClasses(requestedSubcommands);
 	return bot;
 }
