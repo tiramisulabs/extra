@@ -1,5 +1,5 @@
 import { type ErrorMatcher, MockAssertionError } from './bot/assertions';
-import { type EmbedView, type InteractiveComponentView, normalizeEmbed } from './bot/state';
+import { type EmbedView, harvestComponents, type InteractiveComponentView, normalizeEmbed } from './bot/state';
 
 /**
  * Expected-embed shape for {@link expectEmbed}; every field is optional and checked only when present. Text
@@ -200,7 +200,21 @@ function componentsOf(subject: ComponentSource): InteractiveComponentView[] {
 	// Prefer the all-responses accessor, so a select in an earlier reply still matches.
 	if (typeof subject.allComponents === 'function') return subject.allComponents();
 	if (typeof subject.lastComponents === 'function') return subject.lastComponents();
-	return Array.isArray(subject.components) ? (subject.components as InteractiveComponentView[]) : [];
+	if (subject.components === undefined) return [];
+	const alreadyNormalized = Array.isArray(subject.components)
+		? subject.components.filter((component): component is InteractiveComponentView => {
+				if (component === null || typeof component !== 'object') return false;
+				const view = component as Partial<InteractiveComponentView>;
+				return (
+					typeof view.type === 'number' &&
+					(typeof view.customId === 'string' ||
+						typeof view.label === 'string' ||
+						typeof view.disabled === 'boolean' ||
+						Array.isArray(view.options))
+				);
+			})
+		: [];
+	return [...alreadyNormalized, ...harvestComponents(subject.components).components];
 }
 
 const isSelectType = (type: number): boolean => type === 3 || (type >= 5 && type <= 8);

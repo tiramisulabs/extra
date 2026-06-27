@@ -143,6 +143,18 @@ describe('context path: component accessors + expectComponent', () => {
 		expectComponent(select, { type: 'select', options: [{ label: /Display/, value: 'c1' }] });
 	});
 
+	test('expectComponent normalizes raw component payloads passed directly', () => {
+		const components = [
+			new ActionRow<Button>()
+				.setComponents([
+					new Button().setCustomId('join-clip-money').setLabel('Join Clip Money').setStyle(ButtonStyle.Success),
+				])
+				.toJSON(),
+		];
+
+		expectComponent({ components }, { customId: 'join-clip-money', label: /Join Clip Money/ });
+	});
+
 	test('expectComponent throws (not vacuous) when no component was sent', async () => {
 		const ctx = mockCommandContext();
 		await ctx.write({ content: 'no components here' });
