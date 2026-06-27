@@ -314,6 +314,7 @@ export interface ApiInteractionPayload {
 			| { type: 1; components: { type: 4; custom_id: string; value: string }[] }
 			| { type: 18; component: { type: 4; custom_id: string; value: string } }
 			| { type: 18; component: { type: 19; custom_id: string; values: string[] } }
+			| { type: 18; component: { type: 3 | 5 | 6 | 7 | 8; custom_id: string; values: string[] } }
 		)[];
 	};
 	message?: ApiMessage;
@@ -551,7 +552,61 @@ export function selectMenuInteraction(options: SelectMenuInteractionOptions): Ap
  * Modal submit values keyed by input custom_id. A string fills a TextInput; an attachment array fills a
  * FileUpload input — so a command's `interaction.getFiles(customId)` (content-type validation, etc.) sees them.
  */
-export type ModalFields = Record<string, string | ApiAttachment[]>;
+/** The select kinds a modal can carry; sets the submitted select's component type and what `data.resolved` holds. */
+export type ModalSelectKind = 'string' | 'user' | 'role' | 'channel' | 'mentionable';
+
+/** A select-menu submission inside a modal — produced by {@link modalSelect}, accepted as a {@link ModalFields} value. */
+export interface ModalSelectField {
+	readonly __modalSelect: ModalSelectKind;
+	readonly values: string[];
+}
+
+/**
+ * A modal field value: a string (TextInput), a `string[]` (string select — shorthand for `modalSelect(values)`), an
+ * `ApiAttachment[]` (FileUpload), or a {@link modalSelect} for a user/role/channel/mentionable select.
+ */
+export type ModalFields = Record<string, string | string[] | ApiAttachment[] | ModalSelectField>;
+
+const SELECT_COMPONENT_TYPE: Record<ModalSelectKind, 3 | 5 | 6 | 7 | 8> = {
+	string: 3,
+	user: 5,
+	role: 6,
+	mentionable: 7,
+	channel: 8,
+};
+
+/**
+ * Fill a select menu inside a modal so the handler's typed readers resolve. `getInputValue(id)` returns the raw ids
+ * for any kind; the entity readers (`getUsers`/`getRoles`/`getChannels`/`getMentionables`) need the entity in
+ * `data.resolved`, which this auto-builds from the ids (minimal mocks). A plain string select needs no factory — pass
+ * a `string[]` as the field value directly.
+ */
+export function modalSelect(values: string[], kind: ModalSelectKind = 'string'): ModalSelectField {
+	return { __modalSelect: kind, values };
+}
+
+function isModalSelectField(value: unknown): value is ModalSelectField {
+	return typeof value === 'object' && value !== null && '__modalSelect' in value;
+}
+
+/** Populate `resolved` with minimal entities for an entity select so seyfert's getUsers/getRoles/etc. find them. */
+function resolveSelectEntities(kind: ModalSelectKind, values: string[], resolved: ResolvedData): void {
+	switch (kind) {
+		case 'user':
+		case 'mentionable':
+			resolved.users ??= {};
+			for (const id of values) resolved.users[id] = apiUser({ id });
+			break;
+		case 'role':
+			resolved.roles ??= {};
+			for (const id of values) resolved.roles[id] = apiRole({ id });
+			break;
+		case 'channel':
+			resolved.channels ??= {};
+			for (const id of values) resolved.channels[id] = apiChannel({ id });
+			break;
+	}
+}
 
 export interface ModalSubmitInteractionOptions extends BaseInteractionOptions {
 	customId: string;
@@ -560,19 +615,32 @@ export interface ModalSubmitInteractionOptions extends BaseInteractionOptions {
 
 export function modalSubmitInteraction(options: ModalSubmitInteractionOptions): ApiInteractionPayload {
 	const payload = baseInteraction(options, 5);
-	const attachments: Record<string, ApiAttachment> = {};
+	const resolved: ResolvedData = {};
 	const components = Object.entries(options.fields ?? {}).map(([customId, value]) => {
+		if (isModalSelectField(value)) {
+			resolveSelectEntities(value.__modalSelect, value.values, resolved);
+			const type = SELECT_COMPONENT_TYPE[value.__modalSelect];
+			return { type: 18 as const, component: { type, custom_id: customId, values: value.values } };
+		}
 		if (Array.isArray(value)) {
+			// A string[] is a string select; an ApiAttachment[] is a FileUpload (objects carry an id, strings don't).
+			if (value.length === 0 || typeof value[0] === 'string') {
+				return { type: 18 as const, component: { type: 3 as const, custom_id: customId, values: value as string[] } };
+			}
 			// FileUpload (19): seyfert's getFiles reads data.resolved.attachments after finding this component.
-			for (const file of value) attachments[file.id] = file;
-			return { type: 18 as const, component: { type: 19 as const, custom_id: customId, values: value.map(f => f.id) } };
+			resolved.attachments ??= {};
+			for (const file of value as ApiAttachment[]) resolved.attachments[file.id] = file;
+			return {
+				type: 18 as const,
+				component: { type: 19 as const, custom_id: customId, values: (value as ApiAttachment[]).map(f => f.id) },
+			};
 		}
 		return { type: 18 as const, component: { type: 4 as const, custom_id: customId, value } };
 	});
 	payload.data = {
 		custom_id: options.customId,
 		components,
-		...(Object.keys(attachments).length ? { resolved: { attachments } } : {}),
+		...(Object.keys(resolved).length ? { resolved } : {}),
 	};
 	return payload;
 }

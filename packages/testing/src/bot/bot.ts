@@ -237,13 +237,25 @@ async function runMockClientStartup(client: Client, options: MockBotOptions): Pr
 	await client.cache.adapter.start();
 
 	if (options.loadModule) installModuleLoader(client, options.loadModule);
+
+	const lazyCommands = options.lazy === true;
+	if (lazyCommands && options.only?.length) {
+		throw new TypeError(
+			'createMockBot: `lazy` and `only` both narrow command loading — use one. `lazy` loads each command on first dispatch; `only` loads a fixed set up front.',
+		);
+	}
+	if (lazyCommands && !loadFromConfig && !options.commandsDir) {
+		throw new TypeError(
+			'createMockBot: `lazy` needs a `commandsDir` (or `loadFromConfig`) to load commands from on dispatch.',
+		);
+	}
 	const onlyNames = options.only?.length ? installCommandFilter(client, options.only) : undefined;
 
 	if (loadFromConfig || options.langsDir) await client.loadLangs(options.langsDir);
 	if (options.defaultLang) client.langs.defaultLang = options.defaultLang;
 
 	await runPluginHooks(client, 'commands:beforeLoad', client, options.commandsDir);
-	if (loadFromConfig || options.commandsDir) await client.loadCommands(options.commandsDir);
+	if (!lazyCommands && (loadFromConfig || options.commandsDir)) await client.loadCommands(options.commandsDir);
 	if (onlyNames) assertOnlyLoaded(client, onlyNames, options.commandsDir);
 	await lifecycle.reloadPluginCommands();
 
@@ -767,6 +779,23 @@ export interface MockBotOptions {
 	 */
 	only?: (MockCommandClass | string)[];
 	/**
+	 * Defer command transformation: instead of loading the whole `commandsDir` at startup (slow for a large bot),
+	 * load a command's group the first time you dispatch it — anchored to the `name` you pass to {@link MockBot.slash}
+	 * (or `userMenu`/`messageMenu`/`autocomplete`). Point `commandsDir` at your real command root, pass nothing else;
+	 * only what you dispatch is transformed.
+	 *
+	 * Resolution is two-tier: path-first (a folder/file whose name equals the command `name` — no import for the
+	 * rest), then a fallback full scan when the folder name differs from the `@Declare` name (e.g. a `mass/` folder
+	 * whose command is `mass-dm`). The fallback imports the remaining tree once, then caches it. Each dispatch's load
+	 * is serialized, and previously-loaded groups accumulate.
+	 *
+	 * Covers command-resolving dispatches (slash/menu/autocomplete) loaded from `commandsDir`. Component/modal
+	 * handlers (ComponentCommand/ModalCommand) resolve from `client.components` and still load eagerly — pass them via
+	 * `components`/`componentsDir`. Mutually exclusive with {@link only} (both narrow loading); requires a
+	 * `commandsDir` or `loadFromConfig`.
+	 */
+	lazy?: boolean;
+	/**
 	 * How command/component/event files are imported when loading from a directory (`commandsDir`, etc.).
 	 *
 	 * Why this exists: a test runner (vitest/jest/bun) only transforms TypeScript in the modules IT evaluates —
@@ -880,6 +909,10 @@ export class MockBot {
 	private readonly displayedModals = new Map<string, { customId?: string; inputIds: Set<string> }>();
 	private virtualNowMs = Date.now();
 	private closed = false;
+	/** Set once the fallback full scan has run, so no further lazy load is attempted (see {@link MockBotOptions.lazy}). */
+	private loadedAllCommands = false;
+	/** Serializes lazy loads so concurrent dispatches don't clobber the handler's per-file filter. */
+	private lazyLoadLock: Promise<void> = Promise.resolve();
 	/** The most recent interaction-original message, used to resolve a collector source for an immediate reply. */
 	private lastInteractionMessage?: { id: string; channel_id?: string };
 	/** Component/modal detection capabilities, fixed at install time from the client's component surface. */
@@ -899,6 +932,8 @@ export class MockBot {
 		private readonly validateOptions = true,
 		private readonly timers?: { advance(ms: number): void | Promise<void> },
 		private readonly onCommandError: 'throw' | 'capture' = 'throw',
+		/** When set, commands load on first dispatch from this dir (undefined dir → seyfert config). See {@link MockBotOptions.lazy}. */
+		private readonly lazyCommands?: { commandsDir?: string },
 	) {}
 
 	/**
@@ -1417,6 +1452,15 @@ export class MockBot {
 	}
 
 	/**
+	 * Latest text content rendered by ANY dispatch — scanned UNSCOPED like {@link lastEmbeds}, so a reply written
+	 * inside a collector handler or on a modal-submit token (invisible to a flow's scoped `DispatchResult.content`)
+	 * is still readable. Undefined if no content has been sent.
+	 */
+	lastContent(): string | undefined {
+		return renderedReply(this.rest.actions).content;
+	}
+
+	/**
 	 * Read-only list of the application commands registered on the client. Pure read of
 	 * `client.commands.values`; no mutation or side effects.
 	 */
@@ -1803,6 +1847,102 @@ export class MockBot {
 		await this.timers.advance(ms);
 		this.virtualNowMs += ms;
 		await this.flushPending(dispatchId);
+	}
+
+	/** Resolve the invoking user for a dispatch the same way {@link dispatchVia} does: explicit > id shorthand > default. */
+	private resolveInvoker(options: { user?: ApiUser; userId?: string }): ApiUser {
+		return options.user ?? (options.userId !== undefined ? apiUser({ id: options.userId }) : this.defaultUser);
+	}
+
+	private get lazyEnabled(): boolean {
+		return this.lazyCommands !== undefined;
+	}
+
+	/** True once `name` is resolvable — already in the registry (lazily loaded or passed via `commands`) or all loaded. */
+	private commandIsLoaded(name: string): boolean {
+		return this.loadedAllCommands || this.client.commands.values.some(command => command.name === name);
+	}
+
+	/**
+	 * Lazily load the command group that answers to `name`, serialized against other in-flight loads. Path-first:
+	 * narrow the loader to files/dirs named `name` and reload — cheap, transforms only that group when the folder
+	 * matches the command name. If that didn't surface `name` (folder ≠ @Declare name), fall back to a full scan
+	 * once. Each load reuses seyfert's `loadCommands` (which resets the handler's values) and merges the result back
+	 * onto the previously-loaded set, so groups accumulate across dispatches.
+	 */
+	private ensureCommandLoaded(name: string): Promise<void> {
+		if (!this.lazyEnabled || this.commandIsLoaded(name)) return Promise.resolve();
+		const next = this.lazyLoadLock.then(async () => {
+			if (this.commandIsLoaded(name)) return;
+			await this.lazyLoad(this.commandPathFilter(name));
+			if (this.client.commands.values.some(command => command.name === name)) return;
+			if (this.loadedAllCommands) return;
+			await this.lazyLoad(() => true);
+			this.loadedAllCommands = true;
+		});
+		this.lazyLoadLock = next.then(
+			() => {},
+			() => {},
+		);
+		return next;
+	}
+
+	/** A per-file filter (seyfert reads it in getFiles before importing) matching a dir/file segment equal to `name`. */
+	private commandPathFilter(name: string): (path: string) => boolean {
+		return path => {
+			const segments = path.split(/[/\\]/);
+			const base = (segments.at(-1) ?? '').replace(/\.[cm]?[jt]s$/, '');
+			return segments.includes(name) || base === name;
+		};
+	}
+
+	/** Reload commands through `filter`, merging the freshly-loaded set onto what was already loaded (by type+name). */
+	private async lazyLoad(filter: (path: string) => boolean): Promise<void> {
+		const handler = this.client.commands as unknown as {
+			filter: (path: string) => boolean;
+			values: { name: string; type: number }[];
+		};
+		handler.filter = filter;
+		const previous = [...handler.values];
+		await this.client.loadCommands(this.lazyCommands?.commandsDir);
+		const merged = new Map<string, { name: string; type: number }>();
+		for (const command of previous) merged.set(`${command.type}:${command.name}`, command);
+		for (const command of handler.values) merged.set(`${command.type}:${command.name}`, command);
+		handler.values = [...merged.values()];
+	}
+
+	/**
+	 * Build and run a dispatch whose payload is produced asynchronously (used by lazy loading, where the command must
+	 * be imported before its options can be resolved). Mirrors {@link dispatchInteraction}'s wiring — same dispatchId,
+	 * modal/component awaiters — but takes the invoking user up front (known from the dispatch options) instead of
+	 * deriving it from the not-yet-built payload, so chaining (`.fillModal`, `.untilComponent`) works under lazy.
+	 */
+	private dispatchDeferred<R = DispatchResult>(
+		user: ApiUser | undefined,
+		buildPayload: () => Promise<ApiInteractionPayload>,
+		wrapResult?: (result: DispatchResult) => R,
+	): Dispatch<R> {
+		this.assertOpen('dispatch');
+		const userId = user?.id;
+		const dispatchId = nextDispatchId();
+		return this.track(
+			new Dispatch<R>(
+				this.rest,
+				this.client,
+				userId,
+				async () => {
+					const payload = await buildPayload();
+					const result = await this.runInteraction(payload, dispatchId);
+					return (wrapResult ? wrapResult(result) : result) as R;
+				},
+				(id, ownerDispatchId) => this.onModalRegistered(id, ownerDispatchId),
+				dispatchId,
+				user ? (customId, fields) => this.fillModal(customId, fields, { user }) : undefined,
+				id => this.modalOwners.delete(id),
+				(customId, scopeId, execution, timeoutMs) =>
+					this.awaitRenderedComponent(customId, scopeId, execution, timeoutMs),
+			),
+		);
 	}
 
 	dispatchInteraction(payload: ApiInteractionPayload): Dispatch<DispatchResult> {
@@ -2283,6 +2423,17 @@ export class MockBot {
 	}
 
 	private dispatchSlash(options: ChatInputInteractionOptions): Dispatch<DispatchResult> {
+		if (this.lazyEnabled && !this.commandIsLoaded(options.name)) {
+			const user = this.resolveInvoker(options);
+			return this.dispatchDeferred(user, async () => {
+				await this.ensureCommandLoaded(options.name);
+				this.assertCommandRegistered(options.name, ApplicationCommandType.ChatInput, 'slash');
+				const prepared = prepareChatInputOptions(this.client.commands.values, options, this.validateOptions);
+				return chatInputInteraction(
+					this.applyWorldPermissions({ applicationId: this.client.applicationId, ...prepared, user }),
+				);
+			});
+		}
 		this.assertCommandRegistered(options.name, ApplicationCommandType.ChatInput, 'slash');
 		return this.dispatchVia(
 			'slash',
@@ -2293,15 +2444,28 @@ export class MockBot {
 
 	autocomplete(options: AutocompleteInteractionOptions): Dispatch<AutocompleteResult> {
 		this.assertOpen('autocomplete');
-		this.assertCommandRegistered(options.name, ApplicationCommandType.ChatInput, 'autocomplete');
-		const prepared = prepareAutocompleteOptions(this.client.commands.values, options, this.validateOptions);
-		const payload = autocompleteInteraction(
-			this.applyWorldPermissions({
-				user: this.defaultUser,
-				applicationId: this.client.applicationId,
-				...prepared,
-			}),
-		);
+		const withChoices = (result: DispatchResult): AutocompleteResult => {
+			const body = result.reply?.body;
+			return { ...result, choices: body?.type === 8 ? body.data?.choices : undefined };
+		};
+		const buildPayload = (): ApiInteractionPayload => {
+			this.assertCommandRegistered(options.name, ApplicationCommandType.ChatInput, 'autocomplete');
+			const prepared = prepareAutocompleteOptions(this.client.commands.values, options, this.validateOptions);
+			return autocompleteInteraction(
+				this.applyWorldPermissions({ user: this.defaultUser, applicationId: this.client.applicationId, ...prepared }),
+			);
+		};
+		if (this.lazyEnabled && !this.commandIsLoaded(options.name)) {
+			return this.dispatchDeferred<AutocompleteResult>(
+				this.resolveInvoker(options),
+				async () => {
+					await this.ensureCommandLoaded(options.name);
+					return buildPayload();
+				},
+				withChoices,
+			);
+		}
+		const payload = buildPayload();
 		const userId = payload.member?.user.id ?? payload.user?.id;
 		const dispatchId = nextDispatchId();
 		return this.track(
@@ -2309,11 +2473,7 @@ export class MockBot {
 				this.rest,
 				this.client,
 				userId,
-				async () => {
-					const result = await this.runInteraction(payload, dispatchId);
-					const body = result.reply?.body;
-					return { ...result, choices: body?.type === 8 ? body.data?.choices : undefined };
-				},
+				async () => withChoices(await this.runInteraction(payload, dispatchId)),
 				(id, ownerDispatchId) => this.onModalRegistered(id, ownerDispatchId),
 				dispatchId,
 			),
@@ -2321,18 +2481,47 @@ export class MockBot {
 	}
 
 	userMenu(options: UserCommandInteractionOptions): Dispatch<UserMenuResult> {
-		this.assertCommandRegistered(options.name, ApplicationCommandType.User, 'userMenu');
-		return this.dispatchVia<UserCommandInteractionOptions, UserMenuResult>('userMenu', options, prepared => {
+		const build = (prepared: UserCommandInteractionOptions): ApiInteractionPayload => {
 			const targetMember = options.targetMember ?? this.worldMemberFor(prepared.guildId, prepared.target);
 			return userCommandInteraction({ ...prepared, ...(targetMember ? { targetMember } : {}) });
-		});
+		};
+		if (this.lazyEnabled && !this.commandIsLoaded(options.name)) {
+			return this.lazyMenuDispatch(options, ApplicationCommandType.User, 'userMenu', build) as Dispatch<UserMenuResult>;
+		}
+		this.assertCommandRegistered(options.name, ApplicationCommandType.User, 'userMenu');
+		return this.dispatchVia<UserCommandInteractionOptions, UserMenuResult>('userMenu', options, build);
 	}
 
 	messageMenu(options: MessageCommandInteractionOptions): Dispatch<MessageMenuResult> {
-		this.assertCommandRegistered(options.name, ApplicationCommandType.Message, 'messageMenu');
-		return this.dispatchVia<MessageCommandInteractionOptions, MessageMenuResult>('messageMenu', options, prepared => {
+		const build = (prepared: MessageCommandInteractionOptions): ApiInteractionPayload => {
 			const targetMember = options.targetMember ?? this.worldMemberFor(prepared.guildId, prepared.target?.author);
 			return messageCommandInteraction({ ...prepared, ...(targetMember ? { targetMember } : {}) });
+		};
+		if (this.lazyEnabled && !this.commandIsLoaded(options.name)) {
+			return this.lazyMenuDispatch(
+				options,
+				ApplicationCommandType.Message,
+				'messageMenu',
+				build,
+			) as Dispatch<MessageMenuResult>;
+		}
+		this.assertCommandRegistered(options.name, ApplicationCommandType.Message, 'messageMenu');
+		return this.dispatchVia<MessageCommandInteractionOptions, MessageMenuResult>('messageMenu', options, build);
+	}
+
+	/** Lazy counterpart of {@link dispatchVia} for the context-menu dispatchers: load the command, then build. */
+	private lazyMenuDispatch<O extends BaseInteractionOptions>(
+		options: O & { name: string },
+		type: ApplicationCommandType,
+		verb: string,
+		build: (prepared: O) => ApiInteractionPayload,
+	): Dispatch<DispatchResult> {
+		const user = this.resolveInvoker(options);
+		return this.dispatchDeferred(user, async () => {
+			await this.ensureCommandLoaded(options.name);
+			this.assertCommandRegistered(options.name, type, verb);
+			const prepared = this.applyWorldPermissions({ applicationId: this.client.applicationId, ...options, user });
+			return build(prepared);
 		});
 	}
 
@@ -2885,6 +3074,7 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 		options.validateOptions ?? true,
 		options.timers,
 		options.onCommandError ?? 'throw',
+		options.lazy ? { commandsDir: options.commandsDir } : undefined,
 	);
 	bot.installDispatchHooks();
 	return bot;

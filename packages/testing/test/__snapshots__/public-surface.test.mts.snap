@@ -91,6 +91,7 @@ exports[`public API surface > exported names match the committed snapshot 1`] = 
   "mockUser",
   "mockVoiceState",
   "mockWorld",
+  "modalSelect",
   "modalSubmitInteraction",
   "permissionBits",
   "rawOption",

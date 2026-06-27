@@ -164,6 +164,15 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 	}
 
 	/**
+	 * Best-effort latest text content this dispatch has rendered, or undefined if none. The text counterpart of
+	 * {@link lastEmbeds}/{@link lastComponents}; works while PARKED, so a flow whose reply lands on a different token
+	 * (e.g. an inline `await ctx.interaction.modal(...)` continuation that replies on the submit) is still readable.
+	 */
+	lastContent(): string | undefined {
+		return this.rendered().content;
+	}
+
+	/**
 	 * @internal Low-level primitive: resolve the instant seyfert registers a modal for this dispatch's user. Used
 	 * by {@link fillModal} / {@link timeoutModal}, which are the supported one-call ways to drive a modal — prefer
 	 * those. Awaited as an event (no wall-clock poll), so it works under frozen/fake timers; fails fast if the

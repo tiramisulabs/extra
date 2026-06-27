@@ -262,4 +262,28 @@ describe('collector patterns', () => {
 		expectEmbed(bot, { contains: /reopened/ });
 		await bot.close();
 	});
+
+	// Text counterpart of the embed accessor above: a reply written inside a collector handler records under no
+	// dispatch, so the scoped `DispatchResult.content` misses it — bot.lastContent() (unscoped) sees it.
+	test('bot-level lastContent sees text written inside a collector handler', async () => {
+		@Declare({ name: 'ack', description: 'Confirm then acknowledge' })
+		class AckCommand extends Command {
+			async run(ctx: CommandContext) {
+				const row = new ActionRow<Button>().setComponents([
+					new Button().setCustomId('ack').setLabel('Ack').setStyle(ButtonStyle.Primary),
+				]);
+				const message = await ctx.write({ content: 'Confirm?', components: [row] }, true);
+				message.createComponentCollector().run('ack', async i => {
+					await i.write({ content: 'acknowledged' });
+				});
+			}
+		}
+
+		const bot = await createMockBot({ commands: [AckCommand] });
+		await bot.slash({ name: 'ack' });
+		await bot.clickButton('ack');
+
+		expect(bot.lastContent()).toBe('acknowledged');
+		await bot.close();
+	});
 });
