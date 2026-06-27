@@ -1045,7 +1045,7 @@ export class MockBot {
 
 	/**
 	 * Read-only view of the simulated world for assertions — the full entity-query surface behind the
-	 * `world*` accessors. Exposes only query methods; the `@internal` mutators that the mock drives in
+	 * `world*` accessors. Exposes only query methods; the internal mutators that the mock drives in
 	 * response to Discord traffic are not part of this public type. Use the {@link MockBot} verbs (or REST
 	 * routes) to change world state.
 	 */
