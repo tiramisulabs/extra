@@ -128,10 +128,10 @@ describe('context path: component accessors + expectComponent', () => {
 		const ctx = mockCommandContext();
 		await ctx.write({
 			components: [
-				{ type: 1, components: [{ type: 2, custom_id: 'delete_payout_menu', label: 'Delete', disabled: true }] },
+				{ type: 1, components: [{ type: 2, custom_id: 'delete_item_menu', label: 'Delete', disabled: true }] },
 			],
 		});
-		expectComponent(ctx, { customId: 'delete_payout_menu', type: 'button', disabled: true });
+		expectComponent(ctx, { customId: 'delete_item_menu', type: 'button', disabled: true });
 		expect(() => expectComponent(ctx, { customId: 'nope' })).toThrow(/no component matched/);
 
 		const select = mockCommandContext();
@@ -146,13 +146,11 @@ describe('context path: component accessors + expectComponent', () => {
 	test('expectComponent normalizes raw component payloads passed directly', () => {
 		const components = [
 			new ActionRow<Button>()
-				.setComponents([
-					new Button().setCustomId('join-clip-money').setLabel('Join Clip Money').setStyle(ButtonStyle.Success),
-				])
+				.setComponents([new Button().setCustomId('sample-action').setLabel('Run Action').setStyle(ButtonStyle.Success)])
 				.toJSON(),
 		];
 
-		expectComponent({ components }, { customId: 'join-clip-money', label: /Join Clip Money/ });
+		expectComponent({ components }, { customId: 'sample-action', label: /Run Action/ });
 	});
 
 	test('expectComponent throws (not vacuous) when no component was sent', async () => {
@@ -168,7 +166,7 @@ describe('context path: component accessors + expectComponent', () => {
 				await ctx.write({
 					components: [
 						new ActionRow<Button>().setComponents([
-							new Button().setCustomId('manage-account:link:c1').setLabel('Link').setStyle(ButtonStyle.Primary),
+							new Button().setCustomId('sample:link:item-1').setLabel('Link').setStyle(ButtonStyle.Primary),
 						]),
 					],
 				});
@@ -177,7 +175,7 @@ describe('context path: component accessors + expectComponent', () => {
 
 		const bot = await createMockBot({ commands: [MenuCommand] });
 		const res = await bot.slash({ name: 'menu' });
-		expectComponent(res, { customId: /manage-account:link/ });
+		expectComponent(res, { customId: /sample:link/ });
 		await bot.close();
 	});
 });
@@ -185,8 +183,8 @@ describe('context path: component accessors + expectComponent', () => {
 describe('expectContent', () => {
 	test('matches content (anti-vacuous) on context, bare strings, and DispatchResult', async () => {
 		const ctx = mockCommandContext();
-		await ctx.write({ content: 'reopened campaign' });
-		expect(expectContent(ctx, /reopened/)).toBe('reopened campaign');
+		await ctx.write({ content: 'reopened record' });
+		expect(expectContent(ctx, /reopened/)).toBe('reopened record');
 		expect(() => expectContent(ctx, 'closed')).toThrow(/no reply text matched/);
 
 		const bare = mockCommandContext();
@@ -209,13 +207,13 @@ describe('assertion gaps (RegExp render, cross-response, TextDisplay)', () => {
 	test('B: expectComponent/components() span ALL responses, not just the last', async () => {
 		const ctx = mockCommandContext();
 		await ctx.write({
-			components: [{ type: 1, components: [{ type: 3, custom_id: 'delete_payout_menu', options: [] }] }],
+			components: [{ type: 1, components: [{ type: 3, custom_id: 'delete_item_menu', options: [] }] }],
 		});
 		await ctx.write({ embeds: [{ title: 'Timeout' }] }); // last reply has no component
 
 		expect(ctx.lastComponents()).toEqual([]); // last response: nothing
-		expect(ctx.allComponents().map(component => component.customId)).toContain('delete_payout_menu');
-		expect(() => expectComponent(ctx, { customId: 'delete_payout_menu' })).not.toThrow();
+		expect(ctx.allComponents().map(component => component.customId)).toContain('delete_item_menu');
+		expect(() => expectComponent(ctx, { customId: 'delete_item_menu' })).not.toThrow();
 
 		const e = mockCommandContext();
 		await e.write({ embeds: [{ title: 'First' }] });
@@ -226,11 +224,11 @@ describe('assertion gaps (RegExp render, cross-response, TextDisplay)', () => {
 
 	test('C: Components-v2 TextDisplay is surfaced via lastTexts()/allTexts() and scanned by expectContent', async () => {
 		const ctx = mockCommandContext();
-		await ctx.write({ components: [{ type: 17, components: [{ type: 10, content: 'Found 2 payouts' }] }] });
+		await ctx.write({ components: [{ type: 17, components: [{ type: 10, content: 'Found 2 records' }] }] });
 
-		expect(ctx.allTexts()).toContain('Found 2 payouts');
-		expect(ctx.lastTexts()).toContain('Found 2 payouts');
-		expect(expectContent(ctx, /Found 2 payouts/)).toBe('Found 2 payouts');
+		expect(ctx.allTexts()).toContain('Found 2 records');
+		expect(ctx.lastTexts()).toContain('Found 2 records');
+		expect(expectContent(ctx, /Found 2 records/)).toBe('Found 2 records');
 	});
 });
 
