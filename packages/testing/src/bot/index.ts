@@ -21,14 +21,6 @@
  */
 
 export {
-	type ErrorMatcher,
-	type ExpectedDenial,
-	expectDenied,
-	expectError,
-	expectReply,
-	MockAssertionError,
-} from './assertions';
-export {
 	type Actor,
 	type ActorOptions,
 	type AutocompleteResult,

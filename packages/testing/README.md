@@ -683,18 +683,18 @@ Use `ChannelView.overwrites` for permission-matrix assertions. Direct replies
 also remain available as `result.reply?.body.data` when the channel view is not
 the clearest assertion surface.
 
-### Assertion helpers
+### Outcome reader
 
 Naive checks pass green when nothing happened — `expect(result.content).toContain('ok')`
-is satisfied by `content` being `undefined`. These runner-agnostic helpers throw a
-`MockAssertionError` instead, so a handler that silently returned fails loud:
+is satisfied by `content` being `undefined`. Use the runner-agnostic outcome reader for
+dispatch-level facts, and keep ordinary comparisons in your test runner:
 
 ```ts
-import { expectReply, expectDenied, expectError } from '@slipher/testing';
+import { outcome } from '@slipher/testing';
 
-expectReply(result); // throws if no reply/edit/followup was sent
-expectDenied(result, { kind: 'permissions', missing: 'BanMembers' }); // assert a structured denial
-const error = expectError(result, /timeout/); // needs onCommandError: 'capture'
+outcome(result).get.response(); // throws if the dispatch never responded
+outcome(result).get.denial({ kind: 'permissions', missing: 'BanMembers' });
+const { error } = outcome(result).get.error(/timeout/); // needs onCommandError: 'capture'
 ```
 
 ### Real-world recipes

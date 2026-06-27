@@ -1,78 +1,10 @@
-import { ActionRow, Button, Command, type CommandContext, Declare, Embed, Middlewares } from 'seyfert';
+import { ActionRow, Button, Command, type CommandContext, Declare, Embed } from 'seyfert';
 import { ButtonStyle } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
-import { expectDenied, expectError, expectReply, MockAssertionError } from '../../src/bot/assertions';
 import { createMockBot } from '../../src/bot/bot';
 import { apiUser } from '../../src/bot/payloads';
 import { mockWorld } from '../../src/bot/world';
-import { GreetCommand, testMiddlewares } from './_setup';
-
-@Declare({ name: 'silent', description: 'Returns without replying' })
-class SilentCommand extends Command {
-	async run(_ctx: CommandContext) {}
-}
-
-@Declare({ name: 'boom', description: 'Throws an unhandled error' })
-class BoomCommand extends Command {
-	async run(_ctx: CommandContext) {
-		throw new Error('kaboom');
-	}
-}
-
-@Declare({ name: 'blocked', description: 'Denied by a middleware that stops the chain' })
-@Middlewares(['blocker'])
-class BlockedCommand extends Command {
-	async run(ctx: CommandContext) {
-		await ctx.write({ content: 'never' });
-	}
-}
-
-describe('F43 assertion helpers (runner-agnostic)', () => {
-	test('expectReply passes when a reply was sent and throws when none was', async () => {
-		const bot = await createMockBot({ commands: [GreetCommand, SilentCommand] });
-		const replied = await bot.slash({ name: 'greet', options: { name: 'x' } });
-		expect(() => expectReply(replied)).not.toThrow();
-		expect(expectReply(replied)).toBe(replied);
-
-		const silent = await bot.slash({ name: 'silent' });
-		expect(() => expectReply(silent)).toThrow(MockAssertionError);
-		await bot.close();
-	});
-
-	test('expectDenied asserts denial and its structured kind', async () => {
-		const bot = await createMockBot({ commands: [BlockedCommand], middlewares: testMiddlewares });
-		const result = await bot.slash({ name: 'blocked' });
-		expect(() => expectDenied(result)).not.toThrow();
-		expect(() => expectDenied(result, { kind: 'stop' })).not.toThrow();
-		expect(() => expectDenied(result, { kind: 'permissions' })).toThrow(MockAssertionError);
-		await bot.close();
-	});
-
-	test('expectDenied throws when the dispatch actually replied', async () => {
-		const bot = await createMockBot({ commands: [GreetCommand] });
-		const result = await bot.slash({ name: 'greet', options: { name: 'x' } });
-		expect(() => expectDenied(result)).toThrow(MockAssertionError);
-		await bot.close();
-	});
-
-	test('expectError returns the captured error and matches its message', async () => {
-		const bot = await createMockBot({ commands: [BoomCommand], onCommandError: 'capture' });
-		const result = await bot.slash({ name: 'boom' });
-		const error = expectError(result);
-		expect((error as Error).message).toBe('kaboom');
-		expect(() => expectError(result, 'kaboom')).not.toThrow();
-		expect(() => expectError(result, /kab/)).not.toThrow();
-		expect(() => expectError(result, 'nope')).toThrow(MockAssertionError);
-		await bot.close();
-	});
-
-	test('expectError throws when nothing errored', async () => {
-		const bot = await createMockBot({ commands: [GreetCommand], onCommandError: 'capture' });
-		const result = await bot.slash({ name: 'greet', options: { name: 'x' } });
-		expect(() => expectError(result)).toThrow(MockAssertionError);
-		await bot.close();
-	});
-});
+import { GreetCommand } from './_setup';
 
 describe('F37 symmetric readers', () => {
 	test('worldChannel/worldRole resolve by id alone and the role view keeps permissions/color', async () => {
