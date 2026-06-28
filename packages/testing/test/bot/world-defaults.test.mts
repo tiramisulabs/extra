@@ -51,6 +51,45 @@ describe('stateful world defaults', () => {
 		await synthetic.close();
 	});
 
+	test('guild member list returns world members whose role managers mutate world and cache', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'bulk-role-guild' });
+		const role = world.registerRole(guild.id, { id: 'bulk-role' });
+		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'bulk-actor' }) });
+		const targetA = world.registerMember(guild.id, { user: apiUser({ id: 'bulk-target-a' }), roles: [role.id] });
+		const targetB = world.registerMember(guild.id, { user: apiUser({ id: 'bulk-target-b' }), roles: [role.id] });
+		world.registerMember(guild.id, { user: apiUser({ id: 'bulk-target-c' }), roles: [] });
+		const channel = world.registerChannel(guild.id);
+
+		@Declare({ name: 'bulk-remove-role', description: 'Removes a role from listed members' })
+		class BulkRemoveRole extends Command {
+			async run(ctx: CommandContext) {
+				const guild = await ctx.guild();
+				const members = await guild!.members.list({ limit: 1000 }, true);
+				const removed: string[] = [];
+
+				for (const member of members) {
+					if (!member.roles.keys.includes(role.id)) continue;
+					removed.push(member.user.id);
+					await member.roles.remove(role.id);
+				}
+
+				await ctx.write({ content: removed.join(',') });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [BulkRemoveRole], world });
+		await expect(
+			bot.slash({ name: 'bulk-remove-role', guildId: guild.id, channel, user: actor.user }),
+		).resolves.toMatchObject({
+			content: 'bulk-target-a,bulk-target-b',
+		});
+		expect(bot.world.query.member({ guildId: guild.id, userId: targetA.user.id })?.roles).toEqual([]);
+		expect(bot.world.query.member({ guildId: guild.id, userId: targetB.user.id })?.roles).toEqual([]);
+		await expect(bot.client.members.raw(guild.id, targetA.user.id)).resolves.toMatchObject({ roles: [] });
+		await bot.close();
+	});
+
 	test('ban removes the member from world, cache, later REST fetches, and emits remove events', async () => {
 		const removed: string[] = [];
 		const onRemove = createEvent({

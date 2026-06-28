@@ -63,6 +63,12 @@ function messageQuery(query: Record<string, unknown> | undefined): MessageQuery 
 	};
 }
 
+function memberListLimit(query: Record<string, unknown> | undefined): number {
+	const requested = Number(queryString(query?.limit) ?? 1);
+	if (!Number.isFinite(requested)) return 1;
+	return Math.max(1, Math.min(1000, Math.trunc(requested)));
+}
+
 function interceptFetchOne<T>(
 	rest: MockApiHandler,
 	route: RouteMatcher,
@@ -329,6 +335,17 @@ export function registerWorldDefaults(
 		params => apiChannel({ id: params.channelId }),
 		world ? { code: ErrorCode.UnknownChannel, message: 'Unknown Channel' } : undefined,
 	);
+	rest.intercept(Routes.fetchMembers, (pending, params) => {
+		requireGuild(params.guildId);
+		const after = queryString(pending.query?.after);
+		return (world?.members ?? [])
+			.filter(entry => entry.guildId === params.guildId)
+			.filter(entry => !removed.has(key(params.guildId, entry.member.user.id)))
+			.sort((a, b) => a.member.user.id.localeCompare(b.member.user.id))
+			.filter(entry => after === undefined || entry.member.user.id > after)
+			.slice(0, memberListLimit(pending.query))
+			.map(entry => entry.member);
+	});
 	rest.intercept(Routes.fetchMember, (_pending, params) => {
 		requireGuild(params.guildId);
 		if (removed.has(key(params.guildId, params.userId))) {
