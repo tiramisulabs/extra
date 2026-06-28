@@ -1,5 +1,16 @@
 import type { LoggerLike, QueueLike, SchedulerLike } from '@slipher/types';
-import { Command, type CommandContext, createStringOption, Declare, Options, SubCommand } from 'seyfert';
+import {
+	Command,
+	type CommandContext,
+	ComponentCommand,
+	type ComponentContext,
+	createStringOption,
+	Declare,
+	ModalCommand,
+	type ModalContext,
+	Options,
+	SubCommand,
+} from 'seyfert';
 import {
 	type ButtonView,
 	type ContainerView,
@@ -7,8 +18,12 @@ import {
 	type DispatchResult,
 	type GuildMemberView,
 	type MessageView,
+	type MockComponentContext,
+	type MockModalContext,
 	mockCommandContext,
+	mockComponentContext,
 	mockLogger,
+	mockModalContext,
 	mockQueues,
 	mockScheduler,
 	type OutcomeCapturedError,
@@ -70,6 +85,79 @@ class SetTypeSub extends SubCommand {
 class ConfigTypeCommand extends Command {}
 
 createMockBot({ commands: [ConfigTypeCommand, SetTypeSub] });
+
+class FilterTypeButton extends ComponentCommand {
+	componentType = 'Button' as const;
+	filter(ctx: ComponentContext<'Button'>) {
+		expectType<string>(ctx.customId);
+		return true;
+	}
+	async run(ctx: ComponentContext<'Button'>) {
+		expectType<string>(ctx.customId);
+	}
+}
+
+class FilterTypeSelect extends ComponentCommand {
+	componentType = 'StringSelect' as const;
+	filter(ctx: ComponentContext<'StringSelect'>) {
+		expectType<string[]>(ctx.interaction.values);
+		return true;
+	}
+	async run(ctx: ComponentContext<'StringSelect'>) {
+		expectType<string[]>(ctx.interaction.values);
+	}
+}
+
+class FilterTypeModal extends ModalCommand {
+	filter(ctx: ModalContext) {
+		expectType<string>(ctx.customId);
+		return true;
+	}
+	async run(ctx: ModalContext) {
+		expectType<string>(ctx.customId);
+	}
+}
+
+const buttonFilter = mockComponentContext(FilterTypeButton);
+expectType<Promise<boolean>>(buttonFilter.filter({ customId: 'save' }));
+expectType<Promise<MockComponentContext<'Button'>>>(buttonFilter.run({ customId: 'save' }));
+buttonFilter.filter(mockComponentContext({ customId: 'save' }));
+
+const selectFilter = mockComponentContext(FilterTypeSelect);
+expectType<Promise<boolean>>(
+	selectFilter.filter({
+		customId: 'pick',
+		values: ['a'],
+	}),
+);
+expectType<Promise<MockComponentContext<'StringSelect'>>>(
+	selectFilter.run({
+		customId: 'pick',
+		values: ['a'],
+	}),
+);
+
+const selectRunContext = mockComponentContext({
+	customId: 'pick',
+	componentType: 'StringSelect',
+	values: ['a'],
+});
+expectType<'StringSelect'>(selectRunContext.componentType);
+expectType<string[]>(selectRunContext.interaction.values);
+selectFilter.filter(selectRunContext);
+
+const objectSelectContext = mockComponentContext({ componentType: 'StringSelect', values: ['a'] });
+expectType<'StringSelect'>(objectSelectContext.componentType);
+expectType<string[]>(objectSelectContext.interaction.values);
+
+const modalFilter = mockModalContext(FilterTypeModal);
+expectType<Promise<boolean>>(modalFilter.filter({ customId: 'profile' }));
+expectType<Promise<MockModalContext>>(modalFilter.run({ customId: 'profile' }));
+
+// @ts-expect-error — class-first component harness cannot receive another component type.
+buttonFilter.filter({ componentType: 'StringSelect' });
+// @ts-expect-error — class-first component options moved to filter()/run().
+mockComponentContext(FilterTypeButton, { customId: 'save' });
 
 declare const bot: Awaited<ReturnType<typeof createMockBot>>;
 bot.slash(SetTypeSub, { options: { value: 'x' } });

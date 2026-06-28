@@ -30,16 +30,15 @@ import BanCommand from './commands/ban';
 
 test('replies after banning', async () => {
 	// A stand-in context carrying just the fields the command touches.
-	// `TOptions` is inferred from `options` — no generic annotation needed.
-	const ctx = mockCommandContext({
-		commandName: 'ban',
+	// The command class binds ctx.run() and lets options infer from the command.
+	const ctx = mockCommandContext(BanCommand, {
 		options: { user: mockUser({ id: '123' }) },
 	});
 
 	// Run the real command body against the mock — no cast at the call site.
 	// MockCommandContext is intentionally a partial, not a full CommandContext;
 	// ctx.run() owns that one cast internally so your test doesn't.
-	await ctx.run(new BanCommand());
+	await ctx.run();
 
 	// Every reply lands in ctx.responses, so you assert without spies.
 	expect(ctx.lastResponse()).toMatchObject({ content: expect.stringContaining('Banned') });
@@ -57,6 +56,37 @@ test('replies after banning', async () => {
 - `responses`, `lastResponse()`, and `clearResponses()`
 
 `ctx.client.logger === ctx.logger`, `ctx.client.queues === ctx.queues`, and `ctx.client.scheduler === ctx.scheduler`. Use `mockClient({ extra })` when a command touches client surfaces that this package does not model.
+
+## Mock Component and Modal Contexts
+
+Use `mockComponentContext()` and `mockModalContext()` for small unit tests of a
+component/modal filter or run body. Pass the command class once, then call
+`filter(input)` or `run(input)` with the context fields for that case. `run()`
+returns the mock context it used, so fixture helpers such as `responses`,
+`lastResponse()`, and `lastComponents()` stay available without a cast.
+
+```ts
+import { mockComponentContext, mockModalContext } from '@slipher/testing';
+import { LeaveButton } from '../src/components/leave';
+import { ProfileModal } from '../src/modals/profile';
+
+const leave = mockComponentContext(LeaveButton);
+
+expect(await leave.filter({ customId: 'leave:campaign:c1' })).toBe(true);
+
+const click = await leave.run({ customId: 'leave:campaign:c1' });
+expect(click.lastResponse()).toMatchObject({ content: expect.stringContaining('left') });
+
+const profile = mockModalContext(ProfileModal);
+
+expect(await profile.filter({ customId: 'profile' })).toBe(true);
+
+const submit = await profile.run({
+	customId: 'profile',
+	fields: { username: 'socram' },
+});
+expect(submit.lastResponse()).toBeDefined();
+```
 
 ## Factories
 

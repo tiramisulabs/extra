@@ -1,4 +1,4 @@
-import type { ComponentCommand, ComponentContext, ModalCommand, ModalContext } from 'seyfert';
+import type { ComponentCommand, ModalCommand } from 'seyfert';
 import type { SlashCommandClass, SlashOptionsOf } from './bot/bot';
 import { type EmbedView, harvestComponents, type InteractiveComponentView, normalizeEmbed } from './bot/state';
 import {
@@ -167,8 +167,9 @@ export interface MockCommandContext<TOptions extends Record<string, unknown> = R
 	allTexts(): string[];
 	/**
 	 * Run the bound command's `run()` against this mock (skips the pipeline; the cast lives here, not in your
-	 * test). The command is bound at creation — `mockCommandContext(MyCommand)` / `mockComponentContext(MyButton)`
-	 * / `mockModalContext(MyModal)` — so this takes no argument. Throws if the context was built without a command.
+	 * test). Command contexts bind the command at creation with `mockCommandContext(MyCommand)`. Component/modal
+	 * class-first helpers return a harness whose `run(input)` returns the context it used.
+	 * Throws if this context was built without a command.
 	 */
 	run(): Promise<unknown>;
 }
@@ -197,6 +198,23 @@ export interface MockComponentContextOptions extends MockInteractionContextOptio
 	componentType?: 'Button' | 'StringSelect' | 'UserSelect' | 'RoleSelect' | 'MentionableSelect' | 'ChannelSelect';
 	values?: string[];
 }
+
+export type MockComponentType = NonNullable<MockComponentContextOptions['componentType']>;
+
+type MockNonButtonComponentType = Exclude<MockComponentType, 'Button'>;
+type ExtractComponentType<C extends ComponentCommandClass> = Extract<
+	InstanceType<C>['componentType'],
+	MockComponentType
+>;
+type ComponentTypeOf<C extends ComponentCommandClass> = [ExtractComponentType<C>] extends [never]
+	? MockComponentType
+	: ExtractComponentType<C>;
+type MockComponentContextOptionsFor<T extends MockComponentType> = Omit<
+	MockComponentContextOptions,
+	'componentType'
+> & {
+	componentType?: T;
+};
 
 export interface MockModalContextOptions extends MockInteractionContextOptions {
 	customId?: string;
@@ -251,34 +269,25 @@ export interface MockInteractionContextBase {
 	allTexts(): string[];
 	/**
 	 * Run the bound command's `run()` against this mock (skips the pipeline; the cast lives here, not in your
-	 * test). The command is bound at creation — `mockCommandContext(MyCommand)` / `mockComponentContext(MyButton)`
-	 * / `mockModalContext(MyModal)` — so this takes no argument. Throws if the context was built without a command.
+	 * test). Command contexts bind the command at creation with `mockCommandContext(MyCommand)`. Component/modal
+	 * class-first helpers return a harness whose `run(input)` returns the context it used.
+	 * Throws if this context was built without a command.
 	 */
 	run(): Promise<unknown>;
 }
 
-export interface MockComponentContext extends MockInteractionContextBase {
+export interface MockComponentContext<T extends MockComponentType = 'Button'> extends MockInteractionContextBase {
 	customId: string;
-	componentType: NonNullable<MockComponentContextOptions['componentType']>;
+	componentType: T;
 	interaction: {
 		customId: string;
 		custom_id: string;
-		componentType: NonNullable<MockComponentContextOptions['componentType']>;
+		componentType: T;
 		values: string[];
 	};
 	deferredUpdate: boolean;
 	update(response: MockContextResponse): Promise<MockContextResponse>;
 	deferUpdate(): Promise<void>;
-	/**
-	 * View this mock as a seyfert {@link ComponentContext} for passing to a `ComponentCommand`'s `filter`/`run`
-	 * directly — `button.filter(ctx.asComponentContext())`. A typed cast: the mock is a friendly stand-in (string
-	 * `componentType`, simplified `interaction`) that can't be structurally a `ComponentContext`, so this names the
-	 * cast in one place instead of `as unknown as` in your test. Pass the component type (default `'Button'`) to
-	 * type the returned context's interaction; the value drives only the type.
-	 */
-	asComponentContext<T extends NonNullable<MockComponentContextOptions['componentType']> = 'Button'>(
-		type?: T,
-	): ComponentContext<T>;
 }
 
 export interface MockModalContext extends MockInteractionContextBase {
@@ -291,11 +300,22 @@ export interface MockModalContext extends MockInteractionContextBase {
 		getInputValue(customId: string, required: true): string | string[];
 		getInputValue(customId: string, required?: false): string | string[] | undefined;
 	};
-	/**
-	 * View this mock as a seyfert {@link ModalContext} for passing to a `ModalCommand`'s `run`/`filter` directly —
-	 * `modal.run(ctx.asModalContext())`. A typed cast in one place; see {@link MockComponentContext.asComponentContext}.
-	 */
-	asModalContext(): ModalContext;
+}
+
+type MockComponentContextInput<T extends MockComponentType> =
+	| MockComponentContext<T>
+	| MockComponentContextOptionsFor<T>;
+
+export interface MockComponentContextHarness<T extends MockComponentType = 'Button'> {
+	filter(input?: MockComponentContextInput<T>): Promise<boolean>;
+	run(input?: MockComponentContextInput<T>): Promise<MockComponentContext<T>>;
+}
+
+type MockModalContextInput = MockModalContext | MockModalContextOptions;
+
+export interface MockModalContextHarness {
+	filter(input?: MockModalContextInput): Promise<boolean>;
+	run(input?: MockModalContextInput): Promise<MockModalContext>;
 }
 
 /**
@@ -407,7 +427,8 @@ function mockInteractionBase(
 			if (typeof command?.run !== 'function') {
 				throw new TypeError(
 					'ctx.run(): no command bound to this context. Build it with its command class — ' +
-						'e.g. mockCommandContext(MyCommand) / mockComponentContext(MyButton) / mockModalContext(MyModal).',
+						'e.g. mockCommandContext(MyCommand). For components/modals use the class-first harness — ' +
+						'e.g. const button = mockComponentContext(MyButton); await button.run(input).',
 				);
 			}
 			return command.run(this as never);
@@ -447,23 +468,49 @@ export function mockCommandContext(
 	};
 }
 
-// Class-first (preferred): derives componentType (+ customId when a plain string) from the class, binds ctx.run().
-export function mockComponentContext<C extends ComponentCommandClass>(
-	command: C,
-	options?: MockComponentContextOptions,
-): MockComponentContext;
-// Object-form (escape, no command): ctx.run() throws (nothing bound).
-export function mockComponentContext(options?: MockComponentContextOptions): MockComponentContext;
-export function mockComponentContext(
-	commandOrOptions: ComponentCommandClass | MockComponentContextOptions = {},
-	classOptions?: MockComponentContextOptions,
-): MockComponentContext {
-	const isClass = typeof commandOrOptions === 'function';
-	const instance = isClass ? new (commandOrOptions as ComponentCommandClass)() : undefined;
-	const options = (isClass ? classOptions : (commandOrOptions as MockComponentContextOptions)) ?? {};
-	const base = mockInteractionBase(options, instance);
-	const customId = options.customId ?? (typeof instance?.customId === 'string' ? instance.customId : 'test-component');
-	const componentType = options.componentType ?? instance?.componentType ?? 'Button';
+function isMockInteractionContext(value: unknown): value is MockInteractionContextBase {
+	return (
+		typeof value === 'object' && value !== null && 'responses' in value && 'write' in value && 'lastResponse' in value
+	);
+}
+
+function isMockComponentContext(value: unknown): value is MockComponentContext<MockComponentType> {
+	return isMockInteractionContext(value) && 'customId' in value && 'componentType' in value && 'interaction' in value;
+}
+
+function isMockModalContext(value: unknown): value is MockModalContext {
+	return isMockInteractionContext(value) && 'customId' in value && 'components' in value && 'interaction' in value;
+}
+
+function matchesCustomId(expected: unknown, actual: string): boolean {
+	if (expected === undefined) return true;
+	if (typeof expected === 'string') return expected === actual;
+	if (expected instanceof RegExp) {
+		expected.lastIndex = 0;
+		return expected.test(actual);
+	}
+	return true;
+}
+
+function assertComponentTypeMatches(
+	actual: MockComponentType | undefined,
+	expected: MockComponentType,
+	commandName: string,
+) {
+	if (actual && actual !== expected) {
+		throw new TypeError(
+			`mockComponentContext(${commandName}): componentType "${actual}" does not match the command componentType "${expected}".`,
+		);
+	}
+}
+
+function createMockComponentContext<T extends MockComponentType>(
+	options: MockComponentContextOptionsFor<T> = {},
+	defaults: { customId?: string; componentType?: T } = {},
+): MockComponentContext<T> {
+	const base = mockInteractionBase(options);
+	const customId = options.customId ?? defaults.customId ?? 'test-component';
+	const componentType = (options.componentType ?? defaults.componentType ?? 'Button') as T;
 	const values = options.values ?? [];
 	let deferredUpdate = false;
 
@@ -486,30 +533,78 @@ export function mockComponentContext(
 		async deferUpdate() {
 			deferredUpdate = true;
 		},
-		asComponentContext<T extends NonNullable<MockComponentContextOptions['componentType']> = 'Button'>(
-			_type?: T,
-		): ComponentContext<T> {
-			return this as unknown as ComponentContext<T>;
+	} as MockComponentContext<T>;
+}
+
+function createMockComponentHarness<C extends ComponentCommandClass>(
+	command: C,
+): MockComponentContextHarness<ComponentTypeOf<C>> {
+	const instance = new command();
+	const componentType = (instance.componentType ?? 'Button') as ComponentTypeOf<C>;
+	const defaultCustomId = typeof instance.customId === 'string' ? instance.customId : undefined;
+	const commandName = command.name || 'ComponentCommand';
+	const makeContext = (input?: MockComponentContextInput<ComponentTypeOf<C>>) => {
+		if (isMockComponentContext(input)) {
+			assertComponentTypeMatches(input.componentType, componentType, commandName);
+			return input as MockComponentContext<ComponentTypeOf<C>>;
+		}
+		const options = input ?? {};
+		assertComponentTypeMatches(options.componentType, componentType, commandName);
+		return createMockComponentContext(options, { customId: defaultCustomId, componentType });
+	};
+
+	return {
+		async filter(input) {
+			const ctx = makeContext(input);
+			if (!matchesCustomId(instance.customId, ctx.customId)) return false;
+			return typeof instance.filter === 'function' ? Boolean(await instance.filter(ctx as never)) : true;
+		},
+		async run(input) {
+			const ctx = makeContext(input);
+			if (typeof instance.run !== 'function') {
+				throw new TypeError(`mockComponentContext(${commandName}).run(): command has no run() method.`);
+			}
+			await instance.run(ctx as never);
+			return ctx;
 		},
 	};
 }
 
-// Class-first (preferred): derives customId (when a plain string) from the class, binds ctx.run().
-export function mockModalContext<C extends ModalCommandClass>(
+// Class-first (preferred): derives defaults from the command class and lets filter/run create the context they use.
+export function mockComponentContext<C extends ComponentCommandClass>(
 	command: C,
-	options?: MockModalContextOptions,
-): MockModalContext;
-// Object-form (escape, no command): ctx.run() throws (nothing bound).
-export function mockModalContext(options?: MockModalContextOptions): MockModalContext;
-export function mockModalContext(
-	commandOrOptions: ModalCommandClass | MockModalContextOptions = {},
-	classOptions?: MockModalContextOptions,
-): MockModalContext {
+): MockComponentContextHarness<ComponentTypeOf<C>>;
+// Object-form: creates a raw component context. No `componentType` means a button context.
+export function mockComponentContext(
+	options?: MockComponentContextOptionsFor<'Button'>,
+): MockComponentContext<'Button'>;
+export function mockComponentContext<T extends MockNonButtonComponentType>(
+	options: MockComponentContextOptionsFor<T> & { componentType: T },
+): MockComponentContext<T>;
+export function mockComponentContext(
+	commandOrOptions: ComponentCommandClass | MockComponentContextOptions = {},
+	_legacyOptions?: MockComponentContextOptions,
+): MockComponentContextHarness<MockComponentType> | MockComponentContext<MockComponentType> {
 	const isClass = typeof commandOrOptions === 'function';
-	const instance = isClass ? new (commandOrOptions as ModalCommandClass)() : undefined;
-	const options = (isClass ? classOptions : (commandOrOptions as MockModalContextOptions)) ?? {};
-	const base = mockInteractionBase(options, instance);
-	const customId = options.customId ?? (typeof instance?.customId === 'string' ? instance.customId : 'test-modal');
+	if (isClass) {
+		if (arguments.length > 1) {
+			throw new TypeError(
+				'mockComponentContext(ComponentClass, options) was removed. Use const component = ' +
+					'mockComponentContext(ComponentClass); then component.filter(options) or await component.run(options).',
+			);
+		}
+		return createMockComponentHarness(commandOrOptions as ComponentCommandClass);
+	}
+
+	return createMockComponentContext(commandOrOptions as MockComponentContextOptions);
+}
+
+function createMockModalContext(
+	options: MockModalContextOptions = {},
+	defaults: { customId?: string } = {},
+): MockModalContext {
+	const base = mockInteractionBase(options);
+	const customId = options.customId ?? defaults.customId ?? 'test-modal';
 	const fields = options.fields ?? {};
 	const components = Object.entries(fields).map(([fieldCustomId, value]) => ({
 		type: 18 as const,
@@ -533,10 +628,53 @@ export function mockModalContext(
 			components,
 			getInputValue,
 		},
-		asModalContext(): ModalContext {
-			return this as unknown as ModalContext;
+	};
+}
+
+function createMockModalHarness<C extends ModalCommandClass>(command: C): MockModalContextHarness {
+	const instance = new command();
+	const defaultCustomId = typeof instance.customId === 'string' ? instance.customId : undefined;
+	const commandName = command.name || 'ModalCommand';
+	const makeContext = (input?: MockModalContextInput) =>
+		isMockModalContext(input) ? input : createMockModalContext(input ?? {}, { customId: defaultCustomId });
+
+	return {
+		async filter(input) {
+			const ctx = makeContext(input);
+			if (!matchesCustomId(instance.customId, ctx.customId)) return false;
+			return typeof instance.filter === 'function' ? Boolean(await instance.filter(ctx as never)) : true;
+		},
+		async run(input) {
+			const ctx = makeContext(input);
+			if (typeof instance.run !== 'function') {
+				throw new TypeError(`mockModalContext(${commandName}).run(): command has no run() method.`);
+			}
+			await instance.run(ctx as never);
+			return ctx;
 		},
 	};
+}
+
+// Class-first (preferred): derives defaults from the modal class and lets filter/run create the context they use.
+export function mockModalContext<C extends ModalCommandClass>(command: C): MockModalContextHarness;
+// Object-form: creates a raw modal context.
+export function mockModalContext(options?: MockModalContextOptions): MockModalContext;
+export function mockModalContext(
+	commandOrOptions: ModalCommandClass | MockModalContextOptions = {},
+	_legacyOptions?: MockModalContextOptions,
+): MockModalContextHarness | MockModalContext {
+	const isClass = typeof commandOrOptions === 'function';
+	if (isClass) {
+		if (arguments.length > 1) {
+			throw new TypeError(
+				'mockModalContext(ModalClass, options) was removed. Use const modal = mockModalContext(ModalClass); ' +
+					'then modal.filter(options) or await modal.run(options).',
+			);
+		}
+		return createMockModalHarness(commandOrOptions as ModalCommandClass);
+	}
+
+	return createMockModalContext(commandOrOptions as MockModalContextOptions);
 }
 
 export interface MockScene<TOptions extends Record<string, unknown> = Record<string, unknown>> {

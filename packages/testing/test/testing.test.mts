@@ -461,10 +461,10 @@ describe('mockCommandContext', () => {
 			}
 		}
 
-		const ctx = mockComponentContext(ConfirmButton);
+		const button = mockComponentContext(ConfirmButton);
+		const ctx = await button.run();
 		expect(ctx.componentType).toBe('Button'); // derived from the class
 		expect(ctx.customId).toBe('confirm');
-		await ctx.run();
 
 		expect(seen).toEqual(['confirm']);
 		expect(ctx.lastResponse()).toMatchObject({ content: 'clicked' });
@@ -480,36 +480,54 @@ describe('mockCommandContext', () => {
 			}
 		}
 
-		const ctx = mockModalContext(FeedbackModal);
+		const modal = mockModalContext(FeedbackModal);
+		const ctx = await modal.run();
 		expect(ctx.customId).toBe('feedback');
-		await ctx.run();
 
 		expect(seen).toEqual(['feedback']);
 		expect(ctx.lastResponse()).toMatchObject({ content: 'submitted' });
 	});
 
-	test('asComponentContext()/asModalContext() feed a command filter/run directly', () => {
+	test('mockComponentContext()/mockModalContext() can filter and run with per-call context input', async () => {
 		class GatedButton extends ComponentCommand {
 			componentType = 'Button' as const;
 			filter(ctx: ComponentContext<'Button'>) {
 				return ctx.customId === 'go';
 			}
-			async run() {}
+			async run(ctx: ComponentContext<'Button'>) {
+				await ctx.write({ content: 'clicked' });
+			}
 		}
 		class GatedModal extends ModalCommand {
+			customId = 'form';
 			filter(ctx: ModalContext) {
 				return ctx.customId === 'form';
 			}
+			async run(ctx: ModalContext) {
+				await ctx.write({ content: 'submitted' });
+			}
+		}
+		class UngatedButton extends ComponentCommand {
+			componentType = 'Button' as const;
+			customId = 'go';
 			async run() {}
 		}
 
-		const button = new GatedButton();
-		// The point: the mock is accepted where a seyfert ComponentContext is required, no `as unknown` in the test.
-		expect(button.filter(mockComponentContext({ customId: 'go' }).asComponentContext())).toBe(true);
-		expect(button.filter(mockComponentContext({ customId: 'nope' }).asComponentContext())).toBe(false);
+		const button = mockComponentContext(GatedButton);
+		expect(await button.filter({ customId: 'go' })).toBe(true);
+		expect(await button.filter({ customId: 'nope' })).toBe(false);
+		const click = await button.run({ customId: 'go' });
+		expect(click.lastResponse()).toMatchObject({ content: 'clicked' });
 
-		const modal = new GatedModal();
-		expect(modal.filter(mockModalContext({ customId: 'form' }).asModalContext())).toBe(true);
+		const ungated = mockComponentContext(UngatedButton);
+		expect(await ungated.filter({ customId: 'go' })).toBe(true);
+		expect(await ungated.filter({ customId: 'other' })).toBe(false);
+
+		const modal = mockModalContext(GatedModal);
+		expect(await modal.filter({ customId: 'form' })).toBe(true);
+		expect(await modal.filter({ customId: 'other' })).toBe(false);
+		const submit = await modal.run({ customId: 'form' });
+		expect(submit.lastResponse()).toMatchObject({ content: 'submitted' });
 	});
 
 	test('mockScene(Command) wires entities + a class-bound, typed-options ctx', async () => {
