@@ -108,7 +108,10 @@ describe('rendered reader', () => {
 			],
 		});
 
-		expect(() => ui.get.message({ content: /Settings/ })).toThrow(/Container content matched/);
+		const messageError = catchRenderedOutputError(() => ui.get.message({ content: /Settings/ }));
+		expect(messageError.message).toContain('Container content matched');
+		expect(messageError.message).not.toContain('If the Components V2 panel is the contract');
+		expect(messageError.message).not.toContain('get.container');
 		const panel = ui.get.container({ content: /Settings/, has: { kind: 'select', query: 'reason' } });
 		expect(panel.accentColor).toBe(0x00aa88);
 		expect(panel.get.content({ text: 'Settings' }).text).toBe('Settings');

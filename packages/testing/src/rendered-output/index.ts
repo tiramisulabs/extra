@@ -1057,7 +1057,7 @@ function containerContentDiagnostics(kind: string, query: unknown, scope: Scope)
 	if (content === undefined) return undefined;
 	const matches = componentCandidates(scope, 'content', { text: content as TextMatcher });
 	if (matches.length === 0) return undefined;
-	return `\nContainer content matched:\n${matches.map(match => `  ${match.summary}`).join('\n')}\n\nIf the Components V2 panel is the contract, use:\n  rendered(result).get.container({ content: ${describeQuery(content)} })`;
+	return `\nContainer content matched:\n${matches.map(match => `  ${match.summary}`).join('\n')}`;
 }
 
 function modalFieldDiagnostics(kind: string, scope: Scope): string | undefined {
