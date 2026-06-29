@@ -1039,9 +1039,6 @@ function renderedOutputError(
 		kind !== 'message' && scope.messages.length > 1
 			? `\nUse a scope first, for example rendered(result).get.message({ content: /.../ }).get.${kind}(...).`
 			: undefined,
-		kind !== 'container'
-			? `\nFor Components V2 panels, try rendered(result).get.container({ content: /.../ }).get.${kind}(...).`
-			: undefined,
 		matches.length > 1 ? `\nOr use:\n  ${scope.label}.all.${kind}(${queryText})` : undefined,
 	].filter((part): part is string => part !== undefined);
 	return new RenderedOutputError(sections.join('\n'), {

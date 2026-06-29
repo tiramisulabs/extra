@@ -13,6 +13,16 @@ import { MessageFlags, TextInputStyle } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
 import { createMockBot, type RecordedAction, RenderedOutputError, rendered } from '../../src';
 
+function catchRenderedOutputError(run: () => unknown): RenderedOutputError {
+	try {
+		run();
+	} catch (error) {
+		expect(error).toBeInstanceOf(RenderedOutputError);
+		return error as RenderedOutputError;
+	}
+	throw new Error('Expected RenderedOutputError.');
+}
+
 describe('rendered reader', () => {
 	test('get/query/all apply cardinality and message scopes resolve duplicate controls', () => {
 		const ui = rendered([
@@ -36,6 +46,27 @@ describe('rendered reader', () => {
 		const settings = ui.get.message({ content: 'Settings' });
 		expect(settings.get.button('edit').label).toBe('Edit');
 		expect(() => ui.get.button({ customID: 'edit' } as never)).toThrow(/unknown query key/);
+	});
+
+	test('missing message errors do not suggest Components V2 containers when content is absent', () => {
+		const ui = rendered({ content: 'Ready' });
+		const error = catchRenderedOutputError(() => ui.get.message({ content: /invalid-number/ }));
+
+		expect(error.message).toContain('found 0 messages');
+		expect(error.message).not.toContain('For Components V2 panels');
+		expect(error.message).not.toContain('get.container({ content: /.../ })');
+	});
+
+	test('component misses do not append a generic Components V2 container hint', () => {
+		const ui = rendered({
+			flags: MessageFlags.IsComponentsV2,
+			components: [{ type: 17, components: [{ type: 10, content: 'Settings' }] }],
+		});
+		const error = catchRenderedOutputError(() => ui.get.embed({ title: /Missing/ }));
+
+		expect(error.message).toContain('found 0 embeds');
+		expect(error.message).not.toContain('For Components V2 panels');
+		expect(error.message).not.toContain('get.container({ content: /.../ })');
 	});
 
 	test('message content stays separate from Components V2 container content', () => {
