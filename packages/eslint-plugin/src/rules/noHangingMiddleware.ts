@@ -1,9 +1,49 @@
 import type { ESLintUtils, TSESLint, TSESTree } from '@typescript-eslint/utils';
+import * as ts from 'typescript';
 import { getServices, isSeyfertSymbol } from '../utils';
 
 // Only `next`/`stop` advance the pipeline. `pass` exists in seyfert 4.x but is
 // being removed in the next major, so it does NOT count — a `pass`-only path hangs.
 const ADVANCERS = new Set(['next', 'stop']);
+
+/** Truthiness of a single (non-union) type constituent. */
+function constituentTruthiness(checker: ts.TypeChecker, type: ts.Type): 'truthy' | 'falsy' | 'unknown' {
+	const flags = type.flags;
+	if (flags & ts.TypeFlags.BooleanLiteral) return checker.typeToString(type) === 'false' ? 'falsy' : 'truthy';
+	if (flags & ts.TypeFlags.StringLiteral) return (type as ts.StringLiteralType).value === '' ? 'falsy' : 'truthy';
+	if (flags & ts.TypeFlags.NumberLiteral) return (type as ts.NumberLiteralType).value === 0 ? 'falsy' : 'truthy';
+	if (flags & ts.TypeFlags.BigIntLiteral) {
+		return (type as ts.BigIntLiteralType).value.base10Value === '0' ? 'falsy' : 'truthy';
+	}
+	if (flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void)) return 'falsy';
+	// Objects, arrays, classes, functions and symbols are always truthy.
+	if (flags & (ts.TypeFlags.Object | ts.TypeFlags.NonPrimitive | ts.TypeFlags.ESSymbol | ts.TypeFlags.UniqueESSymbol)) {
+		return 'truthy';
+	}
+	// Wide primitives (string/number/boolean/bigint), any, unknown, enums, … may be either.
+	return 'unknown';
+}
+
+/**
+ * Whether a condition's TYPE is always truthy (`true`), always falsy (`false`),
+ * or undeterminable (`undefined`). Type-aware: a non-empty string literal, a
+ * number ≠ 0, an object/array/class/function/symbol is always truthy;
+ * `false`/`0`/`''`/`0n`/`null`/`undefined` are always falsy; a union is only
+ * decided when every constituent agrees.
+ */
+function typeTruthiness(checker: ts.TypeChecker, type: ts.Type): boolean | undefined {
+	let sawTruthy = false;
+	let sawFalsy = false;
+	for (const part of type.isUnion() ? type.types : [type]) {
+		const result = constituentTruthiness(checker, part);
+		if (result === 'unknown') return undefined;
+		if (result === 'truthy') sawTruthy = true;
+		else sawFalsy = true;
+	}
+	if (sawTruthy && !sawFalsy) return true;
+	if (sawFalsy && !sawTruthy) return false;
+	return undefined;
+}
 
 interface FuncInfo {
 	upper: FuncInfo | null;
@@ -118,6 +158,57 @@ export default function create(createRule: ReturnType<typeof ESLintUtils.RuleCre
 				return false;
 			};
 
+			// ESLint's CFG does not constant-fold conditions, so `if (true) { next(); }`
+			// looks like it has a falling-through (hanging) branch. This AST pass
+			// understands type-constant conditions (via the type checker) and is used ONLY to suppress a
+			// CFG "hang" when every live path provably advances. It is conservative — it
+			// bails to `false` on anything it can't prove — so it never hides a real
+			// hang. Runtime "always/never" branches are out of reach (no linter can).
+			const conditionTruthiness = (test: TSESTree.Expression): boolean | undefined => {
+				const services = getServices(context);
+				if (!services) return undefined;
+				return typeTruthiness(services.program.getTypeChecker(), services.getTypeAtLocation(test));
+			};
+
+			const definitelyAdvances = (node: TSESTree.Node | null | undefined, info: FuncInfo): boolean => {
+				switch (node?.type) {
+					case 'BlockStatement':
+						for (const statement of node.body) {
+							if (definitelyAdvances(statement, info)) return true;
+							// Only statements that always complete normally may precede the advancer.
+							if (
+								statement.type !== 'ExpressionStatement' &&
+								statement.type !== 'VariableDeclaration' &&
+								statement.type !== 'EmptyStatement'
+							) {
+								return false;
+							}
+						}
+						return false;
+					case 'ExpressionStatement':
+						return node.expression.type === 'CallExpression' && isAdvancerCall(node.expression, info);
+					case 'ReturnStatement':
+						return node.argument?.type === 'CallExpression' && isAdvancerCall(node.argument, info);
+					case 'ThrowStatement':
+						return true;
+					case 'IfStatement': {
+						const truthy = conditionTruthiness(node.test);
+						if (truthy === true) return definitelyAdvances(node.consequent, info);
+						if (truthy === false) return definitelyAdvances(node.alternate, info);
+						return definitelyAdvances(node.consequent, info) && definitelyAdvances(node.alternate, info);
+					}
+					default:
+						return false;
+				}
+			};
+
+			const bodyDefinitelyAdvances = (info: FuncInfo): boolean => {
+				const fn = info.node;
+				if (fn.type !== 'ArrowFunctionExpression' && fn.type !== 'FunctionExpression') return false;
+				if (fn.body.type === 'BlockStatement') return definitelyAdvances(fn.body, info);
+				return fn.body.type === 'CallExpression' && isAdvancerCall(fn.body, info);
+			};
+
 			const onCodePathStart = (codePath: TSESLint.CodePath, node: TSESTree.Node): void => {
 				const isMiddleware =
 					(node.type === 'ArrowFunctionExpression' || node.type === 'FunctionExpression') &&
@@ -140,7 +231,7 @@ export default function create(createRule: ReturnType<typeof ESLintUtils.RuleCre
 			const onCodePathEnd = (_codePath: TSESLint.CodePath, _node: TSESTree.Node): void => {
 				const info = funcInfo;
 				funcInfo = info?.upper ?? null;
-				if (info?.isMiddleware && canHang(info)) {
+				if (info?.isMiddleware && canHang(info) && !bodyDefinitelyAdvances(info)) {
 					context.report({ node: info.node, messageId: 'mayHang' });
 				}
 			};

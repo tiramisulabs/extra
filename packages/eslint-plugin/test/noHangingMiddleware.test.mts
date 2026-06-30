@@ -6,20 +6,24 @@ const createRule = ESLintUtils.RuleCreator(() => 'https://example.com/seyfert-es
 const rule = noHangingMiddlewareFactory(createRule);
 
 const mw = (body: string) => `import { createMiddleware } from 'seyfert';\nexport const m = ${body};`;
+// Same, with a declarations/types preamble so a condition can be given a precise type.
+const mwd = (decls: string, body: string) =>
+	`import { createMiddleware } from 'seyfert';\n${decls}\nexport const m = ${body};`;
+
+// `if (<cond>) { next(); }` with no else — valid only when <cond> is provably truthy.
+const ifCond = (cond: string) => mw(`createMiddleware(({ next }) => { if (${cond}) { next(); } })`);
+const ifCondD = (decls: string, cond: string) =>
+	mwd(decls, `createMiddleware(({ next }) => { if (${cond}) { next(); } })`);
+const hang = (code: string) => ({ code, errors: [{ messageId: 'mayHang' as const }] });
 
 createTester().run('no-hanging-middleware', rule, {
 	valid: [
-		// Unconditional next.
+		// --- control flow (no constants) ---
 		mw(`createMiddleware(({ next }) => { next(); })`),
-		// Every branch advances (return stop / next).
 		mw(`createMiddleware(({ next, stop }) => { if (Math.random() > 0.5) return stop('e'); next(); })`),
-		// if/else, both advance.
 		mw(`createMiddleware(({ next, stop }) => { if (Math.random() > 0.5) next(); else stop('e'); })`),
-		// Expression-body arrow with member call.
 		mw(`createMiddleware(m => m.next())`),
-		// Async: advances after await.
 		mw(`createMiddleware(async ({ next }) => { await Promise.resolve(); next(); })`),
-		// switch with every case + default advancing.
 		mw(`createMiddleware(({ next, stop }) => {
 	switch (Math.floor(Math.random() * 2)) {
 		case 0:
@@ -28,37 +32,80 @@ createTester().run('no-hanging-middleware', rule, {
 			return stop('e');
 	}
 })`),
-		// throw branch is exempt (does not hang); the other branch advances.
 		mw(`createMiddleware(({ next }) => { if (Math.random() > 0.5) throw new Error('x'); next(); })`),
-		// Not seyfert's createMiddleware -> not analysed.
 		`function createMiddleware(cb: (c: { next: () => void }) => void) { return cb; }
 const m = createMiddleware(() => {});`,
+
+		// --- always-truthy conditions (type-aware): the consequent always runs ---
+		// booleans
+		ifCond('true'),
+		mw(`createMiddleware(({ next }) => { if (true) next(); })`),
+		ifCondD('declare const b: true;', 'b'),
+		// numbers
+		ifCond('1'),
+		ifCond('42'),
+		ifCond('-1'),
+		ifCondD('declare const n: 5;', 'n'),
+		// bigint
+		ifCond('1n'),
+		// strings
+		ifCond("'go'"),
+		ifCondD("declare const s: 'lit';", 's'),
+		// objects
+		ifCond('{}'),
+		ifCondD('declare const o: { a: number };', 'o'),
+		// arrays
+		ifCond('[]'),
+		ifCondD('declare const arr: number[];', 'arr'),
+		// functions
+		ifCond('() => {}'),
+		ifCond('function () {}'),
+		ifCondD('declare const fn: () => void;', 'fn'),
+		// classes
+		ifCond('class {}'),
+		ifCondD('class C {}', 'C'),
+		ifCondD('class C {}', 'new C()'),
+		ifCondD('class C {} declare const c: C;', 'c'),
+
+		// --- always-falsy conditions: the ELSE branch always runs ---
+		mw(`createMiddleware(({ next }) => { if (false) {} else { next(); } })`),
+		mw(`createMiddleware(({ stop }) => { if ('') {} else { stop('e'); } })`),
+		mw(`createMiddleware(({ next }) => { if (0) {} else { next(); } })`),
+		mwd('declare const u: undefined;', `createMiddleware(({ next }) => { if (u) {} else { next(); } })`),
 	],
 	invalid: [
-		// if without else: the false path hangs.
-		{
-			code: mw(`createMiddleware(({ next }) => { if (Math.random() > 0.5) next(); })`),
-			errors: [{ messageId: 'mayHang' }],
-		},
-		// Empty body never advances.
-		{ code: mw(`createMiddleware(() => {})`), errors: [{ messageId: 'mayHang' }] },
-		// Early return without advancing.
-		{
-			code: mw(`createMiddleware(({ next }) => { if (Math.random() > 0.5) return; next(); })`),
-			errors: [{ messageId: 'mayHang' }],
-		},
-		// `pass` no longer advances the pipeline -> hangs.
-		{ code: mw(`createMiddleware(({ pass }) => { pass(); })`), errors: [{ messageId: 'mayHang' }] },
-		// switch without default: the unmatched path falls through.
-		{
-			code: mw(`createMiddleware(({ next }) => {
+		// --- real hangs (non-constant control flow) ---
+		hang(mw(`createMiddleware(({ next }) => { if (Math.random() > 0.5) next(); })`)),
+		hang(mw(`createMiddleware(() => {})`)),
+		hang(mw(`createMiddleware(({ next }) => { if (Math.random() > 0.5) return; next(); })`)),
+		hang(mw(`createMiddleware(({ pass }) => { pass(); })`)),
+		hang(
+			mw(`createMiddleware(({ next }) => {
 	switch (Math.floor(Math.random() * 2)) {
 		case 0:
 			next();
 			break;
 	}
 })`),
-			errors: [{ messageId: 'mayHang' }],
-		},
+		),
+
+		// --- always-falsy conditions, no else: the consequent never runs -> hangs ---
+		hang(ifCond('false')),
+		hang(ifCond('0')),
+		hang(ifCond('0n')),
+		hang(ifCond("''")),
+		hang(ifCond('null')),
+		hang(ifCondD('declare const u: undefined;', 'u')),
+
+		// --- undeterminable types: could be falsy -> must NOT be suppressed ---
+		hang(ifCondD('declare const b: boolean;', 'b')),
+		hang(ifCondD('declare const s: string;', 's')),
+		hang(ifCondD('declare const n: number;', 'n')),
+		hang(ifCondD('declare const o: { a: number } | null;', 'o')),
+		hang(ifCondD("declare const u: 'a' | '';", 'u')),
+
+		// --- constant-true condition, but the taken branch still doesn't advance ---
+		hang(mw(`createMiddleware(({ next }) => { if (true) { return; } next(); })`)),
+		hang(mw(`createMiddleware(({ next }) => { if (true) {} })`)),
 	],
 });
