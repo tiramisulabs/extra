@@ -1,78 +1,19 @@
 import type { ESLintUtils, TSESTree } from '@typescript-eslint/utils';
 import * as ts from 'typescript';
-import { getServices, isSeyfertSymbol, seyfertExportName } from '../utils';
-
-const OPTION_BUILDER = /^create[A-Za-z]*Option$/;
+import {
+	constInitializer,
+	getServices,
+	isSeyfertSymbol,
+	propertyName,
+	resolveObjectLiteral,
+	seyfertOptionBuilderName,
+	symbolConstInitializer,
+	unwrap,
+} from '../utils';
 
 interface Violation {
 	node: ts.Node;
 	name: string;
-}
-
-/** Strip `as`, `satisfies`, parentheses and `!` to reach the underlying expression. */
-function unwrap(node: ts.Expression): ts.Expression {
-	let current = node;
-	while (
-		ts.isAsExpression(current) ||
-		ts.isSatisfiesExpression(current) ||
-		ts.isParenthesizedExpression(current) ||
-		ts.isNonNullExpression(current)
-	) {
-		current = current.expression;
-	}
-	return current;
-}
-
-/** The initializer of the `const` a symbol points at, if any. */
-function symbolConstInitializer(symbol: ts.Symbol | undefined): ts.Expression | undefined {
-	const declaration = symbol?.valueDeclaration;
-	if (
-		declaration &&
-		ts.isVariableDeclaration(declaration) &&
-		declaration.initializer &&
-		declaration.parent.flags & ts.NodeFlags.Const
-	) {
-		return declaration.initializer;
-	}
-	return undefined;
-}
-
-/** The `const` initializer an identifier/property-access refers to, across imports. */
-function constInitializer(checker: ts.TypeChecker, node: ts.Expression): ts.Expression | undefined {
-	let symbol = checker.getSymbolAtLocation(node);
-	if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
-		try {
-			symbol = checker.getAliasedSymbol(symbol);
-		} catch {
-			return undefined;
-		}
-	}
-	return symbolConstInitializer(symbol);
-}
-
-/**
- * Resolve an expression to the object literal it ultimately refers to — through
- * `const` bindings and imports. Returns undefined for arrays, parameters,
- * computed values, or anything not statically resolvable.
- */
-function resolveObjectLiteral(
-	checker: ts.TypeChecker,
-	node: ts.Expression,
-	seen: Set<ts.Node>,
-): ts.ObjectLiteralExpression | undefined {
-	const expression = unwrap(node);
-	if (seen.has(expression)) return undefined;
-	seen.add(expression);
-
-	if (ts.isObjectLiteralExpression(expression)) return expression;
-	if (!ts.isIdentifier(expression) && !ts.isPropertyAccessExpression(expression)) return undefined;
-
-	const initializer = constInitializer(checker, expression);
-	return initializer ? resolveObjectLiteral(checker, initializer, seen) : undefined;
-}
-
-function propertyName(name: ts.PropertyName): string {
-	return ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name) ? name.text : 'option';
 }
 
 /**
@@ -84,15 +25,9 @@ function collectViolations(checker: ts.TypeChecker, root: ts.ObjectLiteralExpres
 	const violations: Violation[] = [];
 	const seen = new Set<ts.Node>();
 
-	const isSeyfertBuilderCall = (value: ts.Expression): boolean => {
-		if (!ts.isCallExpression(value)) return false;
-		const name = seyfertExportName(checker, checker.getSymbolAtLocation(value.expression));
-		return name !== undefined && OPTION_BUILDER.test(name);
-	};
-
 	const checkValue = (value: ts.Expression, name: string): void => {
 		const expression = unwrap(value);
-		if (isSeyfertBuilderCall(expression)) return;
+		if (seyfertOptionBuilderName(checker, expression) !== undefined) return;
 		// A reference to a const that holds a builder result (`const q = createX(); { q }`).
 		if (ts.isIdentifier(expression) && !seen.has(expression)) {
 			seen.add(expression);

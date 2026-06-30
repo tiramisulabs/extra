@@ -120,3 +120,116 @@ export function hasSeyfertDecorator(
 	}
 	return false;
 }
+
+/** Strip `as`, `satisfies`, parentheses and `!` to reach the underlying expression. */
+export function unwrap(node: ts.Expression): ts.Expression {
+	let current = node;
+	while (
+		ts.isAsExpression(current) ||
+		ts.isSatisfiesExpression(current) ||
+		ts.isParenthesizedExpression(current) ||
+		ts.isNonNullExpression(current)
+	) {
+		current = current.expression;
+	}
+	return current;
+}
+
+/** The initializer of the `const` a symbol points at, if any. */
+export function symbolConstInitializer(symbol: ts.Symbol | undefined): ts.Expression | undefined {
+	const declaration = symbol?.valueDeclaration;
+	if (
+		declaration &&
+		ts.isVariableDeclaration(declaration) &&
+		declaration.initializer &&
+		declaration.parent.flags & ts.NodeFlags.Const
+	) {
+		return declaration.initializer;
+	}
+	return undefined;
+}
+
+/** The `const` initializer an identifier/property-access refers to, across imports. */
+export function constInitializer(checker: ts.TypeChecker, node: ts.Expression): ts.Expression | undefined {
+	let symbol = checker.getSymbolAtLocation(node);
+	if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
+		try {
+			symbol = checker.getAliasedSymbol(symbol);
+		} catch {
+			return undefined;
+		}
+	}
+	return symbolConstInitializer(symbol);
+}
+
+/**
+ * Resolve an expression to the object literal it ultimately refers to — through
+ * `const` bindings and imports. Returns undefined for arrays, parameters,
+ * computed values, or anything not statically resolvable.
+ */
+export function resolveObjectLiteral(
+	checker: ts.TypeChecker,
+	node: ts.Expression,
+	seen: Set<ts.Node>,
+): ts.ObjectLiteralExpression | undefined {
+	const expression = unwrap(node);
+	if (seen.has(expression)) return undefined;
+	seen.add(expression);
+
+	if (ts.isObjectLiteralExpression(expression)) return expression;
+	if (!ts.isIdentifier(expression) && !ts.isPropertyAccessExpression(expression)) return undefined;
+
+	const initializer = constInitializer(checker, expression);
+	return initializer ? resolveObjectLiteral(checker, initializer, seen) : undefined;
+}
+
+/** The text of an object-literal property name (identifier/string/number key). */
+export function propertyName(name: ts.PropertyName): string {
+	if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) return name.text;
+	if (ts.isComputedPropertyName(name)) {
+		const expression = name.expression;
+		if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) return expression.text;
+	}
+	return 'option';
+}
+
+/** The value expression of a `name: <value>` (or shorthand `name`) property, if present. */
+export function objectProperty(object: ts.ObjectLiteralExpression, name: string): ts.Expression | undefined {
+	for (const property of object.properties) {
+		if (ts.isPropertyAssignment(property) && propertyName(property.name) === name) {
+			return property.initializer;
+		}
+		if (ts.isShorthandPropertyAssignment(property) && property.name.text === name) {
+			return property.name;
+		}
+	}
+	return undefined;
+}
+
+/** The static string value of `expr` if it is a string literal (after unwrapping). */
+export function stringLiteralValue(expr: ts.Expression): string | undefined {
+	const node = unwrap(expr);
+	return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) ? node.text : undefined;
+}
+
+/** The static boolean value of `expr` if it is a `true`/`false` literal (after unwrapping). */
+export function booleanLiteralValue(expr: ts.Expression): boolean | undefined {
+	const node = unwrap(expr);
+	if (node.kind === ts.SyntaxKind.TrueKeyword) return true;
+	if (node.kind === ts.SyntaxKind.FalseKeyword) return false;
+	return undefined;
+}
+
+/** Seyfert option builders are `createXOption` (e.g. `createStringOption`). */
+const OPTION_BUILDER = /^create[A-Za-z]*Option$/;
+
+/**
+ * If `expr` is a call to a seyfert `createXOption` builder (verified by package
+ * origin), return the builder name; otherwise undefined.
+ */
+export function seyfertOptionBuilderName(checker: ts.TypeChecker, expr: ts.Expression): string | undefined {
+	const node = unwrap(expr);
+	if (!ts.isCallExpression(node)) return undefined;
+	const name = seyfertExportName(checker, checker.getSymbolAtLocation(node.expression));
+	return name !== undefined && OPTION_BUILDER.test(name) ? name : undefined;
+}

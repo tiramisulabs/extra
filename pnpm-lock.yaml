@@ -69,8 +69,8 @@ importers:
         specifier: ^10.6.0
         version: 10.6.0
       seyfert:
-        specifier: 4.4.0
-        version: 4.4.0
+        specifier: 5.0.1-dev-28455961168.0
+        version: 5.0.1-dev-28455961168.0
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -1112,6 +1112,9 @@ packages:
   seyfert@4.4.0:
     resolution: {integrity: sha512-DhrOpXPc74K5lGkhEWm0wpfQAaCoUpNh6sfPywLU9siKkuzFBq+lmMOGz+SIMke5kfwBuuDGM7R3Aw1ADeKo5g==}
 
+  seyfert@5.0.1-dev-28455961168.0:
+    resolution: {integrity: sha512-Bm3u4odRWHtFL79Hk3mxK9IycSDCW8cWW+5qoheTcyEFOJ75zqWix7t2ZZeUUvcu3i+C9/hKMoiYpzHtDI51Jw==}
+
   shebang-command@2.0.0:
     resolution: {integrity: sha512-kHxr2zZpYtdmrN1qDjrrX/Z1rR1kG8Dx+gkpK1G4eXmvXswmcE1hTWBWYUzlraYw1/yZp6YuDY77YtvbN0dmDA==}
     engines: {node: '>=8'}
@@ -2071,6 +2074,8 @@ snapshots:
   semver@7.8.5: {}
 
   seyfert@4.4.0: {}
+
+  seyfert@5.0.1-dev-28455961168.0: {}
 
   shebang-command@2.0.0:
     dependencies:

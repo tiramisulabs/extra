@@ -52,7 +52,9 @@ export async function lintProject(files: Record<string, string>, rules: Linter.R
 		symlinkSync(seyfertDir, join(root, 'node_modules', 'seyfert'), 'dir');
 		writeFileSync(join(root, 'tsconfig.json'), FIXTURE_TSCONFIG);
 		for (const [name, code] of Object.entries(files)) {
-			writeFileSync(join(root, name), code);
+			const filePath = join(root, name);
+			mkdirSync(dirname(filePath), { recursive: true });
+			writeFileSync(filePath, code);
 		}
 
 		const eslint = new ESLint({
