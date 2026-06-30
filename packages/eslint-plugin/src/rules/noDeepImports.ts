@@ -2,7 +2,9 @@ import type { ESLintUtils, TSESTree } from '@typescript-eslint/utils';
 import * as ts from 'typescript';
 import { getServices } from '../utils';
 
-const DEEP_IMPORT = /^seyfert\/lib\//;
+// Matches the internal `seyfert/lib` barrel and any `seyfert/lib/...` subpath.
+// The trailing `(?:\/|$)` is what catches the bare `seyfert/lib` (same file as root).
+const DEEP_IMPORT = /^seyfert\/lib(?:\/|$)/;
 
 // Cache the set of names exported from the `seyfert` package root, keyed by the
 // resolved root declaration file. Expanding `export *` requires a type checker,

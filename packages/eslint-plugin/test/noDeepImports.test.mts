@@ -29,6 +29,12 @@ createTester().run('no-deep-imports', rule, {
 			output: null,
 			errors: [{ messageId: 'preferRoot' }],
 		},
+		{
+			// The bare `seyfert/lib` barrel resolves to the same file as the root → must be flagged.
+			code: "import { AutoLoad } from 'seyfert/lib';",
+			output: "import { AutoLoad } from 'seyfert';",
+			errors: [{ messageId: 'preferRoot' }],
+		},
 	],
 });
 
