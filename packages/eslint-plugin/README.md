@@ -13,6 +13,7 @@ package.
 | `seyfert/no-deep-imports` | Prefer the `seyfert` root over deep `seyfert/lib/...` paths when the symbol is re-exported from root. | ✅ |
 | `seyfert/options-use-builders` | Values in `@Options({ ... })` must be created with a `createXOption` builder. | – |
 | `seyfert/no-hanging-middleware` | `createMiddleware` callbacks must call `next()` or `stop()` on every code path. | – |
+| `seyfert/decorator-target` | `@Group` only on a `SubCommand`; `@Groups`/`@GroupsT`/`@AutoLoad` only on a `Command`. | – |
 
 ## Usage
 

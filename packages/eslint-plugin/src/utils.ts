@@ -81,9 +81,10 @@ const COMMAND_BASES = new Set(['BaseCommand', 'Command', 'SubCommand', 'ContextM
 
 /**
  * Walk the base-type chain of `type` and report whether any ancestor is a
- * seyfert command base class (verified by both name and package origin).
+ * seyfert class whose name is in `names` (verified by both name and package
+ * origin).
  */
-export function extendsSeyfertCommand(checker: ts.TypeChecker, type: ts.Type): boolean {
+export function extendsSeyfertClass(checker: ts.TypeChecker, type: ts.Type, names: ReadonlySet<string>): boolean {
 	const seen = new Set<ts.Type>();
 	const stack: ts.Type[] = [type];
 	while (stack.length > 0) {
@@ -91,10 +92,15 @@ export function extendsSeyfertCommand(checker: ts.TypeChecker, type: ts.Type): b
 		if (!current || seen.has(current)) continue;
 		seen.add(current);
 		const symbol = current.aliasSymbol ?? current.getSymbol();
-		if (symbol && COMMAND_BASES.has(symbol.getName()) && isSeyfertSymbol(checker, symbol)) return true;
+		if (symbol && names.has(symbol.getName()) && isSeyfertSymbol(checker, symbol)) return true;
 		for (const base of current.getBaseTypes() ?? []) stack.push(base);
 	}
 	return false;
+}
+
+/** Whether `type` extends any seyfert command base (`Command`, `SubCommand`, …). */
+export function extendsSeyfertCommand(checker: ts.TypeChecker, type: ts.Type): boolean {
+	return extendsSeyfertClass(checker, type, COMMAND_BASES);
 }
 
 /**

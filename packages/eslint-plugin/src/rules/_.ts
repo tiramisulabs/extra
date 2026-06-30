@@ -1,5 +1,6 @@
 import { ESLintUtils } from '@typescript-eslint/utils';
 import type { ESLint } from 'eslint';
+import decoratorTarget from './decoratorTarget';
 import noDeepImports from './noDeepImports';
 import noHangingMiddleware from './noHangingMiddleware';
 import optionsUseBuilders from './optionsUseBuilders';
@@ -21,6 +22,8 @@ const plugin: ESLint.Plugin = {
 		'options-use-builders': optionsUseBuilders(createRule),
 		// @ts-expect-error typescript-eslint RuleModule vs core ESLint RuleModule variance.
 		'no-hanging-middleware': noHangingMiddleware(createRule),
+		// @ts-expect-error typescript-eslint RuleModule vs core ESLint RuleModule variance.
+		'decorator-target': decoratorTarget(createRule),
 	},
 };
 

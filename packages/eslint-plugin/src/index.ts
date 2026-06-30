@@ -15,6 +15,7 @@ export const configs: { recommended: Linter.Config[] } = {
 				'seyfert/no-deep-imports': 'error',
 				'seyfert/options-use-builders': 'error',
 				'seyfert/no-hanging-middleware': 'error',
+				'seyfert/decorator-target': 'error',
 			},
 		},
 	],
