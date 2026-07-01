@@ -22,6 +22,7 @@ package.
 | `seyfert/config-default-export` | The result of `config.bot()`/`config.http()` must be the file's `export default`. | – |
 | `seyfert/i18n-resolve-with-get` | Resolve a `ctx.t` locale proxy with `.get()` before using it as a string. | – |
 | `seyfert/group-exists` | A subcommand's `@Group` must reference a group declared in the command's `@Groups`/`@GroupsT` (resolves both `@Options` and `@AutoLoad`). | – |
+| `seyfert/no-method-destructure` | Don't destructure a method off a seyfert object — it loses its `this` and throws when called. | – |
 | `seyfert/prefer-typed-group` | Prefer the type-safe `@Group(groups, name)` overload over a bare `@Group(name)`. **(opt-in — not in `recommended`)** | – |
 
 > **Floating promises:** seyfert's response methods (`ctx.write`, `ctx.editOrReply`,

@@ -24,6 +24,7 @@ export const configs: { recommended: Linter.Config[] } = {
 				'seyfert/config-default-export': 'error',
 				'seyfert/i18n-resolve-with-get': 'error',
 				'seyfert/group-exists': 'error',
+				'seyfert/no-method-destructure': 'error',
 			},
 		},
 	],

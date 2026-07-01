@@ -10,6 +10,7 @@ import groupExists from './groupExists';
 import i18nResolveWithGet from './i18nResolveWithGet';
 import noDeepImports from './noDeepImports';
 import noHangingMiddleware from './noHangingMiddleware';
+import noMethodDestructure from './noMethodDestructure';
 import optionsUseBuilders from './optionsUseBuilders';
 import preferTypedGroup from './preferTypedGroup';
 import requireDeclare from './requireDeclare';
@@ -49,6 +50,8 @@ const plugin: ESLint.Plugin = {
 		'i18n-resolve-with-get': i18nResolveWithGet(createRule),
 		// @ts-expect-error typescript-eslint RuleModule vs core ESLint RuleModule variance.
 		'group-exists': groupExists(createRule),
+		// @ts-expect-error typescript-eslint RuleModule vs core ESLint RuleModule variance.
+		'no-method-destructure': noMethodDestructure(createRule),
 		// @ts-expect-error typescript-eslint RuleModule vs core ESLint RuleModule variance.
 		'prefer-typed-group': preferTypedGroup(createRule),
 	},
