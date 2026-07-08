@@ -6,3 +6,12 @@ export type {
 	OpenTelemetryPluginOptions,
 	TraceSource,
 } from './options';
+export {
+	getCurrentSpan,
+	getMeter,
+	getTracer,
+	record,
+	setAttributes,
+	startActiveSpan,
+	startSpan,
+} from './trace-api';
