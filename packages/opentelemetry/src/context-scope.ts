@@ -15,20 +15,57 @@ export interface InteractionScopeDeps {
 	getMetrics: () => CoreMetrics | undefined;
 }
 
+type ContextMarkers = {
+	isModal?: () => boolean;
+	isComponent?: () => boolean;
+	isChat?: () => boolean;
+	isMenu?: () => boolean;
+	isEntryPoint?: () => boolean;
+	customId?: unknown;
+	command?: unknown;
+	fullCommandName?: unknown;
+	commandName?: unknown;
+	interaction?: unknown;
+	values?: unknown;
+};
+
+function callMarker(context: ContextMarkers, name: keyof ContextMarkers): boolean {
+	const fn = context[name];
+	if (typeof fn !== 'function') return false;
+	try {
+		return Boolean((fn as () => boolean).call(context));
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Prefer Seyfert BaseContext markers (`isModal` / `isComponent` / `isChat` / …),
+ * then fall back to structural fields for plain test objects.
+ */
 function detectKind(context: unknown): InteractionKind {
-	const source =
-		context !== null && typeof context === 'object'
-			? (context as Record<string, unknown>)
-			: {};
+	const source: ContextMarkers =
+		context !== null && typeof context === 'object' ? (context as ContextMarkers) : {};
+
+	if (callMarker(source, 'isModal')) return 'modal';
+	if (callMarker(source, 'isComponent')) return 'component';
+	if (callMarker(source, 'isChat')) return 'command';
+	if (callMarker(source, 'isMenu')) return 'command';
+	if (callMarker(source, 'isEntryPoint')) return 'command';
 
 	if (source.customId !== undefined && source.customId !== null) {
 		const interaction =
 			source.interaction !== null && typeof source.interaction === 'object'
 				? (source.interaction as Record<string, unknown>)
-				: source;
-		// Discord interaction type 5 = MODAL_SUBMIT
+				: (source as Record<string, unknown>);
+		// Discord interaction type 5 = ModalSubmit, 3 = MessageComponent
 		if (interaction.type === 5) return 'modal';
+		if (interaction.type === 3) return 'component';
 		return 'component';
+	}
+
+	if (source.command !== undefined || source.fullCommandName !== undefined || source.commandName !== undefined) {
+		return 'command';
 	}
 
 	return 'command';
