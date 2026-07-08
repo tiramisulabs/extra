@@ -4,7 +4,6 @@ import type { ResolvedOpenTelemetryOptions } from './options';
 
 /**
  * Whether this process still has only the API proxy provider (no real SDK).
- * Mirrors Elysia's `shouldStartNodeSDK` guard.
  */
 export function shouldStartNodeSDK(provider: TracerProvider): boolean {
 	if (!(provider instanceof ProxyTracerProvider)) return false;

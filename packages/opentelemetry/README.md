@@ -1,6 +1,6 @@
 # @slipher/opentelemetry
 
-Full-surface [OpenTelemetry](https://opentelemetry.io/) for [Seyfert](https://seyfert.dev) v5: automatic traces and duration metrics for interactions, gateway events, Discord REST, and cache — with Elysia-style helpers and a thin `client.trace` / `ctx.trace` API.
+Full-surface [OpenTelemetry](https://opentelemetry.io/) for [Seyfert](https://seyfert.dev) v5: automatic traces and duration metrics for interactions, gateway events, Discord REST, and cache — with module helpers and a thin `client.trace` / `ctx.trace` API.
 
 | Surface | Span kind | Default |
 | --- | --- | --- |
@@ -9,7 +9,7 @@ Full-surface [OpenTelemetry](https://opentelemetry.io/) for [Seyfert](https://se
 | Discord REST (Seyfert API client) | `CLIENT` | on |
 | Cache adapter operations | `INTERNAL` | on |
 
-The plugin auto-starts a `NodeSDK` when no real tracer provider is registered yet (same ownership model as Elysia’s OTel plugin). If you already preload an SDK, the plugin reuses that provider and only installs instrumentation.
+The plugin auto-starts a `NodeSDK` when no real tracer provider is registered yet. If you already preload an SDK, the plugin reuses that provider and only installs instrumentation.
 
 ## Install
 
@@ -258,3 +258,7 @@ Only structural metadata (methods, paths, ids, status codes, resource names) is 
 ## Limitations
 
 - **REST FIFO correlation:** Concurrent Discord REST calls that share the same `method + path` are correlated with a FIFO queue (Seyfert observer payloads cannot carry a request id). Completions are assumed to finish in request order for a given route; out-of-order completion for the same route can attach status/duration to the wrong span. Distinct routes are unaffected.
+
+## Inspiration
+
+API shape and ownership ideas draw from the [Elysia OpenTelemetry plugin](https://elysiajs.com/plugins/opentelemetry).
