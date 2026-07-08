@@ -1,5 +1,6 @@
 import './seyfert';
 
+export { createTraceHandle, type TraceHandle } from './handle';
 export { opentelemetry } from './plugin';
 export type {
 	InstrumentFlags,
