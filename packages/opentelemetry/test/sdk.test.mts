@@ -29,8 +29,9 @@ describe('startOwnedSdk', () => {
 	test('starts NodeSDK when the global provider is still a bare proxy', async () => {
 		const globalProvider = trace.getTracerProvider();
 		if (!shouldStartNodeSDK(globalProvider)) {
-			// Another test file already registered a real provider — skip.
-			return;
+			assert.fail(
+				'Global tracer provider is not a bare ProxyTracerProvider; startOwnedSdk success path could not run. Run sdk tests first/in isolation.',
+			);
 		}
 
 		const owned = startOwnedSdk(resolvePluginOptions({ serviceName: 'test-owned-sdk' }));
