@@ -40,8 +40,7 @@ function fakeRestApi() {
 }
 
 function requestPayload(
-	partial: Partial<RestObserverRequestPayload> &
-		Pick<RestObserverRequestPayload, 'method' | 'url'>,
+	partial: Partial<RestObserverRequestPayload> & Pick<RestObserverRequestPayload, 'method' | 'url'>,
 ): RestObserverRequestPayload {
 	return {
 		client: {},
@@ -56,8 +55,7 @@ function requestPayload(
 }
 
 function successPayload(
-	partial: Partial<RestObserverSuccessPayload> &
-		Pick<RestObserverSuccessPayload, 'method' | 'url' | 'response'>,
+	partial: Partial<RestObserverSuccessPayload> & Pick<RestObserverSuccessPayload, 'method' | 'url' | 'response'>,
 ): RestObserverSuccessPayload {
 	return {
 		...requestPayload(partial),
@@ -66,8 +64,7 @@ function successPayload(
 }
 
 function failPayload(
-	partial: Partial<RestObserverFailPayload> &
-		Pick<RestObserverFailPayload, 'method' | 'url' | 'error'>,
+	partial: Partial<RestObserverFailPayload> & Pick<RestObserverFailPayload, 'method' | 'url' | 'error'>,
 ): RestObserverFailPayload {
 	return {
 		...requestPayload(partial),
@@ -76,29 +73,15 @@ function failPayload(
 	};
 }
 
-const SENSITIVE_ATTR_KEYS = [
-	'authorization',
-	'Authorization',
-	'token',
-	'auth',
-	'cookie',
-	'body',
-	'request',
-];
+const SENSITIVE_ATTR_KEYS = ['authorization', 'Authorization', 'token', 'auth', 'cookie', 'body', 'request'];
 
 function assertNoSensitiveAttributes(attrs: Record<string, unknown>): void {
 	const keys = Object.keys(attrs);
 	for (const forbidden of SENSITIVE_ATTR_KEYS) {
-		assert.ok(
-			!keys.includes(forbidden),
-			`attributes must not include sensitive key "${forbidden}"`,
-		);
+		assert.ok(!keys.includes(forbidden), `attributes must not include sensitive key "${forbidden}"`);
 	}
 	for (const key of keys) {
-		assert.ok(
-			!/authori[sz]ation|token|cookie|password|secret/i.test(key),
-			`attributes key looks sensitive: ${key}`,
-		);
+		assert.ok(!/authori[sz]ation|token|cookie|password|secret/i.test(key), `attributes key looks sensitive: ${key}`);
 	}
 }
 
@@ -115,9 +98,7 @@ describe('instrumentRest (api.rest.observe)', () => {
 			assert.ok(observer?.onRequest);
 			assert.ok(observer?.onSuccess);
 
-			await observer!.onRequest!(
-				requestPayload({ method: 'GET', url: '/users/@me' }),
-			);
+			await observer!.onRequest!(requestPayload({ method: 'GET', url: '/users/@me' }));
 			await observer!.onSuccess!(
 				successPayload({
 					method: 'GET',
@@ -149,9 +130,7 @@ describe('instrumentRest (api.rest.observe)', () => {
 			});
 
 			const observer = getObserver()!;
-			await observer.onRequest!(
-				requestPayload({ method: 'POST', url: '/channels/1/messages' }),
-			);
+			await observer.onRequest!(requestPayload({ method: 'POST', url: '/channels/1/messages' }));
 			await observer.onFail!(
 				failPayload({
 					method: 'POST',
@@ -181,9 +160,7 @@ describe('instrumentRest (api.rest.observe)', () => {
 			});
 
 			const observer = getObserver()!;
-			await observer.onRequest!(
-				requestPayload({ method: 'GET', url: '/gateway' }),
-			);
+			await observer.onRequest!(requestPayload({ method: 'GET', url: '/gateway' }));
 			await observer.onFail!(
 				failPayload({
 					method: 'GET',
@@ -211,9 +188,7 @@ describe('instrumentRest (api.rest.observe)', () => {
 			});
 
 			const observer = getObserver()!;
-			await observer.onRequest!(
-				requestPayload({ method: 'GET', url: '/users/0' }),
-			);
+			await observer.onRequest!(requestPayload({ method: 'GET', url: '/users/0' }));
 			await observer.onFail!(
 				failPayload({
 					method: 'GET',
@@ -245,9 +220,7 @@ describe('instrumentRest (api.rest.observe)', () => {
 			});
 
 			const observer = getObserver()!;
-			await observer.onRequest!(
-				requestPayload({ method: 'GET', url: '/users/@me' }),
-			);
+			await observer.onRequest!(requestPayload({ method: 'GET', url: '/users/@me' }));
 			await observer.onSuccess!(
 				successPayload({
 					method: 'GET',
@@ -299,11 +272,7 @@ describe('instrumentRest (api.rest.observe)', () => {
 			assertNoSensitiveAttributes(spans[0].attributes as Record<string, unknown>);
 			// Only expected attribute keys
 			const keys = Object.keys(spans[0].attributes).sort();
-			assert.deepEqual(keys, [
-				'http.request.method',
-				'http.response.status_code',
-				'url.path',
-			]);
+			assert.deepEqual(keys, ['http.request.method', 'http.response.status_code', 'url.path']);
 
 			cleanup();
 		});
@@ -311,10 +280,13 @@ describe('instrumentRest (api.rest.observe)', () => {
 
 	test('missing rest.observe → no-op disposer', async () => {
 		await withProvider(async exporter => {
-			const cleanup = instrumentRest({}, {
-				checkIfShouldTrace: () => true,
-				getMetrics: () => undefined,
-			});
+			const cleanup = instrumentRest(
+				{},
+				{
+					checkIfShouldTrace: () => true,
+					getMetrics: () => undefined,
+				},
+			);
 			assert.equal(typeof cleanup, 'function');
 			cleanup();
 			assert.equal(exporter.getFinishedSpans().length, 0);
@@ -356,9 +328,7 @@ describe('instrumentRest (api.rest.observe)', () => {
 			});
 
 			const observer = getObserver()!;
-			await observer.onRequest!(
-				requestPayload({ method: 'GET', url: '/gateway/bot' }),
-			);
+			await observer.onRequest!(requestPayload({ method: 'GET', url: '/gateway/bot' }));
 			await observer.onSuccess!(
 				successPayload({
 					method: 'GET',
@@ -390,12 +360,8 @@ describe('instrumentRest (api.rest.observe)', () => {
 
 			const observer = getObserver()!;
 			// Two in-flight GETs to the same path
-			await observer.onRequest!(
-				requestPayload({ method: 'GET', url: '/channels/1' }),
-			);
-			await observer.onRequest!(
-				requestPayload({ method: 'GET', url: '/channels/1' }),
-			);
+			await observer.onRequest!(requestPayload({ method: 'GET', url: '/channels/1' }));
+			await observer.onRequest!(requestPayload({ method: 'GET', url: '/channels/1' }));
 			// Complete second first would be LIFO wrong; FIFO: first success ends first span
 			await observer.onSuccess!(
 				successPayload({

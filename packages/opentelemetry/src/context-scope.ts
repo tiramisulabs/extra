@@ -1,11 +1,7 @@
 import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
 import type { ContextScope } from 'seyfert';
-import {
-	extractInteractionAttributes,
-	interactionSpanName,
-	type InteractionKind,
-} from './attributes';
-import { durationSecondsSince, type CoreMetrics } from './metrics';
+import { extractInteractionAttributes, type InteractionKind, interactionSpanName } from './attributes';
+import { type CoreMetrics, durationSecondsSince } from './metrics';
 import type { TraceSource } from './options';
 import { getTracer } from './trace-api';
 
@@ -44,8 +40,7 @@ function callMarker(context: ContextMarkers, name: keyof ContextMarkers): boolea
  * then fall back to structural fields for plain test objects.
  */
 function detectKind(context: unknown): InteractionKind {
-	const source: ContextMarkers =
-		context !== null && typeof context === 'object' ? (context as ContextMarkers) : {};
+	const source: ContextMarkers = context !== null && typeof context === 'object' ? (context as ContextMarkers) : {};
 
 	if (callMarker(source, 'isModal')) return 'modal';
 	if (callMarker(source, 'isComponent')) return 'component';
@@ -102,11 +97,7 @@ export function createInteractionContextScope(deps: InteractionScopeDeps): Conte
 
 			try {
 				const result = run();
-				if (
-					result !== null &&
-					typeof result === 'object' &&
-					typeof (result as Promise<unknown>).then === 'function'
-				) {
+				if (result !== null && typeof result === 'object' && typeof (result as Promise<unknown>).then === 'function') {
 					return Promise.resolve(result).then(
 						value => {
 							finish();

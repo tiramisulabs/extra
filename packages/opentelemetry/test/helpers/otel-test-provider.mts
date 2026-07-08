@@ -1,10 +1,10 @@
 import {
 	type Context,
 	type ContextManager,
-	ROOT_CONTEXT,
 	context,
 	metrics,
 	ProxyTracerProvider,
+	ROOT_CONTEXT,
 	trace,
 } from '@opentelemetry/api';
 import {
@@ -13,11 +13,7 @@ import {
 	MeterProvider,
 	PeriodicExportingMetricReader,
 } from '@opentelemetry/sdk-metrics';
-import {
-	BasicTracerProvider,
-	InMemorySpanExporter,
-	SimpleSpanProcessor,
-} from '@opentelemetry/sdk-trace-base';
+import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 
 /**
  * Sync stack context manager so `trace.getActiveSpan()` works under
@@ -67,11 +63,8 @@ export function ensureTestContextManager(): void {
 	if (contextManagerInstalled) return;
 	try {
 		// @ts-expect-error private method — same pattern as production sdk helper
-		const current = context._getContextManager?.() as
-			| { constructor?: { name?: string } }
-			| undefined;
-		const noneSet =
-			current === undefined || current.constructor?.name === 'NoopContextManager';
+		const current = context._getContextManager?.() as { constructor?: { name?: string } } | undefined;
+		const noneSet = current === undefined || current.constructor?.name === 'NoopContextManager';
 		if (!noneSet) {
 			contextManagerInstalled = true;
 			return;

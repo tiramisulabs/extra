@@ -1,5 +1,5 @@
-import { SpanKind, SpanStatusCode, type Span } from '@opentelemetry/api';
-import { durationSecondsSince, type CoreMetrics } from '../metrics';
+import { type Span, SpanKind, SpanStatusCode } from '@opentelemetry/api';
+import { type CoreMetrics, durationSecondsSince } from '../metrics';
 import type { TraceSource } from '../options';
 import { getTracer } from '../trace-api';
 
@@ -104,10 +104,7 @@ function markError(span: Span, error: unknown, message?: string): void {
  * onSuccess/onFail. In-flight spans are correlated with a FIFO queue keyed by
  * `method + url` (stable across the three callbacks for a given request).
  */
-export function instrumentRest(
-	api: RestApi | undefined,
-	deps: RestInstrumentDeps,
-): () => void {
+export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDeps): () => void {
 	const observe = api?.rest?.observe;
 	if (typeof observe !== 'function') {
 		return () => {};
@@ -166,9 +163,7 @@ export function instrumentRest(
 
 				const { span, start } = item;
 				const status =
-					payload.response && typeof payload.response.status === 'number'
-						? payload.response.status
-						: undefined;
+					payload.response && typeof payload.response.status === 'number' ? payload.response.status : undefined;
 
 				try {
 					if (status !== undefined) {
@@ -205,8 +200,7 @@ export function instrumentRest(
 				if (!item) return;
 
 				const { span, start } = item;
-				const status =
-					typeof payload.statusCode === 'number' ? payload.statusCode : undefined;
+				const status = typeof payload.statusCode === 'number' ? payload.statusCode : undefined;
 
 				try {
 					if (status !== undefined) {
@@ -214,11 +208,7 @@ export function instrumentRest(
 					}
 					// ERROR on throw/network (no status) or HTTP >= 500; 4xx stays unset.
 					if (status === undefined || status >= 500) {
-						markError(
-							span,
-							payload.error,
-							status !== undefined ? `HTTP ${status}` : undefined,
-						);
+						markError(span, payload.error, status !== undefined ? `HTTP ${status}` : undefined);
 					}
 				} catch {
 					// never throw from instrumentation

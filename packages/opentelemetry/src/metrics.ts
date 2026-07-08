@@ -1,13 +1,7 @@
-import {
-	type Attributes,
-	type Histogram,
-	metrics,
-} from '@opentelemetry/api';
+import { type Attributes, type Histogram, metrics } from '@opentelemetry/api';
 import type { ResolvedInstrumentFlags } from './options';
 
-const DURATION_BOUNDARIES = [
-	0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10, 30, 60,
-];
+const DURATION_BOUNDARIES = [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10, 30, 60];
 
 const histogramOptions = {
 	unit: 's',
@@ -21,10 +15,7 @@ export interface CoreMetrics {
 	recordCache(durationSeconds: number, attributes: Attributes): void;
 }
 
-export function createCoreMetrics(
-	serviceName: string,
-	instrument: ResolvedInstrumentFlags,
-): CoreMetrics {
+export function createCoreMetrics(serviceName: string, instrument: ResolvedInstrumentFlags): CoreMetrics {
 	const meter = metrics.getMeter(serviceName);
 
 	const interaction = instrument.interactions
@@ -55,11 +46,7 @@ export function createCoreMetrics(
 			})
 		: undefined;
 
-	const record = (
-		histogram: Histogram | undefined,
-		value: number,
-		attributes: Attributes,
-	) => {
+	const record = (histogram: Histogram | undefined, value: number, attributes: Attributes) => {
 		histogram?.record(value, attributes);
 	};
 

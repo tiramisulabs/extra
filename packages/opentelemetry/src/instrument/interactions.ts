@@ -1,4 +1,4 @@
-import { SpanStatusCode, type Span } from '@opentelemetry/api';
+import { type Span, SpanStatusCode } from '@opentelemetry/api';
 import type { TraceSource } from '../options';
 import { getCurrentSpan, getTracer } from '../trace-api';
 
@@ -198,11 +198,7 @@ function installRunWrappers(api: InteractionApi, deps: InteractionInstrumentDeps
 			if (typeof original !== 'function') return;
 
 			const kind: 'command' | 'component' | 'modal' =
-				metadata.kind === 'component'
-					? 'component'
-					: metadata.kind === 'modal'
-						? 'modal'
-						: 'command';
+				metadata.kind === 'component' ? 'component' : metadata.kind === 'modal' ? 'modal' : 'command';
 
 			instance.run = function otelWrappedRun(this: unknown, context: unknown, ...rest: unknown[]) {
 				if (!shouldTrace(deps, kind, context)) {
@@ -224,10 +220,7 @@ function installRunWrappers(api: InteractionApi, deps: InteractionInstrumentDeps
  * - commands: onBeforeOptions, onBeforeMiddlewares, onAfterRun, onRunError, …
  * - components/modals: onBeforeMiddlewares, onAfterRun, onRunError, …
  */
-export function registerInteractionInstrumentation(
-	api: InteractionApi,
-	deps: InteractionInstrumentDeps,
-): void {
+export function registerInteractionInstrumentation(api: InteractionApi, deps: InteractionInstrumentDeps): void {
 	api.commands.defaults(createCommandHooks(deps));
 	api.components.defaults(createComponentHooks('component', deps));
 	api.modals.defaults(createComponentHooks('modal', deps));

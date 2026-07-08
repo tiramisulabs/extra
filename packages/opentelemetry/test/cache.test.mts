@@ -1,11 +1,7 @@
 import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
 import type { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import { assert, describe, test } from 'vitest';
-import {
-	extractCacheResource,
-	instrumentCache,
-	type CacheClient,
-} from '../src/instrument/cache';
+import { type CacheClient, extractCacheResource, instrumentCache } from '../src/instrument/cache';
 import { setTraceServiceName } from '../src/trace-api';
 import { installTestTracer } from './helpers/otel-test-provider.mts';
 
@@ -190,10 +186,7 @@ describe('instrumentCache (adapter wraps)', () => {
 				getMetrics: () => undefined,
 			});
 
-			assert.throws(
-				() => (adapter.get as (k: string) => unknown)('user.1'),
-				/adapter boom/,
-			);
+			assert.throws(() => (adapter.get as (k: string) => unknown)('user.1'), /adapter boom/);
 
 			const spans = exporter.getFinishedSpans();
 			assert.equal(spans.length, 1);
@@ -259,11 +252,14 @@ describe('instrumentCache (adapter wraps)', () => {
 
 	test('missing cache.adapter → no-op disposer', async () => {
 		await withProvider(async exporter => {
-			const cleanup = instrumentCache({}, {
-				checkIfShouldTrace: () => true,
-				skipResources: new Set(),
-				getMetrics: () => undefined,
-			});
+			const cleanup = instrumentCache(
+				{},
+				{
+					checkIfShouldTrace: () => true,
+					skipResources: new Set(),
+					getMetrics: () => undefined,
+				},
+			);
 			assert.equal(typeof cleanup, 'function');
 			cleanup();
 			assert.equal(exporter.getFinishedSpans().length, 0);

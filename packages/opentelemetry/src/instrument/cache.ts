@@ -1,5 +1,5 @@
-import { SpanKind, SpanStatusCode, type Span } from '@opentelemetry/api';
-import { durationSecondsSince, type CoreMetrics } from '../metrics';
+import { type Span, SpanKind, SpanStatusCode } from '@opentelemetry/api';
+import { type CoreMetrics, durationSecondsSince } from '../metrics';
 import type { TraceSource } from '../options';
 import { getTracer } from '../trace-api';
 
@@ -85,11 +85,7 @@ export function extractCacheResource(args: unknown[]): string {
 }
 
 function isThenable(value: unknown): value is PromiseLike<unknown> {
-	return (
-		value !== null &&
-		typeof value === 'object' &&
-		typeof (value as PromiseLike<unknown>).then === 'function'
-	);
+	return value !== null && typeof value === 'object' && typeof (value as PromiseLike<unknown>).then === 'function';
 }
 
 function safeEnd(span: Span): void {
@@ -133,10 +129,7 @@ function recordCacheMetrics(
  * Mechanism: replace methods on `client.cache.adapter` at setup; disposer
  * restores the original function references.
  */
-export function instrumentCache(
-	client: CacheClient | unknown,
-	deps: CacheInstrumentDeps,
-): () => void {
+export function instrumentCache(client: CacheClient | unknown, deps: CacheInstrumentDeps): () => void {
 	const adapter = (client as CacheClient | null | undefined)?.cache?.adapter;
 	if (!adapter || typeof adapter !== 'object') {
 		return () => {};
@@ -186,10 +179,7 @@ export function instrumentCache(
 							const isError = error !== undefined;
 							try {
 								if (method === 'get' && !isError) {
-									span.setAttribute(
-										'seyfert.cache.hit',
-										value !== undefined && value !== null,
-									);
+									span.setAttribute('seyfert.cache.hit', value !== undefined && value !== null);
 								}
 							} catch {
 								// never throw from instrumentation
@@ -210,8 +200,7 @@ export function instrumentCache(
 								'seyfert.error': isError,
 							};
 							if (method === 'get' && !isError) {
-								metricAttrs['seyfert.cache.hit'] =
-									value !== undefined && value !== null;
+								metricAttrs['seyfert.cache.hit'] = value !== undefined && value !== null;
 							}
 							recordCacheMetrics(deps, start, metricAttrs);
 							safeEnd(span);

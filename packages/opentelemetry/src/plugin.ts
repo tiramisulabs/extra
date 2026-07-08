@@ -5,9 +5,9 @@ import { instrumentCache } from './instrument/cache';
 import { instrumentEvents } from './instrument/events';
 import { registerInteractionInstrumentation } from './instrument/interactions';
 import { instrumentRest } from './instrument/rest';
-import { createCoreMetrics, type CoreMetrics } from './metrics';
-import { resolvePluginOptions, type OpenTelemetryPluginOptions } from './options';
-import { startOwnedSdk, type OwnedSdk } from './sdk';
+import { type CoreMetrics, createCoreMetrics } from './metrics';
+import { type OpenTelemetryPluginOptions, resolvePluginOptions } from './options';
+import { type OwnedSdk, startOwnedSdk } from './sdk';
 import { setTraceServiceName } from './trace-api';
 
 export interface OpenTelemetryPlugin extends SeyfertPlugin {

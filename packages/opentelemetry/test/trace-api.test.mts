@@ -1,12 +1,7 @@
 import { SpanStatusCode } from '@opentelemetry/api';
 import type { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import { assert, describe, test } from 'vitest';
-import {
-	getCurrentSpan,
-	getTracer,
-	record,
-	setAttributes,
-} from '../src/trace-api';
+import { getCurrentSpan, getTracer, record, setAttributes } from '../src/trace-api';
 import { installTestTracer } from './helpers/otel-test-provider.mts';
 
 /**

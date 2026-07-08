@@ -5,8 +5,8 @@ import {
 	type Span,
 	type SpanOptions,
 	SpanStatusCode,
-	trace,
 	type Tracer,
+	trace,
 } from '@opentelemetry/api';
 
 let activeServiceName = 'seyfert';
@@ -35,21 +35,14 @@ function createActiveSpanHandler(fn: (span: Span) => unknown) {
 	return function handler(span: Span) {
 		try {
 			const result = fn(span);
-			if (
-				result !== null &&
-				typeof result === 'object' &&
-				typeof (result as Promise<unknown>).then === 'function'
-			) {
+			if (result !== null && typeof result === 'object' && typeof (result as Promise<unknown>).then === 'function') {
 				return Promise.resolve(result).then(
 					value => {
 						span.end();
 						return value;
 					},
 					rejectResult => {
-						const err =
-							rejectResult instanceof Error
-								? rejectResult
-								: new Error(String(rejectResult));
+						const err = rejectResult instanceof Error ? rejectResult : new Error(String(rejectResult));
 						span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
 						span.recordException(err);
 						span.end();
@@ -77,12 +70,7 @@ export const startActiveSpan: StartActiveSpan = (...args: ActiveSpanArgs) => {
 		case 3:
 			return tracer.startActiveSpan(args[0], args[1], createActiveSpanHandler(args[2]));
 		case 4:
-			return tracer.startActiveSpan(
-				args[0],
-				args[1],
-				args[2],
-				createActiveSpanHandler(args[3]),
-			);
+			return tracer.startActiveSpan(args[0], args[1], args[2], createActiveSpanHandler(args[3]));
 	}
 };
 

@@ -1,12 +1,12 @@
 import './seyfert';
 
 export { createTraceHandle, type TraceHandle } from './handle';
-export { opentelemetry } from './plugin';
 export type {
 	InstrumentFlags,
 	OpenTelemetryPluginOptions,
 	TraceSource,
 } from './options';
+export { opentelemetry } from './plugin';
 export {
 	getCurrentSpan,
 	getMeter,

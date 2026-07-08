@@ -241,10 +241,7 @@ describe('registerInteractionInstrumentation', () => {
 				modals: { defaults() {} },
 				handlers: {
 					transform(
-						transformer: (
-							instance: { run?: (ctx: object) => unknown },
-							metadata: { kind: string },
-						) => unknown,
+						transformer: (instance: { run?: (ctx: object) => unknown }, metadata: { kind: string }) => unknown,
 					) {
 						const instance = {
 							run(ctx: object) {

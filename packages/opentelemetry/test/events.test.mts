@@ -15,10 +15,7 @@ function fakeClient(runEvent?: (name: string, ...args: unknown[]) => unknown) {
 	const calls: string[] = [];
 	const client = {
 		events: {
-			runEvent(
-				name: string,
-				...args: unknown[]
-			): unknown {
+			runEvent(name: string, ...args: unknown[]): unknown {
 				calls.push(name);
 				if (runEvent) return runEvent(name, ...args);
 				return 'ok';
@@ -37,12 +34,7 @@ describe('instrumentEvents (gateway runEvent)', () => {
 				getMetrics: () => undefined,
 			});
 
-			const result = await client.events.runEvent(
-				'messageCreate',
-				client,
-				{ content: 'hi' },
-				0,
-			);
+			const result = await client.events.runEvent('messageCreate', client, { content: 'hi' }, 0);
 
 			assert.equal(result, 'ok');
 			assert.deepEqual(calls, ['messageCreate']);
@@ -101,10 +93,7 @@ describe('instrumentEvents (gateway runEvent)', () => {
 				getMetrics: () => undefined,
 			});
 
-			assert.throws(
-				() => client.events.runEvent('messageCreate', client, {}, 0),
-				/handler boom/,
-			);
+			assert.throws(() => client.events.runEvent('messageCreate', client, {}, 0), /handler boom/);
 
 			const spans = exporter.getFinishedSpans();
 			assert.equal(spans.length, 1);
@@ -146,10 +135,13 @@ describe('instrumentEvents (gateway runEvent)', () => {
 
 	test('missing events.runEvent → no-op disposer', async () => {
 		await withProvider(async exporter => {
-			const cleanup = instrumentEvents({}, {
-				checkIfShouldTrace: () => true,
-				getMetrics: () => undefined,
-			});
+			const cleanup = instrumentEvents(
+				{},
+				{
+					checkIfShouldTrace: () => true,
+					getMetrics: () => undefined,
+				},
+			);
 			assert.equal(typeof cleanup, 'function');
 			cleanup();
 			assert.equal(exporter.getFinishedSpans().length, 0);

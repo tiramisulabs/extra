@@ -1,10 +1,4 @@
-import {
-	context,
-	type ContextManager,
-	type TracerProvider,
-	ProxyTracerProvider,
-	trace,
-} from '@opentelemetry/api';
+import { type ContextManager, context, ProxyTracerProvider, type TracerProvider, trace } from '@opentelemetry/api';
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import type { ResolvedOpenTelemetryOptions } from './options';
 
@@ -54,8 +48,7 @@ function trySetContextManager(contextManager: ContextManager): void {
 		// Private API: returns NoopContextManager when no global manager is set.
 		// @ts-expect-error private method — same pattern as Elysia
 		const current = context._getContextManager?.() as { constructor?: { name?: string } } | undefined;
-		const noneSet =
-			current === undefined || current.constructor?.name === 'NoopContextManager';
+		const noneSet = current === undefined || current.constructor?.name === 'NoopContextManager';
 		if (!noneSet) return;
 
 		contextManager.enable();

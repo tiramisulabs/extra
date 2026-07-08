@@ -1,5 +1,5 @@
 import { type Attributes, SpanKind, SpanStatusCode } from '@opentelemetry/api';
-import { durationSecondsSince, type CoreMetrics } from '../metrics';
+import { type CoreMetrics, durationSecondsSince } from '../metrics';
 import type { TraceSource } from '../options';
 import { getTracer } from '../trace-api';
 
@@ -24,10 +24,7 @@ export interface EventsClient {
 
 type RunEvent = (name: string, ...args: unknown[]) => unknown;
 
-function shouldTrace(
-	deps: EventsInstrumentDeps,
-	source: TraceSource,
-): boolean {
+function shouldTrace(deps: EventsInstrumentDeps, source: TraceSource): boolean {
 	try {
 		return deps.checkIfShouldTrace(source);
 	} catch {
@@ -59,10 +56,7 @@ function eventAttributes(name: string, args: readonly unknown[]): Attributes {
  * `runEvent` is the single path Seyfert uses for gateway event invocation
  * (user files + plugin listeners + BOT_READY / RAW / …). Cleanup restores the original.
  */
-export function instrumentEvents(
-	client: EventsClient | unknown,
-	deps: EventsInstrumentDeps,
-): () => void {
+export function instrumentEvents(client: EventsClient | unknown, deps: EventsInstrumentDeps): () => void {
 	const events = (client as EventsClient | null | undefined)?.events;
 	if (!events || typeof events.runEvent !== 'function') {
 		return () => {};
@@ -70,10 +64,7 @@ export function instrumentEvents(
 
 	const original: RunEvent = events.runEvent.bind(events);
 
-	events.runEvent = function instrumentedRunEvent(
-		name: string,
-		...args: unknown[]
-	): unknown {
+	events.runEvent = function instrumentedRunEvent(name: string, ...args: unknown[]): unknown {
 		const source: TraceSource = { kind: 'event', name, args };
 		if (!shouldTrace(deps, source)) {
 			return original(name, ...args);
@@ -82,61 +73,53 @@ export function instrumentEvents(
 		const attributes = eventAttributes(name, args);
 		const start = performance.now();
 
-		return getTracer().startActiveSpan(
-			`event ${name}`,
-			{ kind: SpanKind.INTERNAL, attributes },
-			span => {
-				const finish = (error?: unknown) => {
-					if (error !== undefined) {
-						const err = error instanceof Error ? error : new Error(String(error));
-						try {
-							span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
-							span.recordException(err);
-						} catch {
-							// never throw from instrumentation into the user path
-						}
-					}
+		return getTracer().startActiveSpan(`event ${name}`, { kind: SpanKind.INTERNAL, attributes }, span => {
+			const finish = (error?: unknown) => {
+				if (error !== undefined) {
+					const err = error instanceof Error ? error : new Error(String(error));
 					try {
-						deps.getMetrics()?.recordEvent(durationSecondsSince(start), {
-							...attributes,
-							'seyfert.error': error !== undefined,
-						});
+						span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+						span.recordException(err);
 					} catch {
-						// metrics must not break handlers
+						// never throw from instrumentation into the user path
 					}
-					try {
-						span.end();
-					} catch {
-						// never throw from instrumentation
-					}
-				};
-
-				try {
-					const result = original(name, ...args);
-					if (
-						result !== null &&
-						typeof result === 'object' &&
-						typeof (result as Promise<unknown>).then === 'function'
-					) {
-						return Promise.resolve(result).then(
-							value => {
-								finish();
-								return value;
-							},
-							error => {
-								finish(error);
-								throw error;
-							},
-						);
-					}
-					finish();
-					return result;
-				} catch (error) {
-					finish(error);
-					throw error;
 				}
-			},
-		);
+				try {
+					deps.getMetrics()?.recordEvent(durationSecondsSince(start), {
+						...attributes,
+						'seyfert.error': error !== undefined,
+					});
+				} catch {
+					// metrics must not break handlers
+				}
+				try {
+					span.end();
+				} catch {
+					// never throw from instrumentation
+				}
+			};
+
+			try {
+				const result = original(name, ...args);
+				if (result !== null && typeof result === 'object' && typeof (result as Promise<unknown>).then === 'function') {
+					return Promise.resolve(result).then(
+						value => {
+							finish();
+							return value;
+						},
+						error => {
+							finish(error);
+							throw error;
+						},
+					);
+				}
+				finish();
+				return result;
+			} catch (error) {
+				finish(error);
+				throw error;
+			}
+		});
 	};
 
 	return () => {
