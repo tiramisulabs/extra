@@ -23,6 +23,7 @@ export interface RestObserver {
 	onRequest?(payload: RestObserverRequestPayload): unknown;
 	onSuccess?(payload: RestObserverSuccessPayload): unknown;
 	onFail?(payload: RestObserverFailPayload): unknown;
+	onRatelimit?(payload: RestObserverRatelimitPayload): unknown;
 }
 
 export interface RestObserverRequestPayload {
@@ -39,6 +40,10 @@ export interface RestObserverSuccessPayload extends RestObserverRequestPayload {
 export interface RestObserverFailPayload extends RestObserverRequestPayload {
 	readonly error: unknown;
 	readonly statusCode?: number;
+}
+
+export interface RestObserverRatelimitPayload extends RestObserverRequestPayload {
+	readonly response: { readonly status: number };
 }
 
 interface PendingRest {
@@ -91,6 +96,16 @@ function markError(span: Span, error: unknown, message?: string): void {
 		const err = error instanceof Error ? error : new Error(message ?? String(error));
 		span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
 		span.recordException(err);
+	} catch {
+		// never throw from instrumentation
+	}
+}
+
+function setStatusAttribute(span: Span, status: number | undefined): void {
+	try {
+		if (status !== undefined) {
+			span.setAttribute('http.response.status_code', status);
+		}
 	} catch {
 		// never throw from instrumentation
 	}
@@ -166,9 +181,7 @@ export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDep
 					payload.response && typeof payload.response.status === 'number' ? payload.response.status : undefined;
 
 				try {
-					if (status !== undefined) {
-						span.setAttribute('http.response.status_code', status);
-					}
+					setStatusAttribute(span, status);
 					if (status !== undefined && status >= 500) {
 						span.setStatus({
 							code: SpanStatusCode.ERROR,
@@ -203,9 +216,7 @@ export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDep
 				const status = typeof payload.statusCode === 'number' ? payload.statusCode : undefined;
 
 				try {
-					if (status !== undefined) {
-						span.setAttribute('http.response.status_code', status);
-					}
+					setStatusAttribute(span, status);
 					// ERROR on throw/network (no status) or HTTP >= 500; 4xx stays unset.
 					if (status === undefined || status >= 500) {
 						markError(span, payload.error, status !== undefined ? `HTTP ${status}` : undefined);
@@ -215,6 +226,37 @@ export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDep
 				}
 
 				const isError = status === undefined || status >= 500;
+				recordRestMetrics(deps, start, {
+					'http.request.method': method,
+					'url.path': path,
+					...(status !== undefined ? { 'http.response.status_code': status } : {}),
+					'seyfert.error': isError,
+				});
+				safeEnd(span);
+			} catch {
+				// never throw from instrumentation
+			}
+		},
+
+		onRatelimit(payload) {
+			try {
+				const method = String(payload.method);
+				const path = String(payload.url);
+				const item = takePending(method, path);
+				if (!item) return;
+
+				const { span, start } = item;
+				const status =
+					payload.response && typeof payload.response.status === 'number' ? payload.response.status : undefined;
+
+				setStatusAttribute(span, status);
+				try {
+					span.setAttribute('seyfert.rest.ratelimited', true);
+				} catch {
+					// never throw from instrumentation
+				}
+
+				const isError = status !== undefined && status >= 500;
 				recordRestMetrics(deps, start, {
 					'http.request.method': method,
 					'url.path': path,

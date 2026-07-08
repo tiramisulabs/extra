@@ -1,4 +1,4 @@
-import { type ContextManager, context, ProxyTracerProvider, type TracerProvider, trace } from '@opentelemetry/api';
+import { ProxyTracerProvider, type TracerProvider, trace } from '@opentelemetry/api';
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import type { ResolvedOpenTelemetryOptions } from './options';
 
@@ -25,35 +25,13 @@ export function startOwnedSdk(resolved: ResolvedOpenTelemetryOptions): OwnedSdk 
 
 	const sdk = new NodeSDK({
 		...resolved.sdk,
+		contextManager: resolved.contextManager,
 		serviceName: resolved.serviceName,
 	});
 	sdk.start();
-
-	if (resolved.contextManager) {
-		trySetContextManager(resolved.contextManager);
-	}
 
 	return {
 		sdk,
 		shutdown: () => sdk.shutdown(),
 	};
-}
-
-/**
- * Enable + register a context manager only when none is active.
- * Swallows double-enable / duplicate-registration errors (Elysia spirit).
- */
-function trySetContextManager(contextManager: ContextManager): void {
-	try {
-		// Private API: returns NoopContextManager when no global manager is set.
-		// @ts-expect-error private method — same pattern as Elysia
-		const current = context._getContextManager?.() as { constructor?: { name?: string } } | undefined;
-		const noneSet = current === undefined || current.constructor?.name === 'NoopContextManager';
-		if (!noneSet) return;
-
-		contextManager.enable();
-		context.setGlobalContextManager(contextManager);
-	} catch {
-		// ignore double-enable
-	}
 }

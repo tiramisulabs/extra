@@ -94,16 +94,24 @@ export function createInteractionContextScope(deps: InteractionScopeDeps): Conte
 
 		return tracer.startActiveSpan(name, { kind: SpanKind.INTERNAL, attributes }, span => {
 			const finish = (error?: unknown) => {
-				try {
-					if (error !== undefined) {
+				if (error !== undefined) {
+					try {
 						const err = error instanceof Error ? error : new Error(String(error));
 						span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
 						span.recordException(err);
+					} catch {
+						// never throw instrumentation errors into user code
 					}
+				}
+				try {
 					deps.getMetrics()?.recordInteraction(durationSecondsSince(start), {
 						...attributes,
 						'seyfert.error': error !== undefined,
 					});
+				} catch {
+					// metrics must not break handlers
+				}
+				try {
 					span.end();
 				} catch {
 					// never throw instrumentation errors into user code

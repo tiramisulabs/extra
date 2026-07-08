@@ -5,6 +5,7 @@ import {
 	instrumentRest,
 	type RestObserver,
 	type RestObserverFailPayload,
+	type RestObserverRatelimitPayload,
 	type RestObserverRequestPayload,
 	type RestObserverSuccessPayload,
 } from '../src/instrument/rest';
@@ -70,6 +71,15 @@ function failPayload(
 		...requestPayload(partial),
 		error: partial.error,
 		statusCode: partial.statusCode,
+	};
+}
+
+function ratelimitPayload(
+	partial: Partial<RestObserverRatelimitPayload> & Pick<RestObserverRatelimitPayload, 'method' | 'url' | 'response'>,
+): RestObserverRatelimitPayload {
+	return {
+		...requestPayload(partial),
+		response: partial.response,
 	};
 }
 
@@ -385,6 +395,42 @@ describe('instrumentRest (api.rest.observe)', () => {
 			assert.equal(spans[0].status.code, SpanStatusCode.UNSET);
 			assert.equal(spans[1].attributes['http.response.status_code'], 500);
 			assert.equal(spans[1].status.code, SpanStatusCode.ERROR);
+
+			cleanup();
+		});
+	});
+
+	test('ratelimit closes the current request span before retry success', async () => {
+		await withProvider(async exporter => {
+			const { api, getObserver } = fakeRestApi();
+			const cleanup = instrumentRest(api, {
+				checkIfShouldTrace: () => true,
+				getMetrics: () => undefined,
+			});
+
+			const observer = getObserver()!;
+			await observer.onRequest!(requestPayload({ method: 'POST', url: '/channels/1/messages' }));
+			await observer.onRatelimit!(
+				ratelimitPayload({
+					method: 'POST',
+					url: '/channels/1/messages',
+					response: { status: 429 },
+				}),
+			);
+			await observer.onRequest!(requestPayload({ method: 'POST', url: '/channels/1/messages' }));
+			await observer.onSuccess!(
+				successPayload({
+					method: 'POST',
+					url: '/channels/1/messages',
+					response: { status: 200 },
+				}),
+			);
+
+			const spans = exporter.getFinishedSpans();
+			assert.equal(spans.length, 2);
+			assert.equal(spans[0].attributes['http.response.status_code'], 429);
+			assert.equal(spans[0].attributes['seyfert.rest.ratelimited'], true);
+			assert.equal(spans[1].attributes['http.response.status_code'], 200);
 
 			cleanup();
 		});

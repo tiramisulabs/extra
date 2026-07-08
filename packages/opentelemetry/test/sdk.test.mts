@@ -1,8 +1,46 @@
-import { ProxyTracerProvider, trace } from '@opentelemetry/api';
-import { BasicTracerProvider } from '@opentelemetry/sdk-trace-base';
+import { type Context, type ContextManager, ProxyTracerProvider, ROOT_CONTEXT, trace } from '@opentelemetry/api';
+import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { assert, describe, test } from 'vitest';
 import { resolvePluginOptions } from '../src/options';
 import { shouldStartNodeSDK, startOwnedSdk } from '../src/sdk';
+
+class CountingContextManager implements ContextManager {
+	enableCalls = 0;
+	private current: Context = ROOT_CONTEXT;
+
+	active(): Context {
+		return this.current;
+	}
+
+	with<A extends unknown[], F extends (...args: A) => ReturnType<F>>(
+		context: Context,
+		fn: F,
+		thisArg?: ThisParameterType<F>,
+		...args: A
+	): ReturnType<F> {
+		const previous = this.current;
+		this.current = context;
+		try {
+			return fn.call(thisArg, ...args);
+		} finally {
+			this.current = previous;
+		}
+	}
+
+	bind<T>(_context: Context, target: T): T {
+		return target;
+	}
+
+	enable(): this {
+		this.enableCalls += 1;
+		return this;
+	}
+
+	disable(): this {
+		this.current = ROOT_CONTEXT;
+		return this;
+	}
+}
 
 describe('shouldStartNodeSDK', () => {
 	test('true for ProxyTracerProvider without a real delegate', () => {
@@ -34,10 +72,19 @@ describe('startOwnedSdk', () => {
 			);
 		}
 
-		const owned = startOwnedSdk(resolvePluginOptions({ serviceName: 'test-owned-sdk' }));
+		const contextManager = new CountingContextManager();
+		const exporter = new InMemorySpanExporter();
+		const owned = startOwnedSdk(
+			resolvePluginOptions({
+				contextManager,
+				serviceName: 'test-owned-sdk',
+				spanProcessors: [new SimpleSpanProcessor(exporter)],
+			}),
+		);
 		assert.ok(owned);
 		assert.ok(owned.sdk);
 		assert.equal(typeof owned.shutdown, 'function');
+		assert.ok(contextManager.enableCalls > 0);
 		await owned.shutdown();
 	});
 

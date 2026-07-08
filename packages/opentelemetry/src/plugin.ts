@@ -72,10 +72,14 @@ export function opentelemetry(options: OpenTelemetryPluginOptions = {}): OpenTel
 
 			if (resolved.instrument.events) {
 				cleanups.push(
-					instrumentEvents(client, {
-						checkIfShouldTrace: resolved.checkIfShouldTrace,
-						getMetrics: () => metrics,
-					}),
+					instrumentEvents(
+						client,
+						{
+							checkIfShouldTrace: resolved.checkIfShouldTrace,
+							getMetrics: () => metrics,
+						},
+						api,
+					),
 				);
 			}
 			if (resolved.instrument.rest) {

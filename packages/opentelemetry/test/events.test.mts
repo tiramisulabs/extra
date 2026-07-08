@@ -1,7 +1,7 @@
 import { SpanStatusCode } from '@opentelemetry/api';
 import type { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import { assert, describe, test } from 'vitest';
-import { instrumentEvents } from '../src/instrument/events';
+import { type EventsApi, instrumentEvents } from '../src/instrument/events';
 import { setTraceServiceName } from '../src/trace-api';
 import { installTestTracer } from './helpers/otel-test-provider.mts';
 
@@ -23,6 +23,27 @@ function fakeClient(runEvent?: (name: string, ...args: unknown[]) => unknown) {
 		},
 	};
 	return { client, calls };
+}
+
+function fakeEventApi() {
+	let errorHandler: ((error: unknown, name: string) => unknown) | undefined;
+	let disposed = false;
+	const api: EventsApi = {
+		events: {
+			onError(handler) {
+				errorHandler = handler;
+				return () => {
+					disposed = true;
+					errorHandler = undefined;
+				};
+			},
+		},
+	};
+	return {
+		api,
+		emitError: (error: unknown, name: string) => errorHandler?.(error, name),
+		isDisposed: () => disposed,
+	};
 }
 
 describe('instrumentEvents (gateway runEvent)', () => {
@@ -130,6 +151,48 @@ describe('instrumentEvents (gateway runEvent)', () => {
 			assert.equal(spans[0].attributes['seyfert.shard_id'], 2);
 
 			cleanup();
+		});
+	});
+
+	test('Seyfert-reported handler errors mark resolved runEvent spans as failed', async () => {
+		await withProvider(async exporter => {
+			const reported = new Error('reported boom');
+			const recorded: Array<{ duration: number; attrs: Record<string, unknown> }> = [];
+			const eventApi = fakeEventApi();
+			const { client } = fakeClient(async name => {
+				await eventApi.emitError(reported, name);
+				return undefined;
+			});
+			const cleanup = instrumentEvents(
+				client,
+				{
+					checkIfShouldTrace: () => true,
+					getMetrics: () => ({
+						recordInteraction() {},
+						recordEvent(durationSeconds, attributes) {
+							recorded.push({
+								duration: durationSeconds,
+								attrs: attributes as Record<string, unknown>,
+							});
+						},
+						recordRest() {},
+						recordCache() {},
+					}),
+				},
+				eventApi.api,
+			);
+
+			await client.events.runEvent('messageCreate', client, {}, 0);
+
+			const spans = exporter.getFinishedSpans();
+			assert.equal(spans.length, 1);
+			assert.equal(spans[0].status.code, SpanStatusCode.ERROR);
+			assert.ok(spans[0].events.some(e => e.name === 'exception'));
+			assert.equal(recorded.length, 1);
+			assert.equal(recorded[0].attrs['seyfert.error'], true);
+
+			cleanup();
+			assert.equal(eventApi.isDisposed(), true);
 		});
 	});
 

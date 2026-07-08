@@ -1,4 +1,5 @@
-import { type Attributes, SpanKind, SpanStatusCode } from '@opentelemetry/api';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { type Attributes, type Span, SpanKind, SpanStatusCode } from '@opentelemetry/api';
 import { type CoreMetrics, durationSecondsSince } from '../metrics';
 import type { TraceSource } from '../options';
 import { getTracer } from '../trace-api';
@@ -22,7 +23,21 @@ export interface EventsClient {
 	};
 }
 
+export interface EventsApi {
+	events?: {
+		onError?: (handler: (error: unknown, name: string) => unknown, opts?: object) => () => void;
+	};
+}
+
 type RunEvent = (name: string, ...args: unknown[]) => unknown;
+
+interface ActiveEvent {
+	attributes: Attributes;
+	error?: unknown;
+	name: string;
+	span: Span;
+	start: number;
+}
 
 function shouldTrace(deps: EventsInstrumentDeps, source: TraceSource): boolean {
 	try {
@@ -45,6 +60,16 @@ function eventAttributes(name: string, args: readonly unknown[]): Attributes {
 	return attributes;
 }
 
+function markError(span: Span, error: unknown): void {
+	const err = error instanceof Error ? error : new Error(String(error));
+	try {
+		span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+		span.recordException(err);
+	} catch {
+		// never throw from instrumentation into the user path
+	}
+}
+
 /**
  * Wrap gateway event dispatch (`client.events.runEvent`) under root spans.
  *
@@ -56,13 +81,26 @@ function eventAttributes(name: string, args: readonly unknown[]): Attributes {
  * `runEvent` is the single path Seyfert uses for gateway event invocation
  * (user files + plugin listeners + BOT_READY / RAW / …). Cleanup restores the original.
  */
-export function instrumentEvents(client: EventsClient | unknown, deps: EventsInstrumentDeps): () => void {
+export function instrumentEvents(
+	client: EventsClient | unknown,
+	deps: EventsInstrumentDeps,
+	api?: EventsApi,
+): () => void {
 	const events = (client as EventsClient | null | undefined)?.events;
 	if (!events || typeof events.runEvent !== 'function') {
 		return () => {};
 	}
 
+	const activeEvent = new AsyncLocalStorage<ActiveEvent>();
 	const original: RunEvent = events.runEvent.bind(events);
+	const disposeErrorObserver =
+		typeof api?.events?.onError === 'function'
+			? api.events.onError((error, eventName) => {
+					const active = activeEvent.getStore();
+					if (!active || active.name !== String(eventName)) return;
+					active.error ??= error;
+				})
+			: undefined;
 
 	events.runEvent = function instrumentedRunEvent(name: string, ...args: unknown[]): unknown {
 		const source: TraceSource = { kind: 'event', name, args };
@@ -74,20 +112,16 @@ export function instrumentEvents(client: EventsClient | unknown, deps: EventsIns
 		const start = performance.now();
 
 		return getTracer().startActiveSpan(`event ${name}`, { kind: SpanKind.INTERNAL, attributes }, span => {
+			const active: ActiveEvent = { attributes, name, span, start };
 			const finish = (error?: unknown) => {
-				if (error !== undefined) {
-					const err = error instanceof Error ? error : new Error(String(error));
-					try {
-						span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
-						span.recordException(err);
-					} catch {
-						// never throw from instrumentation into the user path
-					}
+				const finalError = error ?? active.error;
+				if (finalError !== undefined) {
+					markError(span, finalError);
 				}
 				try {
 					deps.getMetrics()?.recordEvent(durationSecondsSince(start), {
 						...attributes,
-						'seyfert.error': error !== undefined,
+						'seyfert.error': finalError !== undefined,
 					});
 				} catch {
 					// metrics must not break handlers
@@ -99,30 +133,41 @@ export function instrumentEvents(client: EventsClient | unknown, deps: EventsIns
 				}
 			};
 
-			try {
-				const result = original(name, ...args);
-				if (result !== null && typeof result === 'object' && typeof (result as Promise<unknown>).then === 'function') {
-					return Promise.resolve(result).then(
-						value => {
-							finish();
-							return value;
-						},
-						error => {
-							finish(error);
-							throw error;
-						},
-					);
+			return activeEvent.run(active, () => {
+				try {
+					const result = original(name, ...args);
+					if (
+						result !== null &&
+						typeof result === 'object' &&
+						typeof (result as Promise<unknown>).then === 'function'
+					) {
+						return Promise.resolve(result).then(
+							value => {
+								finish();
+								return value;
+							},
+							error => {
+								finish(error);
+								throw error;
+							},
+						);
+					}
+					finish();
+					return result;
+				} catch (error) {
+					finish(error);
+					throw error;
 				}
-				finish();
-				return result;
-			} catch (error) {
-				finish(error);
-				throw error;
-			}
+			});
 		});
 	};
 
 	return () => {
 		events.runEvent = original;
+		try {
+			disposeErrorObserver?.();
+		} catch {
+			// never throw from instrumentation cleanup
+		}
 	};
 }

@@ -120,9 +120,9 @@ describe('interaction context scope (root spans)', () => {
 			});
 			const result = scope({ fullCommandName: 'ping' }, () => 'still-ok');
 			assert.equal(result, 'still-ok');
-			// span may or may not have ended depending on where metrics threw; user path must not throw
-			assert.equal(typeof result, 'string');
-			void exporter;
+			const spans = exporter.getFinishedSpans();
+			assert.equal(spans.length, 1);
+			assert.equal(spans[0].name, 'command ping');
 		});
 	});
 
