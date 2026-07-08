@@ -3,6 +3,10 @@ packages:
 
 allowBuilds:
   esbuild: true
+  protobufjs: true
+  "seyfert@https://codeload.github.com/tiramisulabs/seyfert/tar.gz/a85c842c579d2055a446e3c65524e783962c85a6": true
 
 onlyBuiltDependencies:
   - esbuild
+  - protobufjs
+  - seyfert
