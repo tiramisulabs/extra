@@ -29,4 +29,20 @@ describe('resolvePluginOptions', () => {
 		assert.deepEqual([...resolved.cache.skipResources], [...DEFAULT_CACHE_SKIP_RESOURCES]);
 		assert.equal(resolved.checkIfShouldTrace({ kind: 'event', name: 'x', args: [] }), true);
 	});
+
+	test('puts remaining NodeSDK fields on sdk and strips plugin-only keys', () => {
+		const spanProcessors: never[] = [];
+		const resolved = resolvePluginOptions({
+			serviceName: 'custom',
+			instrument: { rest: false },
+			cache: { skipResources: ['members'] },
+			checkIfShouldTrace: () => false,
+			spanProcessors,
+		});
+		assert.equal('serviceName' in resolved.sdk, false);
+		assert.equal('instrument' in resolved.sdk, false);
+		assert.equal('cache' in resolved.sdk, false);
+		assert.equal('checkIfShouldTrace' in resolved.sdk, false);
+		assert.equal(resolved.sdk.spanProcessors, spanProcessors);
+	});
 });
