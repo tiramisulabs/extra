@@ -129,16 +129,20 @@ describe('instrumentCache (adapter wraps)', () => {
 	test('skipResources → no span', async () => {
 		await withProvider(async exporter => {
 			const { adapter, store } = fakeAdapter();
-			store.set('presences.1', { status: 'online' });
+			store.set('presence.1', { status: 'online' });
 			const client = fakeClient(adapter);
 			const cleanup = instrumentCache(client, {
 				checkIfShouldTrace: () => true,
-				skipResources: new Set(['presences', 'voiceStates']),
+				skipResources: new Set(['presence', 'voice_state']),
 				getMetrics: () => undefined,
 			});
 
-			const value = (adapter.get as (k: string) => unknown)('presences.1');
+			const value = (adapter.get as (k: string) => unknown)('presence.1');
 			assert.deepEqual(value, { status: 'online' });
+			assert.equal(exporter.getFinishedSpans().length, 0);
+
+			// voice_state also skipped
+			(adapter.get as (k: string) => unknown)('voice_state.guild.user');
 			assert.equal(exporter.getFinishedSpans().length, 0);
 
 			// Non-skipped resource still traces

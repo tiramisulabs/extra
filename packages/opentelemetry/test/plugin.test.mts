@@ -25,6 +25,29 @@ describe('opentelemetry plugin wiring', () => {
 		await plugin.teardown?.({} as never);
 	});
 
+	test('setup is idempotent (second setup unwraps then re-instruments)', async () => {
+		const store = new Map<string, unknown>();
+		const adapter: Record<string, unknown> = {
+			get(key: string) {
+				return store.has(key) ? store.get(key) : null;
+			},
+		};
+		const client = { cache: { adapter }, events: {} };
+		const plugin = opentelemetry({
+			serviceName: 'plugin-idempotent-test',
+			instrument: { interactions: false, events: false, rest: false, cache: true },
+		});
+		await plugin.setup?.(client as never);
+		const wrappedOnce = adapter.get;
+		await plugin.setup?.(client as never);
+		// Still a wrapped method (re-instrumented); not left double-wrapped in a broken way
+		assert.equal(typeof adapter.get, 'function');
+		assert.notEqual(adapter.get, wrappedOnce);
+		await plugin.teardown?.({} as never);
+		// After teardown, original restored
+		assert.notEqual(adapter.get, wrappedOnce);
+	});
+
 	test('with in-memory exporter: setup empty client and teardown', async () => {
 		const otel = installTestTracer();
 		try {

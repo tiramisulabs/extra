@@ -88,6 +88,44 @@ describe('interaction context scope (root spans)', () => {
 		});
 	});
 
+	test('checkIfShouldTrace throw → fail open (still traces)', async () => {
+		await withProvider(async exporter => {
+			const scope = createInteractionContextScope({
+				serviceName: 'interactions-test',
+				checkIfShouldTrace: () => {
+					throw new Error('filter boom');
+				},
+				getMetrics: () => undefined,
+			});
+			const result = scope({ fullCommandName: 'ping' }, () => 'ok');
+			assert.equal(result, 'ok');
+			assert.equal(exporter.getFinishedSpans().length, 1);
+			assert.equal(exporter.getFinishedSpans()[0].name, 'command ping');
+		});
+	});
+
+	test('user result still returns when metrics throw on finish', async () => {
+		await withProvider(async exporter => {
+			const scope = createInteractionContextScope({
+				serviceName: 'interactions-test',
+				checkIfShouldTrace: () => true,
+				getMetrics: () => ({
+					recordInteraction() {
+						throw new Error('metrics boom');
+					},
+					recordEvent() {},
+					recordRest() {},
+					recordCache() {},
+				}),
+			});
+			const result = scope({ fullCommandName: 'ping' }, () => 'still-ok');
+			assert.equal(result, 'still-ok');
+			// span may or may not have ended depending on where metrics threw; user path must not throw
+			assert.equal(typeof result, 'string');
+			void exporter;
+		});
+	});
+
 	test('detectKind uses isModal / isComponent markers', async () => {
 		await withProvider(async exporter => {
 			const scope = createInteractionContextScope({

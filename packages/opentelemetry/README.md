@@ -64,7 +64,7 @@ await client.start();
 | `instrument` | `InstrumentFlags` | all `true` | Toggle each surface without removing the plugin |
 | `checkIfShouldTrace` | `(source: TraceSource) => boolean` | always `true` | Filter before starting a root span |
 | `contextManager` | `ContextManager` | — | Registered only if no global context manager is active |
-| `cache.skipResources` | `string[]` | `['presences', 'voiceStates']` | Cache resources never traced |
+| `cache.skipResources` | `string[]` | `['presence', 'voice_state']` | Cache resources never traced |
 | NodeSDK fields | `spanProcessors`, … | — | Passed through when the plugin starts the SDK |
 
 Plugin identity (`name: '@slipher/opentelemetry'`) is stable and is **not** overwritten by `serviceName`.
@@ -203,7 +203,7 @@ Attributes are set only when values are available. Sensitive data is never captu
 | `seyfert.cache.resource` | Resource namespace derived from the key |
 | `seyfert.cache.hit` | On `get`, whether the result was non-nullish |
 
-**Span name:** `cache {op} {resource}`. High-churn resources default-skipped: `presences`, `voiceStates` (override with `cache.skipResources`).
+**Span name:** `cache {op} {resource}`. High-churn resources default-skipped: `presence`, `voice_state` (override with `cache.skipResources`).
 
 ### Metrics-only
 
@@ -254,3 +254,7 @@ By default the plugin **never** puts on spans:
 - Other secrets from Discord HTTP traffic
 
 Only structural metadata (methods, paths, ids, status codes, resource names) is recorded. Prefer `checkIfShouldTrace` if certain paths or custom ids must not appear at all.
+
+## Limitations
+
+- **REST FIFO correlation:** Concurrent Discord REST calls that share the same `method + path` are correlated with a FIFO queue (Seyfert observer payloads cannot carry a request id). Completions are assumed to finish in request order for a given route; out-of-order completion for the same route can attach status/duration to the wrong span. Distinct routes are unaffected.

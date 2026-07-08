@@ -69,12 +69,23 @@ function detectKind(context: unknown): InteractionKind {
 /**
  * Root interaction span via Seyfert `contextScopes`.
  * Wraps the command/component/modal pipeline so nested REST/cache spans parent correctly.
+ *
+ * Fail-open: a throwing `checkIfShouldTrace` still traces. Finish/metrics errors never
+ * escape into user code — only the user's own throw/reject is rethrown.
  */
 export function createInteractionContextScope(deps: InteractionScopeDeps): ContextScope {
 	return (context, run) => {
 		const kind = detectKind(context);
 		const source: TraceSource = { kind, context };
-		if (!deps.checkIfShouldTrace(source)) return run();
+
+		let shouldTrace = true;
+		try {
+			shouldTrace = deps.checkIfShouldTrace(source);
+		} catch {
+			// Fail open: prefer a span over silently dropping telemetry.
+			shouldTrace = true;
+		}
+		if (!shouldTrace) return run();
 
 		const tracer = getTracer();
 		const name = interactionSpanName(kind, context);
@@ -83,16 +94,20 @@ export function createInteractionContextScope(deps: InteractionScopeDeps): Conte
 
 		return tracer.startActiveSpan(name, { kind: SpanKind.INTERNAL, attributes }, span => {
 			const finish = (error?: unknown) => {
-				if (error !== undefined) {
-					const err = error instanceof Error ? error : new Error(String(error));
-					span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
-					span.recordException(err);
+				try {
+					if (error !== undefined) {
+						const err = error instanceof Error ? error : new Error(String(error));
+						span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+						span.recordException(err);
+					}
+					deps.getMetrics()?.recordInteraction(durationSecondsSince(start), {
+						...attributes,
+						'seyfert.error': error !== undefined,
+					});
+					span.end();
+				} catch {
+					// never throw instrumentation errors into user code
 				}
-				deps.getMetrics()?.recordInteraction(durationSecondsSince(start), {
-					...attributes,
-					'seyfert.error': error !== undefined,
-				});
-				span.end();
 			};
 
 			try {

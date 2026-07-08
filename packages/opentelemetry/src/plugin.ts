@@ -20,6 +20,17 @@ export function opentelemetry(options: OpenTelemetryPluginOptions = {}): OpenTel
 	let owned: OwnedSdk | undefined;
 	let metrics: CoreMetrics | undefined;
 	const cleanups: Array<() => void> = [];
+	let setupActive = false;
+
+	const runCleanups = () => {
+		for (const cleanup of cleanups.splice(0).reverse()) {
+			try {
+				cleanup();
+			} catch {
+				// never throw from instrumentation cleanup
+			}
+		}
+	};
 
 	return createPlugin({
 		name: '@slipher/opentelemetry',
@@ -48,8 +59,15 @@ export function opentelemetry(options: OpenTelemetryPluginOptions = {}): OpenTel
 			});
 		},
 		setup(client, api) {
+			// Idempotent: unwrap previous instrumentors before re-wrapping.
+			if (setupActive) {
+				runCleanups();
+			}
+			setupActive = true;
+
 			setTraceServiceName(resolved.serviceName);
-			owned = startOwnedSdk(resolved);
+			// Keep an already-owned SDK; a second start would no-op and drop the handle.
+			owned ??= startOwnedSdk(resolved);
 			metrics = createCoreMetrics(resolved.serviceName, resolved.instrument);
 
 			if (resolved.instrument.events) {
@@ -80,17 +98,12 @@ export function opentelemetry(options: OpenTelemetryPluginOptions = {}): OpenTel
 		},
 		async teardown() {
 			try {
-				for (const cleanup of cleanups.splice(0).reverse()) {
-					try {
-						cleanup();
-					} catch {
-						// never throw from instrumentation cleanup
-					}
-				}
+				runCleanups();
 				if (owned) await owned.shutdown();
 			} finally {
 				owned = undefined;
 				metrics = undefined;
+				setupActive = false;
 			}
 		},
 	}) as OpenTelemetryPlugin;

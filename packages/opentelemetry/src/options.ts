@@ -5,8 +5,8 @@ type NodeSDKOptions = NonNullable<ConstructorParameters<typeof NodeSDK>[0]>;
 
 export const DEFAULT_SERVICE_NAME = 'seyfert';
 
-/** High-churn cache resources skipped by default. */
-export const DEFAULT_CACHE_SKIP_RESOURCES = ['presences', 'voiceStates'] as const;
+/** High-churn cache resources skipped by default (Seyfert key namespaces). */
+export const DEFAULT_CACHE_SKIP_RESOURCES = ['presence', 'voice_state'] as const;
 
 export interface InstrumentFlags {
 	interactions?: boolean;
