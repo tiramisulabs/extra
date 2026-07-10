@@ -1,4 +1,4 @@
-import { ApplicationCommandOptionType } from 'seyfert/lib/types';
+import { ApplicationCommandOptionType } from 'seyfert';
 import { mockId } from '../id';
 import { TEST_APPLICATION_ID, TEST_CHANNEL_ID, TEST_GUILD_ID } from './constants';
 import {

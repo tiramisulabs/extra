@@ -1,26 +1,59 @@
-# Webhook Events
+# @slipher/webhooks
 
-Completely agnostic and minimalistic way with 1 dependencies to listen to Discord webhook events.
+Minimal HTTP listener for Discord webhook events.
+
+## Install
+
+```sh
+pnpm add @slipher/webhooks
+```
+
+## Usage
 
 ```ts
-import { init } from '@slipher/webhooks'
+import { init } from '@slipher/webhooks';
 
 const server = init({
 	port: 3000,
 	path: '/api/webhooks',
-	callback: (event) => console.log(event),
-	listen: () => console.log('Listen webhooks'),
+	publicKey: process.env.DISCORD_PUBLIC_KEY!,
+	callback: event => {
+		console.log(event);
+	},
+	listen: () => console.log('Listening for webhooks'),
 });
 ```
-### To complete the typing you must use the augmentation module provided by typescript
+
+The listener accepts `POST` requests at the configured `path`, verifies Discord's Ed25519 signature with `x-signature-timestamp`, `x-signature-ed25519`, and `publicKey`, then calls `callback` for event payloads.
+
+## Responses
+
+- Non-`POST` requests return `405`.
+- Requests to another path return `401`.
+- Invalid signatures return `401`.
+- Malformed JSON or non-object JSON returns `400`.
+- Bodies larger than 1 MB return `413`.
+- Valid Discord ping and event payloads return `204`.
+
+## Type Augmentation
+
+To complete the event typing, augment the webhook interfaces with your API types.
 
 **Seyfert**
+
 ```ts
-import type { APIUser, APIGuild, APIEntitlement } from "seyfert/lib/types";
+import type { APIEntitlement, APIGuild, APIUser } from 'seyfert/lib/types';
 
 declare module '@slipher/webhooks' {
 	export interface EntitlementCreateEventType extends APIEntitlement {}
 	export interface UserType extends APIUser {}
 	export interface GuildType extends APIGuild {}
 }
+```
+
+## Development
+
+```sh
+pnpm --filter @slipher/webhooks test
+pnpm --filter @slipher/webhooks build
 ```

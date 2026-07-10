@@ -167,7 +167,7 @@ describe('createMockBot', () => {
 		await bot.close();
 	});
 
-	test('settles when a middleware denies via editOrReply without next()/stop()/pass()', async () => {
+	test('settles when a middleware denies via editOrReply without next()/stop()', async () => {
 		denierCalls.length = 0;
 		deniedBodyRan.length = 0;
 		const bot = await createMockBot({

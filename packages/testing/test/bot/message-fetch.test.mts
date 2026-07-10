@@ -1,8 +1,8 @@
 import { Command, type CommandContext, Declare } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
-import { DiscordErrors } from '../../src/bot/rest';
 import { apiUser } from '../../src/bot/payloads';
+import { DiscordErrors } from '../../src/bot/rest';
 import { mockWorld } from '../../src/bot/world';
 
 describe('single message fetch', () => {

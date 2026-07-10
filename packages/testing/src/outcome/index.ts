@@ -1,4 +1,4 @@
-import { InteractionResponseType } from 'seyfert/lib/types';
+import { InteractionResponseType } from 'seyfert';
 import type { CapturedReply, DispatchResult, OutgoingMessage } from '../bot/bot';
 import type { DispatchDenial } from '../bot/dispatch-context';
 import { isEphemeral } from '../bot/message-flags';
@@ -157,7 +157,6 @@ const RESPONSE_KINDS = [
 
 const DENIAL_KINDS = [
 	'stop',
-	'pass',
 	'no-next',
 	'permissions',
 	'bot-permissions',

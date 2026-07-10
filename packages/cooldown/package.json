@@ -1,6 +1,6 @@
 {
 	"name": "@slipher/cooldown",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"private": false,
 	"license": "MIT",
 	"publishConfig": {
@@ -22,8 +22,8 @@
 		"prepublish": "pnpm build"
 	},
 	"devDependencies": {
-		"@types/node": "^25.0.10",
-		"typescript": "^5.9.3"
+		"@types/node": "^26.0.1",
+		"typescript": "^6.0.3"
 	},
 	"dependencies": {
 		"seyfert": "4.4.0"

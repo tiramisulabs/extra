@@ -1,10 +1,11 @@
 import { MESSAGE_FLAG_COMPONENTS_V2 } from './message-flags';
 import { apiError, ErrorCode } from './rest';
-import { arrayValue, asRecord, numberValue, stringValue, walkComponents } from './state';
+import { arrayValue, asRecord, numberValue, stringValue, walkComponents } from './state-support';
 
 // Server-side message-body validation: the mock simulates Discord's 400s for impossible payloads so an
 // over-limit/malformed send fails loud instead of passing a happy-path test. Pure functions (no WorldState
-// dependency) — they only borrow state.ts's value/component parsing helpers.
+// dependency) — they import the parsing helpers from the internal support module directly, avoiding the public
+// state barrel and its WorldState implementation graph.
 
 const MAX_MESSAGE_CONTENT = 2000;
 const cp = (value: string): number => [...value].length;

@@ -1,4 +1,4 @@
-import { type DurationInput, parseDuration } from '@slipher/internal';
+import { type DurationInput, parseDuration } from './duration';
 
 const DISCORD_EPOCH = 1420070400000n;
 const BASE_MS = 1577836800000n;

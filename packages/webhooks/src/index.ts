@@ -1,7 +1,31 @@
 import { createServer } from 'node:http';
 import nacl from 'tweetnacl';
 
-const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
+export interface BadWebhookPayloadResult {
+	ok: false;
+	status: 400;
+	message: string;
+}
+
+export type WebhookPayload = WebhookPingEventPayload | WebhookEventPayload;
+export type WebhookPayloadResult = { ok: true; body: WebhookPayload } | BadWebhookPayloadResult;
+export const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export function parseWebhookPayload(rawBody: string): WebhookPayloadResult {
+	let body: unknown;
+	try {
+		body = JSON.parse(rawBody);
+	} catch {
+		return { ok: false, status: 400, message: 'Malformed JSON body.' };
+	}
+
+	if (!isJsonObject(body)) return { ok: false, status: 400, message: 'Expected a JSON object body.' };
+	return { ok: true, body: body as unknown as WebhookPayload };
+}
 
 export const init = (options: AppOptions) => {
 	const server = createServer((req, res) => {
@@ -10,23 +34,22 @@ export const init = (options: AppOptions) => {
 
 		let rawBody = '';
 		let bodySize = 0;
-		let bodyRejected = false;
+		let bodyTooLarge = false;
 
 		req.on('data', chunk => {
-			if (bodyRejected) return;
-			const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-			bodySize += buffer.length;
+			if (bodyTooLarge) return;
+			bodySize += Buffer.byteLength(chunk);
 			if (bodySize > MAX_WEBHOOK_BODY_BYTES) {
-				bodyRejected = true;
+				bodyTooLarge = true;
 				rawBody = '';
 				res.writeHead(413).end();
 				return;
 			}
-			rawBody += buffer.toString();
+			rawBody += chunk.toString(); // Append each chunk of data
 		});
 
 		req.on('end', () => {
-			if (bodyRejected) return;
+			if (bodyTooLarge) return;
 			let verify: boolean;
 			try {
 				verify = verifySignature({
@@ -41,8 +64,9 @@ export const init = (options: AppOptions) => {
 			}
 
 			if (verify) {
-				const body = parseWebhookPayload(rawBody);
-				if (!body) return res.writeHead(400).end();
+				const parsed = parseWebhookPayload(rawBody);
+				if (!parsed.ok) return res.writeHead(parsed.status).end(JSON.stringify({ message: parsed.message }));
+				const body = parsed.body;
 				if (body.type === WebhookRequestType.Event) options.callback(body);
 				return res.writeHead(204).end();
 			}
@@ -57,29 +81,6 @@ export const init = (options: AppOptions) => {
 	server.listen(options.port, options.listen);
 	return server;
 };
-
-function parseWebhookPayload(rawBody: string): WebhookPingEventPayload | WebhookEventPayload | undefined {
-	let body: unknown;
-	try {
-		body = JSON.parse(rawBody);
-	} catch {
-		return;
-	}
-
-	if (!body || typeof body !== 'object' || Array.isArray(body)) return;
-	const payload = body as { type?: unknown; event?: unknown; version?: unknown; application_id?: unknown };
-	if (payload.version !== 1 || typeof payload.application_id !== 'string') return;
-	if (payload.type === WebhookRequestType.PING) return body as WebhookPingEventPayload;
-	if (
-		payload.type === WebhookRequestType.Event &&
-		payload.event &&
-		typeof payload.event === 'object' &&
-		!Array.isArray(payload.event)
-	) {
-		return body as WebhookEventPayload;
-	}
-	return;
-}
 
 export function verifySignature({ timestamp, body, ed25519, publicKey }: SignatureOptions) {
 	return nacl!.sign.detached.verify(

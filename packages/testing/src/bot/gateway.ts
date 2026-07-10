@@ -1,4 +1,4 @@
-import type { GatewaySendPayload } from 'seyfert/lib/types';
+import type { GatewaySendPayload } from 'seyfert';
 
 /** Minimal shard shape exposed by MockGateway.values(). */
 export interface MockShard {

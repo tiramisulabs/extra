@@ -1,6 +1,6 @@
 {
 	"name": "@slipher/generic-adapter",
-	"version": "0.0.7",
+	"version": "0.0.8",
 	"private": false,
 	"license": "MIT",
 	"publishConfig": {
@@ -25,7 +25,7 @@
 		"tweetnacl": "^1.0.3"
 	},
 	"devDependencies": {
-		"@types/node": "^25.0.10",
-		"typescript": "^5.9.3"
+		"@types/node": "^26.0.1",
+		"typescript": "^6.0.3"
 	}
 }

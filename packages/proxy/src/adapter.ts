@@ -7,6 +7,15 @@ import {
 	type us_listen_socket,
 } from 'uWebSockets.js';
 import { ApiHandler, type HttpMethods, type RawFile } from 'seyfert';
+import { isMultipartContentType, parseJsonObject, parseMultipartBody } from './parsing';
+
+function writeBadRequest(res: HttpResponse, message: string) {
+	if (!res.aborted)
+		res.cork(() => {
+			res.writeStatus('400').writeHeader('content-type', 'application/json').end(JSON.stringify({ message }));
+		});
+}
+
 export function createProxy(options: {
 	token: string;
 	port: number;
@@ -27,7 +36,10 @@ export function createProxy(options: {
 		res.onAborted(() => {
 			res.aborted = true;
 		});
-		if (res.aborted) return;
+		if (res.aborted) {
+			res.writeStatus('401');
+			return;
+		}
 
 		const auth = req.getHeader('authorization');
 		if (auth !== authKey) {
@@ -35,33 +47,25 @@ export function createProxy(options: {
 			return;
 		}
 		let body: undefined | Record<string, unknown>;
-		const files: RawFile[] = [];
+		let files: RawFile[] = [];
 		const method = <HttpMethods>req.getMethod().toUpperCase();
 		const query = new URLSearchParams(req.getQuery());
 		const path = <`/${string}`>req.getUrl().slice(sliceLength);
 		const reason = req.getHeader('x-audit-log-reason');
 		if (method !== 'GET' && method !== 'DELETE') {
-			try {
-				const contentType = req.getHeader('content-type') ?? '';
-				if (contentType.includes('multipart/form-data')) {
-					const form = await readBody(res, req, contentType);
-					if (form) {
-						for (let i = 0; i < form.length; i++) {
-							const field = form[i];
-							if (field.name === 'payload_json') {
-								body = parseJsonObject(Buffer.from(field.data).toString());
-							} else {
-								files.push({
-									filename: field.filename || field.name || `file-${i}`,
-									data: field.data,
-								});
-							}
-						}
-					}
-				} else body = await readJson(res);
-			} catch (e) {
-				writeJsonResponse(res, '400', { message: getErrorMessage(e) });
-				return;
+			const contentType = req.getHeader('content-type');
+			if (isMultipartContentType(contentType)) {
+				const form = await readBody(res, req, contentType);
+				if (form) {
+					const parsed = parseMultipartBody(form);
+					if (!parsed.ok) return writeBadRequest(res, parsed.message);
+					body = parsed.body;
+					files = parsed.files;
+				}
+			} else {
+				const parsed = parseJsonObject(await readBuffer(res));
+				if (!parsed.ok) return writeBadRequest(res, parsed.message);
+				body = parsed.value;
 			}
 		}
 		try {
@@ -76,7 +80,7 @@ export function createProxy(options: {
 					res.writeHeader('content-type', 'application/json').end(JSON.stringify(result));
 				});
 		} catch (e) {
-			const message = getErrorMessage(e);
+			const message = typeof e === 'object' && e && 'message' in e ? (e.message as string) : String(e);
 			if (!res.aborted)
 				res.cork(() => {
 					res
@@ -105,7 +109,6 @@ export function readBuffer(res: HttpResponse) {
 					ok(Buffer.concat(buffers));
 				} catch (e) {
 					res.close();
-					rej(e);
 					return;
 				}
 			} else {
@@ -119,29 +122,10 @@ export function readBuffer(res: HttpResponse) {
 
 export async function readJson<T extends Record<string, any>>(res: HttpResponse): Promise<T> {
 	const buffer = await readBuffer(res);
-	return parseJsonObject(buffer.toString()) as T;
+	return JSON.parse(buffer.toString());
 }
 
-export async function readBody(res: HttpResponse, req: HttpRequest, header?: string) {
-	const contentType = header ?? req.getHeader('content-type');
+export async function readBody(res: HttpResponse, req: HttpRequest, contentType = req.getHeader('content-type')) {
 	const buffer = await readBuffer(res);
 	return getParts(buffer, contentType);
-}
-
-function parseJsonObject(value: string): Record<string, unknown> {
-	const parsed = JSON.parse(value);
-	if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
-		throw new TypeError('Expected a JSON object body');
-	return parsed as Record<string, unknown>;
-}
-
-function getErrorMessage(error: unknown): string {
-	return typeof error === 'object' && error && 'message' in error ? String(error.message) : String(error);
-}
-
-function writeJsonResponse(res: HttpResponse, status: string, body: Record<string, unknown>) {
-	if (res.aborted) return;
-	res.cork(() => {
-		res.writeStatus(status).writeHeader('content-type', 'application/json').end(JSON.stringify(body));
-	});
 }

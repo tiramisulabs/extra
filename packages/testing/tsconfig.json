@@ -1,31 +1,14 @@
 {
+	"extends": "../../tsconfig.json",
 	"compilerOptions": {
-		"module": "CommonJS",
-		"target": "ESNext",
-		"lib": [
-			"ESNext"
-		],
-		"moduleResolution": "node",
-		"declaration": true,
-		"sourceMap": false,
-		"strict": true,
-		"esModuleInterop": true,
 		"experimentalDecorators": true,
 		"emitDecoratorMetadata": true,
-		"preserveConstEnums": true,
-		"noImplicitAny": true,
-		"strictNullChecks": true,
-		"strictFunctionTypes": true,
-		"noImplicitThis": true,
-		"noUnusedLocals": true,
-		"noUnusedParameters": true,
-		"noImplicitReturns": true,
-		"noFallthroughCasesInSwitch": true,
-		"skipLibCheck": true,
-		"noErrorTruncation": true,
-		"outDir": "./lib",
-		"stripInternal": true
+		"rootDir": "./src",
+		"outDir": "./lib"
 	},
+	"include": [
+		"src"
+	],
 	"exclude": [
 		"**/lib",
 		"**/test"

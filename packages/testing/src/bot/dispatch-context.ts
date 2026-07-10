@@ -4,12 +4,11 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 export interface DispatchDenial {
 	/**
 	 * - `stop`: a middleware called `stop(reason)`.
-	 * - `pass`: a middleware called `pass()`, short-circuiting the chain so `run` was skipped.
-	 * - `no-next`: a middleware replied and returned without calling next/stop/pass.
+	 * - `no-next`: a middleware replied and returned without calling next/stop.
 	 * - `permissions`: the invoking member lacked the command's `defaultMemberPermissions`.
 	 * - `bot-permissions`: the bot lacked the command's `botPermissions`.
 	 */
-	kind: 'stop' | 'pass' | 'no-next' | 'permissions' | 'bot-permissions';
+	kind: 'stop' | 'no-next' | 'permissions' | 'bot-permissions';
 	/** The argument passed to `stop(reason)`, when kind is `stop`. */
 	reason?: unknown;
 	/** The middleware key that denied, when derivable. */

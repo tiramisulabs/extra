@@ -1,5 +1,4 @@
-import { ApiHandler } from 'seyfert';
-import type { ApiRequestOptions, HttpMethods } from 'seyfert/lib/api/shared';
+import { ApiHandler, type ApiRequestOptions, type HttpMethods } from 'seyfert';
 import { dispatchStore } from './dispatch-context';
 import { apiMessage } from './payloads';
 import { CHANNEL_MESSAGE_POST, WEBHOOK_EXECUTE_POST } from './routes';

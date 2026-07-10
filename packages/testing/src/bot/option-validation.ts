@@ -1,5 +1,4 @@
-import { ApplicationCommandType } from 'seyfert';
-import { ApplicationCommandOptionType } from 'seyfert/lib/types';
+import { ApplicationCommandOptionType, ApplicationCommandType } from 'seyfert';
 import {
 	type AutocompleteInteractionOptions,
 	type ChatInputInteractionOptions,

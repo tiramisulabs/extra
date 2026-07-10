@@ -1,5 +1,5 @@
-import { isAmbiguousQueueAddArgs, queueAddAmbiguityMessage } from '@slipher/internal';
 import { mockId } from './id';
+import { isAmbiguousQueueAddArgs, queueAddAmbiguityMessage } from './queue-options';
 
 type Awaitable<T> = T | PromiseLike<T>;
 type DurationInputLike = number | string;
@@ -286,7 +286,7 @@ export function mockQueues(): MockQueues {
 					jobs: [],
 					/**
 					 * Runtime overload disambiguation for add uses maybeOptions plus
-					 * @slipher/internal's isJobOptionsLike. The two-argument form
+					 * isJobOptionsLike. The two-argument form
 					 * add('send', { delay: '5s' }) is ambiguous, so it throws instead
 					 * of guessing. Use add('send', { payload: true }, { delay: '5s' })
 					 * to force name="send".

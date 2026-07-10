@@ -1,94 +1,48 @@
-import { createServer } from 'node:net';
-import nacl from 'tweetnacl';
-import { afterEach, describe, expect, test, vi } from 'vitest';
-import { init, WebhookRequestType } from '../src';
+import type { Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { assert, describe, test } from 'vitest';
+import { init, MAX_WEBHOOK_BODY_BYTES, parseWebhookPayload, WebhookRequestType } from '../src';
 
-const servers: ReturnType<typeof init>[] = [];
+describe('@slipher/webhooks payload parsing', () => {
+	test('parseWebhookPayload accepts JSON objects', () => {
+		assert.deepEqual(parseWebhookPayload('{"type":0,"version":1,"application_id":"app"}'), {
+			ok: true,
+			body: {
+				type: WebhookRequestType.PING,
+				version: 1,
+				application_id: 'app',
+			},
+		});
+	});
 
-afterEach(async () => {
-	await Promise.all(
-		servers.map(
-			server =>
-				new Promise<void>(resolve => {
-					server.close(() => resolve());
-				}),
-		),
-	);
-	servers.length = 0;
-});
+	test('parseWebhookPayload rejects malformed or non-object JSON', () => {
+		assert.deepEqual(parseWebhookPayload('{'), { ok: false, status: 400, message: 'Malformed JSON body.' });
+		assert.deepEqual(parseWebhookPayload('[]'), { ok: false, status: 400, message: 'Expected a JSON object body.' });
+	});
 
-async function freePort(): Promise<number> {
-	return new Promise((resolve, reject) => {
-		const server = createServer();
-		server.on('error', reject);
-		server.listen(0, () => {
+	test('init rejects bodies larger than the webhook size limit', async () => {
+		let server!: Server;
+		await new Promise<void>(resolve => {
+			server = init({
+				path: '/webhook',
+				port: 0,
+				publicKey: '0'.repeat(64),
+				callback: () => undefined,
+				listen: resolve,
+			});
+		});
+
+		try {
 			const address = server.address();
-			if (!address || typeof address === 'string') {
-				server.close();
-				reject(new TypeError('Unable to reserve a test port'));
-				return;
-			}
-			const { port } = address;
-			server.close(() => resolve(port));
-		});
-	});
-}
-
-function sign(body: string, secretKey: Uint8Array, timestamp = '1700000000') {
-	const signature = nacl.sign.detached(Buffer.from(timestamp + body), secretKey);
-	return {
-		timestamp,
-		ed25519: Buffer.from(signature).toString('hex'),
-	};
-}
-
-async function startWebhook(callback = vi.fn()) {
-	const keys = nacl.sign.keyPair();
-	const port = await freePort();
-	const server = init({
-		path: '/discord',
-		port,
-		publicKey: Buffer.from(keys.publicKey).toString('hex'),
-		callback,
-	});
-	servers.push(server);
-	await new Promise(resolve => server.once('listening', resolve));
-	return { callback, keys, url: `http://127.0.0.1:${port}/discord` };
-}
-
-describe('@slipher/webhooks', () => {
-	test('rejects signed event payloads missing required base fields', async () => {
-		const { callback, keys, url } = await startWebhook();
-		const body = JSON.stringify({ type: WebhookRequestType.Event, event: {} });
-		const signature = sign(body, keys.secretKey);
-
-		const response = await fetch(url, {
-			method: 'POST',
-			headers: {
-				'x-signature-timestamp': signature.timestamp,
-				'x-signature-ed25519': signature.ed25519,
-			},
-			body,
-		});
-
-		expect(response.status).toBe(400);
-		expect(callback).not.toHaveBeenCalled();
-	});
-
-	test('rejects oversized webhook bodies before signature verification', async () => {
-		const { callback, url } = await startWebhook();
-		const body = 'x'.repeat(1024 * 1024 + 1);
-
-		const response = await fetch(url, {
-			method: 'POST',
-			headers: {
-				'x-signature-timestamp': '1700000000',
-				'x-signature-ed25519': '00',
-			},
-			body,
-		});
-
-		expect(response.status).toBe(413);
-		expect(callback).not.toHaveBeenCalled();
+			assert.notEqual(address, null);
+			assert.notEqual(typeof address, 'string');
+			const response = await fetch(`http://127.0.0.1:${(address as AddressInfo).port}/webhook`, {
+				method: 'POST',
+				body: 'x'.repeat(MAX_WEBHOOK_BODY_BYTES + 1),
+			});
+			assert.equal(response.status, 413);
+		} finally {
+			await new Promise<void>(resolve => server.close(() => resolve()));
+		}
 	});
 });

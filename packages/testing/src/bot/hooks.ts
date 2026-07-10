@@ -3,12 +3,11 @@ import type { ModalWaiter } from './dispatch';
 import { dispatchStore } from './dispatch-context';
 import { componentInternals, modalRegistry } from './seyfert-internals';
 
-type MiddlewareControl = (...args: never[]) => unknown;
+type MiddlewareControl = (...args: unknown[]) => unknown;
 interface MiddlewareControls {
 	context: unknown;
 	next: MiddlewareControl;
 	stop: MiddlewareControl;
-	pass: MiddlewareControl;
 }
 type WrappedMiddleware = (controls: MiddlewareControls) => unknown;
 
@@ -171,31 +170,22 @@ function installMiddlewareDenialHooks(client: Client, state: DispatchHookInstall
 					progressed = true;
 					return fn(...args);
 				};
-			// stop(reason) terminates the chain and routes through onMiddlewaresError: record it as a
-			// structured 'stop' denial, capturing the reason argument, before delegating.
+			// stop(reason) is a denial; stop() is Seyfert v5's silent-skip form. Both terminate the
+			// chain, so expose the public control that actually ran and preserve its optional reason.
 			const stop: MiddlewareControl = (...args) => {
 				if (ctx) ctx.denial = { kind: 'stop', reason: args[0], middleware: key };
 				progressed = true;
 				return controls.stop(...args);
 			};
-			// pass() short-circuits the chain so command.run is skipped — a distinct outcome from a normal
-			// success. Record it as a structured 'pass' denial (denied=true) so a test can assert the gate
-			// skipped the command, instead of it collapsing into the success shape.
-			const pass: MiddlewareControl = (...args) => {
-				if (ctx) ctx.denial = { kind: 'pass', middleware: key };
-				progressed = true;
-				return controls.pass(...args);
-			};
 			const result = real({
 				...controls,
 				next: mark(controls.next),
 				stop,
-				pass,
 			});
 			Promise.resolve(result).then(
 				() => {
 					if (progressed) return;
-					// The middleware denied (replied + returned without next/stop/pass). Its reply may still be
+					// The middleware denied (replied + returned without next/stop). Its reply may still be
 					// recording through async REST hops, so don't settle after a single tick. Drain until this
 					// dispatch's REST surface is quiescent: action count stable across a tick AND none in flight.
 					if (ctx && !ctx.denial) ctx.denial = { kind: 'no-next', middleware: key };

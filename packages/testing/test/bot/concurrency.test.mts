@@ -6,7 +6,7 @@ import { Routes } from '../../src/bot/routes';
 import { mockWorld } from '../../src/bot/world';
 
 describe('concurrent dispatch isolation', () => {
-	test('creating another bot does not reset the global dispatch id allocator', async () => {
+	test('creating, resetting, and closing another bot cannot reuse a live bot interaction id or token', async () => {
 		@Declare({ name: 'id-probe', description: 'dispatch id probe' })
 		class IdProbe extends Command {
 			async run(ctx: CommandContext) {
@@ -15,14 +15,30 @@ describe('concurrent dispatch isolation', () => {
 		}
 
 		const firstBot = await createMockBot({ commands: [IdProbe] });
-		const first = firstBot.slash({ name: 'id-probe' });
-		const secondBot = await createMockBot({ commands: [IdProbe] });
-		const second = secondBot.slash({ name: 'id-probe' });
+		const first = await firstBot.slash({ name: 'id-probe' });
+		const firstCallback = first.actions.find(action => action.route.endsWith('/callback'));
+		expect(firstCallback).toBeDefined();
 
-		expect(second.dispatchId).toBeGreaterThan(first.dispatchId ?? 0);
-		await Promise.all([first, second]);
-		await firstBot.close();
+		// A second bot shares the package-level allocator. Its lifecycle must never rewind IDs used by a live bot.
+		const secondBot = await createMockBot({ commands: [IdProbe] });
+		secondBot.reset();
 		await secondBot.close();
+
+		// Before the fix, createMockBot reset the allocator here. A's second callback reused A's first token and
+		// failed with Discord 40060 Already Acknowledged.
+		const second = await firstBot.slash({ name: 'id-probe' });
+		const secondCallback = second.actions.find(action => action.route.endsWith('/callback'));
+		expect(secondCallback).toBeDefined();
+
+		const callbackParts = [firstCallback, secondCallback].map(action => {
+			const match = /^\/interactions\/([^/]+)\/([^/]+)\/callback$/.exec(action?.route ?? '');
+			if (!match) throw new Error(`expected interaction callback route, got ${action?.route}`);
+			return { id: match[1], token: match[2] };
+		});
+		expect(new Set(callbackParts.map(part => part.id)).size).toBe(2);
+		expect(new Set(callbackParts.map(part => part.token)).size).toBe(2);
+		expect(second.content).toBe('ok');
+		await firstBot.close();
 	});
 
 	test('a slash and a button racing through one dedup gate are attributed to themselves', async () => {

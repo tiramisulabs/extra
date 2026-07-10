@@ -1,35 +1,45 @@
-import type { HttpResponse } from 'uWebSockets.js';
-import { describe, expect, test, vi } from 'vitest';
-import { readBuffer } from '../src/adapter';
+import { assert, describe, test } from 'vitest';
+import { isMultipartContentType, parseJsonObject, parseMultipartBody } from '../src/parsing';
 
-vi.mock('uWebSockets.js', () => ({
-	App: vi.fn(),
-	getParts: vi.fn(),
-}));
+function bytes(value: string) {
+	return new TextEncoder().encode(value).buffer;
+}
 
-describe('readBuffer', () => {
-	test('rejects if final Buffer.concat fails after closing the response', async () => {
-		let onData: ((chunk: ArrayBuffer, isLast: boolean) => void) | undefined;
-		const response = {
-			onData(handler: (chunk: ArrayBuffer, isLast: boolean) => void) {
-				onData = handler;
-				return response;
-			},
-			onAborted() {
-				return response;
-			},
-			close: vi.fn(),
-		} as unknown as HttpResponse;
-		const failure = new Error('concat failed');
-		const concat = vi.spyOn(Buffer, 'concat').mockImplementation(() => {
-			throw failure;
+describe('@slipher/proxy request parsing', () => {
+	test('isMultipartContentType rejects missing headers', () => {
+		assert.equal(isMultipartContentType(undefined), false);
+		assert.equal(isMultipartContentType('application/json'), false);
+		assert.equal(isMultipartContentType('multipart/form-data; boundary=body'), true);
+	});
+
+	test('parseJsonObject accepts only JSON objects', () => {
+		assert.deepEqual(parseJsonObject('{"content":"hello"}'), { ok: true, value: { content: 'hello' } });
+		assert.deepEqual(parseJsonObject('[]'), { ok: false, status: 400, message: 'Expected a JSON object body.' });
+		assert.deepEqual(parseJsonObject('{'), { ok: false, status: 400, message: 'Malformed JSON body.' });
+	});
+
+	test('parseMultipartBody parses payload_json and falls back unnamed file names', () => {
+		const parsed = parseMultipartBody([
+			{ name: 'payload_json', data: bytes('{"content":"hello"}') },
+			{ name: 'upload', data: bytes('a') },
+			{ name: '', filename: 'named.txt', data: bytes('b') },
+			{ name: '', data: bytes('c') },
+		]);
+
+		assert.equal(parsed.ok, true);
+		if (!parsed.ok) return;
+		assert.deepEqual(parsed.body, { content: 'hello' });
+		assert.deepEqual(
+			parsed.files.map(file => file.filename),
+			['upload', 'named.txt', 'file-3'],
+		);
+	});
+
+	test('parseMultipartBody rejects malformed payload_json', () => {
+		assert.deepEqual(parseMultipartBody([{ name: 'payload_json', data: bytes('{') }]), {
+			ok: false,
+			status: 400,
+			message: 'Malformed JSON body.',
 		});
-
-		const pending = readBuffer(response);
-		onData?.(new ArrayBuffer(1), true);
-
-		await expect(pending).rejects.toThrow('concat failed');
-		expect(response.close).toHaveBeenCalledTimes(1);
-		concat.mockRestore();
 	});
 });

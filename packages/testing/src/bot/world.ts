@@ -1,5 +1,4 @@
-import type { UsingClient } from 'seyfert';
-import { CacheFrom } from 'seyfert/lib/cache';
+import { CacheFrom, type UsingClient } from 'seyfert';
 import { TEST_BOT_ID } from './constants';
 import {
 	type ApiAuditLogEntry,

@@ -167,7 +167,7 @@ describe('interaction acknowledgement (fail loud before ack)', () => {
 		await bot.close();
 	});
 
-	test('deferUpdate then editResponse edits the source message in place (no new message)', async () => {
+	test('deferUpdate then editOrReply edits the source message in place (no new message)', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'du-guild' });
 		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'du-actor' }) });
@@ -185,7 +185,7 @@ describe('interaction acknowledgement (fail loud before ack)', () => {
 			}
 			async run(ctx: ComponentContext<'Button'>) {
 				await ctx.deferUpdate();
-				await ctx.editResponse({ content: 'page 2' });
+				await ctx.editOrReply({ content: 'page 2' });
 			}
 		}
 
@@ -198,7 +198,7 @@ describe('interaction acknowledgement (fail loud before ack)', () => {
 		await bot.close();
 	});
 
-	test('update() then editResponse edits the source message in place (no phantom message)', async () => {
+	test('update() then editOrReply edits the source message in place (no phantom message)', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'up-guild' });
 		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'up-actor' }) });
@@ -216,7 +216,7 @@ describe('interaction acknowledgement (fail loud before ack)', () => {
 			}
 			async run(ctx: ComponentContext<'Button'>) {
 				await ctx.update({ content: 'page 2' });
-				await ctx.editResponse({ content: 'page 3' });
+				await ctx.editOrReply({ content: 'page 3' });
 			}
 		}
 
@@ -224,7 +224,7 @@ describe('interaction acknowledgement (fail loud before ack)', () => {
 		const before = bot.world.query.channel({ id: 'up-chan' })?.messages.length ?? 0;
 		await bot.clickButton('go', { source: 'up-src', user: actor.user });
 		const after = bot.world.query.channel({ id: 'up-chan' })?.messages ?? [];
-		expect(after).toHaveLength(before); // no phantom message minted by the trailing editResponse
+		expect(after).toHaveLength(before); // no phantom message minted by the trailing editOrReply
 		expect(bot.world.query.message({ channelId: channel.id, id: 'up-src' })?.content).toBe('page 3');
 		await bot.close();
 	});

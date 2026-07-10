@@ -111,12 +111,12 @@ export const blocker = createMiddleware<void>(middle => {
 	middle.stop('blocked');
 });
 
-// Feature-gate pattern: pass() short-circuits the chain so the command's run is skipped (no error, no reply).
-export const passer = createMiddleware<void>(middle => {
-	middle.pass();
+// Feature-gate pattern: stop() silently skips the command's run (no error, no reply).
+export const skipper = createMiddleware<void>(middle => {
+	middle.stop();
 });
 
-// Production guard pattern: deny by replying and returning, WITHOUT next()/stop()/pass().
+// Production guard pattern: deny by replying and returning, WITHOUT next()/stop().
 export const denierCalls: string[] = [];
 export const denier = createMiddleware<void>(middle => {
 	denierCalls.push('denier');
@@ -126,7 +126,7 @@ export const denier = createMiddleware<void>(middle => {
 export const slowDenierCalls: string[] = [];
 /** Channel the slowDenier guard fetches before replying; the test stubs that GET with a slow responder. */
 export const SLOW_DENIER_CHANNEL_ID = 'slow-denier-channel';
-// Realistic guard: deny without next/stop/pass. It kicks off a slow REST lookup (a channel fetch) and only
+// Realistic guard: deny without next/stop. It kicks off a slow REST lookup (a channel fetch) and only
 // replies once that resolves, returning synchronously so the chain is never progressed and the middleware
 // promise settles immediately. The lookup stays in flight across several macrotasks; the denial reply's
 // callback request lands only after it. A fixed single-tick denial settle would finalize the dispatch between
@@ -151,7 +151,7 @@ export const requireRoles = createMiddleware<void>(middle => {
 	middle.next();
 });
 
-export const testMiddlewares = { blocker, denier, globalCounter, guard, passer, requireRoles, slowDenier };
+export const testMiddlewares = { blocker, denier, globalCounter, guard, requireRoles, skipper, slowDenier };
 
 declare module 'seyfert' {
 	interface SeyfertRegistry {

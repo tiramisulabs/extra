@@ -1,6 +1,5 @@
-import { CDNRouter, type CDNUrlOptions, calculateUserDefaultAvatarIndex, Formatter } from 'seyfert';
+import { CDNRouter, type CDNUrlOptions, ChannelType, calculateUserDefaultAvatarIndex, Formatter } from 'seyfert';
 import { PermissionsBitField } from 'seyfert/lib/structures/extra/Permissions';
-import { ChannelType } from 'seyfert/lib/types';
 import { mockId, timestampFrom } from './id';
 
 /** Pure, stateless CDN string builder — `CDNRouter.createProxy()` needs no rest client (mirrors `rest.cdn`). */

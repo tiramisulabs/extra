@@ -1,6 +1,6 @@
 {
 	"name": "@slipher/webhooks",
-	"version": "0.0.3",
+	"version": "0.0.4",
 	"private": false,
 	"license": "MIT",
 	"publishConfig": {
@@ -15,15 +15,15 @@
 	"scripts": {
 		"dev": "tsc --watch",
 		"build": "tsc",
-		"test": "vitest run --config ./test/vitest.config.mts",
 		"lint": "biome lint --write ./src",
 		"format": "biome format --write ./src",
 		"checkb": "biome check --write --no-errors-on-unmatched ./src",
+		"test": "vitest run ./test/",
 		"prepublish": "pnpm build"
 	},
 	"devDependencies": {
-		"@types/node": "^25.0.10",
-		"typescript": "^5.9.3"
+		"@types/node": "^26.0.1",
+		"typescript": "^6.0.3"
 	},
 	"dependencies": {
 		"tweetnacl": "^1.0.3"

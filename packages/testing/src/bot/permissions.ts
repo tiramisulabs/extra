@@ -1,4 +1,4 @@
-import { PermissionFlagsBits } from 'seyfert/lib/types';
+import { PermissionFlagsBits } from 'seyfert';
 
 export type PermissionInput = string | bigint | (keyof typeof PermissionFlagsBits)[];
 
