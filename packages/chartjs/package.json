@@ -1,6 +1,6 @@
 {
 	"name": "@slipher/chartjs",
-	"version": "0.0.4",
+	"version": "0.0.5",
 	"private": false,
 	"license": "MIT",
 	"publishConfig": {
@@ -21,11 +21,11 @@
 		"prepublish": "pnpm build"
 	},
 	"devDependencies": {
-		"@types/node": "^25.0.10",
-		"typescript": "^5.9.3"
+		"@types/node": "^26.0.1",
+		"typescript": "^6.0.3"
 	},
 	"dependencies": {
-		"@napi-rs/canvas": "^0.1.88",
+		"@napi-rs/canvas": "^1.0.1",
 		"chart.js": "^4.5.1"
 	}
 }

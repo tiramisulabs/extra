@@ -13,7 +13,7 @@ Requires Seyfert v5.
 ## Setup
 
 ```ts
-import { Client, definePlugins, type RegisterPlugins } from 'seyfert';
+import { Client, definePlugins } from 'seyfert';
 import { cooldown } from '@slipher/cooldown';
 
 const plugins = definePlugins(
@@ -25,7 +25,9 @@ const plugins = definePlugins(
 const client = new Client({ plugins });
 
 declare module 'seyfert' {
-	interface Register extends RegisterPlugins<typeof plugins> {}
+	interface SeyfertRegistry {
+		plugins: typeof plugins;
+	}
 }
 ```
 
@@ -79,7 +81,9 @@ If you configure the middleware with an options object, the runtime middleware i
 import type { CooldownMiddlewares } from '@slipher/cooldown';
 
 declare module 'seyfert' {
-	interface RegisteredMiddlewares extends CooldownMiddlewares<'cooldown'> {}
+	interface SeyfertRegistry {
+		middlewares: CooldownMiddlewares<'cooldown'>;
+	}
 }
 ```
 
@@ -95,7 +99,9 @@ Use the same helper for custom names:
 
 ```ts
 declare module 'seyfert' {
-	interface RegisteredMiddlewares extends CooldownMiddlewares<'commandCooldown'> {}
+	interface SeyfertRegistry {
+		middlewares: CooldownMiddlewares<'commandCooldown'>;
+	}
 }
 
 const plugins = definePlugins(
@@ -161,9 +167,9 @@ if (result && !result.allowed) {
 Use explicit options outside a command, in admin commands, or in tests:
 
 ```ts
-await client.cooldown?.check({ name: 'ping', target: userId, guildId });
-await client.cooldown?.consume({ name: 'ping', target: userId, guildId, cost: 2 });
-await client.cooldown?.reset({ name: 'ping', target: userId, guildId });
+await client.cooldown.check({ name: 'ping', target: userId, guildId });
+await client.cooldown.consume({ name: 'ping', target: userId, guildId, cost: 2 });
+await client.cooldown.reset({ name: 'ping', target: userId, guildId });
 ```
 
 `check` previews the result without mutating the bucket. `consume` decrements the bucket. `reset` deletes the bucket and returns `false` when the command has no cooldown.
@@ -198,7 +204,7 @@ Asking for a `cost` higher than the bucket limit is a programmer error and throw
 
 ## Shared Buckets
 
-Commands that share a `group` share the same cache key. The key shape is `${group ?? resolvedCommandName}:${typeLabel}:${target}`.
+Commands that share a `group` share the same cache key. The key shape is `${encodeURIComponent(group ?? resolvedCommandName)}:${typeLabel}:${encodeURIComponent(target)}`; ordinary Discord IDs remain unchanged while custom values containing spaces or separators cannot collide.
 
 ```ts
 @Cooldown.user(5_000, { group: 'moderation' })
@@ -212,10 +218,14 @@ A user that runs `/ban` cannot immediately run `/kick`; both commands consume `m
 
 `group` only changes the bucket namespace after a cooldown is resolved. It does not make subcommands inherit cooldowns. For subcommands, the manager uses `subcommand.cooldown ?? parent.cooldown`.
 
+Commands in one group should use the same `type`, `interval`, and `uses`. The command being consumed supplies those settings, so mixing policies inside one shared bucket would make the effective limit depend on call order.
+
 ## Storage Atomicity
 
-`consume` is atomic when the cache adapter explicitly opts in to `AtomicCooldownAdapter` with `supportsAtomicCooldowns: true` and a Redis-compatible `eval(script, keys, args)` method. Adapters that merely expose `eval` without the opt-in marker use the regular read-decide-write path.
+`consume` is atomic across processes when the cache adapter explicitly opts in to `AtomicCooldownAdapter` with `supportsAtomicCooldowns: true` and a Redis-compatible `eval(script, keys, args)` method. Adapters that merely expose `eval` without the opt-in marker use the regular read-decide-write path.
 
 The Redis script uses Redis `TIME` as its clock source and the resource key constants from this package. `ExpirableRedisAdapter` deliberately does not opt in because its TTL and relationship bookkeeping are adapter-specific.
 
-Only `consume` uses the atomic path. `check` and `reset` remain regular cache operations, so use `consume` as the admission authority in multi-worker bots.
+For non-atomic async adapters, one manager serializes `consume` and `reset` per bucket key, preventing overspend inside that process without blocking unrelated buckets. This cannot coordinate separate processes or replicas. Use an adapter that explicitly supports atomic cooldowns when several workers share storage.
+
+`check` remains a read-only preview and can become stale immediately. Use `consume` as the admission authority.

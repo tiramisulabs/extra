@@ -2,6 +2,7 @@ import './seyfert';
 import type { CooldownProps, CooldownTargetResolver, CooldownTargetType } from './manager';
 
 export * from './manager';
+export * from './plugin';
 
 export interface CooldownDecoratorOptions {
 	uses?: number;
@@ -11,9 +12,10 @@ export interface CooldownDecoratorOptions {
 function decorate(props: CooldownProps): ClassDecorator {
 	return target => {
 		const command = target as unknown as new (...args: any[]) => object;
-		return class extends command {
+		const decorated = class extends command {
 			cooldown = props;
-		} as unknown as void;
+		};
+		return decorated as unknown as typeof target;
 	};
 }
 

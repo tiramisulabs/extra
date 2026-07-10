@@ -5,6 +5,7 @@ import type {
 	ContextMenuCommand,
 	EntryPointCommand,
 	HttpClient,
+	ParseClient,
 	PluginMiddlewaresMapOf,
 	PluginUsingClient,
 	RegisteredMiddlewares,
@@ -48,7 +49,7 @@ const pluginsWithConfiguredMiddleware = definePlugins(pluginWithConfiguredMiddle
 declare module 'seyfert' {
 	interface SeyfertRegistry {
 		plugins: typeof plugins;
-		client: Client;
+		client: ParseClient<Client<true>>;
 		middlewares: CooldownMiddlewares<'commandCooldown'>;
 	}
 }

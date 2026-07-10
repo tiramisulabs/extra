@@ -1,4 +1,4 @@
-import { BaseResource, type CacheFrom } from 'seyfert/lib/cache';
+import { BaseResource, type CacheFrom } from 'seyfert';
 import type { PickPartial } from 'seyfert/lib/common';
 
 export const COOLDOWN_RESOURCE_NAMESPACE = 'cooldowns';

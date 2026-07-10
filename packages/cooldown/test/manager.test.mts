@@ -1,7 +1,17 @@
-import { type AnyContext, Cache, Client, Command, Logger, MemoryAdapter, SubCommand } from 'seyfert';
+import {
+	type AnyContext,
+	Cache,
+	CacheFrom,
+	Client,
+	Command,
+	definePlugins,
+	Logger,
+	MemoryAdapter,
+	SubCommand,
+} from 'seyfert';
 import { HandleCommand } from 'seyfert/lib/commands/handle';
 import { CommandHandler } from 'seyfert/lib/commands/handler.js';
-import { afterEach, assert, beforeEach, describe, test, vi } from 'vitest';
+import { afterEach, assert, beforeEach, describe, expect, test, vi } from 'vitest';
 import { Cooldown, CooldownManager, type CooldownProps, cooldown as cooldownPlugin } from '../src';
 import type { CooldownData } from '../src/resource';
 
@@ -13,6 +23,12 @@ function makeCommand(overrides: Record<string, unknown>) {
 
 function makeSub(overrides: Record<string, unknown>) {
 	return Object.assign(new (class extends SubCommand {})(), overrides);
+}
+
+function propsFrom(decorator: ClassDecorator): CooldownProps {
+	class CommandTarget {}
+	const Decorated = (decorator(CommandTarget) ?? CommandTarget) as typeof CommandTarget;
+	return (new Decorated() as CommandTarget & { cooldown: CooldownProps }).cooldown;
 }
 
 function commandContext(overrides: Record<string, unknown> = {}) {
@@ -53,33 +69,50 @@ function getPluginContextScope(plugin: ReturnType<typeof cooldownPlugin>): Coold
 class AtomicMemoryAdapter extends MemoryAdapter {
 	readonly supportsAtomicCooldowns = true;
 	evalCalls = 0;
+	inFlight = 0;
+	maxInFlight = 0;
 
 	async eval(_script: string, keys: string[], args: string[]) {
 		this.evalCalls++;
-		const [hashKey, namespace] = keys;
-		const [intervalArg, limitArg, costArg, memberKey] = args;
-		const now = Date.now();
-		const interval = Number(intervalArg);
-		const limit = Number(limitArg);
-		const cost = Number(costArg);
-		const data = this.get(hashKey) as CooldownData | null;
+		this.inFlight++;
+		this.maxInFlight = Math.max(this.maxInFlight, this.inFlight);
+		await Promise.resolve();
 
-		if (!data || now - data.lastDrip >= interval) {
-			const remaining = limit - cost;
+		try {
+			const [hashKey, namespace] = keys;
+			const [intervalArg, limitArg, costArg, memberKey] = args;
+			const now = Date.now();
+			const interval = Number(intervalArg);
+			const limit = Number(limitArg);
+			const cost = Number(costArg);
+			const data = this.get(hashKey) as CooldownData | null;
+			const invalidData =
+				!!data &&
+				(!Number.isSafeInteger(data.lastDrip) ||
+					data.lastDrip > now ||
+					!Number.isSafeInteger(data.remaining) ||
+					data.remaining < 0 ||
+					data.remaining > limit);
+
+			if (!data || invalidData || now - data.lastDrip >= interval) {
+				const remaining = limit - cost;
+				this.addToRelationship(namespace, memberKey);
+				this.set(hashKey, { interval, remaining, lastDrip: now });
+				return [1, 0, now, limit, remaining];
+			}
+
+			const remainingMs = interval - (now - data.lastDrip);
+			if (data.remaining - cost < 0) {
+				return [0, remainingMs, now + remainingMs, limit, data.remaining];
+			}
+
+			const remaining = data.remaining - cost;
 			this.addToRelationship(namespace, memberKey);
-			this.set(hashKey, { interval, remaining, lastDrip: now });
+			this.patch(hashKey, { interval, remaining });
 			return [1, 0, now, limit, remaining];
+		} finally {
+			this.inFlight--;
 		}
-
-		const remainingMs = interval - (now - data.lastDrip);
-		if (data.remaining - cost < 0) {
-			return [0, remainingMs, now + remainingMs, limit, data.remaining];
-		}
-
-		const remaining = data.remaining - cost;
-		this.addToRelationship(namespace, memberKey);
-		this.patch(hashKey, { interval, remaining });
-		return [1, 0, now, limit, remaining];
 	}
 }
 
@@ -90,6 +123,19 @@ class EvalOnlyMemoryAdapter extends MemoryAdapter {
 		this.evalCalls++;
 		throw new Error('eval should not be used without an explicit cooldown atomic opt-in');
 	}
+}
+
+function createAsyncMemoryAdapter() {
+	const storage = new MemoryAdapter();
+	const adapter = new Proxy(storage, {
+		get(target, property, receiver) {
+			if (property === 'isAsync') return true;
+			const value = Reflect.get(target, property, receiver);
+			if (typeof value !== 'function') return value;
+			return (...args: unknown[]) => Promise.resolve().then(() => Reflect.apply(value, target, args));
+		},
+	});
+	return { adapter, storage };
 }
 
 describe('CooldownManager — explicit check / consume / reset', () => {
@@ -134,6 +180,7 @@ describe('CooldownManager — explicit check / consume / reset', () => {
 		assert.equal(result.remainingUses, 1);
 		assert.equal(result.key, 'ping:user:u1');
 		assert.ok(result.retryAfter instanceof Date);
+		assert.equal(manager.resource.get('ping:user:u1')?.lastDrip, result.retryAfter.getTime());
 		assert.equal('reason' in result, false);
 	});
 
@@ -199,6 +246,26 @@ describe('CooldownManager — explicit check / consume / reset', () => {
 		assert.ok(await manager.consume({ name: 'guildOnly', target: 'u1', guildId: '124' }));
 	});
 
+	test('explicit form resolves a global command when a guildId is present', async () => {
+		const result = await manager.consume({ name: 'ping', target: 'u1', guildId: '124' });
+
+		assert.ok(result);
+		assert.equal(result.key, 'ping:user:u1');
+	});
+
+	test('rejects invalid intervals, limits, and costs before writing a bucket', () => {
+		const ping = client.commands!.values.find(command => command.name === 'ping')!;
+		ping.cooldown = { interval: 0 };
+		assert.throws(() => manager.consume({ name: 'ping', target: 'u1' }), /interval/);
+
+		ping.cooldown = { interval: 1_000, uses: 1.5 };
+		assert.throws(() => manager.consume({ name: 'ping', target: 'u1' }), /safe integer/);
+
+		ping.cooldown = { interval: 1_000, uses: 2 };
+		assert.throws(() => manager.consume({ name: 'ping', target: 'u1', cost: 1.5 }), /safe integer/);
+		assert.equal(manager.resource.get('ping:user:u1'), undefined);
+	});
+
 	test('consume refills after the interval elapses', async () => {
 		await manager.consume({ name: 'ping', target: 'u1' });
 		await manager.consume({ name: 'ping', target: 'u1' });
@@ -214,6 +281,36 @@ describe('CooldownManager — explicit check / consume / reset', () => {
 		assert.equal(await manager.consume({ name: 'unbounded', target: 'u1' }), undefined);
 		assert.equal(await manager.check({ name: 'unbounded', target: 'u1' }), undefined);
 		assert.equal(await manager.reset({ name: 'unbounded', target: 'u1' }), false);
+	});
+
+	test('requires an exact command name and never mutates the root bucket for an invalid suffix', async () => {
+		assert.equal(await manager.consume({ name: 'ping typo', target: 'u1' }), undefined);
+		assert.equal(await manager.check({ name: 'ping typo', target: 'u1' }), undefined);
+		assert.equal(await manager.reset({ name: 'ping typo', target: 'u1' }), false);
+		assert.equal(manager.resource.get('ping:user:u1'), undefined);
+	});
+
+	test('consume replaces corrupt stored buckets with a canonical bucket', async () => {
+		const corruptBuckets = [
+			{ lastDrip: 1, remaining: 0 },
+			{ lastDrip: Number.MAX_SAFE_INTEGER + 1, remaining: 0 },
+			{ lastDrip: 0, remaining: 1.5 },
+			{ lastDrip: 0, remaining: -1 },
+			{ lastDrip: 0, remaining: 3 },
+		];
+
+		for (const [index, bucket] of corruptBuckets.entries()) {
+			const target = `corrupt-${index}`;
+			const key = `ping:user:${target}`;
+			await manager.resource.set(CacheFrom.Gateway, key, { interval: 1_000, ...bucket });
+
+			const result = await manager.consume({ name: 'ping', target });
+			const stored = await manager.resource.get(key);
+
+			assert.ok(result?.allowed);
+			assert.equal(result.remainingUses, 1);
+			assert.deepEqual(stored, { interval: 1_000, lastDrip: 0, remaining: 1 });
+		}
 	});
 });
 
@@ -302,7 +399,7 @@ describe('CooldownManager — implicit scoped check / consume / reset', () => {
 		);
 
 		assert.ok(result);
-		assert.equal(result.key, 'parent child:user:user1');
+		assert.equal(result.key, 'parent%20child:user:user1');
 	});
 
 	test('implicit path defaults guildId from the active context', async () => {
@@ -403,6 +500,22 @@ describe('CooldownManager — custom target resolver, shared groups, and targets
 
 		assert.ok(result);
 		assert.equal(result.key, 'custom:custom:static-target');
+	});
+
+	test('encodes custom groups and targets so key segments cannot collide', async () => {
+		const command = makeCommand({
+			name: 'encoded',
+			cooldown: { group: 'heavy:jobs', interval: 1_000, type: () => 'tenant:a b' },
+		});
+		client = createClient([command]);
+		const { plugin, scope } = createScopedPlugin(client);
+
+		const result = await scope(commandContext({ client, command, fullCommandName: 'encoded' }), () =>
+			plugin.manager.consume(),
+		);
+
+		assert.ok(result);
+		assert.equal(result.key, 'heavy%3Ajobs:custom:tenant%3Aa%20b');
 	});
 
 	test('shared group: two distinct commands share the same bucket', async () => {
@@ -510,6 +623,15 @@ describe('CooldownManager — atomic storage', () => {
 		assert.equal(adapter.contains('cooldowns', 'ping:user:u1'), true);
 	});
 
+	test('rejects malformed results from an opted-in atomic adapter', async () => {
+		const adapter = new AtomicMemoryAdapter();
+		adapter.eval = async () => [1, 0, Number.NaN, 2, 1];
+		client.cache = new Cache(0, adapter, {}, client);
+		manager = new CooldownManager(client);
+
+		await expect(manager.consume({ name: 'ping', target: 'u1' }) as Promise<unknown>).rejects.toThrow(/invalid result/);
+	});
+
 	test('atomic adapter path does not overspend under concurrent consumes', async () => {
 		const adapter = new AtomicMemoryAdapter();
 		client.cache = new Cache(0, adapter, {}, client);
@@ -520,6 +642,7 @@ describe('CooldownManager — atomic storage', () => {
 		const blocked = results.filter(result => result && !result.allowed);
 
 		assert.equal(adapter.evalCalls, 5);
+		assert.ok(adapter.maxInFlight > 1);
 		assert.equal(allowed.length, 2);
 		assert.equal(blocked.length, 3);
 		assert.deepEqual(
@@ -528,47 +651,74 @@ describe('CooldownManager — atomic storage', () => {
 		);
 		assert.equal((adapter.get('cooldowns.ping:user:u1') as CooldownData | null)?.remaining, 0);
 	});
+
+	test('atomic adapter replaces corrupt buckets with canonical state', async () => {
+		const adapter = new AtomicMemoryAdapter();
+		client.cache = new Cache(0, adapter, {}, client);
+		manager = new CooldownManager(client);
+		const corruptBuckets = [
+			{ lastDrip: 1, remaining: 0 },
+			{ lastDrip: Number.MAX_SAFE_INTEGER + 1, remaining: 0 },
+			{ lastDrip: 0, remaining: 1.5 },
+			{ lastDrip: 0, remaining: -1 },
+			{ lastDrip: 0, remaining: 3 },
+		];
+
+		for (const [index, bucket] of corruptBuckets.entries()) {
+			const target = `corrupt-${index}`;
+			const key = `cooldowns.ping:user:${target}`;
+			adapter.set(key, { interval: 1_000, ...bucket });
+
+			const result = await manager.consume({ name: 'ping', target });
+			const stored = adapter.get(key) as CooldownData | null;
+
+			assert.ok(result?.allowed);
+			assert.equal(result.remainingUses, 1);
+			assert.deepEqual(stored, { interval: 1_000, lastDrip: 0, remaining: 1 });
+		}
+	});
+
+	test('serializes concurrent fallback consumes for async non-atomic adapters', async () => {
+		const { adapter, storage } = createAsyncMemoryAdapter();
+		client.cache = new Cache(0, adapter as never, {}, client);
+		manager = new CooldownManager(client);
+
+		const results = await Promise.all(Array.from({ length: 5 }, () => manager.consume({ name: 'ping', target: 'u1' })));
+		const allowed = results.filter(result => result?.allowed);
+		const blocked = results.filter(result => result && !result.allowed);
+
+		assert.equal(allowed.length, 2);
+		assert.equal(blocked.length, 3);
+		assert.deepEqual(
+			allowed.map(result => result?.remainingUses),
+			[1, 0],
+		);
+		assert.equal((storage.get('cooldowns.ping:user:u1') as CooldownData | null)?.remaining, 0);
+	});
 });
 
 describe('Cooldown decorator shortcuts', () => {
 	test('Cooldown.user assigns user-scoped props with one default use', () => {
-		@Cooldown.user(5_000)
-		class Cmd {}
-
-		const props = (new Cmd() as Cmd & { cooldown: CooldownProps }).cooldown;
+		const props = propsFrom(Cooldown.user(5_000));
 		assert.equal(props.type, 'user');
 		assert.equal(props.interval, 5_000);
 		assert.equal(props.uses, 1);
 	});
 
 	test('Cooldown.guild / .channel / .global emit correct types', () => {
-		@Cooldown.guild(1_000, { uses: 3 })
-		class G {}
-		@Cooldown.channel(1_000)
-		class C {}
-		@Cooldown.global(1_000)
-		class Gl {}
-
-		assert.equal((new G() as G & { cooldown: CooldownProps }).cooldown.type, 'guild');
-		assert.equal((new G() as G & { cooldown: CooldownProps }).cooldown.uses, 3);
-		assert.equal((new C() as C & { cooldown: CooldownProps }).cooldown.type, 'channel');
-		assert.equal((new Gl() as Gl & { cooldown: CooldownProps }).cooldown.type, 'global');
+		assert.equal(propsFrom(Cooldown.guild(1_000, { uses: 3 })).type, 'guild');
+		assert.equal(propsFrom(Cooldown.guild(1_000, { uses: 3 })).uses, 3);
+		assert.equal(propsFrom(Cooldown.channel(1_000)).type, 'channel');
+		assert.equal(propsFrom(Cooldown.global(1_000)).type, 'global');
 	});
 
 	test('Cooldown.user accepts a shared group in the options bag', () => {
-		@Cooldown.user(1_000, { uses: 1, group: 'mod' })
-		class Cmd {}
-
-		assert.equal((new Cmd() as Cmd & { cooldown: CooldownProps }).cooldown.group, 'mod');
+		assert.equal(propsFrom(Cooldown.user(1_000, { uses: 1, group: 'mod' })).group, 'mod');
 	});
 
 	test('Cooldown.custom assigns a resolver and accepts a shared group', () => {
 		const resolver = () => 'k';
-
-		@Cooldown.custom(resolver, 1_000, { group: 'mod' })
-		class Cmd {}
-
-		const props = (new Cmd() as Cmd & { cooldown: CooldownProps }).cooldown;
+		const props = propsFrom(Cooldown.custom(resolver, 1_000, { group: 'mod' }));
 		assert.equal(props.type, resolver);
 		assert.equal(props.group, 'mod');
 	});
@@ -605,6 +755,20 @@ describe('cooldown() plugin', () => {
 
 		assert.ok(result);
 		assert.equal(result.key, 'testCommand:user:user1');
+	});
+
+	test('installs the manager through the Seyfert v5 client extension contract', () => {
+		const plugin = cooldownPlugin();
+		const plugins = definePlugins(plugin);
+		const client = new Client({
+			getRC: () => ({ debug: false, intents: 0, token: '', locations: { base: '', output: '' } }),
+			plugins,
+		});
+
+		assert.equal(client.cooldown, plugin.manager);
+		assert.equal(Object.getOwnPropertyDescriptor(client, 'cooldown')?.writable, false);
+		plugin.setup(client);
+		assert.equal(plugin.manager.client, client);
 	});
 
 	test('does not register a middleware by default', () => {
@@ -756,10 +920,12 @@ describe('cooldown() plugin', () => {
 		}
 	});
 
-	test('setup attaches the manager to the client', () => {
+	test('setup attaches the manager to the client resources without mutating plugin-owned keys', () => {
 		const plugin = cooldownPlugin();
 		const client = createClient();
 		plugin.setup(client);
-		assert.equal((client as Client & { cooldown: CooldownManager }).cooldown, plugin.manager);
+		assert.equal(plugin.manager.client, client);
+		assert.equal('cooldown' in client, false);
+		assert.throws(() => plugin.setup(createClient()), /another client/);
 	});
 });
