@@ -8,10 +8,12 @@ import type {
 	BullMQQueueEvents,
 	BullMQWorker,
 	PersistentSchedulerOptions,
+	PersistentSchedulerResource,
 	ScheduledTaskDefinition,
 	SchedulerClientLike,
 	SchedulerDriver,
 	SchedulerHost,
+	SchedulerLogger,
 } from '../types';
 
 const MAX_TRACKED_JOB_STATES = 10_000;
@@ -27,6 +29,7 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 		{ repeat: Record<string, unknown>; template: Record<string, unknown> }
 	>();
 	private readonly bullmq: BullMQModule;
+	private readonly fallbackLogger?: SchedulerLogger;
 	private readonly queueName: string;
 	private readonly queueOptions: Record<string, unknown>;
 	private readonly activeJobIds = new Set<string>();
@@ -37,17 +40,20 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 	private readonly terminalJobStates = new Map<string, 'completed' | 'failed'>();
 	private readonly immediateRunDeduplicationMs: number;
 	private readonly purgeOrphansOnStartup: boolean;
+	private activationGate?: ReturnType<typeof createActivationGate>;
+	private activationPromise?: Promise<void>;
 	private closePromise?: Promise<void>;
 	private queue?: BullMQQueue;
 	private queueEventChain = Promise.resolve();
 	private queueEvents?: BullMQQueueEvents;
-	private setupPromise?: Promise<void>;
+	private preparePromise?: Promise<void>;
 	private host?: SchedulerHost;
-	private state: 'pending' | 'setting-up' | 'ready' | 'closing' | 'closed' = 'pending';
+	private state: 'pending' | 'preparing' | 'prepared' | 'ready' | 'closing' | 'closed' = 'pending';
 	private worker?: BullMQWorker;
 
 	constructor(options: PersistentSchedulerOptions) {
 		this.bullmq = options.bullmq ?? loadBullMQ();
+		this.fallbackLogger = options.logger;
 		this.queueName = options.queueName ?? 'slipher:scheduler';
 		this.queueOptions = createBullMQOptions(options);
 		this.host = options.logger ? { emit: () => undefined, logger: options.logger } : undefined;
@@ -59,18 +65,30 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 	}
 
 	attach(host: SchedulerHost) {
+		host.logger ??= this.fallbackLogger;
 		this.host = host;
 	}
 
-	setup(client?: SchedulerClientLike) {
+	prepare(client?: SchedulerClientLike) {
+		if (this.closePromise || this.state === 'closing' || this.state === 'closed') {
+			return Promise.reject(new Error('Scheduler persistent driver has been stopped.'));
+		}
+		if (this.state === 'prepared' || this.state === 'ready') return Promise.resolve();
+		if (this.preparePromise) return this.preparePromise;
+
+		this.preparePromise = this.initialize(client);
+		return this.preparePromise;
+	}
+
+	activate(client?: SchedulerClientLike) {
 		if (this.closePromise || this.state === 'closing' || this.state === 'closed') {
 			return Promise.reject(new Error('Scheduler persistent driver has been stopped.'));
 		}
 		if (this.state === 'ready') return Promise.resolve();
-		if (this.setupPromise) return this.setupPromise;
+		if (this.activationPromise) return this.activationPromise;
 
-		this.setupPromise = this.initialize(client);
-		return this.setupPromise;
+		this.activationPromise = this.activatePrepared(client);
+		return this.activationPromise;
 	}
 
 	schedule(definition: ScheduledTaskDefinition) {
@@ -84,7 +102,9 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 
 		this.tasks.set(task.id, task);
 		this.templates.set(task.id, { repeat, template });
-		if (this.state === 'ready') this.dispatchSchedulerWrite(task, () => this.upsertTaskScheduler(task));
+		if (this.state === 'prepared' || this.state === 'ready') {
+			this.dispatchSchedulerWrite(task, () => this.syncScheduledTask(task));
+		}
 
 		return task;
 	}
@@ -115,9 +135,15 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 	}
 
 	private async shutdown() {
-		if (this.setupPromise) {
+		if (this.activationPromise) {
 			try {
-				await this.setupPromise;
+				await this.activationPromise;
+			} catch {
+				// Activation reports its own error and leaves prepared resources for shutdown.
+			}
+		} else if (this.preparePromise) {
+			try {
+				await this.preparePromise;
 			} catch {
 				// initialize() already rolled back any resources it opened.
 			}
@@ -167,20 +193,43 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 	private async initialize(client?: SchedulerClientLike) {
 		try {
 			this.enforceExplicitIds();
-			this.state = 'setting-up';
+			this.state = 'preparing';
 			this.queue = new this.bullmq.Queue(this.queueName, this.queueOptions);
-			this.worker = new this.bullmq.Worker(this.queueName, job => this.process(job, client), this.queueOptions);
+			this.wireResourceErrors(this.queue, 'queue');
+			const activationGate = createActivationGate();
+			this.activationGate = activationGate;
+			this.worker = new this.bullmq.Worker(
+				this.queueName,
+				async job => {
+					if (!(await activationGate.promise)) {
+						throw new Error('Scheduler persistent driver stopped before task activation');
+					}
+					return this.process(job, client);
+				},
+				{
+					...this.queueOptions,
+					autorun: false,
+				},
+			);
+			this.wireResourceErrors(this.worker, 'worker');
 			if (this.bullmq.QueueEvents) {
 				this.queueEvents = new this.bullmq.QueueEvents(this.queueName, this.queueOptions);
+				this.wireResourceErrors(this.queueEvents, 'queue-events');
 				this.wireQueueEvents();
 			}
 
+			await Promise.all([
+				this.queue.waitUntilReady(),
+				this.worker.waitUntilReady(),
+				this.queueEvents?.waitUntilReady(),
+			]);
 			await this.detectOrphans();
 			for (const task of this.tasks.values()) {
 				await this.upsertTaskScheduler(task);
 				if (task.runImmediately) await this.enqueueImmediateRun(task);
 			}
-			if (!this.closePromise) this.state = 'ready';
+			await this.startWorker();
+			if (!this.closePromise) this.state = 'prepared';
 		} catch (error) {
 			const cleanupErrors = await this.closeResources();
 			this.state = cleanupErrors.length ? 'closed' : 'pending';
@@ -192,7 +241,21 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 			}
 			throw error;
 		} finally {
-			this.setupPromise = undefined;
+			this.preparePromise = undefined;
+		}
+	}
+
+	private async activatePrepared(client?: SchedulerClientLike) {
+		try {
+			await this.prepare(client);
+			if (this.closePromise || this.state === 'closing' || this.state === 'closed') {
+				throw new Error('Scheduler persistent driver has been stopped.');
+			}
+
+			this.state = 'ready';
+			this.activationGate?.activate();
+		} finally {
+			this.activationPromise = undefined;
 		}
 	}
 
@@ -201,6 +264,8 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 		const worker = this.worker;
 		const queueEvents = this.queueEvents;
 		const queue = this.queue;
+		this.activationGate?.cancel();
+		this.activationGate = undefined;
 		this.worker = undefined;
 		this.queueEvents = undefined;
 
@@ -267,6 +332,13 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 		throw new Error('BullMQ Queue must expose upsertJobScheduler or add');
 	}
 
+	private async syncScheduledTask(task: ScheduledTask) {
+		await this.upsertTaskScheduler(task);
+		if ((this.state === 'prepared' || this.state === 'ready') && task.runImmediately) {
+			await this.enqueueImmediateRun(task);
+		}
+	}
+
 	private async enqueueImmediateRun(task: ScheduledTask) {
 		const result = await this.requireQueue().add?.(
 			task.id,
@@ -308,9 +380,67 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 			} else {
 				this.host?.logger?.warn?.(
 					{ taskId: id },
-					`Orphaned scheduler "${id}" found in Redis. To remove: scheduler.remove('${id}'). To auto-purge on startup: persistent({ purgeOrphansOnStartup: true }).`,
+					`Orphaned scheduler "${id}" found in Redis. To remove: scheduler.removeOrphan('${id}'). To auto-purge on startup: persistent({ purgeOrphansOnStartup: true }).`,
 				);
 			}
+		}
+	}
+
+	private wireResourceErrors(
+		resource: Pick<BullMQQueue | BullMQQueueEvents | BullMQWorker, 'on'>,
+		source: PersistentSchedulerResource,
+	) {
+		resource.on('error', error => this.reportResourceError(source, error));
+	}
+
+	private async startWorker() {
+		const worker = this.worker;
+		if (!worker) throw new Error('Scheduler persistent worker is not initialized');
+
+		let starting = true;
+		let startupError: unknown;
+		try {
+			const started = worker.run();
+			void Promise.resolve(started).catch(error => {
+				if (starting) {
+					startupError = error;
+					return;
+				}
+				this.reportWorkerRunFailure(error);
+			});
+		} catch (error) {
+			startupError = error;
+		}
+
+		await Promise.resolve();
+		await Promise.resolve();
+		starting = false;
+		if (startupError) {
+			this.reportResourceError('worker', startupError);
+			throw startupError;
+		}
+		if (!worker.isRunning()) {
+			const error = new Error('Scheduler persistent worker failed to start');
+			this.reportResourceError('worker', error);
+			throw error;
+		}
+	}
+
+	private reportWorkerRunFailure(error: unknown) {
+		if (!this.closePromise && this.state === 'ready') this.state = 'prepared';
+		this.reportResourceError('worker', error);
+	}
+
+	private reportResourceError(source: PersistentSchedulerResource, error: unknown) {
+		try {
+			this.host?.logger?.error?.({ source, error }, `Scheduler persistent ${source} error`);
+		} catch {
+			// A logger failure must not turn a handled BullMQ error into an EventEmitter crash.
+		}
+		try {
+			this.host?.emit('error', { source, error });
+		} catch {
+			// Custom hosts are allowed; keep BullMQ's mandatory error listener non-throwing.
 		}
 	}
 
@@ -562,6 +692,18 @@ function createBullMQOptions(options: PersistentSchedulerOptions) {
 
 function eventRecord(event: unknown): Record<string, unknown> {
 	return event && typeof event === 'object' ? (event as Record<string, unknown>) : {};
+}
+
+function createActivationGate() {
+	let resolve: (active: boolean) => void = () => undefined;
+	const promise = new Promise<boolean>(resolvePromise => {
+		resolve = resolvePromise;
+	});
+	return {
+		promise,
+		activate: () => resolve(true),
+		cancel: () => resolve(false),
+	};
 }
 
 function jobIdFromRecord(record: Record<string, unknown>) {

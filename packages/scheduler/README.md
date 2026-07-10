@@ -119,7 +119,7 @@ registry.add('poller', '10s', async task => {
 await registry.setup();
 ```
 
-When you use the registry without the Seyfert plugin, call `registry.setup()` after registering tasks. The `memory()` driver creates Croner jobs paused and resumes them during setup; the plugin does this for you when the client starts.
+When you use the registry without the Seyfert plugin, call `registry.setup()` after registering tasks. The `memory()` driver creates Croner jobs paused and resumes them during setup. With the plugin, driver resources are prepared during plugin setup so connection failures reject `client.start()`, then tasks activate from Seyfert's `plugins:ready` hook after every plugin has finished setup.
 
 ## Decorators
 
@@ -201,14 +201,14 @@ process.on('SIGTERM', () => {
 Removing a persistent task from code is not enough. The Redis schedule keeps firing until it is removed:
 
 ```ts
-await registry.remove('old-task-id');
+await registry.removeOrphan('old-task-id');
 ```
 
-On startup, the persistent driver compares Redis job schedulers against registered tasks. Orphans are warned by default. Use `persistent({ purgeOrphansOnStartup: true })` to remove them during setup.
+On startup, the persistent driver compares Redis job schedulers against registered tasks. Orphans are warned by default. After startup, remove a specific orphan with `removeOrphan(id)`, or use `persistent({ purgeOrphansOnStartup: true })` to remove all detected orphans during setup. `remove(id)` remains for tasks that are still registered in the current registry.
 
 `pause(id)` removes the BullMQ job scheduler. `resume(id)` re-creates it with the captured template and emits `resumed`. `start(id)` remains as a compatibility alias for `resume(id)`.
 
-`runImmediately: true` runs the task once at setup, then on its normal schedule. Persistent drivers deduplicate immediate jobs across replicas that start within the same 60-second window. Configure `immediateRunDeduplicationMs` when a deployment wave needs a different window:
+`runImmediately: true` runs the task once when the scheduler activates, then on its normal schedule. Persistent drivers deduplicate immediate jobs across replicas that start within the same 60-second window. Configure `immediateRunDeduplicationMs` when a deployment wave needs a different window:
 
 ```ts
 persistent({
@@ -228,7 +228,7 @@ registry.on('completed', ({ task, result }) => {
 });
 ```
 
-Supported events: `scheduled`, `started`, `completed`, `failed`, `paused`, `resumed`, and `removed`.
+Supported events: `scheduled`, `started`, `completed`, `failed`, `paused`, `resumed`, `removed`, and `error`. Persistent BullMQ resources emit `error` with `{ source, error }`, where `source` is `queue`, `queue-events`, or `worker`; these transport errors are also sent to the configured logger.
 
 With `memory()`, events are in-process. With `persistent()`, the worker emits lifecycle events immediately in the replica running the task, while BullMQ `QueueEvents` mirrors the same outcome to the other replicas without duplicating it locally. `QueueEvents` uses one extra Redis connection per scheduler queue per replica.
 

@@ -8,6 +8,7 @@ import type {
 	ScheduledTaskDefinition,
 	SchedulerDriver,
 	SchedulerHost,
+	SchedulerLogger,
 } from '../types';
 
 export function memory(options: MemorySchedulerOptions = {}) {
@@ -16,6 +17,7 @@ export function memory(options: MemorySchedulerOptions = {}) {
 
 class MemorySchedulerDriver implements SchedulerDriver {
 	private readonly croner: CronerFactory;
+	private readonly fallbackLogger?: SchedulerLogger;
 	private readonly tasks = new Map<string, ScheduledTask>();
 	private readonly jobs = new Map<string, CronerJob>();
 	private readonly immediateTaskIds = new Set<string>();
@@ -24,14 +26,18 @@ class MemorySchedulerDriver implements SchedulerDriver {
 
 	constructor(options: MemorySchedulerOptions) {
 		this.croner = options.croner ?? defaultCronerFactory;
+		this.fallbackLogger = options.logger;
 		this.host = options.logger ? { emit: () => undefined, logger: options.logger } : undefined;
 	}
 
 	attach(host: SchedulerHost) {
+		host.logger ??= this.fallbackLogger;
 		this.host = host;
 	}
 
-	setup() {
+	prepare() {}
+
+	activate() {
 		this.ready = true;
 		for (const job of this.jobs.values()) job.resume?.();
 		for (const id of [...this.immediateTaskIds]) {
@@ -59,9 +65,11 @@ class MemorySchedulerDriver implements SchedulerDriver {
 		this.tasks.set(task.id, task);
 		this.jobs.set(task.id, job);
 
-		if (task.runImmediately) {
-			if (this.ready) this.runImmediately(task, job);
-			else this.immediateTaskIds.add(task.id);
+		if (this.ready) {
+			job.resume?.();
+			if (task.runImmediately) this.runImmediately(task, job);
+		} else if (task.runImmediately) {
+			this.immediateTaskIds.add(task.id);
 		}
 
 		return task;

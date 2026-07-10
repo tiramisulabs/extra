@@ -12,6 +12,8 @@ export type ScheduledTaskStatus = 'scheduled' | 'running' | 'paused' | 'complete
 
 export type SchedulerRunner = (task: ScheduledTask) => Awaitable<unknown>;
 
+export type PersistentSchedulerResource = 'queue' | 'queue-events' | 'worker';
+
 export interface SchedulerLogger {
 	error?(...args: any[]): void;
 	info?(...args: any[]): void;
@@ -47,6 +49,7 @@ export interface SchedulerEventPayloads {
 	paused: { task: ScheduledTask };
 	resumed: { task: ScheduledTask };
 	removed: { task: ScheduledTask };
+	error: { source: PersistentSchedulerResource; error: unknown };
 }
 
 export type SchedulerEventName = keyof SchedulerEventPayloads;
@@ -60,6 +63,9 @@ export interface SchedulerHost {
 
 export interface SchedulerDriver {
 	attach?(host: SchedulerHost): void;
+	prepare?(client?: SchedulerClientLike): Awaitable<void>;
+	activate?(client?: SchedulerClientLike): Awaitable<void>;
+	/** @deprecated Implement prepare() and activate() for lifecycle-aware drivers. */
 	setup?(client?: SchedulerClientLike): Awaitable<void>;
 	schedule(definition: ScheduledTaskDefinition): ScheduledTask;
 	start?(id: string): Awaitable<void>;
@@ -151,6 +157,8 @@ export interface BullMQModule {
 }
 
 export interface BullMQQueue {
+	on(event: string, listener: (...args: unknown[]) => void): unknown;
+	waitUntilReady(): Awaitable<unknown>;
 	upsertJobScheduler?(
 		id: string,
 		repeat: Record<string, unknown>,
@@ -163,11 +171,16 @@ export interface BullMQQueue {
 }
 
 export interface BullMQWorker {
+	on(event: string, listener: (...args: unknown[]) => void): unknown;
+	waitUntilReady(): Awaitable<unknown>;
+	isRunning(): boolean;
+	run(): Awaitable<unknown>;
 	close?(): Awaitable<unknown>;
 }
 
 export interface BullMQQueueEvents {
-	on?(event: string, listener: (...args: unknown[]) => void): unknown;
+	on(event: string, listener: (...args: unknown[]) => void): unknown;
+	waitUntilReady(): Awaitable<unknown>;
 	close?(): Awaitable<unknown>;
 }
 

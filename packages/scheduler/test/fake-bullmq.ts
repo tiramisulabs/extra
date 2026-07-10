@@ -4,6 +4,8 @@ export function createFakeBullMQ() {
 		closeGate: undefined as Promise<void> | undefined,
 		deduplications: new Map<string, { expiresAt: number; jobId: string }>(),
 		failUpserts: 0,
+		failResourceReadiness: 0,
+		failWorkerRuns: 0,
 		jobLookupGate: undefined as Promise<void> | undefined,
 		jobs: new Map<string, { id: string; name: string; data?: Record<string, unknown>; repeatJobKey?: string }>(),
 		jobSchedulers: [] as Array<{ id: string }>,
@@ -12,6 +14,7 @@ export function createFakeBullMQ() {
 		queueEvents: [] as FakeQueueEvents[],
 		queues: [] as FakeQueue[],
 		workers: [] as FakeWorker[],
+		workerRunErrorListenerCounts: [] as number[],
 	};
 
 	class FakeQueue {
@@ -19,6 +22,7 @@ export function createFakeBullMQ() {
 		closed = false;
 		schedulers: Array<{ id: string; repeat: Record<string, unknown>; template: Record<string, unknown> }> = [];
 		removed: string[] = [];
+		listeners = new Map<string, ((payload: unknown) => void)[]>();
 
 		constructor(
 			readonly name: string,
@@ -68,6 +72,21 @@ export function createFakeBullMQ() {
 			this.removed.push(id);
 		}
 
+		on(event: string, listener: (payload: unknown) => void) {
+			this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]);
+		}
+
+		emit(event: string, payload: unknown) {
+			for (const listener of this.listeners.get(event) ?? []) listener(payload);
+		}
+
+		waitUntilReady() {
+			if (state.failResourceReadiness > 0) {
+				state.failResourceReadiness -= 1;
+				throw new Error('resource readiness failed');
+			}
+		}
+
 		async close() {
 			await state.closeGate;
 			this.closed = true;
@@ -76,7 +95,7 @@ export function createFakeBullMQ() {
 
 	class FakeQueueEvents {
 		closed = false;
-		listeners = new Map<string, ((payload: Record<string, unknown>) => void)[]>();
+		listeners = new Map<string, ((payload: unknown) => void)[]>();
 
 		constructor(
 			readonly name: string,
@@ -85,13 +104,15 @@ export function createFakeBullMQ() {
 			state.queueEvents.push(this);
 		}
 
-		on(event: string, listener: (payload: Record<string, unknown>) => void) {
+		on(event: string, listener: (payload: unknown) => void) {
 			this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]);
 		}
 
-		emit(event: string, payload: Record<string, unknown>) {
+		emit(event: string, payload: unknown) {
 			for (const listener of this.listeners.get(event) ?? []) listener(payload);
 		}
+
+		waitUntilReady() {}
 
 		async close() {
 			await state.closeGate;
@@ -101,6 +122,8 @@ export function createFakeBullMQ() {
 
 	class FakeWorker {
 		closed = false;
+		listeners = new Map<string, ((payload: unknown) => void)[]>();
+		running = false;
 
 		constructor(
 			readonly name: string,
@@ -108,10 +131,36 @@ export function createFakeBullMQ() {
 			readonly options: Record<string, unknown> = {},
 		) {
 			state.workers.push(this);
+			if (options.autorun !== false) this.running = true;
+		}
+
+		on(event: string, listener: (payload: unknown) => void) {
+			this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]);
+		}
+
+		emit(event: string, payload: unknown) {
+			for (const listener of this.listeners.get(event) ?? []) listener(payload);
+		}
+
+		waitUntilReady() {}
+
+		run() {
+			state.workerRunErrorListenerCounts.push(this.listeners.get('error')?.length ?? 0);
+			if (state.failWorkerRuns > 0) {
+				state.failWorkerRuns -= 1;
+				return Promise.reject(new Error('worker run failed'));
+			}
+			this.running = true;
+			return undefined;
+		}
+
+		isRunning() {
+			return this.running;
 		}
 
 		async close() {
 			await state.closeGate;
+			this.running = false;
 			this.closed = true;
 		}
 	}

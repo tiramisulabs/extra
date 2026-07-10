@@ -7,7 +7,8 @@
 			"outputs": ["lib/**"]
 		},
 		"test": {
-			"cache": false
+			"cache": false,
+			"env": ["SLIPHER_SCHEDULER_REDIS_URL"]
 		},
 		"dev": {
 			"cache": false,

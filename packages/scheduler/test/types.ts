@@ -38,6 +38,9 @@ expectType<SchedulerRegistry>(pluginClient.scheduler);
 createScheduler({ driver: memory() });
 scheduler({ driver: memory() });
 expectType<Promise<void>>(createScheduler({ driver: memory() }).resume('task'));
+expectType<Promise<void>>(createScheduler({ driver: memory() }).removeOrphan('task'));
+expectType<Promise<void>>(createScheduler({ driver: memory() }).prepare());
+expectType<Promise<void>>(createScheduler({ driver: memory() }).activate());
 
 // @ts-expect-error scheduler driver is required
 createScheduler({});

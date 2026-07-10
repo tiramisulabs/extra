@@ -6,7 +6,10 @@
 	},
 	"include": [
 		"./types.ts",
-		"./scheduler.test.mts"
+		"./fake-bullmq.ts",
+		"./scheduler.test.mts",
+		"./lifecycle.test.mts",
+		"./redis-smoke.test.mts"
 	],
 	"exclude": []
 }

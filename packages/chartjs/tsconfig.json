@@ -6,6 +6,10 @@
 			"ESNext"
 		],
 		"moduleResolution": "node",
+		"ignoreDeprecations": "6.0",
+		"types": [
+			"node"
+		],
 		"declaration": true,
 		"sourceMap": false,
 		"strict": true,
@@ -24,11 +28,12 @@
 		"noFallthroughCasesInSwitch": true,
 		"skipLibCheck": true,
 		"noErrorTruncation": true,
+		"rootDir": "./src",
 		"outDir": "./lib",
-		"stripInternal": true,
+		"stripInternal": true
 	},
 	"exclude": [
 		"**/lib",
 		"**/test"
-	],
+	]
 }

@@ -188,8 +188,27 @@ describe('scheduler', () => {
 			tasks: [MaintenanceTasks],
 		});
 		const client: Record<string, unknown> = {};
+		let onPluginsReady: ((client: Record<string, unknown>) => Promise<void> | void) | undefined;
+		plugin.register?.({
+			hooks: {
+				on(name: string, listener: (client: Record<string, unknown>) => Promise<void> | void) {
+					assert.equal(name, 'plugins:ready');
+					onPluginsReady = listener;
+					return () => undefined;
+				},
+			},
+		} as never);
 
 		await plugin.setup?.(client);
+		assert.equal(
+			croner.jobs.every(job => job.paused),
+			true,
+		);
+		await onPluginsReady?.(client);
+		assert.equal(
+			croner.jobs.every(job => !job.paused),
+			true,
+		);
 
 		const extension = { scheduler: plugin.ctx?.scheduler({} as never, client as never) };
 
@@ -306,7 +325,11 @@ describe('scheduler', () => {
 		assert.equal(bullmq.state.queues[0]!.name, 'scheduler');
 		assert.deepEqual(bullmq.state.queues[0]!.options, { connection, prefix: 'slipher-test' });
 		assert.equal(bullmq.state.workers[0]!.name, 'scheduler');
-		assert.deepEqual(bullmq.state.workers[0]!.options, { connection, prefix: 'slipher-test' });
+		assert.deepEqual(bullmq.state.workers[0]!.options, {
+			autorun: false,
+			connection,
+			prefix: 'slipher-test',
+		});
 		assert.equal(bullmq.state.queueEvents[0]!.name, 'scheduler');
 		assert.deepEqual(bullmq.state.queues[0]!.schedulers, [
 			{
@@ -837,8 +860,11 @@ describe('scheduler', () => {
 		await warnRegistry.setup({ initialized: true });
 
 		assert.equal(warned.length, 1);
-		assert.match(String((warned[0] as unknown[])[1]), /persistent\(\{ purgeOrphansOnStartup: true \}\)/);
+		assert.match(String((warned[0] as unknown[])[1]), /scheduler\.removeOrphan\('old-task'\)/);
 		assert.deepEqual(warnedBullmq.state.queues[0]!.removed, []);
+		await warnRegistry.removeOrphan('old-task');
+		assert.deepEqual(warnedBullmq.state.queues[0]!.removed, ['old-task']);
+		await assertRejects(() => warnRegistry.removeOrphan('daily'), /is registered; use remove\('daily'\)/);
 
 		const purgeRegistry = createScheduler({
 			driver: persistent({ bullmq: purged.module, purgeOrphansOnStartup: true }),
@@ -847,6 +873,41 @@ describe('scheduler', () => {
 		await purgeRegistry.setup({ initialized: true });
 
 		assert.deepEqual(purged.state.queues[0]!.removed, ['old-task']);
+	});
+
+	test('persistent attaches BullMQ error handlers before starting the worker', async () => {
+		const bullmq = createFakeBullMQ();
+		const logged: unknown[] = [];
+		const registry = createScheduler({
+			driver: persistent({ bullmq: bullmq.module }),
+			logger: {
+				error: (...args: unknown[]) => logged.push(args),
+			},
+		});
+		const errors: Array<{ source: string; error: unknown }> = [];
+		registry.on('error', payload => {
+			errors.push(payload);
+		});
+		registry.interval('heartbeat', '30s', () => undefined);
+
+		await registry.setup({ initialized: true });
+
+		assert.equal(bullmq.state.workers[0]!.options.autorun, false);
+		assert.deepEqual(bullmq.state.workerRunErrorListenerCounts, [1]);
+		const queueError = new Error('queue connection failed');
+		const queueEventsError = new Error('queue events connection failed');
+		const workerError = new Error('worker connection failed');
+		bullmq.state.queues[0]!.emit('error', queueError);
+		bullmq.state.queueEvents[0]!.emit('error', queueEventsError);
+		bullmq.state.workers[0]!.emit('error', workerError);
+
+		assert.deepEqual(errors, [
+			{ source: 'queue', error: queueError },
+			{ source: 'queue-events', error: queueEventsError },
+			{ source: 'worker', error: workerError },
+		]);
+		assert.equal(logged.length, 3);
+		await registry.close();
 	});
 
 	test('persistent decorated tasks require explicit stable ids', async () => {

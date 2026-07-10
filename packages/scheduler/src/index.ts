@@ -16,6 +16,7 @@ export type {
 	DurationInput,
 	MemorySchedulerOptions,
 	PersistentSchedulerOptions,
+	PersistentSchedulerResource,
 	ScheduledTaskDefinition,
 	ScheduledTaskOptions,
 	ScheduledTaskSnapshot,

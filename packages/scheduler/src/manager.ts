@@ -171,12 +171,34 @@ export class SchedulerRegistry extends SchedulerEmitter {
 		this.emit('removed', { task });
 	}
 
+	async removeOrphan(id: string) {
+		if (this.tasks.has(id)) {
+			throw new Error(`Scheduler task "${id}" is registered; use remove('${id}') instead.`);
+		}
+
+		await this.driver.remove?.(id);
+	}
+
 	async close() {
 		await this.driver.close?.();
 	}
 
-	async setup(client?: SchedulerClientLike) {
+	async prepare(client?: SchedulerClientLike) {
+		await this.driver.prepare?.(client);
+	}
+
+	async activate(client?: SchedulerClientLike) {
+		if (this.driver.activate) {
+			await this.driver.activate(client);
+			return;
+		}
+
 		await this.driver.setup?.(client);
+	}
+
+	async setup(client?: SchedulerClientLike) {
+		await this.prepare(client);
+		await this.activate(client);
 	}
 
 	private define(definition: ScheduledTaskDefinition) {
@@ -218,6 +240,9 @@ export function scheduler(options: CreateSchedulerOptions): SchedulerPlugin {
 		ctx: {
 			scheduler: () => registry,
 		},
+		register(api) {
+			api.hooks.on('plugins:ready', client => registry.activate(client));
+		},
 		async setup(client) {
 			if (!client.scheduler) client.scheduler = registry;
 
@@ -225,7 +250,7 @@ export function scheduler(options: CreateSchedulerOptions): SchedulerPlugin {
 				registry.setLogger(client.logger);
 			}
 
-			await registry.setup(client);
+			await registry.prepare(client);
 		},
 		async teardown() {
 			await registry.close();
