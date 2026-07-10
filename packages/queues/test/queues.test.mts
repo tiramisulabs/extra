@@ -1,3 +1,4 @@
+import { Client, definePlugins } from 'seyfert';
 import { assert, describe, expect, test } from 'vitest';
 import {
 	createQueues,
@@ -7,15 +8,13 @@ import {
 	OnWorkerEvent,
 	Process,
 	Processor,
-	persistent,
 	type Queue,
 	type QueueEventMap,
-	type QueueJob,
 	type QueueJobOf,
 	type QueueRegistration,
-	type QueuesRegistry,
 	queues,
 } from '../src';
+import { flushQueueEvents } from './fake-bullmq';
 
 type MailJob = { job: 'send'; email: string } | { job: 'digest'; email: string; window: 'daily' | 'weekly' };
 
@@ -125,7 +124,7 @@ describe('memory queues', () => {
 		await registry.close();
 	});
 
-	test('runs higher priority ready jobs before lower priority jobs', async () => {
+	test('matches BullMQ priority ordering and honors autostart false', async () => {
 		const processed: string[] = [];
 		let now = 1_000;
 		const registry = createQueues({ driver: memory({ now: () => now++ }) });
@@ -138,10 +137,30 @@ describe('memory queues', () => {
 			processed.push(job.data.label);
 			return job.data.label;
 		});
+		await flushQueueEvents();
+		assert.deepEqual(processed, []);
+		queue.start();
 
 		await idle;
 
-		assert.deepEqual(processed, ['high', 'low']);
+		assert.deepEqual(processed, ['low', 'high']);
+		await registry.close();
+	});
+
+	test('honors a per-job retryDelay over the memory queue default', async () => {
+		const registry = createQueues({ driver: memory({ attempts: 2, retryDelay: '1h' }) });
+		const queue = registry.get('welcome');
+		let attempts = 0;
+		queue.process(job => {
+			if (++attempts === 1) throw new Error('retry now');
+			return `welcome:${job.data.userId}`;
+		});
+		const retrying = waitForEvent(queue, 'retrying');
+		const completed = waitForEvent(queue, 'completed');
+		await queue.add({ userId: 'user-1' }, { retryDelay: 0 });
+
+		assert.equal((await retrying).delay, 0);
+		await completed;
 		await registry.close();
 	});
 
@@ -172,6 +191,52 @@ describe('memory queues', () => {
 		assert.instanceOf(reported[0].error, Error);
 
 		await registry.close();
+	});
+
+	test('reports rejected async listeners without interrupting later listeners', async () => {
+		const reported: unknown[] = [];
+		const registry = createQueues({
+			driver: memory({ reportListenerError: (_event, error) => reported.push(error) }),
+		});
+		const queue = registry.get('welcome');
+		const events: string[] = [];
+
+		queue.process(job => `welcome:${job.data.userId}`);
+		queue.on('completed', async () => {
+			throw new Error('async listener failed');
+		});
+		queue.on('completed', () => events.push('second'));
+		const idle = waitForEvent(queue, 'idle');
+		await queue.add({ userId: 'user-1' });
+		await idle;
+		await flushQueueEvents();
+
+		assert.deepEqual(events, ['second']);
+		assert.match((reported[0] as Error).message, /async listener failed/);
+		await registry.close();
+	});
+
+	test('bounds retained completed jobs', async () => {
+		const registry = createQueues({ driver: memory({ retention: 2 }) });
+		const queue = registry.get('welcome');
+		queue.process(job => `welcome:${job.data.userId}`);
+		const idle = waitForEvent(queue, 'idle');
+		await queue.add({ userId: 'one' }, { id: 'one' });
+		await queue.add({ userId: 'two' }, { id: 'two' });
+		await queue.add({ userId: 'three' }, { id: 'three' });
+		await idle;
+
+		assert.equal(queue.counts().completed, 2);
+		assert.equal(queue.getJob('one'), undefined);
+		assert.ok(queue.getJob('three'));
+		await registry.close();
+	});
+
+	test('rejects writes after a memory queue is closed', async () => {
+		const queue = memory().get('welcome');
+		queue.close();
+		assert.throws(() => queue.add({ userId: 'user-1' }), /closed/);
+		assert.throws(() => queue.start(), /closed/);
 	});
 
 	test('supports once listeners with object payloads', async () => {
@@ -346,321 +411,35 @@ describe('decorated queues', () => {
 		assert.equal(registry.get('welcome', { attempts: 3 }), optioned);
 		assert.throws(() => registry.get('welcome', { attempts: 4 }), /different options/);
 
-		const dynamic = registry.get('dynamic');
-		assert.equal(registry.get('dynamic', { attempts: 2 }), dynamic);
+		registry.get('dynamic');
+		assert.throws(() => registry.get('dynamic', { attempts: 2 }), /different options/);
 	});
 });
 
 describe('queues plugin', () => {
-	test('exposes the registry on Seyfert context and installs it on the client during setup', async () => {
+	test('lets Seyfert install the registry as a read-only client extension', async () => {
 		const plugin = queues({ driver: memory() });
-		const client = {};
-		const extension = { queues: plugin.ctx?.queues({}, client as never) };
-
-		await plugin.setup?.(client);
+		const plugins = definePlugins(plugin);
+		const client = new Client({ plugins });
+		const extension = { queues: plugin.ctx?.queues({}, client) };
 
 		assert.equal(plugin.name, '@slipher/queues');
 		assert.equal(typeof plugin.client?.queues, 'function');
 		assert.equal(extension.queues, plugin.registry);
-		assert.equal((client as { queues?: QueuesRegistry }).queues, plugin.registry);
+		assert.equal(client.queues, plugin.registry);
+		assert.equal(Object.getOwnPropertyDescriptor(client, 'queues')?.writable, false);
+		await plugin.setup?.(client);
 		await plugin.teardown?.(client);
 	});
 
-	test('teardown uninstalls the registry from the client and closes captured registry access', async () => {
+	test('teardown closes captured registry access without mutating Seyfert-owned client properties', async () => {
 		const plugin = queues({ driver: memory() });
-		const client = {};
+		const client = new Client({ plugins: definePlugins(plugin) });
 
 		await plugin.setup?.(client);
 		await plugin.teardown?.(client);
 
-		assert.equal((client as { queues?: QueuesRegistry }).queues, undefined);
+		assert.equal(client.queues, plugin.registry);
 		assert.throws(() => plugin.registry.get('welcome'), /closed/);
 	});
 });
-
-describe('persistent queues', () => {
-	test('defers BullMQ construction to setup and closes queue resources during teardown', async () => {
-		const fake = createFakeBullMQ();
-		const registry = createQueues({
-			driver: persistent({
-				bullmq: fake.module,
-				connection: { host: '127.0.0.1', port: 6379 },
-				prefix: 'slipher-test',
-			}),
-		});
-		const queue = registry.get('mail', { concurrency: 2 });
-
-		queue.process(job => `sent:${job.data.email}`);
-
-		assert.equal(fake.queues.length, 0);
-		await assertRejects(() => queue.add('send', { email: 'hi@example.com' }), /not initialized/);
-
-		await registry.setup({ initialized: true });
-
-		assert.equal(fake.queues.length, 1);
-		assert.equal(fake.workers.length, 1);
-		assert.equal(fake.queueEvents.length, 1);
-		assert.equal(fake.workers[0].options.concurrency, 2);
-
-		await registry.close();
-
-		assert.equal(fake.workers[0].closed, true);
-		assert.equal(fake.queueEvents[0].closed, true);
-		assert.equal(fake.queues[0].closed, true);
-	});
-
-	test('sends queue options to the queue constructor and job defaults to add options', async () => {
-		const fake = createFakeBullMQ();
-		const registry = createQueues({
-			driver: persistent({
-				bullmq: fake.module,
-				connection: { host: '127.0.0.1', port: 6379 },
-				defaultJobOptions: { removeOnComplete: true },
-				prefix: 'slipher-test',
-				queueOptions: { settings: { stalledInterval: 1_000 } },
-			}),
-		});
-		const queue = registry.get('mail', {
-			attempts: 3,
-			retryDelay: '5s',
-		});
-		queue.process(job => `sent:${job.data.email}`);
-
-		await registry.setup({ initialized: true });
-		const job = await queue.add('send', { email: 'hi@example.com' }, { attempts: 4, delay: '1s', id: 'job-1' });
-		const result = await fake.workers[0].processor({
-			attemptsMade: 1,
-			data: { email: 'hi@example.com' },
-			id: 'bull-job-1',
-			name: 'send',
-			opts: { attempts: 4 },
-			processedOn: Date.parse('2026-05-29T10:00:01.000Z'),
-			timestamp: Date.parse('2026-05-29T10:00:00.000Z'),
-		});
-
-		assert.equal(job.id, 'job-1');
-		assert.deepEqual(fake.queues[0].options, {
-			connection: { host: '127.0.0.1', port: 6379 },
-			defaultJobOptions: { removeOnComplete: true },
-			prefix: 'slipher-test',
-			settings: { stalledInterval: 1_000 },
-		});
-		assert.deepEqual(fake.queues[0].adds[0], {
-			data: { email: 'hi@example.com' },
-			name: 'send',
-			options: {
-				attempts: 4,
-				backoff: { delay: 5000, type: 'fixed' },
-				delay: 1000,
-				jobId: 'job-1',
-				removeOnComplete: true,
-			},
-		});
-		assert.equal(result, 'sent:hi@example.com');
-
-		await registry.close();
-	});
-
-	test('rejects function retryDelay on the persistent driver during setup', async () => {
-		const fake = createFakeBullMQ();
-		const registry = createQueues({
-			driver: persistent({ bullmq: fake.module }),
-		});
-
-		registry.get('mail', {
-			retryDelay: () => 100,
-		});
-
-		await assertRejects(() => registry.setup({ initialized: true }), /does not support function-form retryDelay/);
-	});
-
-	test('keeps worker handlers separate from QueueEvents lifecycle events', async () => {
-		const fake = createFakeBullMQ();
-		const queueEvents: string[] = [];
-		const workerEvents: string[] = [];
-
-		class MailProcessor {
-			handle(job: QueueJobOf<'mail'>) {
-				return `worker:${job.name}:${job.data.email}`;
-			}
-
-			queueCompleted(payload: { job: QueueJobOf<'mail'>; result: string }) {
-				queueEvents.push(payload.result);
-			}
-
-			workerCompleted(payload: { job: QueueJobOf<'mail'>; result: string }) {
-				workerEvents.push(payload.result);
-			}
-		}
-
-		Processor('mail')(MailProcessor);
-		Process()(MailProcessor.prototype, 'handle');
-		OnQueueEvent('completed')(MailProcessor.prototype, 'queueCompleted');
-		OnWorkerEvent('completed')(MailProcessor.prototype, 'workerCompleted');
-
-		const registry = createQueues({
-			driver: persistent({ bullmq: fake.module }),
-			processors: [MailProcessor],
-		});
-
-		await registry.setup({ initialized: true });
-		await fake.workers[0].processor({
-			data: { email: 'hi@example.com' },
-			id: 'job-1',
-			name: 'send',
-		});
-
-		assert.deepEqual(queueEvents, []);
-		assert.deepEqual(workerEvents, ['worker:send:hi@example.com']);
-
-		fake.queueEvents[0].emit('completed', {
-			jobId: 'job-1',
-			returnvalue: 'queue:send:hi@example.com',
-		});
-		await flushQueueEvents();
-
-		assert.deepEqual(queueEvents, ['queue:send:hi@example.com']);
-		assert.deepEqual(workerEvents, ['worker:send:hi@example.com']);
-
-		await registry.close();
-	});
-});
-
-async function assertRejects(run: () => Promise<unknown>, expected: RegExp) {
-	let thrown: unknown;
-	try {
-		await run();
-	} catch (error) {
-		thrown = error;
-	}
-
-	assert.instanceOf(thrown, Error);
-	assert.match((thrown as Error).message, expected);
-}
-
-async function flushQueueEvents() {
-	await Promise.resolve();
-	await Promise.resolve();
-}
-
-function createFakeBullMQ() {
-	const queues: FakeBullQueue[] = [];
-	const workers: FakeBullWorker[] = [];
-	const queueEvents: FakeBullQueueEvents[] = [];
-
-	return {
-		queueEvents,
-		queues,
-		workers,
-		module: {
-			Queue: class extends FakeBullQueue {
-				constructor(name: string, options: Record<string, unknown>) {
-					super(name, options);
-					queues.push(this);
-				}
-			},
-			QueueEvents: class extends FakeBullQueueEvents {
-				constructor(name: string, options: Record<string, unknown>) {
-					super(name, options);
-					queueEvents.push(this);
-				}
-			},
-			Worker: class extends FakeBullWorker {
-				constructor(name: string, processor: (job: FakeBullJob) => unknown, options: Record<string, unknown>) {
-					super(name, processor, options);
-					workers.push(this);
-				}
-			},
-		},
-	};
-}
-
-class FakeBullQueue {
-	readonly adds: { name: string; data: unknown; options: unknown }[] = [];
-	closed = false;
-	paused = false;
-	resumed = false;
-
-	constructor(
-		readonly name: string,
-		readonly options: Record<string, unknown>,
-	) {}
-
-	async add(name: string, data: unknown, options: unknown) {
-		this.adds.push({ name, data, options });
-		return { id: (options as { jobId?: string }).jobId ?? `${name}:1`, name, data };
-	}
-
-	async getJob(_id: string) {
-		return undefined;
-	}
-
-	async getJobCounts() {
-		return { active: 0, completed: 0, delayed: 0, failed: 0, waiting: 0 };
-	}
-
-	async pause() {
-		this.paused = true;
-	}
-
-	async resume() {
-		this.resumed = true;
-	}
-
-	async close() {
-		this.closed = true;
-	}
-}
-
-class FakeBullQueueEvents {
-	readonly listeners = new Map<string, ((event: unknown) => void)[]>();
-	closed = false;
-
-	constructor(
-		readonly name: string,
-		readonly options: Record<string, unknown>,
-	) {}
-
-	on(event: string, listener: (event: unknown) => void) {
-		this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]);
-		return this;
-	}
-
-	emit(event: string, payload: unknown) {
-		for (const listener of this.listeners.get(event) ?? []) listener(payload);
-	}
-
-	async close() {
-		this.closed = true;
-	}
-}
-
-class FakeBullWorker {
-	readonly listeners = new Map<string, ((...args: unknown[]) => void)[]>();
-	closed = false;
-
-	constructor(
-		readonly name: string,
-		readonly processor: (job: FakeBullJob) => unknown,
-		readonly options: Record<string, unknown>,
-	) {}
-
-	on(event: string, listener: (...args: unknown[]) => void) {
-		this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]);
-		return this;
-	}
-
-	async close() {
-		this.closed = true;
-	}
-}
-
-interface FakeBullJob {
-	id: string;
-	name: string;
-	data: unknown;
-	opts?: { attempts?: number };
-	attemptsMade?: number;
-	timestamp?: number;
-	processedOn?: number;
-}

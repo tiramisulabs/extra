@@ -22,11 +22,11 @@
 	},
 	"scripts": {
 		"dev": "tsc --watch",
-		"build": "pnpm --filter @slipher/internal build && tsc && node ../../scripts/vendor-internal.mjs queues",
+		"build": "tsc",
 		"lint": "biome lint --write ./src ./test",
 		"format": "biome format --write ./src ./test",
 		"checkb": "biome check --write --no-errors-on-unmatched ./src ./test",
-		"typecheck": "pnpm --filter @slipher/internal build && tsc --noEmit --project ./test/tsconfig.json",
+		"typecheck": "tsc --noEmit --project ./test/tsconfig.json",
 		"test": "pnpm typecheck && vitest run --config ./test/vitest.config.mts ./test/",
 		"prepublishOnly": "pnpm build"
 	},
@@ -40,10 +40,8 @@
 		}
 	},
 	"devDependencies": {
-		"@slipher/internal": "workspace:*",
-		"@slipher/types": "workspace:*",
-		"@types/node": "^25.0.10",
+		"@types/node": "^26.0.1",
 		"seyfert": "github:tiramisulabs/seyfert#main",
-		"typescript": "^5.9.3"
+		"typescript": "^6.0.3"
 	}
 }

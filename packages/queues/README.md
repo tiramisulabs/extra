@@ -30,7 +30,7 @@ pnpm add bullmq
 Declare queues with `RegisteredQueues`. Named jobs use a `job` discriminant; that field is type-only and becomes BullMQ's native job name.
 
 ```ts
-import { Client, definePlugins, type RegisterPlugins } from 'seyfert';
+import { Client, definePlugins } from 'seyfert';
 import {
 	OnQueueEvent,
 	OnWorkerEvent,
@@ -72,8 +72,8 @@ class AudioProcessor {
 	}
 
 	@OnQueueEvent('completed')
-	onCompleted({ job, result }: { job: QueueJobOf<'audio'>; result: string }) {
-		job.snapshot();
+	onCompleted({ job, result }: { job: QueueJobOf<'audio'> | undefined; jobId: string; result: string }) {
+		job?.snapshot();
 		void result;
 	}
 }
@@ -89,7 +89,9 @@ const queuesPlugin = queues({
 const plugins = definePlugins(queuesPlugin);
 
 declare module 'seyfert' {
-	interface Register extends RegisterPlugins<typeof plugins> {}
+	interface SeyfertRegistry {
+		plugins: typeof plugins;
+	}
 }
 
 export const registry = queuesPlugin.registry;
@@ -156,9 +158,9 @@ Avoid importing the exported `client` from processors or services that are loade
 
 ## Events
 
-`@OnWorkerEvent(event)` is local to the process that ran the job. Use it for local cache updates or process-local instrumentation.
+`@OnWorkerEvent(event)` is local to the process that ran the job. Use it for local cache updates or process-local instrumentation. It accepts `active`, `completed`, `failed`, `retrying`, and `idle`.
 
-`@OnQueueEvent(event)` is the queue/global channel. With `memory()` both decorators observe the same single-process queue. With `persistent()`, queue-level events are prepared for BullMQ `QueueEvents` and use one extra Redis connection per queue per replica.
+`@OnQueueEvent(event)` is the queue/global channel and accepts `added`, `completed`, and `failed`. With `memory()` both decorators observe the same single-process queue. With `persistent()`, queue-level events come from BullMQ `QueueEvents` and use one extra Redis connection per queue per replica. Global payloads always include `jobId`; `job` can be `undefined` when BullMQ has already removed the job through `removeOnComplete` or `removeOnFail`.
 
 All listeners receive one object payload, matching `@slipher/scheduler`: `{ job }`, `{ job, result }`, `{ job, error }`, `{ job, error, delay }`, or `{}` for `idle`. Direct queue instances support both `on()` and `once()`.
 
@@ -178,7 +180,7 @@ queues({
 
 The driver decides where jobs live — your queue and processor code stays the same, so you can swap drivers without touching anything else.
 
-`memory()` runs jobs in the current process and supports `delay`, `attempts`, `retryDelay`, `priority`, `concurrency`, and the lifecycle events `added`, `active`, `completed`, `failed`, `retrying`, and `idle`.
+`memory()` runs jobs in the current process and supports `delay`, `attempts`, `retryDelay`, `priority`, `concurrency`, and the lifecycle events `added`, `active`, `completed`, `failed`, `retrying`, and `idle`. Like BullMQ, lower numeric priorities run first. It retains at most 1,000 completed and 1,000 failed jobs per queue by default; set `retention` to another non-negative count (or `0` to retain none).
 
 `persistent()` runs them on BullMQ/Redis so they survive restarts and spread across workers:
 
@@ -190,10 +192,23 @@ const queuesPlugin = queues({
 		connection: { host: '127.0.0.1', port: 6379 },
 		prefix: 'slipher',
 		defaultJobOptions: { removeOnComplete: true, attempts: 3 },
+		queueEventsOptions: { blockingTimeout: 10_000 },
 	}),
 	processors: [AudioProcessor],
 });
 // add queuesPlugin to the client's `plugins: []`
+```
+
+Set `autostart: false` on either driver to register a processor without consuming jobs until `await queue.start()`. `await queue.pause()` pauses consumption explicitly.
+
+Queues created after the Seyfert client has started initialize lazily on their first asynchronous operation. Await late processor setup so BullMQ connection and Worker readiness errors stay observable:
+
+```ts
+const lateQueue = client.queues.get<{ fileId: string }, void>('late-media');
+await lateQueue.process(job => processLateMedia(job.data.fileId));
+
+// Decorated processors registered after startup are asynchronous for the same reason.
+await client.queues.register({ processors: [LateMediaProcessor] });
 ```
 
 `retryDelay` only matters when `attempts > 1` — if a queue or job sets `retryDelay` while attempts resolves to `1`, Slipher emits a `SLIPHER_QUEUE_RETRY_DELAY_NO_RETRIES` warning because no retry will be scheduled. Per-job options are the final `add()` argument:

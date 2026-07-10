@@ -1,4 +1,3 @@
-import type { QueueLike } from '@slipher/types';
 import {
 	type Client,
 	type CommandContext,
@@ -74,6 +73,10 @@ expectType<Awaitable<QueueJob<{ source: 'slash-command' | 'scheduler'; userId: s
 );
 
 welcomeQueue.add('audit', { action: 'deploy' });
+welcomeQueue.on('completed', payload => {
+	expectType<string>(payload.jobId);
+	expectType<QueueJob<QueueData<'welcome'>, string> | undefined>(payload.job);
+});
 
 // @ts-expect-error direct registered queue access keeps named job payloads narrow
 welcomeQueue.add('send', { source: 'text-command', userId: 'user-1' });
@@ -97,7 +100,6 @@ expectType<MethodDecorator>(OnWorkerEvent('active'));
 
 const dynamicQueue = registry.get<{ value: number }, boolean>('dynamic');
 expectType<Queue<{ value: number }, boolean>>(dynamicQueue);
-expectType<QueueLike<{ value: number }, boolean>>(dynamicQueue);
 
 expectType<'send' | 'audit'>({} as JobNameOf<'welcome'>);
 expectType<{ source: 'slash-command' | 'scheduler'; userId: string } | { action: string }>({} as QueueData<'welcome'>);
