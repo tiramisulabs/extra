@@ -1,6 +1,6 @@
-import { createPlugin, type SeyfertPlugin } from 'seyfert';
+import { createPlugin } from 'seyfert';
 import { createInteractionContextScope } from './context-scope';
-import { createTraceHandle, type TraceHandle } from './handle';
+import { createTraceHandle } from './handle';
 import { instrumentCache } from './instrument/cache';
 import { instrumentEvents } from './instrument/events';
 import { registerInteractionInstrumentation } from './instrument/interactions';
@@ -10,11 +10,7 @@ import { type OpenTelemetryPluginOptions, resolvePluginOptions } from './options
 import { type OwnedSdk, startOwnedSdk } from './sdk';
 import { setTraceServiceName } from './trace-api';
 
-export interface OpenTelemetryPlugin extends SeyfertPlugin<{ trace: TraceHandle }, { trace: TraceHandle }> {
-	name: '@slipher/opentelemetry';
-}
-
-export function opentelemetry(options: OpenTelemetryPluginOptions = {}): OpenTelemetryPlugin {
+export function opentelemetry(options: OpenTelemetryPluginOptions = {}) {
 	const resolved = resolvePluginOptions(options);
 	const handle = createTraceHandle();
 	let owned: OwnedSdk | undefined;
@@ -116,5 +112,9 @@ export function opentelemetry(options: OpenTelemetryPluginOptions = {}): OpenTel
 				setupActive = false;
 			}
 		},
-	}) as OpenTelemetryPlugin;
+	});
 }
+
+// Inferred so the client/ctx `trace` extension (E/C) reaches consumers via SeyfertRegistry.
+// A hand-written interface + `as` cast previously erased it, breaking `client.trace` typing.
+export type OpenTelemetryPlugin = ReturnType<typeof opentelemetry>;
