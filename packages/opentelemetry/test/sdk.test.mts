@@ -1,10 +1,20 @@
-import { type Context, type ContextManager, ProxyTracerProvider, ROOT_CONTEXT, trace } from '@opentelemetry/api';
+import {
+	type Context,
+	type ContextManager,
+	context,
+	metrics,
+	ProxyTracerProvider,
+	ROOT_CONTEXT,
+	trace,
+} from '@opentelemetry/api';
+import { MeterProvider } from '@opentelemetry/sdk-metrics';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { assert, describe, test } from 'vitest';
 import { resolvePluginOptions } from '../src/options';
 import { shouldStartNodeSDK, startOwnedSdk } from '../src/sdk';
 
 class CountingContextManager implements ContextManager {
+	disableCalls = 0;
 	enableCalls = 0;
 	private current: Context = ROOT_CONTEXT;
 
@@ -37,6 +47,7 @@ class CountingContextManager implements ContextManager {
 	}
 
 	disable(): this {
+		this.disableCalls += 1;
 		this.current = ROOT_CONTEXT;
 		return this;
 	}
@@ -76,6 +87,7 @@ describe('startOwnedSdk', () => {
 		const exporter = new InMemorySpanExporter();
 		const owned = startOwnedSdk(
 			resolvePluginOptions({
+				autoDetectResources: false,
 				contextManager,
 				serviceName: 'test-owned-sdk',
 				spanProcessors: [new SimpleSpanProcessor(exporter)],
@@ -86,6 +98,44 @@ describe('startOwnedSdk', () => {
 		assert.equal(typeof owned.shutdown, 'function');
 		assert.ok(contextManager.enableCalls > 0);
 		await owned.shutdown();
+		assert.equal(shouldStartNodeSDK(trace.getTracerProvider()), true);
+
+		const secondExporter = new InMemorySpanExporter();
+		const second = startOwnedSdk(
+			resolvePluginOptions({
+				autoDetectResources: false,
+				serviceName: 'test-owned-sdk-second-setup',
+				spanProcessors: [new SimpleSpanProcessor(secondExporter)],
+			}),
+		);
+		assert.ok(second, 'a fresh SDK should start after the owned SDK was shut down');
+		trace.getTracer('restart-test').startSpan('second setup').end();
+		assert.equal(secondExporter.getFinishedSpans().length, 1);
+		await second.shutdown();
+	});
+
+	test('shutdown preserves context and metrics providers that the host already owned', async () => {
+		const hostContext = new CountingContextManager();
+		const hostMetrics = new MeterProvider();
+		assert.equal(context.setGlobalContextManager(hostContext), true);
+		assert.equal(metrics.setGlobalMeterProvider(hostMetrics), true);
+		try {
+			const owned = startOwnedSdk(
+				resolvePluginOptions({
+					autoDetectResources: false,
+					spanProcessors: [new SimpleSpanProcessor(new InMemorySpanExporter())],
+				}),
+			);
+			assert.ok(owned);
+			await owned.shutdown();
+
+			assert.equal(hostContext.disableCalls, 0);
+			assert.equal(metrics.getMeterProvider(), hostMetrics);
+		} finally {
+			context.disable();
+			metrics.disable();
+			await hostMetrics.shutdown();
+		}
 	});
 
 	test('returns undefined when a real provider is already registered', () => {

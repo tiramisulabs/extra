@@ -1,5 +1,5 @@
 import { assert, describe, test } from 'vitest';
-import { extractInteractionAttributes, interactionSpanName } from '../src/attributes';
+import { extractInteractionAttributes, interactionSpanName, truncate } from '../src/attributes';
 
 describe('extractInteractionAttributes', () => {
 	test('pulls command fields', () => {
@@ -27,6 +27,12 @@ describe('interactionSpanName', () => {
 	test('truncates long customId', () => {
 		const id = 'x'.repeat(200);
 		const name = interactionSpanName('component', { customId: id });
-		assert.ok(name.length < 120);
+		assert.equal(name, `component ${'x'.repeat(63)}…`);
+	});
+
+	test('truncate honors the full limit and does not split Unicode code points', () => {
+		assert.equal(truncate('abcdef', 4), 'abc…');
+		assert.equal(Array.from(truncate('😀'.repeat(100), 64)).length, 64);
+		assert.ok(truncate('😀'.repeat(100), 64).endsWith('…'));
 	});
 });

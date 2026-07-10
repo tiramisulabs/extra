@@ -21,15 +21,25 @@ export interface CacheClient {
 
 /** Adapter methods that read/write resource data (see seyfert `Adapter`). */
 const ADAPTER_METHODS = [
+	'scan',
 	'get',
 	'set',
 	'remove',
 	'patch',
+	'values',
+	'keys',
+	'count',
+	'flush',
+	'contains',
 	'bulkGet',
 	'bulkSet',
 	'bulkRemove',
 	'bulkPatch',
 	'getToRelationship',
+	'bulkAddToRelationShip',
+	'addToRelationship',
+	'removeToRelationship',
+	'removeRelationship',
 ] as const;
 
 type AdapterMethod = (typeof ADAPTER_METHODS)[number];
@@ -147,7 +157,7 @@ export function instrumentCache(client: CacheClient | unknown, deps: CacheInstru
 		adapter[method] = (...args: unknown[]) => {
 			let resource: string;
 			try {
-				resource = extractCacheResource(args);
+				resource = method === 'flush' ? 'all' : extractCacheResource(args);
 				if (deps.skipResources.has(resource)) {
 					return original(...args);
 				}

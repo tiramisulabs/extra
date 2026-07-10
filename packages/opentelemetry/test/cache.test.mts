@@ -14,6 +14,11 @@ function withProvider(run: (exporter: InMemorySpanExporter) => Promise<void> | v
 /** Minimal in-memory adapter surface matching seyfert `Adapter` data methods. */
 function fakeAdapter(store = new Map<string, unknown>()) {
 	const adapter: Record<string, unknown> = {
+		start() {},
+		scan(query: string) {
+			const prefix = query.replace(/\*$/, '');
+			return [...store.entries()].filter(([key]) => key.startsWith(prefix)).map(([, value]) => value);
+		},
 		get(key: string) {
 			if (!store.has(key)) return null;
 			return store.get(key);
@@ -50,6 +55,25 @@ function fakeAdapter(store = new Map<string, unknown>()) {
 		getToRelationship(to: string) {
 			return store.has(`rel:${to}`) ? (store.get(`rel:${to}`) as string[]) : [];
 		},
+		values(to: string) {
+			return [...store.entries()].filter(([key]) => key.startsWith(`${to}.`)).map(([, value]) => value);
+		},
+		keys(to: string) {
+			return [...store.keys()].filter(key => key.startsWith(`${to}.`));
+		},
+		count(to: string) {
+			return [...store.keys()].filter(key => key.startsWith(`${to}.`)).length;
+		},
+		flush() {
+			store.clear();
+		},
+		contains(to: string, key: string) {
+			return store.has(`${to}.${key}`);
+		},
+		bulkAddToRelationShip(_data: Record<string, string[]>) {},
+		addToRelationship(_to: string, _keys: string | string[]) {},
+		removeToRelationship(_to: string, _keys: string | string[]) {},
+		removeRelationship(_to: string | string[]) {},
 	};
 	return { adapter, store };
 }
@@ -77,6 +101,50 @@ describe('extractCacheResource', () => {
 });
 
 describe('instrumentCache (adapter wraps)', () => {
+	test('wraps the complete Seyfert Adapter data surface and restores exact identities', async () => {
+		await withProvider(async () => {
+			const methods = [
+				'scan',
+				'bulkGet',
+				'get',
+				'bulkSet',
+				'set',
+				'bulkPatch',
+				'patch',
+				'values',
+				'keys',
+				'count',
+				'bulkRemove',
+				'remove',
+				'flush',
+				'contains',
+				'getToRelationship',
+				'bulkAddToRelationShip',
+				'addToRelationship',
+				'removeToRelationship',
+				'removeRelationship',
+			] as const;
+			const { adapter } = fakeAdapter();
+			const originals = new Map(methods.map(method => [method, adapter[method]]));
+			const originalStart = adapter.start;
+			const cleanup = instrumentCache(fakeClient(adapter), {
+				checkIfShouldTrace: () => true,
+				skipResources: new Set(),
+				getMetrics: () => undefined,
+			});
+
+			for (const method of methods) {
+				assert.notEqual(adapter[method], originals.get(method), `${method} was not instrumented`);
+			}
+			assert.equal(adapter.start, originalStart, 'adapter lifecycle start must not be instrumented');
+
+			cleanup();
+			for (const method of methods) {
+				assert.equal(adapter[method], originals.get(method), `${method} identity was not restored`);
+			}
+		});
+	});
+
 	test('get hit sets seyfert.cache.hit true', async () => {
 		await withProvider(async exporter => {
 			const { adapter, store } = fakeAdapter();

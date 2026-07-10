@@ -25,6 +25,15 @@ describe('opentelemetry plugin wiring', () => {
 		await plugin.teardown?.({} as never);
 	});
 
+	test('setup after teardown fails explicitly instead of silently using a stopped SDK', async () => {
+		const plugin = opentelemetry({
+			instrument: { interactions: false, events: false, rest: false, cache: false },
+		});
+		await plugin.setup?.({} as never);
+		await plugin.teardown?.({} as never);
+		assert.throws(() => plugin.setup?.({} as never), /cannot be set up after teardown; create a new plugin instance/);
+	});
+
 	test('setup is idempotent (second setup unwraps then re-instruments)', async () => {
 		const store = new Map<string, unknown>();
 		const adapter: Record<string, unknown> = {

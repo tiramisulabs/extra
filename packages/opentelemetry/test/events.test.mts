@@ -73,6 +73,7 @@ describe('instrumentEvents (gateway runEvent)', () => {
 	test('cleanup restores / no new spans after cleanup', async () => {
 		await withProvider(async exporter => {
 			const { client } = fakeClient();
+			const original = client.events.runEvent;
 			const cleanup = instrumentEvents(client, {
 				checkIfShouldTrace: () => true,
 				getMetrics: () => undefined,
@@ -82,6 +83,7 @@ describe('instrumentEvents (gateway runEvent)', () => {
 			assert.equal(exporter.getFinishedSpans().length, 1);
 
 			cleanup();
+			assert.equal(client.events.runEvent, original);
 			await client.events.runEvent('messageCreate', client, {}, 1);
 			assert.equal(exporter.getFinishedSpans().length, 1);
 		});

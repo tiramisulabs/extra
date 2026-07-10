@@ -92,7 +92,7 @@ export function instrumentEvents(
 	}
 
 	const activeEvent = new AsyncLocalStorage<ActiveEvent>();
-	const original: RunEvent = events.runEvent.bind(events);
+	const original: RunEvent = events.runEvent;
 	const disposeErrorObserver =
 		typeof api?.events?.onError === 'function'
 			? api.events.onError((error, eventName) => {
@@ -105,7 +105,7 @@ export function instrumentEvents(
 	events.runEvent = function instrumentedRunEvent(name: string, ...args: unknown[]): unknown {
 		const source: TraceSource = { kind: 'event', name, args };
 		if (!shouldTrace(deps, source)) {
-			return original(name, ...args);
+			return original.call(events, name, ...args);
 		}
 
 		const attributes = eventAttributes(name, args);
@@ -135,7 +135,7 @@ export function instrumentEvents(
 
 			return activeEvent.run(active, () => {
 				try {
-					const result = original(name, ...args);
+					const result = original.call(events, name, ...args);
 					if (
 						result !== null &&
 						typeof result === 'object' &&

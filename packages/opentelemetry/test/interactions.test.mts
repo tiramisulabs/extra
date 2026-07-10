@@ -126,6 +126,47 @@ describe('interaction context scope (root spans)', () => {
 		});
 	});
 
+	test('interaction metrics include custom_id but exclude unique entity IDs', async () => {
+		await withProvider(async exporter => {
+			const recorded: Record<string, unknown>[] = [];
+			const scope = createInteractionContextScope({
+				serviceName: 'interactions-test',
+				checkIfShouldTrace: () => true,
+				getMetrics: () => ({
+					recordInteraction(_duration, attributes) {
+						recorded.push(attributes as Record<string, unknown>);
+					},
+					recordEvent() {},
+					recordRest() {},
+					recordCache() {},
+				}),
+			});
+
+			scope(
+				{
+					customId: 'user-specific:123',
+					isComponent: () => true,
+					guildId: 'guild-1',
+					channelId: 'channel-1',
+					author: { id: 'user-1' },
+					interaction: { id: 'interaction-1' },
+					shardId: 2,
+				},
+				() => undefined,
+			);
+
+			assert.deepEqual(recorded, [
+				{
+					'seyfert.interaction.kind': 'component',
+					'seyfert.custom_id': 'user-specific:123',
+					'seyfert.shard_id': 2,
+					'seyfert.error': false,
+				},
+			]);
+			assert.equal(exporter.getFinishedSpans()[0].attributes['seyfert.user_id'], 'user-1');
+		});
+	});
+
 	test('detectKind uses isModal / isComponent markers', async () => {
 		await withProvider(async exporter => {
 			const scope = createInteractionContextScope({
@@ -199,17 +240,90 @@ describe('registerInteractionInstrumentation', () => {
 			'onRunError',
 			'onMiddlewaresError',
 			'onOptionsError',
+			'onInternalError',
 		]) {
 			assert.ok(commandKeys.includes(key), `commands defaults missing ${key}`);
 			assert.equal(typeof calls[0].hooks[key], 'function');
 		}
 
 		for (const entry of [calls[1], calls[2]]) {
-			for (const key of ['onBeforeMiddlewares', 'onAfterRun', 'onRunError', 'onMiddlewaresError']) {
+			for (const key of ['onBeforeMiddlewares', 'onAfterRun', 'onRunError', 'onMiddlewaresError', 'onInternalError']) {
 				assert.ok(Object.keys(entry.hooks).includes(key), `${entry.target} missing ${key}`);
 				assert.equal(typeof entry.hooks[key], 'function');
 			}
 		}
+	});
+
+	test('root scope closes a lifecycle child when middleware exits early', async () => {
+		await withProvider(async exporter => {
+			const hooks: Record<string, (...args: never[]) => void> = {};
+			registerInteractionInstrumentation(
+				{
+					commands: {
+						defaults(h: object) {
+							Object.assign(hooks, h);
+						},
+					},
+					components: { defaults() {} },
+					modals: { defaults() {} },
+				},
+				{ checkIfShouldTrace: () => true },
+			);
+			const scope = createInteractionContextScope({
+				serviceName: 'interactions-test',
+				checkIfShouldTrace: () => true,
+				getMetrics: () => undefined,
+			});
+			const ctx = { fullCommandName: 'early-exit' };
+
+			const result = scope(ctx, () => {
+				hooks.onBeforeMiddlewares?.(ctx as never);
+				return 'passed';
+			});
+
+			assert.equal(result, 'passed');
+			assert.deepEqual(
+				exporter
+					.getFinishedSpans()
+					.map(span => span.name)
+					.sort(),
+				['Middlewares', 'command early-exit'],
+			);
+		});
+	});
+
+	test('options validation errors annotate both child and root spans', async () => {
+		await withProvider(async exporter => {
+			const hooks: Record<string, (...args: never[]) => void> = {};
+			registerInteractionInstrumentation(
+				{
+					commands: {
+						defaults(h: object) {
+							Object.assign(hooks, h);
+						},
+					},
+					components: { defaults() {} },
+					modals: { defaults() {} },
+				},
+				{ checkIfShouldTrace: () => true },
+			);
+			const scope = createInteractionContextScope({
+				serviceName: 'interactions-test',
+				checkIfShouldTrace: () => true,
+				getMetrics: () => undefined,
+			});
+			const ctx = { fullCommandName: 'invalid-options' };
+
+			scope(ctx, () => {
+				hooks.onBeforeOptions?.(ctx as never);
+				hooks.onOptionsError?.(ctx as never);
+			});
+
+			const root = exporter.getFinishedSpans().find(span => span.name === 'command invalid-options');
+			const child = exporter.getFinishedSpans().find(span => span.name === 'Options');
+			assert.equal(root?.status.code, SpanStatusCode.ERROR);
+			assert.equal(child?.status.code, SpanStatusCode.ERROR);
+		});
 	});
 
 	test('plugin register() installs defaults when interactions are on', () => {

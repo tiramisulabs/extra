@@ -1,6 +1,6 @@
 import { createPlugin, type SeyfertPlugin } from 'seyfert';
 import { createInteractionContextScope } from './context-scope';
-import { createTraceHandle } from './handle';
+import { createTraceHandle, type TraceHandle } from './handle';
 import { instrumentCache } from './instrument/cache';
 import { instrumentEvents } from './instrument/events';
 import { registerInteractionInstrumentation } from './instrument/interactions';
@@ -10,7 +10,7 @@ import { type OpenTelemetryPluginOptions, resolvePluginOptions } from './options
 import { type OwnedSdk, startOwnedSdk } from './sdk';
 import { setTraceServiceName } from './trace-api';
 
-export interface OpenTelemetryPlugin extends SeyfertPlugin {
+export interface OpenTelemetryPlugin extends SeyfertPlugin<{ trace: TraceHandle }, { trace: TraceHandle }> {
 	name: '@slipher/opentelemetry';
 }
 
@@ -21,6 +21,7 @@ export function opentelemetry(options: OpenTelemetryPluginOptions = {}): OpenTel
 	let metrics: CoreMetrics | undefined;
 	const cleanups: Array<() => void> = [];
 	let setupActive = false;
+	let tornDown = false;
 
 	const runCleanups = () => {
 		for (const cleanup of cleanups.splice(0).reverse()) {
@@ -59,6 +60,9 @@ export function opentelemetry(options: OpenTelemetryPluginOptions = {}): OpenTel
 			});
 		},
 		setup(client, api) {
+			if (tornDown) {
+				throw new Error('@slipher/opentelemetry cannot be set up after teardown; create a new plugin instance');
+			}
 			// Idempotent: unwrap previous instrumentors before re-wrapping.
 			if (setupActive) {
 				runCleanups();
@@ -101,6 +105,8 @@ export function opentelemetry(options: OpenTelemetryPluginOptions = {}): OpenTel
 			}
 		},
 		async teardown() {
+			if (tornDown) return;
+			tornDown = true;
 			try {
 				runCleanups();
 				if (owned) await owned.shutdown();

@@ -50,11 +50,42 @@ interface PendingRest {
 	span: Span;
 	start: number;
 	method: string;
-	path: string;
+	rawPath: string;
+	template: string;
 }
 
 function flightKey(method: string, path: string): string {
 	return `${method}\0${path}`;
+}
+
+export interface SanitizedRestTarget {
+	/** URI path with Discord webhook/interaction tokens removed. */
+	path: string;
+	/** Low-cardinality Discord route template for metrics. */
+	template: string;
+}
+
+/**
+ * Keep useful Discord route structure without exporting secrets or snowflake IDs.
+ * Query strings are intentionally omitted because `url.path` is only the URI path.
+ */
+export function sanitizeRestTarget(value: string): SanitizedRestTarget {
+	let path = value.split(/[?#]/, 1)[0] || '/';
+	try {
+		if (/^[a-z][a-z\d+.-]*:\/\//i.test(value)) path = new URL(value).pathname;
+	} catch {
+		// Keep the best-effort relative path above.
+	}
+
+	path = path.replace(/(\/(?:interactions|webhooks)\/[^/]+)\/[^/]+/g, '$1/REDACTED');
+	const template = path
+		.split('/')
+		.map(segment => (segment === 'REDACTED' ? ':token' : /^\d+$/.test(segment) ? ':id' : segment))
+		.join('/')
+		.replace(/\/(invites|templates)\/[^/]+/g, '/$1/:code')
+		.replace(/\/reactions\/[^/]+/g, '/reactions/:emoji');
+
+	return { path, template };
 }
 
 function shouldTrace(deps: RestInstrumentDeps, source: TraceSource): boolean {
@@ -79,7 +110,7 @@ function recordRestMetrics(
 	start: number,
 	attributes: {
 		'http.request.method': string;
-		'url.path': string;
+		'url.template': string;
 		'http.response.status_code'?: number;
 		'seyfert.error': boolean;
 	},
@@ -91,11 +122,21 @@ function recordRestMetrics(
 	}
 }
 
-function markError(span: Span, error: unknown, message?: string): void {
+function markError(span: Span, error: unknown): void {
 	try {
-		const err = error instanceof Error ? error : new Error(message ?? String(error));
+		const err = error instanceof Error ? error : new Error(String(error));
 		span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+		span.setAttribute('error.type', err.name || 'Error');
 		span.recordException(err);
+	} catch {
+		// never throw from instrumentation
+	}
+}
+
+function markHttpError(span: Span, status: number): void {
+	try {
+		span.setStatus({ code: SpanStatusCode.ERROR });
+		span.setAttribute('error.type', String(status));
 	} catch {
 		// never throw from instrumentation
 	}
@@ -117,7 +158,9 @@ function setStatusAttribute(span: Span, status: number | undefined): void {
  * Correlation: observer payloads are frozen and `request` is deep-cloned per
  * notification, so WeakMap/Symbol on the payload cannot link onRequest →
  * onSuccess/onFail. In-flight spans are correlated with a FIFO queue keyed by
- * `method + url` (stable across the three callbacks for a given request).
+ * `method + url` (stable across the callbacks). Seyfert marks 502/503 retries
+ * with `_50xRetries`; those callbacks update the original logical span instead
+ * of opening an orphan attempt.
  */
 export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDeps): () => void {
 	const observe = api?.rest?.observe;
@@ -125,11 +168,11 @@ export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDep
 		return () => {};
 	}
 
-	/** In-flight CLIENT spans awaiting success/fail, FIFO per method+path. */
+	/** In-flight CLIENT spans awaiting success/fail, FIFO per method+raw path. */
 	const pending = new Map<string, PendingRest[]>();
 
 	const pushPending = (item: PendingRest): void => {
-		const key = flightKey(item.method, item.path);
+		const key = flightKey(item.method, item.rawPath);
 		const queue = pending.get(key);
 		if (queue) {
 			queue.push(item);
@@ -147,13 +190,32 @@ export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDep
 		return item;
 	};
 
+	const peekPending = (method: string, path: string): PendingRest | undefined =>
+		pending.get(flightKey(method, path))?.[0];
+
 	const disposer = observe({
 		onRequest(payload) {
 			try {
 				const method = String(payload.method);
-				const path = String(payload.url);
+				const rawPath = String(payload.url);
+				const { path, template } = sanitizeRestTarget(rawPath);
 				const source: TraceSource = { kind: 'rest', method, path };
 				if (!shouldTrace(deps, source)) return;
+
+				const retryValue = payload.request?._50xRetries;
+				const resendCount =
+					typeof retryValue === 'number' && Number.isInteger(retryValue) && retryValue > 0 ? retryValue : 0;
+				if (resendCount > 0) {
+					const active = peekPending(method, rawPath);
+					if (active) {
+						try {
+							active.span.setAttribute('http.request.resend_count', resendCount);
+						} catch {
+							// never throw from instrumentation
+						}
+						return;
+					}
+				}
 
 				const start = performance.now();
 				const span = getTracer().startSpan(`HTTP ${method}`, {
@@ -161,9 +223,11 @@ export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDep
 					attributes: {
 						'http.request.method': method,
 						'url.path': path,
+						'url.template': template,
+						...(resendCount > 0 ? { 'http.request.resend_count': resendCount } : {}),
 					},
 				});
-				pushPending({ span, start, method, path });
+				pushPending({ span, start, method, rawPath, template });
 			} catch {
 				// never throw from instrumentation into the request path
 			}
@@ -172,8 +236,8 @@ export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDep
 		onSuccess(payload) {
 			try {
 				const method = String(payload.method);
-				const path = String(payload.url);
-				const item = takePending(method, path);
+				const rawPath = String(payload.url);
+				const item = takePending(method, rawPath);
 				if (!item) return;
 
 				const { span, start } = item;
@@ -182,20 +246,15 @@ export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDep
 
 				try {
 					setStatusAttribute(span, status);
-					if (status !== undefined && status >= 500) {
-						span.setStatus({
-							code: SpanStatusCode.ERROR,
-							message: `HTTP ${status}`,
-						});
-					}
+					if (status !== undefined && status >= 400) markHttpError(span, status);
 				} catch {
 					// never throw from instrumentation
 				}
 
-				const isError = status !== undefined && status >= 500;
+				const isError = status !== undefined && status >= 400;
 				recordRestMetrics(deps, start, {
 					'http.request.method': method,
-					'url.path': path,
+					'url.template': item.template,
 					...(status !== undefined ? { 'http.response.status_code': status } : {}),
 					'seyfert.error': isError,
 				});
@@ -208,8 +267,8 @@ export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDep
 		onFail(payload) {
 			try {
 				const method = String(payload.method);
-				const path = String(payload.url);
-				const item = takePending(method, path);
+				const rawPath = String(payload.url);
+				const item = takePending(method, rawPath);
 				if (!item) return;
 
 				const { span, start } = item;
@@ -217,18 +276,16 @@ export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDep
 
 				try {
 					setStatusAttribute(span, status);
-					// ERROR on throw/network (no status) or HTTP >= 500; 4xx stays unset.
-					if (status === undefined || status >= 500) {
-						markError(span, payload.error, status !== undefined ? `HTTP ${status}` : undefined);
-					}
+					if (status === undefined) markError(span, payload.error);
+					else if (status >= 400) markHttpError(span, status);
 				} catch {
 					// never throw from instrumentation
 				}
 
-				const isError = status === undefined || status >= 500;
+				const isError = status === undefined || status >= 400;
 				recordRestMetrics(deps, start, {
 					'http.request.method': method,
-					'url.path': path,
+					'url.template': item.template,
 					...(status !== undefined ? { 'http.response.status_code': status } : {}),
 					'seyfert.error': isError,
 				});
@@ -241,8 +298,8 @@ export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDep
 		onRatelimit(payload) {
 			try {
 				const method = String(payload.method);
-				const path = String(payload.url);
-				const item = takePending(method, path);
+				const rawPath = String(payload.url);
+				const item = takePending(method, rawPath);
 				if (!item) return;
 
 				const { span, start } = item;
@@ -252,14 +309,15 @@ export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDep
 				setStatusAttribute(span, status);
 				try {
 					span.setAttribute('seyfert.rest.ratelimited', true);
+					if (status !== undefined && status >= 400) markHttpError(span, status);
 				} catch {
 					// never throw from instrumentation
 				}
 
-				const isError = status !== undefined && status >= 500;
+				const isError = status !== undefined && status >= 400;
 				recordRestMetrics(deps, start, {
 					'http.request.method': method,
-					'url.path': path,
+					'url.template': item.template,
 					...(status !== undefined ? { 'http.response.status_code': status } : {}),
 					'seyfert.error': isError,
 				});

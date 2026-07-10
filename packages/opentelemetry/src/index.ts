@@ -1,5 +1,3 @@
-import './seyfert';
-
 export { createTraceHandle, type TraceHandle } from './handle';
 export type {
 	InstrumentFlags,

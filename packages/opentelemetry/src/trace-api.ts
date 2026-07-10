@@ -24,18 +24,26 @@ export function getMeter() {
 	return metrics.getMeter(activeServiceName);
 }
 
-export type ActiveSpanArgs<F extends (span: Span) => unknown = (span: Span) => unknown> =
-	| [name: string, fn: F]
-	| [name: string, options: SpanOptions, fn: F]
-	| [name: string, options: SpanOptions, context: Context, fn: F];
+export type ActiveSpanArgs<T> =
+	| [name: string, fn: (span: Span) => T]
+	| [name: string, options: SpanOptions, fn: (span: Span) => T]
+	| [name: string, options: SpanOptions, context: Context, fn: (span: Span) => T];
 
-export type StartActiveSpan = (...args: ActiveSpanArgs) => unknown;
+export interface StartActiveSpan {
+	<T>(name: string, fn: (span: Span) => T): T;
+	<T>(name: string, options: SpanOptions, fn: (span: Span) => T): T;
+	<T>(name: string, options: SpanOptions, context: Context, fn: (span: Span) => T): T;
+}
 
-function createActiveSpanHandler(fn: (span: Span) => unknown) {
+function createActiveSpanHandler<T>(fn: (span: Span) => T): (span: Span) => T {
 	return function handler(span: Span) {
 		try {
 			const result = fn(span);
-			if (result !== null && typeof result === 'object' && typeof (result as Promise<unknown>).then === 'function') {
+			if (
+				result !== null &&
+				typeof result === 'object' &&
+				typeof (result as unknown as Promise<unknown>).then === 'function'
+			) {
 				return Promise.resolve(result).then(
 					value => {
 						span.end();
@@ -48,7 +56,7 @@ function createActiveSpanHandler(fn: (span: Span) => unknown) {
 						span.end();
 						throw rejectResult;
 					},
-				);
+				) as T;
 			}
 			span.end();
 			return result;
@@ -62,7 +70,7 @@ function createActiveSpanHandler(fn: (span: Span) => unknown) {
 	};
 }
 
-export const startActiveSpan: StartActiveSpan = (...args: ActiveSpanArgs) => {
+export const startActiveSpan: StartActiveSpan = (<T>(...args: ActiveSpanArgs<T>) => {
 	const tracer = getTracer();
 	switch (args.length) {
 		case 2:
@@ -72,7 +80,7 @@ export const startActiveSpan: StartActiveSpan = (...args: ActiveSpanArgs) => {
 		case 4:
 			return tracer.startActiveSpan(args[0], args[1], args[2], createActiveSpanHandler(args[3]));
 	}
-};
+}) as StartActiveSpan;
 
 /** Alias of {@link startActiveSpan}: auto-ends span; ERROR + recordException on throw/reject. */
 export const record = startActiveSpan;

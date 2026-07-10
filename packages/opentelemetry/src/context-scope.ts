@@ -1,6 +1,7 @@
 import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
 import type { ContextScope } from 'seyfert';
 import { extractInteractionAttributes, type InteractionKind, interactionSpanName } from './attributes';
+import { finishInteractionLifecycle } from './instrument/interactions';
 import { type CoreMetrics, durationSecondsSince } from './metrics';
 import type { TraceSource } from './options';
 import { getTracer } from './trace-api';
@@ -94,6 +95,7 @@ export function createInteractionContextScope(deps: InteractionScopeDeps): Conte
 
 		return tracer.startActiveSpan(name, { kind: SpanKind.INTERNAL, attributes }, span => {
 			const finish = (error?: unknown) => {
+				finishInteractionLifecycle(context, error);
 				if (error !== undefined) {
 					try {
 						const err = error instanceof Error ? error : new Error(String(error));
@@ -105,7 +107,16 @@ export function createInteractionContextScope(deps: InteractionScopeDeps): Conte
 				}
 				try {
 					deps.getMetrics()?.recordInteraction(durationSecondsSince(start), {
-						...attributes,
+						'seyfert.interaction.kind': kind,
+						...(typeof attributes['seyfert.command'] === 'string'
+							? { 'seyfert.command': attributes['seyfert.command'] }
+							: {}),
+						...(typeof attributes['seyfert.custom_id'] === 'string'
+							? { 'seyfert.custom_id': attributes['seyfert.custom_id'] }
+							: {}),
+						...(typeof attributes['seyfert.shard_id'] === 'number'
+							? { 'seyfert.shard_id': attributes['seyfert.shard_id'] }
+							: {}),
 						'seyfert.error': error !== undefined,
 					});
 				} catch {

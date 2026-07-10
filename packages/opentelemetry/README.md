@@ -11,6 +11,8 @@ Full-surface [OpenTelemetry](https://opentelemetry.io/) for [Seyfert](https://se
 
 The plugin auto-starts a `NodeSDK` when no real tracer provider is registered yet. If you already preload an SDK, the plugin reuses that provider and only installs instrumentation.
 
+`teardown` is terminal for a plugin instance because OpenTelemetry processors and exporters are shut down with the SDK. Create a fresh `opentelemetry(...)` instance (and fresh processor/exporter instances) for a new client lifecycle; calling `setup` again on a torn-down instance throws instead of silently dropping telemetry.
+
 ## Install
 
 ```bash
@@ -42,8 +44,6 @@ const plugins = definePlugins(
   }),
 );
 
-const client = new Client({ plugins });
-
 // Type the plugin map so `client.trace` / `ctx.trace` resolve correctly
 declare module 'seyfert' {
   interface SeyfertRegistry {
@@ -51,10 +51,12 @@ declare module 'seyfert' {
   }
 }
 
+const client = new Client({ plugins });
+
 await client.start();
 ```
 
-`OpenTelemetryPluginOptions` extends NodeSDK constructor options (`spanProcessors`, `traceExporter`, `metricReaders`, `instrumentations`, …) plus plugin-specific fields below. Those SDK fields are applied only when this plugin owns the `NodeSDK`.
+`OpenTelemetryPluginOptions` extends NodeSDK constructor options (`spanProcessors`, `traceExporter`, `metricReader`, `instrumentations`, …) plus plugin-specific fields below. Those SDK fields are applied only when this plugin owns the `NodeSDK`.
 
 ### Options
 
@@ -190,16 +192,19 @@ Attributes are set only when values are available. Sensitive data is never captu
 | Attribute | Description |
 | --- | --- |
 | `http.request.method` | HTTP method |
-| `url.path` | Request path/url from Seyfert (no auth headers/bodies) |
+| `url.path` | URI path with Discord webhook/interaction tokens redacted and query omitted |
+| `url.template` | Low-cardinality Discord route template (`/channels/:id/messages`) |
 | `http.response.status_code` | Response status when known |
+| `http.request.resend_count` | 502/503 resend count when Seyfert retries |
+| `error.type` | HTTP status or exception type for failed client operations |
 
-**Span name:** `HTTP {METHOD}`. Status `>= 500` or thrown failures set span status `ERROR`; 4xx is recorded as attributes without forcing ERROR.
+**Span name:** `HTTP {METHOD}`. HTTP 4xx/5xx and thrown client failures set span status `ERROR`. Seyfert 502/503 retries stay on one logical span and update `http.request.resend_count`.
 
 ### Cache
 
 | Attribute | Description |
 | --- | --- |
-| `seyfert.cache.op` | Adapter method (`get`, `set`, `remove`, `patch`, bulk variants, …) |
+| `seyfert.cache.op` | Any Seyfert adapter data method (`get`, `scan`, `values`, relationships, bulk variants, …) |
 | `seyfert.cache.resource` | Resource namespace derived from the key |
 | `seyfert.cache.hit` | On `get`, whether the result was non-nullish |
 
@@ -217,9 +222,9 @@ Four duration histograms (unit `s`) on the meter named `serviceName`. Instrument
 
 | Instrument | Unit | Typical attributes |
 | --- | --- | --- |
-| `seyfert.interaction.duration` | s | interaction kind, command/custom_id, `seyfert.error` |
+| `seyfert.interaction.duration` | s | interaction kind, command/custom_id when known, shard, `seyfert.error` |
 | `seyfert.event.duration` | s | `seyfert.event.name`, `seyfert.error` |
-| `seyfert.rest.duration` | s | method, path, status, `seyfert.error` |
+| `seyfert.rest.duration` | s | method, low-cardinality URL template, status, `seyfert.error` |
 | `seyfert.cache.operation.duration` | s | op, resource, hit (when applicable), `seyfert.error` |
 
 For custom metrics, use `getMeter()` and the global meter provider (works whether or not this plugin owns the SDK).
@@ -253,11 +258,11 @@ By default the plugin **never** puts on spans:
 - **Authorization** (or cookie) headers
 - Other secrets from Discord HTTP traffic
 
-Only structural metadata (methods, paths, ids, status codes, resource names) is recorded. Prefer `checkIfShouldTrace` if certain paths or custom ids must not appear at all.
+REST query strings are omitted, Discord webhook/interaction tokens are replaced with `REDACTED`, and metric dimensions use low-cardinality route templates. User, guild, channel, and interaction IDs remain span-only attributes; `custom_id` is intentionally included in interaction metrics. Prefer `checkIfShouldTrace` if certain paths, IDs, or custom IDs must not appear in telemetry at all.
 
 ## Limitations
 
-- **REST FIFO correlation:** Concurrent Discord REST calls that share the same `method + path` are correlated with a FIFO queue (Seyfert observer payloads cannot carry a request id). Completions are assumed to finish in request order for a given route; out-of-order completion for the same route can attach status/duration to the wrong span. Distinct routes are unaffected.
+- **REST FIFO correlation:** Concurrent Discord REST calls that share the same `method + path` are correlated with a FIFO queue (Seyfert observer payloads cannot carry a request id). Completions are assumed to finish in request order for a given route; out-of-order completion for the same route can attach status/duration to the wrong span. Seyfert 502/503 retries are recognized through `_50xRetries` and remain on the original logical span. Distinct routes are unaffected.
 
 ## Inspiration
 

@@ -8,6 +8,7 @@ import {
 	type RestObserverRatelimitPayload,
 	type RestObserverRequestPayload,
 	type RestObserverSuccessPayload,
+	sanitizeRestTarget,
 } from '../src/instrument/rest';
 import { setTraceServiceName } from '../src/trace-api';
 import { installTestTracer } from './helpers/otel-test-provider.mts';
@@ -93,7 +94,33 @@ function assertNoSensitiveAttributes(attrs: Record<string, unknown>): void {
 	for (const key of keys) {
 		assert.ok(!/authori[sz]ation|token|cookie|password|secret/i.test(key), `attributes key looks sensitive: ${key}`);
 	}
+	const serialized = JSON.stringify(attrs);
+	for (const secret of ['super-secret-token', 'Bot.leaked', 'SUPER_SECRET_WEBHOOK_TOKEN']) {
+		assert.ok(!serialized.includes(secret), `attributes leaked sensitive value "${secret}"`);
+	}
 }
+
+describe('sanitizeRestTarget', () => {
+	test('redacts Discord tokens, drops queries, and templates snowflakes', () => {
+		assert.deepEqual(sanitizeRestTarget('/webhooks/123/SUPER_SECRET_WEBHOOK_TOKEN?wait=true'), {
+			path: '/webhooks/123/REDACTED',
+			template: '/webhooks/:id/:token',
+		});
+		assert.deepEqual(sanitizeRestTarget('/interactions/456/interaction-secret/callback'), {
+			path: '/interactions/456/REDACTED/callback',
+			template: '/interactions/:id/:token/callback',
+		});
+		assert.deepEqual(sanitizeRestTarget('/channels/123/messages/456'), {
+			path: '/channels/123/messages/456',
+			template: '/channels/:id/messages/:id',
+		});
+		assert.equal(sanitizeRestTarget('/invites/user-controlled-code').template, '/invites/:code');
+		assert.equal(
+			sanitizeRestTarget('/channels/123/messages/456/reactions/name%3A789/@me').template,
+			'/channels/:id/messages/:id/reactions/:emoji/@me',
+		);
+	});
+});
 
 describe('instrumentRest (api.rest.observe)', () => {
 	test('success → CLIENT span + status', async () => {
@@ -123,6 +150,7 @@ describe('instrumentRest (api.rest.observe)', () => {
 			assert.equal(spans[0].kind, SpanKind.CLIENT);
 			assert.equal(spans[0].attributes['http.request.method'], 'GET');
 			assert.equal(spans[0].attributes['url.path'], '/users/@me');
+			assert.equal(spans[0].attributes['url.template'], '/users/@me');
 			assert.equal(spans[0].attributes['http.response.status_code'], 200);
 			assert.equal(spans[0].status.code, SpanStatusCode.UNSET);
 			assertNoSensitiveAttributes(spans[0].attributes as Record<string, unknown>);
@@ -189,7 +217,7 @@ describe('instrumentRest (api.rest.observe)', () => {
 		});
 	});
 
-	test('fail with 4xx → status attribute without ERROR', async () => {
+	test('fail with 4xx → CLIENT ERROR status', async () => {
 		await withProvider(async exporter => {
 			const { api, getObserver } = fakeRestApi();
 			const cleanup = instrumentRest(api, {
@@ -211,7 +239,45 @@ describe('instrumentRest (api.rest.observe)', () => {
 			const spans = exporter.getFinishedSpans();
 			assert.equal(spans.length, 1);
 			assert.equal(spans[0].attributes['http.response.status_code'], 404);
-			assert.equal(spans[0].status.code, SpanStatusCode.UNSET);
+			assert.equal(spans[0].status.code, SpanStatusCode.ERROR);
+			assert.equal(spans[0].attributes['error.type'], '404');
+
+			cleanup();
+		});
+	});
+
+	test('redacts webhook tokens before filtering, tracing, and metrics', async () => {
+		await withProvider(async exporter => {
+			const sources: unknown[] = [];
+			const recorded: Record<string, unknown>[] = [];
+			const { api, getObserver } = fakeRestApi();
+			const cleanup = instrumentRest(api, {
+				checkIfShouldTrace: source => {
+					sources.push(source);
+					return true;
+				},
+				getMetrics: () => ({
+					recordInteraction() {},
+					recordEvent() {},
+					recordRest(_duration, attributes) {
+						recorded.push(attributes as Record<string, unknown>);
+					},
+					recordCache() {},
+				}),
+			});
+
+			const url = '/webhooks/123/SUPER_SECRET_WEBHOOK_TOKEN?wait=true';
+			const observer = getObserver()!;
+			await observer.onRequest!(requestPayload({ method: 'POST', url }));
+			await observer.onSuccess!(successPayload({ method: 'POST', url, response: { status: 204 } }));
+
+			assert.deepEqual(sources, [{ kind: 'rest', method: 'POST', path: '/webhooks/123/REDACTED' }]);
+			const span = exporter.getFinishedSpans()[0];
+			assert.equal(span.attributes['url.path'], '/webhooks/123/REDACTED');
+			assert.equal(span.attributes['url.template'], '/webhooks/:id/:token');
+			assert.equal(recorded[0]['url.template'], '/webhooks/:id/:token');
+			assertNoSensitiveAttributes(span.attributes as Record<string, unknown>);
+			assertNoSensitiveAttributes(recorded[0]);
 
 			cleanup();
 		});
@@ -282,7 +348,7 @@ describe('instrumentRest (api.rest.observe)', () => {
 			assertNoSensitiveAttributes(spans[0].attributes as Record<string, unknown>);
 			// Only expected attribute keys
 			const keys = Object.keys(spans[0].attributes).sort();
-			assert.deepEqual(keys, ['http.request.method', 'http.response.status_code', 'url.path']);
+			assert.deepEqual(keys, ['http.request.method', 'http.response.status_code', 'url.path', 'url.template']);
 
 			cleanup();
 		});
@@ -350,13 +416,38 @@ describe('instrumentRest (api.rest.observe)', () => {
 			assert.equal(recorded.length, 1);
 			assert.ok(recorded[0].duration >= 0);
 			assert.equal(recorded[0].attrs['http.request.method'], 'GET');
-			assert.equal(recorded[0].attrs['url.path'], '/gateway/bot');
+			assert.equal(recorded[0].attrs['url.template'], '/gateway/bot');
 			assert.equal(recorded[0].attrs['http.response.status_code'], 200);
 			assert.equal(recorded[0].attrs['seyfert.error'], false);
 			assertNoSensitiveAttributes(recorded[0].attrs);
 			assert.equal(exporter.getFinishedSpans().length, 1);
 
 			cleanup();
+		});
+	});
+
+	test('502/503 retries update one logical span instead of orphaning attempts', async () => {
+		await withProvider(async exporter => {
+			const { api, getObserver } = fakeRestApi();
+			const cleanup = instrumentRest(api, {
+				checkIfShouldTrace: () => true,
+				getMetrics: () => undefined,
+			});
+
+			const observer = getObserver()!;
+			const url = '/gateway/bot';
+			await observer.onRequest!(requestPayload({ method: 'GET', url }));
+			await observer.onRequest!(
+				requestPayload({ method: 'GET', url, request: Object.freeze({ auth: true, _50xRetries: 1 }) }),
+			);
+			await observer.onSuccess!(successPayload({ method: 'GET', url, response: { status: 200 } }));
+
+			const spans = exporter.getFinishedSpans();
+			assert.equal(spans.length, 1);
+			assert.equal(spans[0].attributes['http.request.resend_count'], 1);
+			assert.equal(spans[0].attributes['http.response.status_code'], 200);
+			cleanup();
+			assert.equal(exporter.getFinishedSpans().length, 1);
 		});
 	});
 
@@ -430,6 +521,7 @@ describe('instrumentRest (api.rest.observe)', () => {
 			assert.equal(spans.length, 2);
 			assert.equal(spans[0].attributes['http.response.status_code'], 429);
 			assert.equal(spans[0].attributes['seyfert.rest.ratelimited'], true);
+			assert.equal(spans[0].status.code, SpanStatusCode.ERROR);
 			assert.equal(spans[1].attributes['http.response.status_code'], 200);
 
 			cleanup();

@@ -86,6 +86,12 @@ function annotateRootError(error: unknown): void {
 	}
 }
 
+/** End any lifecycle child that is still open when the root interaction scope exits. */
+export function finishInteractionLifecycle(context: unknown, error?: unknown): void {
+	if (error !== undefined) failChild(context, error);
+	endChild(context);
+}
+
 function safeHook<A extends unknown[]>(fn: (...args: A) => void): (...args: A) => void {
 	return (...args: A) => {
 		try {
@@ -143,8 +149,13 @@ function createCommandHooks(deps: InteractionInstrumentDeps) {
 		}),
 		onOptionsError: safeHook((context: unknown) => {
 			if (!shouldTrace(deps, 'command', context)) return;
-			failChild(context, new Error('options validation failed'));
+			const error = new Error('options validation failed');
+			failChild(context, error);
 			endChild(context);
+			annotateRootError(error);
+		}),
+		onInternalError: safeHook((_client: unknown, _command: unknown, error: unknown) => {
+			if (error !== undefined && error !== null) annotateRootError(error);
 		}),
 	};
 }
@@ -174,6 +185,9 @@ function createComponentHooks(kind: 'component' | 'modal', deps: InteractionInst
 			failChild(context, error);
 			endChild(context);
 			annotateRootError(error);
+		}),
+		onInternalError: safeHook((_client: unknown, _command: unknown, error: unknown) => {
+			if (error !== undefined && error !== null) annotateRootError(error);
 		}),
 	};
 }

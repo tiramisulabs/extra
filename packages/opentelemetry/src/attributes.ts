@@ -17,7 +17,11 @@ function getNumber(value: unknown): number | undefined {
 const CUSTOM_ID_MAX = 64;
 
 export function truncate(value: string, max: number): string {
-	return value.length <= max ? value : `${value.slice(0, max)}…`;
+	const characters = Array.from(value);
+	if (characters.length <= max) return value;
+	if (max <= 0) return '';
+	if (max === 1) return '…';
+	return `${characters.slice(0, max - 1).join('')}…`;
 }
 
 export function extractInteractionAttributes(kind: InteractionKind, context: unknown): Attributes {
