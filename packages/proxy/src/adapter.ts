@@ -7,6 +7,15 @@ import {
 	type us_listen_socket,
 } from 'uWebSockets.js';
 import { ApiHandler, type HttpMethods, type RawFile } from 'seyfert';
+import { isMultipartContentType, parseJsonObject, parseMultipartBody } from './parsing';
+
+function writeBadRequest(res: HttpResponse, message: string) {
+	if (!res.aborted)
+		res.cork(() => {
+			res.writeStatus('400').writeHeader('content-type', 'application/json').end(JSON.stringify({ message }));
+		});
+}
+
 export function createProxy(options: {
 	token: string;
 	port: number;
@@ -38,29 +47,26 @@ export function createProxy(options: {
 			return;
 		}
 		let body: undefined | Record<string, unknown>;
-		const files: RawFile[] = [];
+		let files: RawFile[] = [];
 		const method = <HttpMethods>req.getMethod().toUpperCase();
 		const query = new URLSearchParams(req.getQuery());
 		const path = <`/${string}`>req.getUrl().slice(sliceLength);
 		const reason = req.getHeader('x-audit-log-reason');
 		if (method !== 'GET' && method !== 'DELETE') {
 			const contentType = req.getHeader('content-type');
-			if (contentType.includes('multipart/form-data')) {
-				const form = await readBody(res, req);
+			if (isMultipartContentType(contentType)) {
+				const form = await readBody(res, req, contentType);
 				if (form) {
-					for (let i = 0; i < form.length; i++) {
-						const field = form[i];
-						if (field.name === 'payload_json') {
-							body = JSON.parse(Buffer.from(field.data).toString());
-						} else {
-							files.push({
-								filename: field.filename!,
-								data: field.data,
-							});
-						}
-					}
+					const parsed = parseMultipartBody(form);
+					if (!parsed.ok) return writeBadRequest(res, parsed.message);
+					body = parsed.body;
+					files = parsed.files;
 				}
-			} else body = await readJson(res);
+			} else {
+				const parsed = parseJsonObject(await readBuffer(res));
+				if (!parsed.ok) return writeBadRequest(res, parsed.message);
+				body = parsed.value;
+			}
 		}
 		try {
 			const result = await rest.request(method, path, {
@@ -119,8 +125,7 @@ export async function readJson<T extends Record<string, any>>(res: HttpResponse)
 	return JSON.parse(buffer.toString());
 }
 
-export async function readBody(res: HttpResponse, req: HttpRequest) {
-	const contentType = req.getHeader('content-type');
+export async function readBody(res: HttpResponse, req: HttpRequest, contentType = req.getHeader('content-type')) {
 	const buffer = await readBuffer(res);
 	return getParts(buffer, contentType);
 }

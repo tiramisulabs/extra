@@ -1,5 +1,15 @@
 packages:
   - packages/*
 
+allowBuilds:
+  esbuild: true
+  protobufjs: true
+  seyfert: true
+
+minimumReleaseAgeExclude:
+  - seyfert
+
 onlyBuiltDependencies:
   - esbuild
+  - protobufjs
+  - seyfert
