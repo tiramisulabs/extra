@@ -12,6 +12,7 @@ import {
 	scheduler,
 } from '../src';
 import { parseDuration } from '../src/duration';
+import { createFakeBullMQ } from './fake-bullmq';
 
 class FakeCronerJob {
 	paused: boolean;
@@ -58,109 +59,8 @@ function createFakeCroner() {
 	return { factory, jobs };
 }
 
-function createFakeBullMQ() {
-	const state = {
-		jobs: new Map<string, { id: string; name: string; data?: Record<string, unknown>; repeatJobKey?: string }>(),
-		jobSchedulers: [] as Array<{ id: string }>,
-		queueEvents: [] as FakeQueueEvents[],
-		queues: [] as FakeQueue[],
-		workers: [] as FakeWorker[],
-	};
-
-	class FakeQueue {
-		adds: Array<{ name: string; data: Record<string, unknown>; options: Record<string, unknown> }> = [];
-		closed = false;
-		schedulers: Array<{ id: string; repeat: Record<string, unknown>; template: Record<string, unknown> }> = [];
-		removed: string[] = [];
-
-		constructor(
-			readonly name: string,
-			readonly options: Record<string, unknown> = {},
-		) {
-			state.queues.push(this);
-		}
-
-		upsertJobScheduler(id: string, repeat: Record<string, unknown>, template: Record<string, unknown>) {
-			this.schedulers.push({ id, repeat, template });
-		}
-
-		add(name: string, data: Record<string, unknown>, options: Record<string, unknown>) {
-			this.adds.push({ name, data, options });
-			const id = String(options.jobId ?? `${name}:${this.adds.length}`);
-			const job = { id, name, data };
-			state.jobs.set(id, job);
-			return job;
-		}
-
-		getJobSchedulers() {
-			return state.jobSchedulers;
-		}
-
-		removeJobScheduler(id: string) {
-			this.removed.push(id);
-		}
-
-		close() {
-			this.closed = true;
-		}
-	}
-
-	class FakeQueueEvents {
-		closed = false;
-		listeners = new Map<string, ((payload: Record<string, unknown>) => void)[]>();
-
-		constructor(
-			readonly name: string,
-			readonly options: Record<string, unknown> = {},
-		) {
-			state.queueEvents.push(this);
-		}
-
-		on(event: string, listener: (payload: Record<string, unknown>) => void) {
-			this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]);
-		}
-
-		emit(event: string, payload: Record<string, unknown>) {
-			for (const listener of this.listeners.get(event) ?? []) listener(payload);
-		}
-
-		close() {
-			this.closed = true;
-		}
-	}
-
-	class FakeWorker {
-		closed = false;
-
-		constructor(
-			readonly name: string,
-			readonly processor: (job: { name: string; data?: Record<string, unknown> }) => unknown,
-			readonly options: Record<string, unknown> = {},
-		) {
-			state.workers.push(this);
-		}
-
-		close() {
-			this.closed = true;
-		}
-	}
-
-	return {
-		module: {
-			Job: {
-				fromId: (_queue: unknown, id: string) => state.jobs.get(id) ?? null,
-			},
-			Queue: FakeQueue,
-			QueueEvents: FakeQueueEvents,
-			Worker: FakeWorker,
-		},
-		state,
-	};
-}
-
 async function flushMicrotasks() {
-	await Promise.resolve();
-	await Promise.resolve();
+	for (let index = 0; index < 100; index += 1) await Promise.resolve();
 }
 
 function waitForEvent<TEvent extends SchedulerEventName>(registry: SchedulerRegistry, event: TEvent) {
@@ -547,6 +447,212 @@ describe('scheduler', () => {
 		]);
 	});
 
+	test('counts a persistent run once when QueueEvents active arrives before the local processor', async () => {
+		const bullmq = createFakeBullMQ();
+		const registry = createScheduler({
+			driver: persistent({ bullmq: bullmq.module }),
+		});
+		const task = registry.interval('heartbeat', '30s', () => 'ok');
+
+		await registry.setup({ initialized: true });
+		bullmq.state.jobs.set('heartbeat-job', {
+			data: { taskId: 'heartbeat' },
+			id: 'heartbeat-job',
+			name: 'heartbeat',
+		});
+		bullmq.state.queueEvents[0]!.emit('active', { jobId: 'heartbeat-job' });
+		await flushMicrotasks();
+		await bullmq.state.workers[0]!.processor({
+			data: { taskId: 'heartbeat' },
+			id: 'heartbeat-job',
+			name: 'heartbeat',
+		});
+
+		assert.equal(task.runCount, 1);
+		await registry.close();
+	});
+
+	test('ignores duplicate and late QueueEvents after the local processor completes', async () => {
+		const bullmq = createFakeBullMQ();
+		const registry = createScheduler({
+			driver: persistent({ bullmq: bullmq.module }),
+		});
+		const task = registry.interval('heartbeat', '30s', () => 'ok');
+		let started = 0;
+		let completed = 0;
+		registry.on('started', () => {
+			started += 1;
+		});
+		registry.on('completed', () => {
+			completed += 1;
+		});
+
+		await registry.setup({ initialized: true });
+		await bullmq.state.workers[0]!.processor({
+			data: { taskId: 'heartbeat' },
+			id: 'heartbeat-job',
+			name: 'heartbeat',
+		});
+		bullmq.state.queueEvents[0]!.emit('waiting', { jobId: 'heartbeat-job' });
+		bullmq.state.queueEvents[0]!.emit('active', { jobId: 'heartbeat-job', name: 'heartbeat' });
+		bullmq.state.queueEvents[0]!.emit('active', { jobId: 'heartbeat-job', name: 'heartbeat' });
+		bullmq.state.queueEvents[0]!.emit('completed', { jobId: 'heartbeat-job', name: 'heartbeat' });
+		bullmq.state.queueEvents[0]!.emit('completed', { jobId: 'heartbeat-job', name: 'heartbeat' });
+		await flushMicrotasks();
+
+		assert.equal(task.runCount, 1);
+		assert.equal(started, 1);
+		assert.equal(completed, 1);
+		await registry.close();
+	});
+
+	test('ignores duplicate failed events after the local processor rejects', async () => {
+		const bullmq = createFakeBullMQ();
+		const registry = createScheduler({
+			driver: persistent({ bullmq: bullmq.module }),
+		});
+		const task = registry.interval('cleanup', '30s', () => {
+			throw new Error('boom');
+		});
+		let failed = 0;
+		registry.on('failed', () => {
+			failed += 1;
+		});
+
+		await registry.setup({ initialized: true });
+		await assertRejects(
+			() =>
+				Promise.resolve(
+					bullmq.state.workers[0]!.processor({
+						data: { taskId: 'cleanup' },
+						id: 'cleanup-job',
+						name: 'cleanup',
+					}),
+				),
+			/boom/,
+		);
+		bullmq.state.queueEvents[0]!.emit('failed', { failedReason: 'boom', jobId: 'cleanup-job', name: 'cleanup' });
+		bullmq.state.queueEvents[0]!.emit('failed', { failedReason: 'boom', jobId: 'cleanup-job', name: 'cleanup' });
+		bullmq.state.queueEvents[0]!.emit('active', { jobId: 'cleanup-job', name: 'cleanup' });
+		await flushMicrotasks();
+
+		assert.equal(task.runCount, 1);
+		assert.equal(failed, 1);
+		await registry.close();
+	});
+
+	test('counts a BullMQ retry with the same job id as a new run', async () => {
+		const bullmq = createFakeBullMQ();
+		let attempts = 0;
+		const registry = createScheduler({
+			driver: persistent({ bullmq: bullmq.module }),
+		});
+		const task = registry.interval('cleanup', '30s', () => {
+			attempts += 1;
+			if (attempts === 1) throw new Error('retry me');
+			return 'ok';
+		});
+		let started = 0;
+		registry.on('started', () => {
+			started += 1;
+		});
+
+		await registry.setup({ initialized: true });
+		const job = { attemptsMade: 0, data: { taskId: 'cleanup' }, id: 'cleanup-job', name: 'cleanup' };
+		bullmq.state.jobs.set(job.id, job);
+		bullmq.state.queueEvents[0]!.emit('active', { jobId: 'cleanup-job', prev: 'waiting' });
+		await flushMicrotasks();
+		await assertRejects(() => Promise.resolve(bullmq.state.workers[0]!.processor(job)), /retry me/);
+		bullmq.state.queueEvents[0]!.emit('waiting', { jobId: 'cleanup-job', prev: 'active' });
+		bullmq.state.queueEvents[0]!.emit('active', { jobId: 'cleanup-job', prev: 'waiting' });
+		await flushMicrotasks();
+		job.attemptsMade = 1;
+		await bullmq.state.workers[0]!.processor(job);
+
+		assert.equal(task.runCount, 2);
+		assert.equal(started, 2);
+		assert.equal(task.status, 'completed');
+		await registry.close();
+	});
+
+	test('keeps local retry state when QueueEvents catches up after both attempts', async () => {
+		const bullmq = createFakeBullMQ();
+		let attempts = 0;
+		const registry = createScheduler({
+			driver: persistent({ bullmq: bullmq.module }),
+		});
+		const task = registry.interval('cleanup', '30s', () => {
+			attempts += 1;
+			if (attempts === 1) throw new Error('retry me');
+			return 'ok';
+		});
+		let started = 0;
+		registry.on('started', () => {
+			started += 1;
+		});
+
+		await registry.setup({ initialized: true });
+		const job = { attemptsMade: 0, data: { taskId: 'cleanup' }, id: 'cleanup-job', name: 'cleanup' };
+		bullmq.state.jobs.set(job.id, job);
+		await assertRejects(() => Promise.resolve(bullmq.state.workers[0]!.processor(job)), /retry me/);
+		job.attemptsMade = 1;
+		await bullmq.state.workers[0]!.processor(job);
+
+		bullmq.state.queueEvents[0]!.emit('active', { jobId: 'cleanup-job', prev: 'waiting' });
+		bullmq.state.queueEvents[0]!.emit('waiting', { jobId: 'cleanup-job', prev: 'active' });
+		bullmq.state.queueEvents[0]!.emit('active', { jobId: 'cleanup-job', prev: 'waiting' });
+		bullmq.state.queueEvents[0]!.emit('completed', { jobId: 'cleanup-job', returnvalue: 'ok' });
+		await flushMicrotasks();
+
+		assert.equal(task.runCount, 2);
+		assert.equal(started, 2);
+		assert.equal(task.status, 'completed');
+		await registry.close();
+	});
+
+	test('serializes async QueueEvents for a reprocessed job', async () => {
+		const bullmq = createFakeBullMQ();
+		const registry = createScheduler({
+			driver: persistent({ bullmq: bullmq.module }),
+		});
+		const task = registry.interval('cleanup', '30s', () => 'ok');
+		let started = 0;
+		let completed = 0;
+		registry.on('started', () => {
+			started += 1;
+		});
+		registry.on('completed', () => {
+			completed += 1;
+		});
+
+		await registry.setup({ initialized: true });
+		bullmq.state.jobs.set('cleanup-job', {
+			data: { taskId: 'cleanup' },
+			id: 'cleanup-job',
+			name: 'cleanup',
+		});
+		bullmq.state.queueEvents[0]!.emit('active', { jobId: 'cleanup-job' });
+		await flushMicrotasks();
+
+		let releaseLookup: (() => void) | undefined;
+		bullmq.state.jobLookupGate = new Promise<void>(resolve => {
+			releaseLookup = resolve;
+		});
+		bullmq.state.queueEvents[0]!.emit('completed', { jobId: 'cleanup-job', returnvalue: 'first' });
+		bullmq.state.queueEvents[0]!.emit('waiting', { jobId: 'cleanup-job', prev: 'completed' });
+		bullmq.state.queueEvents[0]!.emit('active', { jobId: 'cleanup-job' });
+		releaseLookup?.();
+		await flushMicrotasks();
+		await flushMicrotasks();
+		await flushMicrotasks();
+
+		assert.equal(task.runCount, 2);
+		assert.equal(task.status, 'running');
+		assert.equal(started, 2);
+		assert.equal(completed, 1);
+		await registry.close();
+	});
+
 	test('persistent setup rejects after close without reopening resources', async () => {
 		const bullmq = createFakeBullMQ();
 		const registry = createScheduler({
@@ -561,6 +667,96 @@ describe('scheduler', () => {
 		assert.equal(bullmq.state.queues.length, 1);
 		assert.equal(bullmq.state.queueEvents.length, 1);
 		assert.equal(bullmq.state.workers.length, 1);
+	});
+
+	test('persistent setup rolls back partial resources and can retry', async () => {
+		const bullmq = createFakeBullMQ();
+		const registry = createScheduler({
+			driver: persistent({ bullmq: bullmq.module }),
+		});
+		registry.interval('heartbeat', '30s', () => undefined);
+		bullmq.state.failUpserts = 1;
+
+		await assertRejects(() => registry.setup({ initialized: true }), /upsert failed/);
+		assert.equal(bullmq.state.queues[0]!.closed, true);
+		assert.equal(bullmq.state.queueEvents[0]!.closed, true);
+		assert.equal(bullmq.state.workers[0]!.closed, true);
+
+		await registry.setup({ initialized: true });
+		assert.equal(bullmq.state.queues.length, 2);
+		assert.equal(bullmq.state.queues[1]!.closed, false);
+		await registry.close();
+	});
+
+	test('persistent setup coalesces concurrent callers', async () => {
+		const bullmq = createFakeBullMQ();
+		const registry = createScheduler({
+			driver: persistent({ bullmq: bullmq.module }),
+		});
+		registry.interval('heartbeat', '30s', () => undefined);
+
+		await Promise.all([registry.setup({ initialized: true }), registry.setup({ initialized: true })]);
+		assert.equal(bullmq.state.queues.length, 1);
+		assert.equal(bullmq.state.queueEvents.length, 1);
+		assert.equal(bullmq.state.workers.length, 1);
+		await registry.close();
+	});
+
+	test('persistent close coalesces callers and rejects setup while resources are closing', async () => {
+		const bullmq = createFakeBullMQ();
+		const registry = createScheduler({
+			driver: persistent({ bullmq: bullmq.module }),
+		});
+		registry.interval('heartbeat', '30s', () => undefined);
+		await registry.setup({ initialized: true });
+
+		let releaseClose: (() => void) | undefined;
+		bullmq.state.closeGate = new Promise<void>(resolve => {
+			releaseClose = resolve;
+		});
+		let secondCloseResolved = false;
+		const firstClose = registry.close();
+		const secondClose = registry.close().then(() => {
+			secondCloseResolved = true;
+		});
+		await flushMicrotasks();
+
+		assert.equal(secondCloseResolved, false);
+		await assertRejects(() => registry.setup({ initialized: true }), /has been stopped/);
+		releaseClose?.();
+		await Promise.all([firstClose, secondClose]);
+		assert.equal(bullmq.state.queues[0]!.closed, true);
+		assert.equal(bullmq.state.queueEvents[0]!.closed, true);
+		assert.equal(bullmq.state.workers[0]!.closed, true);
+	});
+
+	test('persistent close drains queued terminal events before closing Queue', async () => {
+		const bullmq = createFakeBullMQ();
+		const registry = createScheduler({
+			driver: persistent({ bullmq: bullmq.module }),
+		});
+		const task = registry.interval('heartbeat', '30s', () => undefined);
+		let completed = 0;
+		registry.on('completed', () => {
+			completed += 1;
+		});
+		await registry.setup({ initialized: true });
+		bullmq.state.jobs.set('heartbeat-job', {
+			data: { taskId: 'heartbeat' },
+			id: 'heartbeat-job',
+			name: 'heartbeat',
+		});
+
+		bullmq.state.queueEvents[0]!.emit('completed', {
+			jobId: 'heartbeat-job',
+			returnvalue: 'ok',
+		});
+		await registry.close();
+
+		assert.equal(task.status, 'completed');
+		assert.equal(task.runCount, 1);
+		assert.equal(completed, 1);
+		assert.equal(bullmq.state.queues[0]!.closed, true);
 	});
 
 	test('persistent pause removes the job scheduler and resume re-upserts its template', async () => {
@@ -585,22 +781,43 @@ describe('scheduler', () => {
 		assert.equal((await resumed).task.id, 'daily');
 	});
 
-	test('persistent runImmediately enqueues one immediate job per setup version', async () => {
+	test('persistent runImmediately deduplicates a start wave and runs again after its window', async () => {
 		const bullmq = createFakeBullMQ();
-		const registry = createScheduler({
-			driver: persistent({ bullmq: bullmq.module }),
+		const createRegistry = () => {
+			const registry = createScheduler({
+				driver: persistent({ bullmq: bullmq.module, immediateRunDeduplicationMs: 1_000 }),
+			});
+			registry.interval('boot', '30s', () => undefined, { runImmediately: true });
+			return registry;
+		};
+		const first = createRegistry();
+		const second = createRegistry();
+
+		await first.setup({ initialized: true });
+		await second.setup({ initialized: true });
+		assert.equal(bullmq.state.acceptedJobs.length, 1);
+		assert.deepEqual(bullmq.state.queues[0]!.adds[0]!.options, {
+			deduplication: { id: 'slipher:scheduler:immediate:boot', ttl: 1_000 },
+			delay: 0,
 		});
+		assert.equal('jobId' in bullmq.state.queues[0]!.adds[0]!.options, false);
 
-		registry.interval('boot', '30s', () => undefined, { runImmediately: true });
-		await registry.setup({ initialized: true });
+		bullmq.state.now = 1_001;
+		const nextWave = createRegistry();
+		await nextWave.setup({ initialized: true });
+		assert.equal(bullmq.state.acceptedJobs.length, 2);
+		assert.notEqual(bullmq.state.acceptedJobs[0]!.id, bullmq.state.acceptedJobs[1]!.id);
 
-		assert.deepEqual(bullmq.state.queues[0]!.adds, [
-			{
-				name: 'boot',
-				data: { taskId: 'boot' },
-				options: { delay: 0, jobId: 'boot:immediate:1' },
-			},
-		]);
+		await first.close();
+		await second.close();
+		await nextWave.close();
+	});
+
+	test('persistent validates the immediate run deduplication window', () => {
+		const bullmq = createFakeBullMQ();
+		for (const immediateRunDeduplicationMs of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+			assert.throws(() => persistent({ bullmq: bullmq.module, immediateRunDeduplicationMs }), /positive integer/);
+		}
 	});
 
 	test('persistent setup warns about or purges orphaned schedulers', async () => {
@@ -649,6 +866,9 @@ describe('scheduler', () => {
 		});
 
 		await assertRejects(() => registry.setup({ initialized: true }), /requires explicit task ids.*Tasks\.implicit/);
+		assert.equal(bullmq.state.queues.length, 0);
+		assert.equal(bullmq.state.queueEvents.length, 0);
+		assert.equal(bullmq.state.workers.length, 0);
 	});
 
 	test('parses human interval durations for scheduler definitions', () => {

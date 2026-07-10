@@ -54,12 +54,19 @@ export class ScheduledTask {
 	}
 }
 
-export async function runTask(task: ScheduledTask, host?: SchedulerHost, nextRun?: () => Date | null | undefined) {
-	task.status = 'running';
-	task.runCount += 1;
-	task.lastRunAt = new Date();
-	task.lastError = undefined;
-	host?.emit('started', { task });
+export async function runTask(
+	task: ScheduledTask,
+	host?: SchedulerHost,
+	nextRun?: () => Date | null | undefined,
+	options: { alreadyStarted?: boolean } = {},
+) {
+	if (!options.alreadyStarted) {
+		task.status = 'running';
+		task.runCount += 1;
+		task.lastRunAt = new Date();
+		task.lastError = undefined;
+		host?.emit('started', { task });
+	}
 
 	try {
 		const result = await task.runner(task);

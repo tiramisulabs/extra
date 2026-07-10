@@ -63,18 +63,6 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
-  packages/internal:
-    devDependencies:
-      '@types/node':
-        specifier: ^25.0.10
-        version: 25.0.10
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.0.18
-        version: 4.0.18(@types/node@25.0.10)
-
   packages/proxy:
     dependencies:
       seyfert:
@@ -116,24 +104,12 @@ importers:
         specifier: ^9.1.0
         version: 9.1.0
     devDependencies:
-      '@slipher/types':
-        specifier: workspace:*
-        version: link:../types
       '@types/node':
         specifier: ^25.0.10
         version: 25.0.10
       seyfert:
         specifier: github:tiramisulabs/seyfert#main
         version: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/abce1db08b9d63eb24b28313037359d365a2e8bc
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-
-  packages/types:
-    devDependencies:
-      '@biomejs/biome':
-        specifier: 2.3.11
-        version: 2.3.11
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

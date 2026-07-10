@@ -14,6 +14,8 @@ import type {
 	SchedulerHost,
 } from '../types';
 
+const MAX_TRACKED_JOB_STATES = 10_000;
+
 export function persistent(options: PersistentSchedulerOptions = {}) {
 	return new PersistentSchedulerDriver(options);
 }
@@ -27,15 +29,21 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 	private readonly bullmq: BullMQModule;
 	private readonly queueName: string;
 	private readonly queueOptions: Record<string, unknown>;
+	private readonly activeJobIds = new Set<string>();
 	private readonly jobTaskIds = new Map<string, string>();
-	private readonly localQueueEventJobIds = new Set<string>();
-	private readonly mirroredQueueEventStartedJobIds = new Set<string>();
+	private readonly localJobAttempts = new Map<string, number>();
+	private readonly queueEventActiveJobIds = new Set<string>();
+	private readonly queueEventAttempts = new Map<string, number>();
+	private readonly terminalJobStates = new Map<string, 'completed' | 'failed'>();
+	private readonly immediateRunDeduplicationMs: number;
 	private readonly purgeOrphansOnStartup: boolean;
+	private closePromise?: Promise<void>;
 	private queue?: BullMQQueue;
+	private queueEventChain = Promise.resolve();
 	private queueEvents?: BullMQQueueEvents;
-	private schedulerVersion = 0;
+	private setupPromise?: Promise<void>;
 	private host?: SchedulerHost;
-	private state: 'pending' | 'ready' | 'closed' = 'pending';
+	private state: 'pending' | 'setting-up' | 'ready' | 'closing' | 'closed' = 'pending';
 	private worker?: BullMQWorker;
 
 	constructor(options: PersistentSchedulerOptions) {
@@ -43,6 +51,10 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 		this.queueName = options.queueName ?? 'slipher:scheduler';
 		this.queueOptions = createBullMQOptions(options);
 		this.host = options.logger ? { emit: () => undefined, logger: options.logger } : undefined;
+		this.immediateRunDeduplicationMs = options.immediateRunDeduplicationMs ?? 60_000;
+		if (!Number.isSafeInteger(this.immediateRunDeduplicationMs) || this.immediateRunDeduplicationMs <= 0) {
+			throw new RangeError('Scheduler immediate run deduplication window must be a positive integer');
+		}
 		this.purgeOrphansOnStartup = options.purgeOrphansOnStartup === true;
 	}
 
@@ -50,25 +62,15 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 		this.host = host;
 	}
 
-	async setup(client?: SchedulerClientLike) {
-		if (this.state === 'ready') return;
-		if (this.state === 'closed') throw new Error('Scheduler persistent driver has been stopped.');
-		this.state = 'ready';
-		this.schedulerVersion += 1;
-		this.queue = new this.bullmq.Queue(this.queueName, this.queueOptions);
-		this.worker = new this.bullmq.Worker(this.queueName, job => this.process(job, client), this.queueOptions);
-		if (this.bullmq.QueueEvents) {
-			this.queueEvents = new this.bullmq.QueueEvents(this.queueName, this.queueOptions);
-			this.wireQueueEvents();
+	setup(client?: SchedulerClientLike) {
+		if (this.closePromise || this.state === 'closing' || this.state === 'closed') {
+			return Promise.reject(new Error('Scheduler persistent driver has been stopped.'));
 		}
+		if (this.state === 'ready') return Promise.resolve();
+		if (this.setupPromise) return this.setupPromise;
 
-		this.enforceExplicitIds();
-		await this.detectOrphans();
-
-		for (const task of this.tasks.values()) {
-			await this.upsertTaskScheduler(task);
-			if (task.runImmediately) await this.enqueueImmediateRun(task);
-		}
+		this.setupPromise = this.initialize(client);
+		return this.setupPromise;
 	}
 
 	schedule(definition: ScheduledTaskDefinition) {
@@ -103,16 +105,28 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 		this.templates.delete(id);
 	}
 
-	async close() {
-		await this.worker?.close?.();
-		await this.queueEvents?.close?.();
-		await this.queue?.close?.();
-		this.worker = undefined;
-		this.queueEvents = undefined;
-		this.queue = undefined;
-		this.localQueueEventJobIds.clear();
-		this.mirroredQueueEventStartedJobIds.clear();
+	close() {
+		if (this.closePromise) return this.closePromise;
+		if (this.state === 'closed') return Promise.resolve();
+
+		this.state = 'closing';
+		this.closePromise = this.shutdown();
+		return this.closePromise;
+	}
+
+	private async shutdown() {
+		if (this.setupPromise) {
+			try {
+				await this.setupPromise;
+			} catch {
+				// initialize() already rolled back any resources it opened.
+			}
+		}
+
+		const errors = await this.closeResources();
 		this.state = 'closed';
+		this.closePromise = undefined;
+		if (errors.length) throw new AggregateError(errors, 'Scheduler persistent driver failed to close');
 	}
 
 	private async process(job: BullMQJob, client?: SchedulerClientLike) {
@@ -132,9 +146,87 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 			throw new Error(`Scheduler task "${taskId}" is not registered`);
 		}
 
-		if (this.queueEvents && jobId) this.localQueueEventJobIds.add(jobId);
+		if (!this.queueEvents || !jobId) return runTask(task, this.host);
 
-		return runTask(task, this.queueEvents ? undefined : this.host);
+		this.markLocalAttempt(jobId, job);
+		this.startJob(task, eventRecord(job));
+		try {
+			const result = await runTask(task, undefined, undefined, { alreadyStarted: true });
+			this.activeJobIds.delete(jobId);
+			this.rememberTerminalJobState(jobId, 'completed');
+			this.host?.emit('completed', { task, result });
+			return result;
+		} catch (error) {
+			this.activeJobIds.delete(jobId);
+			this.rememberTerminalJobState(jobId, 'failed');
+			this.host?.emit('failed', { task, error });
+			throw error;
+		}
+	}
+
+	private async initialize(client?: SchedulerClientLike) {
+		try {
+			this.enforceExplicitIds();
+			this.state = 'setting-up';
+			this.queue = new this.bullmq.Queue(this.queueName, this.queueOptions);
+			this.worker = new this.bullmq.Worker(this.queueName, job => this.process(job, client), this.queueOptions);
+			if (this.bullmq.QueueEvents) {
+				this.queueEvents = new this.bullmq.QueueEvents(this.queueName, this.queueOptions);
+				this.wireQueueEvents();
+			}
+
+			await this.detectOrphans();
+			for (const task of this.tasks.values()) {
+				await this.upsertTaskScheduler(task);
+				if (task.runImmediately) await this.enqueueImmediateRun(task);
+			}
+			if (!this.closePromise) this.state = 'ready';
+		} catch (error) {
+			const cleanupErrors = await this.closeResources();
+			this.state = cleanupErrors.length ? 'closed' : 'pending';
+			if (cleanupErrors.length) {
+				throw new AggregateError(
+					[error, ...cleanupErrors],
+					'Scheduler persistent driver setup failed and cleanup was incomplete',
+				);
+			}
+			throw error;
+		} finally {
+			this.setupPromise = undefined;
+		}
+	}
+
+	private async closeResources() {
+		const errors: unknown[] = [];
+		const worker = this.worker;
+		const queueEvents = this.queueEvents;
+		const queue = this.queue;
+		this.worker = undefined;
+		this.queueEvents = undefined;
+
+		for (const resource of [worker, queueEvents]) {
+			try {
+				await resource?.close?.();
+			} catch (error) {
+				errors.push(error);
+			}
+		}
+		await this.queueEventChain;
+		try {
+			await queue?.close?.();
+		} catch (error) {
+			errors.push(error);
+		} finally {
+			if (this.queue === queue) this.queue = undefined;
+		}
+
+		this.activeJobIds.clear();
+		this.jobTaskIds.clear();
+		this.localJobAttempts.clear();
+		this.queueEventActiveJobIds.clear();
+		this.queueEventAttempts.clear();
+		this.terminalJobStates.clear();
+		return errors;
 	}
 
 	private dispatchSchedulerWrite(task: ScheduledTask, write: () => Awaitable<unknown>) {
@@ -180,8 +272,11 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 			task.id,
 			{ taskId: task.id },
 			{
+				deduplication: {
+					id: `slipher:scheduler:immediate:${task.id}`,
+					ttl: this.immediateRunDeduplicationMs,
+				},
 				delay: 0,
-				jobId: `${task.id}:immediate:${this.schedulerVersion}`,
 			},
 		);
 		this.rememberJobTaskId(result, task.id);
@@ -221,24 +316,37 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 
 	private wireQueueEvents() {
 		this.queueEvents?.on?.('active', event => {
-			void this.emitQueueEventStarted(event);
+			this.enqueueQueueEvent(() => this.emitQueueEventStarted(event));
 		});
 		this.queueEvents?.on?.('completed', event => {
-			void this.emitQueueEventCompleted(event);
+			this.enqueueQueueEvent(() => this.emitQueueEventCompleted(event));
 		});
 		this.queueEvents?.on?.('failed', event => {
-			void this.emitQueueEventFailed(event);
+			this.enqueueQueueEvent(() => this.emitQueueEventFailed(event));
 		});
+		this.queueEvents?.on?.('waiting', event => {
+			this.enqueueQueueEvent(() => this.markJobWaiting(event));
+		});
+	}
+
+	private enqueueQueueEvent(run: () => Promise<void> | void) {
+		this.queueEventChain = this.queueEventChain
+			.then(run, run)
+			.catch(error => this.reportQueueEventFailure('lifecycle', error));
 	}
 
 	private async emitQueueEventStarted(event: unknown) {
 		try {
 			const record = eventRecord(event);
-			const task = await this.taskFromQueueEvent(record);
-			if (task) {
-				if (this.shouldMirrorQueueEventState(record)) this.markQueueEventStarted(task, record);
-				this.host?.emit('started', { task });
+			const jobId = jobIdFromRecord(record);
+			if (jobId) {
+				this.rememberQueueEventActiveJob(jobId);
+				const attempt = (this.queueEventAttempts.get(jobId) ?? -1) + 1;
+				this.queueEventAttempts.set(jobId, attempt);
+				if ((this.localJobAttempts.get(jobId) ?? -1) >= attempt) return;
 			}
+			const task = await this.taskFromQueueEvent(record);
+			if (task) this.startJob(task, record);
 		} catch (error) {
 			this.reportQueueEventFailure('active', error);
 		}
@@ -248,11 +356,9 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 		try {
 			const record = eventRecord(event);
 			const task = await this.taskFromQueueEvent(record);
-			if (task) {
-				if (this.shouldMirrorQueueEventState(record)) this.markQueueEventCompleted(task, record);
-				this.host?.emit('completed', { task, result: record.returnvalue });
-			}
-			this.clearQueueEventJob(record);
+			if (task) this.completeJob(task, record, record.returnvalue);
+			this.forgetQueueEventActiveJob(record);
+			this.forgetCaughtUpAttempts(record);
 		} catch (error) {
 			this.reportQueueEventFailure('completed', error);
 		}
@@ -263,59 +369,118 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 			const record = eventRecord(event);
 			const task = await this.taskFromQueueEvent(record);
 			const failure = new Error(String(record.failedReason ?? 'failed'));
-			if (task) {
-				if (this.shouldMirrorQueueEventState(record)) this.markQueueEventFailed(task, record, failure);
-				this.host?.emit('failed', { task, error: failure });
-			}
-			this.clearQueueEventJob(record);
+			if (task) this.failJob(task, record, failure);
+			this.forgetQueueEventActiveJob(record);
+			this.forgetCaughtUpAttempts(record);
 		} catch (error) {
 			this.reportQueueEventFailure('failed', error);
 		}
 	}
 
-	private shouldMirrorQueueEventState(record: Record<string, unknown>) {
+	private markJobWaiting(event: unknown) {
+		const record = eventRecord(event);
 		const jobId = jobIdFromRecord(record);
-		return !jobId || !this.localQueueEventJobIds.has(jobId);
+		if (!jobId) return;
+
+		const isRetry =
+			record.prev === 'active' ||
+			record.prev === 'failed' ||
+			record.prev === 'completed' ||
+			(record.prev === 'delayed' && this.queueEventActiveJobIds.has(jobId));
+		const localAttempt = this.localJobAttempts.get(jobId) ?? -1;
+		const queueEventAttempt = this.queueEventAttempts.get(jobId) ?? -1;
+		if (isRetry && localAttempt <= queueEventAttempt) {
+			this.activeJobIds.delete(jobId);
+			this.terminalJobStates.delete(jobId);
+		}
 	}
 
-	private markQueueEventStarted(task: ScheduledTask, record: Record<string, unknown>) {
-		const jobId = jobIdFromRecord(record);
-		if (jobId && this.mirroredQueueEventStartedJobIds.has(jobId)) return;
+	private markLocalAttempt(jobId: string, job: BullMQJob) {
+		if (!Number.isSafeInteger(job.attemptsMade) || job.attemptsMade! < 0) return;
 
-		if (jobId) this.mirroredQueueEventStartedJobIds.add(jobId);
+		const attempt = job.attemptsMade!;
+		const previousAttempt = this.localJobAttempts.get(jobId);
+		if (previousAttempt !== undefined && attempt <= previousAttempt) return;
+
+		this.localJobAttempts.set(jobId, attempt);
+		if ((this.queueEventAttempts.get(jobId) ?? -1) >= attempt) return;
+		this.activeJobIds.delete(jobId);
+		this.terminalJobStates.delete(jobId);
+	}
+
+	private rememberQueueEventActiveJob(jobId: string) {
+		this.queueEventActiveJobIds.add(jobId);
+	}
+
+	private forgetQueueEventActiveJob(record: Record<string, unknown>) {
+		const jobId = jobIdFromRecord(record);
+		if (jobId) this.queueEventActiveJobIds.delete(jobId);
+	}
+
+	private forgetCaughtUpAttempts(record: Record<string, unknown>) {
+		const jobId = jobIdFromRecord(record);
+		if (!jobId) return;
+
+		const localAttempt = this.localJobAttempts.get(jobId) ?? -1;
+		const queueEventAttempt = this.queueEventAttempts.get(jobId) ?? -1;
+		if (queueEventAttempt < localAttempt) return;
+		this.localJobAttempts.delete(jobId);
+		this.queueEventAttempts.delete(jobId);
+	}
+
+	private startJob(task: ScheduledTask, record: Record<string, unknown>, emit = true) {
+		const jobId = jobIdFromRecord(record);
+		if (jobId && (this.activeJobIds.has(jobId) || this.terminalJobStates.has(jobId))) return false;
+
+		if (jobId) this.activeJobIds.add(jobId);
 		task.status = 'running';
 		task.runCount += 1;
 		task.lastRunAt = new Date();
 		task.lastError = undefined;
+		if (emit) this.host?.emit('started', { task });
+		return true;
 	}
 
-	private markQueueEventCompleted(task: ScheduledTask, record: Record<string, unknown>) {
-		this.markQueueEventFinished(task, record);
+	private completeJob(task: ScheduledTask, record: Record<string, unknown>, result: unknown) {
+		if (!this.finishJob(task, record, 'completed')) return;
 		task.status = 'completed';
 		task.lastError = undefined;
+		this.host?.emit('completed', { task, result });
 	}
 
-	private markQueueEventFailed(task: ScheduledTask, record: Record<string, unknown>, error: Error) {
-		this.markQueueEventFinished(task, record);
+	private failJob(task: ScheduledTask, record: Record<string, unknown>, error: Error) {
+		if (!this.finishJob(task, record, 'failed')) return;
 		task.status = 'failed';
 		task.lastError = error;
+		this.host?.emit('failed', { task, error });
 	}
 
-	private markQueueEventFinished(task: ScheduledTask, record: Record<string, unknown>) {
+	private finishJob(task: ScheduledTask, record: Record<string, unknown>, state: 'completed' | 'failed') {
 		const jobId = jobIdFromRecord(record);
 		if (jobId) {
-			if (!this.mirroredQueueEventStartedJobIds.has(jobId)) this.markQueueEventStarted(task, record);
-			return;
+			if (this.terminalJobStates.has(jobId)) return false;
+			if (!this.activeJobIds.has(jobId)) this.startJob(task, record, false);
+			this.activeJobIds.delete(jobId);
+			this.rememberTerminalJobState(jobId, state);
+			return true;
 		}
 
-		if (task.status !== 'running') this.markQueueEventStarted(task, record);
+		if (task.status !== 'running') this.startJob(task, record, false);
+		return true;
 	}
 
-	private clearQueueEventJob(record: Record<string, unknown>) {
-		const jobId = jobIdFromRecord(record);
-		if (!jobId) return;
-		this.localQueueEventJobIds.delete(jobId);
-		this.mirroredQueueEventStartedJobIds.delete(jobId);
+	private rememberTerminalJobState(jobId: string, state: 'completed' | 'failed') {
+		this.terminalJobStates.delete(jobId);
+		this.terminalJobStates.set(jobId, state);
+		if (this.terminalJobStates.size <= MAX_TRACKED_JOB_STATES) return;
+
+		const oldestJobId = this.terminalJobStates.keys().next().value;
+		if (oldestJobId) {
+			this.terminalJobStates.delete(oldestJobId);
+			this.localJobAttempts.delete(oldestJobId);
+			this.queueEventActiveJobIds.delete(oldestJobId);
+			this.queueEventAttempts.delete(oldestJobId);
+		}
 	}
 
 	private async taskFromQueueEvent(event: unknown) {
@@ -366,8 +531,10 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 	}
 
 	private requireQueue() {
+		if (this.state === 'closing' || this.state === 'closed') {
+			throw new Error('Scheduler persistent driver has been stopped.');
+		}
 		if (this.queue) return this.queue;
-		if (this.state === 'closed') throw new Error('Scheduler persistent driver has been stopped.');
 		throw new Error('Scheduler persistent driver is not initialized; await client.start() before using it.');
 	}
 }

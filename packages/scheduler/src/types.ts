@@ -130,6 +130,7 @@ export type CronerFactory = (
 export interface PersistentSchedulerOptions {
 	bullmq?: BullMQModule;
 	connection?: unknown;
+	immediateRunDeduplicationMs?: number;
 	prefix?: string;
 	purgeOrphansOnStartup?: boolean;
 	queueName?: string;
@@ -171,6 +172,7 @@ export interface BullMQQueueEvents {
 }
 
 export interface BullMQJob {
+	attemptsMade?: number;
 	id?: string;
 	name: string;
 	data?: Record<string, unknown>;

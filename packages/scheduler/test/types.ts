@@ -1,4 +1,3 @@
-import type { SchedulerLike } from '@slipher/types';
 import {
 	type Client,
 	type CommandContext,
@@ -9,7 +8,7 @@ import {
 	type UsingClient,
 	type WorkerClient,
 } from 'seyfert';
-import { createScheduler, memory, persistent, type ScheduledTask, type SchedulerRegistry, scheduler } from '../src';
+import { createScheduler, memory, persistent, type SchedulerRegistry, scheduler } from '../src';
 
 declare function expectType<T>(value: T): void;
 declare const context: CommandContext;
@@ -38,7 +37,6 @@ expectType<SchedulerRegistry>(pluginClient.scheduler);
 
 createScheduler({ driver: memory() });
 scheduler({ driver: memory() });
-expectType<SchedulerLike<ScheduledTask>>(createScheduler({ driver: memory() }));
 expectType<Promise<void>>(createScheduler({ driver: memory() }).resume('task'));
 
 // @ts-expect-error scheduler driver is required

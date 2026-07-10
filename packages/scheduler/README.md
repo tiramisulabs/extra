@@ -27,7 +27,7 @@ pnpm add bullmq@^5.23.0
 Pick the driver explicitly:
 
 ```ts
-import { Client, definePlugins, type RegisterPlugins } from 'seyfert';
+import { Client, definePlugins } from 'seyfert';
 import { Interval, memory, scheduler } from '@slipher/scheduler';
 
 class MaintenanceTasks {
@@ -44,7 +44,9 @@ const schedulerPlugin = scheduler({
 const plugins = definePlugins(schedulerPlugin);
 
 declare module 'seyfert' {
-	interface Register extends RegisterPlugins<typeof plugins> {}
+	interface SeyfertRegistry {
+		plugins: typeof plugins;
+	}
 }
 
 export const registry = schedulerPlugin.registry;
@@ -162,7 +164,7 @@ const registry = createScheduler({
 For a Seyfert bot, create the plugin, register it on the client, and start the client so plugin setup opens Redis/BullMQ resources:
 
 ```ts
-import { Client, definePlugins, type RegisterPlugins } from 'seyfert';
+import { Client, definePlugins } from 'seyfert';
 import { persistent, scheduler } from '@slipher/scheduler';
 
 const schedulerPlugin = scheduler({
@@ -174,7 +176,9 @@ const schedulerPlugin = scheduler({
 const plugins = definePlugins(schedulerPlugin);
 
 declare module 'seyfert' {
-	interface Register extends RegisterPlugins<typeof plugins> {}
+	interface SeyfertRegistry {
+		plugins: typeof plugins;
+	}
 }
 
 const client = new Client({
@@ -204,7 +208,16 @@ On startup, the persistent driver compares Redis job schedulers against register
 
 `pause(id)` removes the BullMQ job scheduler. `resume(id)` re-creates it with the captured template and emits `resumed`. `start(id)` remains as a compatibility alias for `resume(id)`.
 
-`runImmediately: true` runs the task once at setup (deduplicated across replicas in the same start wave), then on its normal schedule.
+`runImmediately: true` runs the task once at setup, then on its normal schedule. Persistent drivers deduplicate immediate jobs across replicas that start within the same 60-second window. Configure `immediateRunDeduplicationMs` when a deployment wave needs a different window:
+
+```ts
+persistent({
+	connection,
+	immediateRunDeduplicationMs: 30_000,
+});
+```
+
+A restart inside that positive-integer window belongs to the same wave and does not enqueue another immediate run. A restart after the window expires starts a new wave.
 
 ## Events
 
@@ -217,6 +230,6 @@ registry.on('completed', ({ task, result }) => {
 
 Supported events: `scheduled`, `started`, `completed`, `failed`, `paused`, `resumed`, and `removed`.
 
-With `memory()`, events are in-process. With `persistent()`, `started`, `completed`, and `failed` come from BullMQ `QueueEvents`, so every replica listening on the registry sees the cluster-level task outcome. `QueueEvents` uses one extra Redis connection per scheduler queue per replica.
+With `memory()`, events are in-process. With `persistent()`, the worker emits lifecycle events immediately in the replica running the task, while BullMQ `QueueEvents` mirrors the same outcome to the other replicas without duplicating it locally. `QueueEvents` uses one extra Redis connection per scheduler queue per replica.
 
 Listener errors are isolated and reported through the configured logger.
