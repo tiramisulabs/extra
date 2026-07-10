@@ -4,5 +4,8 @@ packages:
 allowBuilds:
   esbuild: true
 
+minimumReleaseAgeExclude:
+  - seyfert
+
 onlyBuiltDependencies:
   - esbuild
