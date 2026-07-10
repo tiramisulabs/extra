@@ -1,0 +1,24 @@
+{
+	"compilerOptions": {
+		"module": "ESNext",
+		"moduleResolution": "Bundler",
+		"target": "ESNext",
+		"lib": [
+			"ESNext"
+		],
+		"types": [
+			"node"
+		],
+		"experimentalDecorators": true,
+		"emitDecoratorMetadata": true,
+		"strict": true,
+		"esModuleInterop": true,
+		"skipLibCheck": true,
+		"noEmit": true
+	},
+	"include": [
+		"fixtures/**/*.ts",
+		"_*.ts",
+		"*.test.mts"
+	]
+}
