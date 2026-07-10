@@ -1,18 +1,16 @@
 import { initLogger } from 'evlog';
-import { Logger as SeyfertLogger } from 'seyfert';
-import { LogLevels } from 'seyfert/lib/common';
+import { LogLevels, Logger as SeyfertLogger } from 'seyfert';
 import { assert, describe, test } from 'vitest';
 import {
 	ConsoleLoggerAdapter,
-	evlogTransport,
 	createLogger,
-	pinoAdapter,
+	evlogTransport,
 	extractSeyfertLogContext,
 	type LogEntry,
 	type LoggerAdapter,
 	logger,
+	pinoAdapter,
 	type RootLogger,
-	runInLoggerScope,
 	useLogger,
 	type WideEventLogger,
 	withLoggerScope,
@@ -75,11 +73,22 @@ function commandContext(loggerInstance: WideEventLogger) {
 function getLoggerPluginOptions(plugin: LoggerPlugin) {
 	const fragment = (plugin.options?.({} as never) ?? {}) as Record<string, unknown>;
 	const defaults = { commands: {}, components: {}, modals: {} };
+	let transform: ((instance: object, metadata: { kind: 'command' | 'component' | 'modal' }) => unknown) | undefined;
 	plugin.register?.({
-		commands: { defaults: (h: object) => Object.assign(defaults.commands, h) },
+		commands: {
+			observe: (observer: object) => Object.assign(defaults.commands, observer),
+			defaults: () => undefined,
+		},
 		components: { defaults: (h: object) => Object.assign(defaults.components, h) },
 		modals: { defaults: (h: object) => Object.assign(defaults.modals, h) },
+		handlers: {
+			transform: (handler: typeof transform) => {
+				transform = handler;
+			},
+		},
 	} as never);
+	transform?.(defaults.components, { kind: 'component' });
+	transform?.(defaults.modals, { kind: 'modal' });
 	return {
 		...fragment,
 		commands: { defaults: defaults.commands },
@@ -95,7 +104,7 @@ function getLoggerContext(plugin: LoggerPlugin, source: unknown): { logger: Wide
 }
 
 describe('logger plugin', () => {
-	test('returns a Seyfert plugin with context and lifecycle defaults', () => {
+	test('returns a Seyfert plugin with lifecycle observers and instrumentation', () => {
 		const plugin: LoggerPlugin = logger({ renderer: new RecordingAdapter() });
 		const options = getLoggerPluginOptions(plugin);
 
@@ -275,6 +284,22 @@ describe('logger plugin', () => {
 		assert.equal(adapter.entries[0].data.command, 'admin ban');
 	});
 
+	test('middleware stops are recorded as denials, not runtime errors', async () => {
+		const adapter = new RecordingAdapter();
+		const plugin = logger({ renderer: adapter });
+		const options = getLoggerPluginOptions(plugin);
+		const extension = getLoggerContext(plugin, { id: 'interaction-1' });
+
+		await options.commands?.defaults?.onMiddlewaresError?.(commandContext(extension.logger), 'owner only', {} as never);
+
+		assert.equal(adapter.entries.length, 1);
+		assert.equal(adapter.entries[0].level, 'warn');
+		assert.equal(adapter.entries[0].message, 'command middleware denied');
+		assert.equal(adapter.entries[0].data.outcome, 'denied');
+		assert.equal(adapter.entries[0].data.reason, 'owner only');
+		assert.equal('error' in adapter.entries[0].data, false);
+	});
+
 	test('setup installs the logger on Seyfert subsystems and cleans up on teardown', async () => {
 		const adapter = new RecordingAdapter();
 		const plugin = logger({ renderer: adapter });
@@ -351,10 +376,31 @@ describe('logger plugin', () => {
 		assert.throws(() => useLogger(), /before the @slipher\/logger plugin is set up/);
 	});
 
+	test('out-of-order teardown keeps the newest active logger installed', async () => {
+		const firstAdapter = new RecordingAdapter();
+		const secondAdapter = new RecordingAdapter();
+		const first = logger({ renderer: firstAdapter });
+		const second = logger({ renderer: secondAdapter });
+		const firstClient = { commands: {}, components: {}, events: {}, langs: {}, cache: {} };
+		const secondClient = { commands: {}, components: {}, events: {}, langs: {}, cache: {} };
+
+		await first.setup?.(firstClient);
+		await second.setup?.(secondClient);
+		await first.teardown?.(firstClient);
+		await useLogger().info('still active');
+
+		assert.equal(firstAdapter.entries.length, 0);
+		assert.equal(secondAdapter.entries[0].message, 'still active');
+
+		await second.teardown?.(secondClient);
+		assert.throws(() => useLogger(), /before the @slipher\/logger plugin is set up/);
+	});
+
 	test('useLogger works outside an interaction scope, immediate and as a one-off wide event', async () => {
 		const adapter = new RecordingAdapter();
 		const plugin = logger({ renderer: adapter });
-		await plugin.setup?.({ commands: {}, components: {}, events: {}, langs: {}, cache: {} });
+		const client = { commands: {}, components: {}, events: {}, langs: {}, cache: {} };
+		await plugin.setup?.(client);
 
 		await useLogger().info('ready');
 		assert.equal(adapter.entries[0].message, 'ready');
@@ -368,25 +414,15 @@ describe('logger plugin', () => {
 		assert.equal(adapter.entries[1].data.source, 'event');
 		assert.equal(adapter.entries[1].data.interactionId, 'interaction-1');
 		assert.equal(adapter.entries[1].data.outcome, 'success');
-	});
 
-	test('runInLoggerScope binds an event so useLogger() resolves to it', () => {
-		const adapter = new RecordingAdapter();
-		const root = createLogger({ renderer: adapter });
-		const event = root.event({ kind: 'job' });
-
-		runInLoggerScope(event, () => {
-			assert.equal(useLogger(), event);
-			useLogger().add({ jobId: 'job-1' });
-		});
-
-		assert.equal(event.currentContext.jobId, 'job-1');
+		await plugin.teardown?.(client);
 	});
 
 	test('withLoggerScope scopes a unit of work and emits one wide event on success', async () => {
 		const adapter = new RecordingAdapter();
 		const plugin = logger({ renderer: adapter });
-		await plugin.setup?.({ commands: {}, components: {}, events: {}, langs: {}, cache: {} });
+		const client = { commands: {}, components: {}, events: {}, langs: {}, cache: {} };
+		await plugin.setup?.(client);
 
 		const result = await withLoggerScope({ kind: 'job', jobId: 'job-1' }, () => {
 			useLogger().add({ processed: 2 });
@@ -399,12 +435,15 @@ describe('logger plugin', () => {
 		assert.equal(adapter.entries[0].data.jobId, 'job-1');
 		assert.equal(adapter.entries[0].data.processed, 2);
 		assert.equal(adapter.entries[0].data.outcome, 'success');
+
+		await plugin.teardown?.(client);
 	});
 
 	test('withLoggerScope emits an error wide event and rethrows on failure', async () => {
 		const adapter = new RecordingAdapter();
 		const plugin = logger({ renderer: adapter });
-		await plugin.setup?.({ commands: {}, components: {}, events: {}, langs: {}, cache: {} });
+		const client = { commands: {}, components: {}, events: {}, langs: {}, cache: {} };
+		await plugin.setup?.(client);
 		const boom = new Error('boom');
 
 		let thrown: unknown;
@@ -420,6 +459,8 @@ describe('logger plugin', () => {
 		assert.equal(adapter.entries.length, 1);
 		assert.equal(adapter.entries[0].data.outcome, 'error');
 		assert.equal(adapter.entries[0].data.error, boom);
+
+		await plugin.teardown?.(client);
 	});
 
 	test('setup routes Seyfert internal logs through the adapter and preserves existing customizers', async () => {
@@ -431,14 +472,16 @@ describe('logger plugin', () => {
 			chained.push([self.name, level, args]);
 			return args;
 		});
+		const plugin = logger({ renderer: adapter, now: () => new Date('2026-05-29T10:00:00.000Z') });
+		const client = { commands: {}, components: {}, events: {}, langs: {}, cache: {} };
 
 		try {
-			const plugin = logger({ renderer: adapter, now: () => new Date('2026-05-29T10:00:00.000Z') });
-			await plugin.setup?.({ commands: {}, components: {}, events: {}, langs: {}, cache: {} });
+			await plugin.setup?.(client);
 
 			new SeyfertLogger({ name: '[API]', active: true }).info('identify', { requestId: 'req-1' });
 			new SeyfertLogger({ name: '[Gateway]', active: true }).error('lost shard', new Error('socket closed'));
 		} finally {
+			await plugin.teardown?.(client);
 			SeyfertLogger.customize((_self, _level, args) => args);
 			console.log = originalLog;
 		}
@@ -876,6 +919,20 @@ describe('createLogger', () => {
 			assert.deepEqual(sink.entries[0].bindings, { shardId: 2 });
 			assert.equal(sink.flushes, 1);
 		}
+	});
+
+	test('flush waits for writes that are still in flight', async () => {
+		const adapter = new BlockingAdapter();
+		const root = createLogger({ renderer: adapter });
+
+		const write = root.info('pending');
+		const flush = root.flush();
+		await Promise.resolve();
+
+		assert.equal(adapter.flushes, 0);
+		adapter.release();
+		await Promise.all([write, flush]);
+		assert.equal(adapter.flushes, 1);
 	});
 
 	test('a throwing transport does not stop the others', async () => {

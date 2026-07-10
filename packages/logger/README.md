@@ -21,7 +21,7 @@ Requires Seyfert v5.
 Install the plugin once on the client:
 
 ```ts
-import { Client, definePlugins, type RegisterPlugins } from 'seyfert';
+import { Client, definePlugins } from 'seyfert';
 import { logger } from '@slipher/logger';
 
 const loggerPlugin = logger({
@@ -35,7 +35,9 @@ const client = new Client({
 });
 
 declare module 'seyfert' {
-	interface Register extends RegisterPlugins<typeof plugins> {}
+	interface SeyfertRegistry {
+		plugins: typeof plugins;
+	}
 }
 ```
 
@@ -55,7 +57,8 @@ declare module 'seyfert' {
 The plugin attaches a `WideEventLogger` to every command, component, and modal context as `ctx.logger`, and drives its lifecycle for you:
 
 - `onBeforeMiddlewares` / `onBeforeOptions` write immediate `debug` breadcrumbs.
-- A middleware, option, permission, or runtime failure emits **one** wide event with `outcome: 'error'` (or `'denied'`) at the point it happens.
+- A middleware that calls `stop()` or `stop(null)` emits **one** wide event with `outcome: 'skipped'`.
+- Middleware and permission denials emit **one** wide event with `outcome: 'denied'`; option and runtime failures use `outcome: 'error'`.
 - A successful run emits **one** wide event with `outcome: 'success'` and `durationMs` when the command returns.
 
 The result is one canonical entry per interaction.
@@ -79,9 +82,12 @@ export const auditMiddleware = createMiddleware<{ requestId: string; plan: 'free
 	},
 );
 
+export const middlewares = { audit: auditMiddleware };
+client.setServices({ middlewares });
+
 declare module 'seyfert' {
-	interface RegisteredMiddlewares {
-		audit: typeof auditMiddleware;
+	interface SeyfertRegistry {
+		middlewares: typeof middlewares;
 	}
 }
 
@@ -154,6 +160,19 @@ await event.emit({ message: 'interactionCreate received' });
 ```
 
 (`useLogger()` throws only if the plugin hasn't been set up yet. Outside a scope each call returns a *fresh* event, so capture it in a variable — as above — when you intend to `add()` then `emit()`.)
+
+If the process has multiple Seyfert clients with different logger instances, pass the owning client explicitly outside an interaction scope: `useLogger(client)`. Calling bare `useLogger()` in that ambiguous state throws instead of sending the entry to the wrong client.
+
+For a background job or other unit of work, `withLoggerScope()` creates the wide event, exposes it through `useLogger()`, and emits success or failure automatically:
+
+```ts
+import { useLogger, withLoggerScope } from '@slipher/logger';
+
+await withLoggerScope({ kind: 'job', jobId }, async () => {
+	const processed = await processJob(jobId);
+	useLogger().add({ processed });
+}, client); // `client` is optional when only one logger is active
+```
 
 Because `useLogger()` reads the active scope instead of taking a parameter, a helper deep in the call stack can enrich the interaction's wide event without being handed the context:
 
@@ -245,6 +264,8 @@ pnpm add evlog
 ```
 
 evlog owns a single global pipeline — drains, redaction, sampling, the service envelope — configured with `initLogger()`. **Pass that config to the evlog factory and slipher calls `initLogger` for you:** it sets `silent` by role (`evlogRenderer` prints, `evlogTransport` drains only) and derives `env.service` from the logger `name`, so you don't define the service twice.
+
+When that config owns a pipeline drain with `flush()`, the adapter forwards it through the logger lifecycle, so `client.close()` drains buffered events before teardown completes.
 
 ```ts
 import { Client } from 'seyfert';

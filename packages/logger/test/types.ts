@@ -1,7 +1,14 @@
-import type { LoggerLike } from '@slipher/types';
 import type { Client, PluginContextMapOf, RegisteredPlugins, Logger as SeyfertLogger } from 'seyfert';
 import { Command, type CommandContext, createMiddleware, Declare, definePlugins } from 'seyfert';
-import { evlogRenderer, evlogTransport, type LoggerAdapter, logger, useLogger, type WideEventLogger } from '../src';
+import {
+	evlogRenderer,
+	evlogTransport,
+	type LoggerAdapter,
+	logger,
+	useLogger,
+	type WideEventLogger,
+	withLoggerScope,
+} from '../src';
 
 declare function expectType<T>(value: T): void;
 declare const context: CommandContext;
@@ -27,12 +34,12 @@ expectType<WideEventLogger>({} as PluginContextMapOf<typeof plugins>['logger']);
 expectType<SeyfertLogger>(client.logger);
 // @ts-expect-error client.logger remains Seyfert's base logger; use ctx.logger or useLogger() for wide events.
 expectType<WideEventLogger>(client.logger);
-expectType<LoggerLike>({} as WideEventLogger);
-
 expectType<LoggerAdapter>(evlogTransport());
 // Passing evlog config is now accepted: @slipher/logger calls initLogger for you.
 expectType<LoggerAdapter>(evlogRenderer({ env: { environment: 'development' }, redact: { paths: ['token'] } }));
 expectType<WideEventLogger>(useLogger());
+expectType<WideEventLogger>(useLogger(client));
+expectType<Promise<string>>(withLoggerScope({ kind: 'job' }, () => 'done', client));
 
 @Declare({
 	name: 'deploy',

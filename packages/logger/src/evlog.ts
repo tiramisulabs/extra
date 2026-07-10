@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 
-import type { LogData, LogEntry, LoggerAdapter, WritableLogLevel } from './core';
+import type { Awaitable, LogData, LogEntry, LoggerAdapter, WritableLogLevel } from './core';
 import { getString, stripUndefined } from './utils';
 
 export type EvlogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -41,6 +41,7 @@ export function evlogTransport(config?: EvlogConfig): LoggerAdapter {
 function createEvlogAdapter(silent: boolean, config?: EvlogConfig): LoggerAdapter {
 	assertEvlogInstalled();
 	const core = importEvlogCore();
+	const flush = getDrainFlush(config?.drain);
 	let initialized = false;
 
 	return {
@@ -61,7 +62,14 @@ function createEvlogAdapter(silent: boolean, config?: EvlogConfig): LoggerAdapte
 
 			writeEvlogImmediateEntry(entry, resolved);
 		},
+		flush,
 	};
+}
+
+function getDrainFlush(drain: unknown): (() => Awaitable<void>) | undefined {
+	if ((typeof drain !== 'function' && (!drain || typeof drain !== 'object')) || !('flush' in drain)) return;
+	const flush = drain.flush;
+	return typeof flush === 'function' ? () => flush.call(drain) : undefined;
 }
 
 function buildInitConfig(silent: boolean, config: EvlogConfig, entry: LogEntry): Record<string, unknown> {

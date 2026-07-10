@@ -1,5 +1,5 @@
 export { ConsoleLoggerAdapter, prettyRenderer, silentRenderer } from './console';
 export * from './core';
-export { evlogRenderer, evlogTransport, type EvlogConfig, type EvlogLevel } from './evlog';
-export { pinoAdapter, type PinoLoggerLike, type PinoLogMethod } from './pino';
+export { type EvlogConfig, type EvlogLevel, evlogRenderer, evlogTransport } from './evlog';
+export { type PinoLoggerLike, type PinoLogMethod, pinoAdapter } from './pino';
 export * from './plugin';

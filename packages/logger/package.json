@@ -32,11 +32,10 @@
 		"prepublish": "pnpm build"
 	},
 	"devDependencies": {
-		"@slipher/types": "workspace:*",
-		"@types/node": "^25.0.10",
+		"@types/node": "^26.0.1",
 		"evlog": "^2.18.1",
 		"seyfert": "github:tiramisulabs/seyfert#main",
-		"typescript": "^5.9.3"
+		"typescript": "^6.0.3"
 	},
 	"peerDependencies": {
 		"evlog": "^2.18.1",

@@ -1,7 +1,7 @@
 import { ConsoleLoggerAdapter } from './console';
 import { getString, isLogData, stripUndefined } from './utils';
 
-export type Awaitable<T> = T | Promise<T>;
+export type Awaitable<T> = T | PromiseLike<T>;
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'silent';
 export type WritableLogLevel = Exclude<LogLevel, 'silent'>;
 export type LogData = Record<string, unknown>;
@@ -30,6 +30,7 @@ export interface LoggerOptions {
 	renderer?: LoggerAdapter;
 	/** Structured sinks (evlog/pino/file). They ship the entry; they don't own the console. */
 	transports?: readonly LoggerAdapter[];
+	/** @internal */
 	now?: () => Date;
 }
 
@@ -45,6 +46,7 @@ export interface WideEventEmitOptions {
 	error?: unknown;
 }
 
+/** @internal */
 export interface WideEventOptions {
 	/** @internal Warn (dev only) if this event is enriched via add() but never emitted. */
 	warnIfUnemitted?: boolean;
@@ -59,9 +61,8 @@ const unemittedEventRegistry =
 		: new FinalizationRegistry<string>(callsite => {
 				process.emitWarning(
 					'A wide event was enriched with .add() but never .emit()-ed, so it was discarded.\n' +
-						'This usually means useLogger() ran outside an interaction scope (a setTimeout, event ' +
-						'listener, or queue job, where AsyncLocalStorage does not propagate). Call .emit() ' +
-						'yourself, or wrap the work in withLoggerScope() so it emits automatically.\n' +
+						'This means useLogger() ran outside an interaction or withLoggerScope() context. ' +
+						'Call .emit() yourself, or wrap the work in withLoggerScope() so it emits automatically.\n' +
 						`Enriched at:\n${callsite}`,
 					{ type: 'SlipherLoggerWarning' },
 				);
@@ -89,12 +90,21 @@ export class RootLogger {
 	private readonly bindings: LogBindings;
 	private readonly adapters: readonly LoggerAdapter[];
 	private readonly now: () => Date;
+	private readonly pendingWrites: Set<Promise<void>>;
 
-	constructor(options: LoggerOptions = {}, adapters?: readonly LoggerAdapter[]) {
+	constructor(options?: LoggerOptions);
+	/** @internal */
+	constructor(options: LoggerOptions, adapters: readonly LoggerAdapter[], pendingWrites: Set<Promise<void>>);
+	constructor(
+		options: LoggerOptions = {},
+		adapters?: readonly LoggerAdapter[],
+		pendingWrites = new Set<Promise<void>>(),
+	) {
 		this.level = options.level ?? 'info';
 		this.bindings = stripUndefined({ name: options.name, ...(options.bindings ?? {}) });
 		this.adapters = adapters ?? resolveAdapters(options);
 		this.now = options.now ?? (() => new Date());
+		this.pendingWrites = pendingWrites;
 	}
 
 	trace(...args: readonly unknown[]): Awaitable<void> {
@@ -125,29 +135,38 @@ export class RootLogger {
 		return new RootLogger(
 			{ level: this.level, bindings: { ...this.bindings, ...bindings }, now: this.now },
 			this.adapters.map(adapter => adapter.child?.(bindings) ?? adapter),
+			this.pendingWrites,
 		);
 	}
 
-	event(data: LogData = {}, options: WideEventOptions = {}): WideEventLogger {
+	event(data: LogData = {}): WideEventLogger {
+		return this.eventWithOptions(data);
+	}
+
+	/** @internal */
+	eventWithOptions(data: LogData = {}, options: WideEventOptions = {}): WideEventLogger {
 		return new WideEventLogger(this, data, { bindings: this.bindings }, options);
 	}
 
-	flush(): Awaitable<void> {
-		return Promise.all(this.adapters.map(adapter => adapter.flush?.())).then(() => undefined);
+	async flush(): Promise<void> {
+		await Promise.all([...this.pendingWrites]);
+		await Promise.all(this.adapters.map(adapter => adapter.flush?.()));
 	}
 
 	isEnabled(level: WritableLogLevel): boolean {
 		return levelValues[level] >= levelValues[this.level];
 	}
 
+	/** @internal */
 	timestamp(): Date {
 		return this.now();
 	}
 
+	/** @internal */
 	async writeEntry(entry: LogEntry): Promise<void> {
 		if (!this.isEnabled(entry.level)) return;
 
-		await Promise.all(
+		const write = Promise.all(
 			this.adapters.map(async adapter => {
 				try {
 					await adapter.write(entry);
@@ -155,9 +174,16 @@ export class RootLogger {
 					console.error('[logger] adapter.write failed:', error);
 				}
 			}),
-		);
+		).then(() => undefined);
+		this.pendingWrites.add(write);
+		try {
+			await write;
+		} finally {
+			this.pendingWrites.delete(write);
+		}
 	}
 
+	/** @internal */
 	writeLevel(level: WritableLogLevel, args: readonly unknown[]): Awaitable<void> {
 		if (!this.isEnabled(level)) return;
 
@@ -182,6 +208,9 @@ export class WideEventLogger {
 	private readonly warnIfUnemitted: boolean;
 	private armed = false;
 
+	constructor(root: RootLogger, data?: LogData);
+	/** @internal */
+	constructor(root: RootLogger, data: LogData, metadata: Pick<LogEntry, 'bindings'>, options: WideEventOptions);
 	constructor(
 		root: RootLogger,
 		data: LogData = {},
