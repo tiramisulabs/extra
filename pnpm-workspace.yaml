@@ -4,7 +4,7 @@ packages:
 allowBuilds:
   esbuild: true
   protobufjs: true
-  "seyfert@https://codeload.github.com/tiramisulabs/seyfert/tar.gz/a85c842c579d2055a446e3c65524e783962c85a6": true
+  "seyfert@https://codeload.github.com/tiramisulabs/seyfert/tar.gz/4aee9b68314f38b193d3cb2a3ac27c51b0eae0af": true
 
 minimumReleaseAgeExclude:
   - seyfert
