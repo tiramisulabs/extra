@@ -1,4 +1,4 @@
-import { createClient, type RedisClientOptions } from '@redis/client';
+import { createClient, type RedisClientOptions, type RedisClientType } from '@redis/client';
 import type { Adapter } from 'seyfert/lib/cache';
 
 export interface RedisAdapterOptions {
@@ -8,12 +8,10 @@ export interface RedisAdapterOptions {
 export class RedisAdapter implements Adapter {
 	isAsync = true;
 
-	client: ReturnType<typeof createClient>;
+	client: RedisClientType;
 	namespace: string;
 
-	constructor(
-		data?: ({ client: ReturnType<typeof createClient> } | { redisOptions: RedisClientOptions }) & RedisAdapterOptions,
-	) {
+	constructor(data?: ({ client: RedisClientType } | { redisOptions: RedisClientOptions }) & RedisAdapterOptions) {
 		this.client = data && 'client' in data ? data.client : createClient(data?.redisOptions);
 		this.namespace = data?.namespace ?? 'seyfert';
 	}

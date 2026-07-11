@@ -15,14 +15,11 @@
 	"scripts": {
 		"dev": "tsc --watch",
 		"build": "tsc",
-		"lint": "biome lint --write ./src",
-		"format": "biome format --write ./src",
-		"test": "vitest run --config ./test/vitest.config.mts ./test/",
-		"checkb": "biome check --write --no-errors-on-unmatched ./src",
-		"test:adapter": "node --test ./test/adapter.test.js",
-		"test:cache": "node --test ./test/cache.test.js",
-		"test:expirableadapter": "node --test ./test/expirableadapter.test.js",
-		"test:expirablecache": "node --test ./test/expirablecache.test.js",
+		"lint": "biome lint --write ./src ./test",
+		"format": "biome format --write ./src ./test",
+		"typecheck": "tsc --noEmit --project ./test/tsconfig.json",
+		"test": "pnpm typecheck && vitest run --config ./test/vitest.config.mts ./test/",
+		"checkb": "biome check --write --no-errors-on-unmatched ./src ./test",
 		"prepublish": "pnpm build"
 	},
 	"dependencies": {
