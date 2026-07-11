@@ -32,10 +32,10 @@
 	},
 	"devDependencies": {
 		"@types/node": "^26.0.1",
-		"seyfert": "github:tiramisulabs/seyfert#main",
+		"seyfert": "^5.0.0",
 		"typescript": "^6.0.3"
 	},
 	"peerDependencies": {
-		"seyfert": ">=5.0.0-0"
+		"seyfert": ">=5.0.0"
 	}
 }

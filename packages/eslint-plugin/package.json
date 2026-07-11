@@ -23,6 +23,7 @@
 	},
 	"peerDependencies": {
 		"eslint": ">=9.0.0",
+		"seyfert": ">=5.0.0",
 		"typescript": ">=5.0.0"
 	},
 	"dependencies": {
@@ -32,7 +33,7 @@
 		"@types/node": "^26.0.1",
 		"@typescript-eslint/rule-tester": "^8.62.0",
 		"eslint": "^10.6.0",
-		"seyfert": "5.0.1-dev-28455961168.0",
+		"seyfert": "^5.0.0",
 		"typescript": "^6.0.3",
 		"typescript-eslint": "^8.62.0",
 		"vitest": "^4.1.9"

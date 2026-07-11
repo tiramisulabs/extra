@@ -1,6 +1,6 @@
 {
 	"name": "@slipher/logger",
-	"version": "0.1.0",
+	"version": "1.0.0",
 	"private": false,
 	"license": "MIT",
 	"publishConfig": {
@@ -34,12 +34,12 @@
 	"devDependencies": {
 		"@types/node": "^26.0.1",
 		"evlog": "^2.18.1",
-		"seyfert": "github:tiramisulabs/seyfert#main",
+		"seyfert": "^5.0.0",
 		"typescript": "^6.0.3"
 	},
 	"peerDependencies": {
 		"evlog": "^2.18.1",
-		"seyfert": ">=5.0.0-0"
+		"seyfert": ">=5.0.0"
 	},
 	"peerDependenciesMeta": {
 		"evlog": {

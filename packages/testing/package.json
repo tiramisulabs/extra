@@ -1,6 +1,6 @@
 {
 	"name": "@slipher/testing",
-	"version": "0.0.1",
+	"version": "1.0.0",
 	"private": false,
 	"license": "MIT",
 	"publishConfig": {
@@ -34,7 +34,7 @@
 	"devDependencies": {
 		"@biomejs/biome": "2.5.1",
 		"@types/node": "^26.0.1",
-		"seyfert": "github:tiramisulabs/seyfert#main",
+		"seyfert": "^5.0.0",
 		"typescript": "^6.0.3",
 		"vitest": "^4.1.9"
 	},

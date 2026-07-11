@@ -1,6 +1,6 @@
 {
 	"name": "@slipher/opentelemetry",
-	"version": "0.1.0",
+	"version": "1.0.0",
 	"private": false,
 	"license": "MIT",
 	"publishConfig": {
@@ -39,11 +39,11 @@
 		"@opentelemetry/sdk-metrics": "^2.0.0",
 		"@opentelemetry/sdk-trace-base": "^2.0.0",
 		"@types/node": "^26.0.1",
-		"seyfert": "github:tiramisulabs/seyfert#main",
+		"seyfert": "^5.0.0",
 		"typescript": "^6.0.3"
 	},
 	"peerDependencies": {
 		"@opentelemetry/api": "^1.9.0",
-		"seyfert": ">=5.0.0-0"
+		"seyfert": ">=5.0.0"
 	}
 }
