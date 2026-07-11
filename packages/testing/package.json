@@ -1,0 +1,44 @@
+{
+	"name": "@slipher/testing",
+	"version": "0.0.1",
+	"private": false,
+	"license": "MIT",
+	"publishConfig": {
+		"access": "public"
+	},
+	"files": [
+		"lib/**"
+	],
+	"main": "./lib/index.js",
+	"module": "./lib/index.js",
+	"types": "./lib/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./lib/index.d.ts",
+			"import": "./lib/index.js",
+			"require": "./lib/index.js",
+			"default": "./lib/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"scripts": {
+		"dev": "tsc --watch",
+		"build": "tsc",
+		"lint": "biome lint --write ./src ./test",
+		"format": "biome format --write ./src ./test",
+		"checkb": "biome check --write --no-errors-on-unmatched ./src ./test",
+		"typecheck": "tsc --noEmit --project ./test/tsconfig.json",
+		"test": "pnpm typecheck && vitest run --config ./test/vitest.config.mts ./test/",
+		"prepublishOnly": "pnpm build"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.1",
+		"@types/node": "^26.0.1",
+		"seyfert": "github:tiramisulabs/seyfert#main",
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.9"
+	},
+	"peerDependencies": {
+		"seyfert": ">=5.0.0"
+	}
+}
