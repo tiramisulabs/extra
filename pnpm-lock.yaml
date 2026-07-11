@@ -41,14 +41,13 @@ importers:
         version: 6.0.3
 
   packages/cooldown:
-    dependencies:
-      seyfert:
-        specifier: 4.4.0
-        version: 4.4.0
     devDependencies:
       '@types/node':
         specifier: ^26.0.1
         version: 26.1.1
+      seyfert:
+        specifier: github:tiramisulabs/seyfert#main
+        version: https://codeload.github.com/tiramisulabs/seyfert/tar.gz/4aee9b68314f38b193d3cb2a3ac27c51b0eae0af
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
