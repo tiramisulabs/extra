@@ -1,6 +1,6 @@
 import type { Logger, UsingClient } from 'seyfert';
 import type { HttpServerAdapter } from 'seyfert/lib/client/types';
-import { isCloudfareWorker } from 'seyfert/lib/common';
+import { isCloudflareWorker } from 'seyfert/lib/common';
 import { type APIInteraction, InteractionResponseType, InteractionType } from 'seyfert/lib/types';
 import nacl from 'tweetnacl';
 
@@ -65,7 +65,7 @@ export class GenericAdapter implements HttpServerAdapter {
 				);
 			}
 			default: {
-				if (isCloudfareWorker()) {
+				if (isCloudflareWorker()) {
 					// you can not do more net requests after responding.
 					// so we use discord api instead
 					return this.client.handleCommand
