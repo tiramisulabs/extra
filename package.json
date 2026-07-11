@@ -15,11 +15,11 @@
 	"devDependencies": {
 		"@biomejs/biome": "2.5.1",
 		"@types/node": "^26.0.1",
-		"typescript": "^6.0.3",
 		"turbo": "^2.10.0",
+		"typescript": "^6.0.3",
 		"vitest": "^4.1.9"
 	},
-	"packageManager": "pnpm@11.9.0",
+	"packageManager": "pnpm@11.11.0",
 	"engines": {
 		"node": ">=22.13"
 	}
