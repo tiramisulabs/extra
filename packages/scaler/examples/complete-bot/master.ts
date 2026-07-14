@@ -1,14 +1,21 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { createLogicalWorkers, resolveShardTopology, ScalerMaster, SeyfertScaler } from '@slipher/scaler/master';
-import { ApiHandler, Logger, type WorkerData } from 'seyfert';
+import {
+	createLogicalWorkers,
+	createSeyfertLaunch,
+	resolveShardTopology,
+	ScalerMaster,
+	SeyfertScaler,
+} from '@slipher/scaler/master';
+import { ApiHandler, Client, Logger } from 'seyfert';
 
 const logger = new Logger({ name: '[Scaler master]' });
 
 async function main() {
-	const token = required('BOT_TOKEN');
+	const botConfig = await new Client().getRC();
+	if (!botConfig.token) throw new Error('seyfert.config token is required');
 	const workerPath = resolve(__dirname, 'worker.js');
-	const api = new ApiHandler({ token });
+	const api = new ApiHandler({ token: botConfig.token });
 	const topology = await resolveShardTopology({
 		getGatewayBot: () => api.proxy.gateway.bot.get(),
 		shardsPerWorker: Number(process.env.SHARDS_PER_WORKER ?? 4),
@@ -32,24 +39,7 @@ async function main() {
 		master,
 		workers: createLogicalWorkers(topology),
 		autoRePlaceOnHostLoss: process.env.SCALER_AUTO_REPLACE === 'true',
-		createLaunch({ worker }) {
-			const workerData: WorkerData = {
-				intents: 1,
-				token,
-				path: workerPath,
-				shards: Array.from({ length: worker.shardEnd - worker.shardStart }, (_, index) => worker.shardStart + index),
-				totalShards: worker.totalShards,
-				totalWorkers: topology.workers,
-				mode: 'clusters',
-				workerId: worker.workerId,
-				debug: false,
-				workerProxy: false,
-				info: topology.info,
-				compress: false,
-				resharding: false,
-			};
-			return { workerData, env: { BOT_TOKEN: token } };
-		},
+		createLaunch: createSeyfertLaunch({ config: botConfig, topology, workerPath }),
 	});
 
 	master.on('error', error => logger.error(error));

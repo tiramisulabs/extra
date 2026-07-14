@@ -1,3 +1,5 @@
+export type { CreateSeyfertLaunchOptions } from './launch';
+export { createSeyfertLaunch } from './launch';
 export type {
 	ScalerMasterLivenessPolicy,
 	ScalerMasterOptions,

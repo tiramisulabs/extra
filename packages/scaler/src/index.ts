@@ -7,6 +7,8 @@ export type {
 	ScalerAgentTransportPolicy,
 } from './agent';
 export { ScalerAgent } from './agent';
+export type { CreateSeyfertLaunchOptions } from './launch';
+export { createSeyfertLaunch } from './launch';
 export type {
 	ScalerMasterLivenessPolicy,
 	ScalerMasterOptions,

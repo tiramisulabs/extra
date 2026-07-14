@@ -92,18 +92,24 @@ Use normal REST clients inside each worker. For cache shared across hosts, use `
 
 ## Worker environment
 
-Worker environments are deliberately clean: the runner does not inherit agent variables such as `PATH` or `HOME`. Children receive the classic `SEYFERT_WORKER_*` variables plus only the values explicitly returned from `createLaunch().env`:
+Worker environments are deliberately clean: the runner does not inherit agent variables such as `PATH` or `HOME`. Children receive the classic `SEYFERT_WORKER_*` variables plus only the values explicitly configured on the launch factory:
 
 ```ts
-async createLaunch({ worker }) {
-  return {
-    workerData: createWorkerData(worker),
-    env: {
-      PATH: '/usr/local/bin:/usr/bin:/bin',
-      APP_ENV: 'production',
-    },
-  };
-}
+const createLaunch = createSeyfertLaunch({
+  config: botConfig,
+  topology,
+  workerPath,
+  env: {
+    PATH: '/usr/local/bin:/usr/bin:/bin',
+    APP_ENV: 'production',
+  },
+});
+```
+
+The worker's `seyfert.config` should read `SEYFERT_WORKER_TOKEN` before the parent process token variable because agents do not inherit the master's environment:
+
+```js
+token: process.env.SEYFERT_WORKER_TOKEN ?? process.env.BOT_TOKEN ?? ''
 ```
 
 ## Stopping workers
@@ -127,11 +133,17 @@ process.once('SIGTERM', () => {
 ## Master
 
 ```ts
-import { ApiHandler, type WorkerData } from 'seyfert';
-import { createLogicalWorkers, resolveShardTopology, ScalerMaster, SeyfertScaler } from '@slipher/scaler/master';
+import { ApiHandler, Client } from 'seyfert';
+import {
+  createLogicalWorkers,
+  createSeyfertLaunch,
+  resolveShardTopology,
+  ScalerMaster,
+  SeyfertScaler,
+} from '@slipher/scaler/master';
 
-const token = process.env.BOT_TOKEN!;
-const api = new ApiHandler({ token });
+const botConfig = await new Client().getRC();
+const api = new ApiHandler({ token: botConfig.token });
 const topology = await resolveShardTopology({
   getGatewayBot: () => api.proxy.gateway.bot.get(),
   shardsPerWorker: 4,
@@ -146,24 +158,11 @@ const master = new ScalerMaster({
 const scaler = new SeyfertScaler({
   master,
   workers: createLogicalWorkers(topology),
-  async createLaunch({ worker }) {
-    const workerData: WorkerData = {
-      token,
-      intents: 1,
-      path: '/srv/bot/worker.js',
-      shards: Array.from({ length: worker.shardEnd - worker.shardStart }, (_, index) => worker.shardStart + index),
-      totalShards: worker.totalShards,
-      totalWorkers: topology.workers,
-      workerId: worker.workerId,
-      mode: 'clusters',
-      debug: false,
-      workerProxy: false,
-      info: topology.info,
-      compress: false,
-      resharding: false,
-    };
-    return { workerData };
-  },
+  createLaunch: createSeyfertLaunch({
+    config: botConfig,
+    topology,
+    workerPath: '/srv/bot/worker.js',
+  }),
 });
 
 await scaler.start();
