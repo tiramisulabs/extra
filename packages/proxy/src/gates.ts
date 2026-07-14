@@ -24,10 +24,6 @@ export class SlidingWindow {
 		return this.entries.length - this.start;
 	}
 
-	delay(now: number): number {
-		return this.blockedFor(now);
-	}
-
 	record(now: number): void {
 		this.prune(now);
 		this.entries.push(now);
@@ -45,8 +41,6 @@ export class SlidingWindow {
 		return Math.max(1, this.entries[releaseIndex] + this.perMs - now);
 	}
 }
-
-export { SlidingWindow as InvalidRequestBudget };
 
 export function isInteractionCallback(url: string): boolean {
 	return /^\/interactions\/[^/]+\/[^/]+\/callback$/.test(url);

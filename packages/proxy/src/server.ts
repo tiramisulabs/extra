@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { ApiHandler, SeyfertError } from 'seyfert';
 import { createCredentialAuthenticator } from './credentials';
-import { InvalidRequestBudget, isInteractionCallback, SlidingWindow } from './gates';
+import { isInteractionCallback, SlidingWindow } from './gates';
 import {
 	nonNegativeInteger,
 	PayloadTooLargeError,
@@ -226,7 +226,7 @@ class ProxyServerImpl implements ProxyServer {
 			this.invalidTimer = undefined;
 			this.notifyStateChange();
 		}, delay);
-		this.invalidTimer.unref?.();
+		this.invalidTimer.unref();
 	}
 
 	record(
@@ -278,7 +278,7 @@ class ProxyServerImpl implements ProxyServer {
 		if (remaining === 0) this.server.closeAllConnections();
 		else {
 			forceTimer = setTimeout(() => this.server.closeAllConnections(), remaining);
-			forceTimer.unref?.();
+			forceTimer.unref();
 		}
 		await serverClosed;
 		if (forceTimer) clearTimeout(forceTimer);
@@ -452,7 +452,7 @@ export async function createProxy(rawOptions: ProxyServerOptions): Promise<Proxy
 		options.maxPendingRequests,
 		options.queueTimeout,
 		new SlidingWindow(GLOBAL_GATE_LIMIT, GLOBAL_GATE_WINDOW),
-		new InvalidRequestBudget(options.invalidWindow.max, options.invalidWindow.perMs),
+		new SlidingWindow(options.invalidWindow.max, options.invalidWindow.perMs),
 		() => proxy?.notifyStateChange(),
 	);
 

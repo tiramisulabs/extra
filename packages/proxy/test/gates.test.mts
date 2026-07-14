@@ -1,6 +1,6 @@
 import { assert, describe, test, vi } from 'vitest';
 import { ProxyError } from '../src';
-import { InvalidRequestBudget, isInteractionCallback, SlidingWindow } from '../src/gates';
+import { isInteractionCallback, SlidingWindow } from '../src/gates';
 import { RequestScheduler } from '../src/scheduler';
 
 describe('proactive gates', () => {
@@ -10,13 +10,13 @@ describe('proactive gates', () => {
 		gate.record(1);
 
 		assert.equal(gate.occupancy(999), 2);
-		assert.equal(gate.delay(999), 1);
-		assert.equal(gate.delay(1_000), 0);
+		assert.equal(gate.blockedFor(999), 1);
+		assert.equal(gate.blockedFor(1_000), 0);
 		assert.equal(gate.occupancy(1_000), 1);
 	});
 
 	test('releases invalid request capacity as entries expire', () => {
-		const budget = new InvalidRequestBudget(2, 10_000);
+		const budget = new SlidingWindow(2, 10_000);
 		budget.record(100);
 		budget.record(200);
 		budget.record(300);
@@ -41,10 +41,10 @@ describe('proactive gates', () => {
 			vi.setSystemTime(1_000);
 			const gate = new SlidingWindow(1, 1_000);
 			gate.record(Date.now());
-			const scheduler = new RequestScheduler(1, 10, gate, new InvalidRequestBudget(10, 1_000), () => {});
+			const scheduler = new RequestScheduler(1, 10, gate, new SlidingWindow(10, 1_000), () => {});
 			let dispatched = false;
 			const queued = scheduler
-				.submit({
+				.submitReserved(scheduler.reserve('queued'), {
 					requestId: 'queued',
 					exempt: false,
 					run: async () => {
@@ -52,15 +52,12 @@ describe('proactive gates', () => {
 					},
 				})
 				.catch(error => error);
-			const overloaded = scheduler
-				.submit({
-					requestId: 'overloaded',
-					exempt: false,
-					run: async () => {},
-				})
-				.catch(error => error);
-
-			const overloadError = await overloaded;
+			let overloadError: unknown;
+			try {
+				scheduler.reserve('overloaded');
+			} catch (error) {
+				overloadError = error;
+			}
 			assert.instanceOf(overloadError, ProxyError);
 			assert.equal(overloadError.code, 'PROXY_OVERLOADED');
 			await vi.advanceTimersByTimeAsync(10);
@@ -79,14 +76,14 @@ describe('proactive gates', () => {
 			vi.setSystemTime(1_000);
 			const gate = new SlidingWindow(1, 1_000);
 			gate.record(Date.now());
-			const scheduler = new RequestScheduler(2, 2_000, gate, new InvalidRequestBudget(10, 1_000), () => {});
+			const scheduler = new RequestScheduler(2, 2_000, gate, new SlidingWindow(10, 1_000), () => {});
 			const dispatched: string[] = [];
-			const limited = scheduler.submit({
+			const limited = scheduler.submitReserved(scheduler.reserve('limited'), {
 				requestId: 'limited',
 				exempt: false,
 				run: async () => dispatched.push('limited'),
 			});
-			const exempt = scheduler.submit({
+			const exempt = scheduler.submitReserved(scheduler.reserve('exempt'), {
 				requestId: 'exempt',
 				exempt: true,
 				run: async () => dispatched.push('exempt'),
@@ -115,11 +112,19 @@ describe('proactive gates', () => {
 			2,
 			1_000,
 			new SlidingWindow(1, 1_000),
-			new InvalidRequestBudget(10, 1_000),
+			new SlidingWindow(10, 1_000),
 			() => {},
 		);
-		const first = scheduler.submit({ requestId: 'duplicate', exempt: true, run: () => firstGate });
-		const second = scheduler.submit({ requestId: 'duplicate', exempt: true, run: () => secondGate });
+		const first = scheduler.submitReserved(scheduler.reserve('duplicate'), {
+			requestId: 'duplicate',
+			exempt: true,
+			run: () => firstGate,
+		});
+		const second = scheduler.submitReserved(scheduler.reserve('duplicate'), {
+			requestId: 'duplicate',
+			exempt: true,
+			run: () => secondGate,
+		});
 
 		assert.equal(scheduler.inFlightCount, 2);
 		assert.deepEqual(

@@ -1,4 +1,4 @@
-import { InvalidRequestBudget, SlidingWindow } from './gates';
+import { SlidingWindow } from './gates';
 import { ProxyError, type ProxyErrorCode, proxyError } from './protocol';
 
 interface PendingEntry {
@@ -46,7 +46,7 @@ export class RequestScheduler {
 		private readonly maxPendingRequests: number,
 		private readonly queueTimeout: number,
 		readonly globalGate: SlidingWindow,
-		readonly invalidBudget: InvalidRequestBudget,
+		readonly invalidBudget: SlidingWindow,
 		private readonly onStateChange: () => void,
 	) {}
 
@@ -107,10 +107,6 @@ export class RequestScheduler {
 		this.onStateChange();
 	}
 
-	submit<T>(options: SubmitOptions<T>): Promise<T> {
-		return this.enqueue(options, Symbol(options.requestId), false);
-	}
-
 	submitReserved<T>(reservation: AdmissionReservation, options: SubmitOptions<T>): Promise<T> {
 		if (!this.reservations.delete(reservation.operationId)) {
 			return Promise.reject(
@@ -118,18 +114,15 @@ export class RequestScheduler {
 			);
 		}
 		this.onStateChange();
-		return this.enqueue(options, reservation.operationId, true);
+		return this.enqueue(options, reservation.operationId);
 	}
 
-	private enqueue<T>(options: SubmitOptions<T>, operationId: symbol, reserved: boolean): Promise<T> {
+	private enqueue<T>(options: SubmitOptions<T>, operationId: symbol): Promise<T> {
 		if (!this.accepting) {
 			return Promise.reject(this.rejection('PROXY_DRAINING', options.requestId, 'Proxy is draining.'));
 		}
 		if (this.quarantined) {
 			return Promise.reject(this.rejection('PROXY_QUARANTINED', options.requestId, 'Proxy is quarantined.'));
-		}
-		if (!reserved && this.pendingCount >= this.maxPendingRequests) {
-			return Promise.reject(this.rejection('PROXY_OVERLOADED', options.requestId, 'Proxy admission queue is full.'));
 		}
 		if (options.signal?.aborted) return Promise.reject(new ClientDisconnectedError());
 
@@ -145,7 +138,7 @@ export class RequestScheduler {
 					this.onStateChange();
 				}, this.queueTimeout),
 			};
-			entry.timer.unref?.();
+			entry.timer.unref();
 			if (options.signal) {
 				entry.onAbort = () => {
 					if (!this.removePending(entry)) return;
@@ -186,7 +179,7 @@ export class RequestScheduler {
 				continue;
 			}
 			const now = Date.now();
-			const delay = entry.exempt ? 0 : this.globalGate.delay(now);
+			const delay = entry.exempt ? 0 : this.globalGate.blockedFor(now);
 			if (delay > 0) {
 				index = this.pending.findIndex(candidate => candidate.exempt);
 				if (index === -1) {
@@ -216,7 +209,7 @@ export class RequestScheduler {
 			this.onStateChange();
 			this.pump();
 		}, delay);
-		this.gateTimer.unref?.();
+		this.gateTimer.unref();
 	}
 
 	private dispatch(entry: PendingEntry): void {

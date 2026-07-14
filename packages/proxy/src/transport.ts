@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import type { BlobPart } from 'node:buffer';
 import type { IncomingHttpHeaders } from 'node:http';
 import type { RawFile } from 'seyfert';
 import { isRecord } from './internal';
@@ -17,22 +17,14 @@ export interface TokenOverrideRequest {
 export type DecodedApiRequest = WireApiRequest & { files?: RawFile[] };
 export type DecodedProxyRequest = DecodedApiRequest | TokenOverrideRequest;
 
-function fileDataToBuffer(data: RawFile['data']): Buffer {
-	if (Buffer.isBuffer(data)) return data;
-	if (data instanceof ArrayBuffer) return Buffer.from(data);
-	if (ArrayBuffer.isView(data)) return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
-	return Buffer.from(String(data));
+function fileDataToBlobPart(data: RawFile['data']): BlobPart {
+	return typeof data === 'boolean' || typeof data === 'number' ? String(data) : (data as BlobPart);
 }
 
-function escapeDisposition(value: string): string {
-	return value.replace(/[\r\n"]/g, character => (character === '"' ? '%22' : ''));
-}
-
-function safeContentType(value: string | undefined): string {
-	return value && !/[\r\n]/.test(value) ? value : 'application/octet-stream';
-}
-
-export function encodeProxyRequest(request: WireApiRequest, files: readonly RawFile[] | undefined): EncodedRequest {
+export async function encodeProxyRequest(
+	request: WireApiRequest,
+	files: readonly RawFile[] | undefined,
+): Promise<EncodedRequest> {
 	const wire: WireApiRequest = {
 		...request,
 		...(files?.length ? { fileKeys: files.map(file => file.key ?? null) } : {}),
@@ -41,25 +33,19 @@ export function encodeProxyRequest(request: WireApiRequest, files: readonly RawF
 		return { body: Buffer.from(JSON.stringify(wire)), contentType: 'application/json' };
 	}
 
-	const boundary = `slipher-${randomBytes(18).toString('hex')}`;
-	const chunks: Buffer[] = [];
-	const append = (value: string | Buffer) => chunks.push(typeof value === 'string' ? Buffer.from(value) : value);
-	append(
-		`--${boundary}\r\nContent-Disposition: form-data; name="payload_json"\r\nContent-Type: application/json\r\n\r\n`,
-	);
-	append(JSON.stringify(wire));
-	append('\r\n');
-
+	const form = new FormData();
+	form.append('payload_json', JSON.stringify(wire));
 	for (const [index, file] of files.entries()) {
-		const key = `files[${index}]`;
-		const filename = escapeDisposition(file.filename);
-		append(`--${boundary}\r\nContent-Disposition: form-data; name="${key}"; filename="${filename}"\r\n`);
-		append(`Content-Type: ${safeContentType(file.contentType)}\r\n\r\n`);
-		append(fileDataToBuffer(file.data));
-		append('\r\n');
+		form.append(
+			`files[${index}]`,
+			new Blob([fileDataToBlobPart(file.data)], { type: file.contentType }),
+			file.filename,
+		);
 	}
-	append(`--${boundary}--\r\n`);
-	return { body: Buffer.concat(chunks), contentType: `multipart/form-data; boundary=${boundary}` };
+	const response = new Response(form);
+	const contentType = response.headers.get('content-type');
+	if (!contentType) throw new Error('FormData response is missing its content type.');
+	return { body: Buffer.from(await response.arrayBuffer()), contentType };
 }
 
 function decodeRawRequest(raw: unknown): DecodedProxyRequest | undefined {

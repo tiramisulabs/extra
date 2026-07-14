@@ -5,13 +5,10 @@ export {
 	type ServiceCredential,
 } from './credentials';
 export {
-	type DiscordErrorEnvelope,
 	ProxyError,
 	type ProxyErrorCode,
 	type ProxyErrorEnvelope,
 	type ProxyOutcome,
-	type ProxyResponseEnvelope,
-	type SuccessEnvelope,
 } from './protocol';
 export {
 	createProxy,

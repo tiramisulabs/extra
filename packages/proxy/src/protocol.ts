@@ -1,7 +1,7 @@
 import type { ApiRequestOptions, HttpMethods } from 'seyfert';
 import { isRecord } from './internal';
 
-export const PROXY_ERROR_CODES = [
+const PROXY_ERROR_CODES = [
 	'PROXY_UNAUTHENTICATED',
 	'PROXY_TOKEN_OVERRIDE_UNSUPPORTED',
 	'PROXY_PAYLOAD_TOO_LARGE',
@@ -106,7 +106,7 @@ export function toApiRequestOptions(request: WireApiRequest, files?: ApiRequestO
 	};
 }
 
-export function isProxyErrorEnvelope(value: unknown): value is ProxyErrorEnvelope {
+function isProxyErrorEnvelope(value: unknown): value is ProxyErrorEnvelope {
 	return (
 		isRecord(value) &&
 		value.kind === 'proxy_error' &&

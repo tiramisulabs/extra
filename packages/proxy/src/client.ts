@@ -11,7 +11,7 @@ import {
 	proxyError,
 	type WireApiRequest,
 } from './protocol';
-import { encodeProxyRequest } from './transport';
+import { type EncodedRequest, encodeProxyRequest } from './transport';
 
 export interface ProxyApiHandlerOptions {
 	url: string | URL;
@@ -53,7 +53,7 @@ function localProxyError(requestId: string, outcome: 'not_dispatched' | 'unknown
 function requestProxy(
 	endpoint: URL,
 	credential: string,
-	encoded: ReturnType<typeof encodeProxyRequest>,
+	encoded: EncodedRequest,
 	requestId: string,
 	requestTimeout: number,
 ): Promise<TransportResult> {
@@ -115,7 +115,7 @@ function requestProxy(
 			markDispatched();
 		});
 		timer = setTimeout(() => request.destroy(new ProxyRequestTimeoutError()), requestTimeout);
-		timer.unref?.();
+		timer.unref();
 		request.once('error', error => {
 			const outcome = error instanceof ProxyRequestTimeoutError || dispatched ? 'unknown' : 'not_dispatched';
 			fail(localProxyError(requestId, outcome, error));
@@ -189,9 +189,9 @@ export class ProxyApiHandler extends ApiHandler {
 
 		const origin = {} as { stack?: string };
 		Error.captureStackTrace?.(origin, this.request);
-		let encoded: ReturnType<typeof encodeProxyRequest>;
+		let encoded: EncodedRequest;
 		try {
-			encoded = encodeProxyRequest(wire, request.files);
+			encoded = await encodeProxyRequest(wire, request.files);
 		} catch (cause) {
 			throw localProxyError(requestId, 'not_dispatched', cause);
 		}
