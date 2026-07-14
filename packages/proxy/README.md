@@ -58,9 +58,9 @@ client cannot declare it.
 | `token` | required | Central Discord bot token |
 | `credentials` | required | Active hashes created by `createServiceCredential` or `hashServiceCredential` |
 | `port` | required | HTTP listening port; `0` selects an ephemeral port |
-| `maxPendingRequests` | `512` | Maximum requests waiting for dispatch |
+| `maxPendingRequests` | `512` | Maximum admitted requests reading a body or waiting for dispatch |
 | `queueTimeout` | `5_000` | Maximum admission wait in milliseconds |
-| `maxRequestBytes` | `10 MiB` | Maximum encoded request size |
+| `maxRequestBytes` | `10 MiB + 64 KiB` | Maximum encoded request size, including proxy metadata and multipart framing |
 | `invalidWindow` | `{ max: 10_000, perMs: 600_000 }` | Invalid-response budget |
 
 The proactive gate admits at most 50 requests per sliding second. Identifiable interaction callback routes are exempt;
@@ -94,6 +94,7 @@ client.setServices({
 	rest: new ProxyApiHandler({
 		url: 'https://discord-rest.internal',
 		credential: process.env.REST_PROXY_CREDENTIAL!,
+		requestTimeout: 30_000,
 	}),
 });
 
@@ -102,7 +103,8 @@ await client.start();
 
 Requests without files use JSON. Requests with files use multipart and keep file bytes binary. `route` and `unshift`
 are intentionally not sent: the central `ApiHandler` owns scheduling. `auth: false` is supported. A per-request
-`ApiRequestOptions.token` override throws `PROXY_TOKEN_OVERRIDE_UNSUPPORTED` before dispatch.
+`ApiRequestOptions.token` override throws `PROXY_TOKEN_OVERRIDE_UNSUPPORTED` before dispatch. `requestTimeout`
+defaults to 30 seconds and bounds transport attempts whose delivery outcome can no longer be proven.
 
 ## Errors and delivery outcomes
 

@@ -29,7 +29,7 @@ function escapeDisposition(value: string): string {
 }
 
 function safeContentType(value: string | undefined): string {
-	return value && /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(value) ? value : 'application/octet-stream';
+	return value && !/[\r\n]/.test(value) ? value : 'application/octet-stream';
 }
 
 export function encodeProxyRequest(request: WireApiRequest, files: readonly RawFile[] | undefined): EncodedRequest {

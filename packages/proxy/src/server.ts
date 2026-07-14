@@ -21,12 +21,17 @@ import {
 	type SuccessEnvelope,
 	toApiRequestOptions,
 } from './protocol';
-import { ClientDisconnectedError, RequestScheduler } from './scheduler';
+import {
+	type AdmissionReservation,
+	ClientDisconnectedError,
+	type InFlightRequest,
+	RequestScheduler,
+} from './scheduler';
 import { type DecodedProxyRequest, decodeProxyRequest } from './transport';
 
 const DEFAULT_MAX_PENDING_REQUESTS = 512;
 const DEFAULT_QUEUE_TIMEOUT = 5_000;
-const DEFAULT_MAX_REQUEST_BYTES = 10 * 1024 * 1024;
+const DEFAULT_MAX_REQUEST_BYTES = 10 * 1024 * 1024 + 64 * 1024;
 const DEFAULT_INVALID_MAX = 10_000;
 const DEFAULT_INVALID_WINDOW = 600_000;
 const GLOBAL_GATE_LIMIT = 50;
@@ -122,6 +127,12 @@ function discordEnvelope(error: SeyfertError): DiscordErrorEnvelope {
 	};
 }
 
+function closeAfterResponse(req: IncomingMessage, res: ServerResponse): void {
+	res.shouldKeepAlive = false;
+	res.setHeader('connection', 'close');
+	res.once('finish', () => req.socket.end());
+}
+
 function validateOptions(options: ProxyServerOptions): Required<Omit<ProxyServerOptions, 'invalidWindow'>> & {
 	invalidWindow: { max: number; perMs: number };
 } {
@@ -148,7 +159,7 @@ class ProxyServerImpl implements ProxyServer {
 	readonly url: string;
 	private readonly observers = new Set<ProxyObserver>();
 	private readonly outcomes: Record<ProxyOutcome, number> = { not_dispatched: 0, completed: 0, unknown: 0 };
-	private readonly ambiguous = new Set<string>();
+	private readonly ambiguous = new Set<symbol>();
 	private closed = false;
 	private closePromise?: Promise<void>;
 	private stateSignature = '';
@@ -218,16 +229,22 @@ class ProxyServerImpl implements ProxyServer {
 		this.invalidTimer.unref?.();
 	}
 
-	record(outcome: ProxyOutcome, requestId: string, serviceId: string, code?: ProxyErrorCode): void {
-		if (this.ambiguous.delete(requestId)) return;
+	record(
+		outcome: ProxyOutcome,
+		requestId: string,
+		serviceId: string,
+		code?: ProxyErrorCode,
+		operationId?: symbol,
+	): void {
+		if (operationId && this.ambiguous.delete(operationId)) return;
 		this.outcomes[outcome]++;
 		this.emit({ type: 'request', requestId, serviceId, outcome, code });
 	}
 
-	markAmbiguous(requestIds: readonly string[]): void {
-		for (const requestId of requestIds) {
-			if (this.ambiguous.has(requestId)) continue;
-			this.ambiguous.add(requestId);
+	markAmbiguous(requests: readonly InFlightRequest[]): void {
+		for (const { operationId, requestId } of requests) {
+			if (this.ambiguous.has(operationId)) continue;
+			this.ambiguous.add(operationId);
 			this.outcomes.unknown++;
 			this.emit({ type: 'request', requestId, outcome: 'unknown' });
 		}
@@ -243,6 +260,7 @@ class ProxyServerImpl implements ProxyServer {
 	private async performClose(drainTimeout: number): Promise<void> {
 		this.scheduler.startDraining();
 		const deadline = Date.now() + drainTimeout;
+		const serverClosed = new Promise<void>(resolve => this.server.close(() => resolve()));
 		while (this.scheduler.inFlightCount > 0 && Date.now() < deadline) {
 			await new Promise(resolve => setTimeout(resolve, Math.min(25, Math.max(1, deadline - Date.now()))));
 		}
@@ -255,10 +273,15 @@ class ProxyServerImpl implements ProxyServer {
 		}
 		this.closed = true;
 		if (this.invalidTimer) clearTimeout(this.invalidTimer);
-		await new Promise<void>(resolve => {
-			this.server.close(() => resolve());
-			if (this.scheduler.inFlightCount > 0) this.server.closeAllConnections();
-		});
+		const remaining = Math.max(0, deadline - Date.now());
+		let forceTimer: NodeJS.Timeout | undefined;
+		if (remaining === 0) this.server.closeAllConnections();
+		else {
+			forceTimer = setTimeout(() => this.server.closeAllConnections(), remaining);
+			forceTimer.unref?.();
+		}
+		await serverClosed;
+		if (forceTimer) clearTimeout(forceTimer);
 		this.notifyStateChange();
 	}
 }
@@ -304,93 +327,118 @@ function createRequestHandler(
 			writeEmpty(res, 404);
 			return;
 		}
-
-		let body: Buffer;
+		const admissionRequestId = randomUUID();
+		let reservation: AdmissionReservation;
 		try {
-			body = await readRequestBody(req, options.maxRequestBytes);
+			reservation = scheduler.reserve(admissionRequestId);
 		} catch (error) {
-			const requestId = randomUUID();
-			const code = error instanceof PayloadTooLargeError ? 'PROXY_PAYLOAD_TOO_LARGE' : 'PROXY_INTERNAL';
-			const envelope = proxyError(code, 'not_dispatched', requestId, toError(error).message || 'Request body failed.');
-			proxy.record('not_dispatched', requestId, serviceId, code);
-			writeJson(res, proxyStatus(code), envelope);
+			if (!(error instanceof ProxyError)) throw error;
+			const envelope = proxyError(error.code, error.outcome, error.requestId, error.message);
+			proxy.record(error.outcome, error.requestId, serviceId, error.code);
+			closeAfterResponse(req, res);
+			writeJson(res, proxyStatus(error.code), envelope);
 			return;
 		}
-
-		let decoded: DecodedProxyRequest | undefined;
-		try {
-			decoded = await decodeProxyRequest(body, req.headers);
-		} catch {
-			decoded = undefined;
-		}
-		const requestId = decoded?.requestId ?? randomUUID();
-		if (decoded && 'tokenOverride' in decoded) {
-			const envelope = proxyError(
-				'PROXY_TOKEN_OVERRIDE_UNSUPPORTED',
-				'not_dispatched',
-				requestId,
-				'ApiRequestOptions.token is not supported by the proxy.',
-			);
-			proxy.record('not_dispatched', requestId, serviceId, envelope.code);
-			writeJson(res, 400, envelope);
-			return;
-		}
-		if (!decoded) {
-			const envelope = proxyError('PROXY_INTERNAL', 'not_dispatched', requestId, 'Invalid proxy request payload.');
-			proxy.record('not_dispatched', requestId, serviceId, envelope.code);
-			writeJson(res, 400, envelope);
-			return;
-		}
-		const request = decoded;
-
-		const disconnected = new AbortController();
-		let dispatched = false;
-		res.once('close', () => {
-			// Once ApiHandler owns the request, its retry and bucket state must finish without downstream cancellation.
-			if (!res.writableEnded && !dispatched) disconnected.abort();
-		});
 
 		try {
-			const envelope = await scheduler.submit<SuccessEnvelope | DiscordErrorEnvelope>({
-				requestId,
-				exempt: isInteractionCallback(request.url),
-				signal: disconnected.signal,
-				run: async () => {
-					dispatched = true;
-					try {
-						const result = await rest.request(request.method, request.url, toApiRequestOptions(request, request.files));
-						return { kind: 'success', status: 200, body: result };
-					} catch (error) {
-						if (SeyfertError.is(error)) return discordEnvelope(error);
-						throw error;
-					}
-				},
+			let body: Buffer;
+			try {
+				body = await readRequestBody(req, options.maxRequestBytes);
+			} catch (error) {
+				const code = error instanceof PayloadTooLargeError ? 'PROXY_PAYLOAD_TOO_LARGE' : 'PROXY_INTERNAL';
+				const envelope = proxyError(
+					code,
+					'not_dispatched',
+					admissionRequestId,
+					toError(error).message || 'Request body failed.',
+				);
+				proxy.record('not_dispatched', admissionRequestId, serviceId, code, reservation.operationId);
+				if (error instanceof PayloadTooLargeError) closeAfterResponse(req, res);
+				writeJson(res, proxyStatus(code), envelope);
+				return;
+			}
+
+			let decoded: DecodedProxyRequest | undefined;
+			try {
+				decoded = await decodeProxyRequest(body, req.headers);
+			} catch {
+				decoded = undefined;
+			}
+			const requestId = decoded?.requestId ?? admissionRequestId;
+			if (decoded && 'tokenOverride' in decoded) {
+				const envelope = proxyError(
+					'PROXY_TOKEN_OVERRIDE_UNSUPPORTED',
+					'not_dispatched',
+					requestId,
+					'ApiRequestOptions.token is not supported by the proxy.',
+				);
+				proxy.record('not_dispatched', requestId, serviceId, envelope.code, reservation.operationId);
+				writeJson(res, 400, envelope);
+				return;
+			}
+			if (!decoded) {
+				const envelope = proxyError('PROXY_INTERNAL', 'not_dispatched', requestId, 'Invalid proxy request payload.');
+				proxy.record('not_dispatched', requestId, serviceId, envelope.code, reservation.operationId);
+				writeJson(res, 400, envelope);
+				return;
+			}
+			const request = decoded;
+
+			const disconnected = new AbortController();
+			let dispatched = false;
+			res.once('close', () => {
+				// Once ApiHandler owns the request, its retry and bucket state must finish without downstream cancellation.
+				if (!res.writableEnded && !dispatched) disconnected.abort();
 			});
-			if (res.destroyed || (!res.writableEnded && res.closed)) {
-				proxy.record('unknown', requestId, serviceId);
-				return;
+
+			try {
+				const envelope = await scheduler.submitReserved<SuccessEnvelope | DiscordErrorEnvelope>(reservation, {
+					requestId,
+					exempt: isInteractionCallback(request.url),
+					signal: disconnected.signal,
+					run: async () => {
+						dispatched = true;
+						try {
+							const result = await rest.request(
+								request.method,
+								request.url,
+								toApiRequestOptions(request, request.files),
+							);
+							return { kind: 'success', status: 200, body: result };
+						} catch (error) {
+							if (SeyfertError.is(error)) return discordEnvelope(error);
+							throw error;
+						}
+					},
+				});
+				if (res.destroyed || (!res.writableEnded && res.closed)) {
+					proxy.record('unknown', requestId, serviceId, undefined, reservation.operationId);
+					return;
+				}
+				proxy.record('completed', requestId, serviceId, undefined, reservation.operationId);
+				writeJson(res, 200, envelope);
+			} catch (error) {
+				if (error instanceof ClientDisconnectedError) {
+					proxy.record('not_dispatched', requestId, serviceId, undefined, reservation.operationId);
+					return;
+				}
+				if (error instanceof ProxyError) {
+					const envelope = proxyError(error.code, error.outcome, error.requestId, error.message);
+					proxy.record(error.outcome, requestId, serviceId, error.code, reservation.operationId);
+					writeJson(res, proxyStatus(error.code), envelope);
+					return;
+				}
+				const envelope = proxyError(
+					'PROXY_INTERNAL',
+					dispatched ? 'unknown' : 'not_dispatched',
+					requestId,
+					'Proxy request failed.',
+				);
+				proxy.record(envelope.outcome, requestId, serviceId, envelope.code, reservation.operationId);
+				writeJson(res, 500, envelope);
 			}
-			proxy.record('completed', requestId, serviceId);
-			writeJson(res, 200, envelope);
-		} catch (error) {
-			if (error instanceof ClientDisconnectedError) {
-				proxy.record('not_dispatched', requestId, serviceId);
-				return;
-			}
-			if (error instanceof ProxyError) {
-				const envelope = proxyError(error.code, error.outcome, error.requestId, error.message);
-				proxy.record(error.outcome, requestId, serviceId, error.code);
-				writeJson(res, proxyStatus(error.code), envelope);
-				return;
-			}
-			const envelope = proxyError(
-				'PROXY_INTERNAL',
-				dispatched ? 'unknown' : 'not_dispatched',
-				requestId,
-				'Proxy request failed.',
-			);
-			proxy.record(envelope.outcome, requestId, serviceId, envelope.code);
-			writeJson(res, 500, envelope);
+		} finally {
+			scheduler.releaseReservation(reservation);
 		}
 	};
 }

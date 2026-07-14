@@ -72,4 +72,65 @@ describe('proactive gates', () => {
 			vi.useRealTimers();
 		}
 	});
+
+	test('dispatches exempt interaction callbacks past a gate-limited queue head', async () => {
+		vi.useFakeTimers();
+		try {
+			vi.setSystemTime(1_000);
+			const gate = new SlidingWindow(1, 1_000);
+			gate.record(Date.now());
+			const scheduler = new RequestScheduler(2, 2_000, gate, new InvalidRequestBudget(10, 1_000), () => {});
+			const dispatched: string[] = [];
+			const limited = scheduler.submit({
+				requestId: 'limited',
+				exempt: false,
+				run: async () => dispatched.push('limited'),
+			});
+			const exempt = scheduler.submit({
+				requestId: 'exempt',
+				exempt: true,
+				run: async () => dispatched.push('exempt'),
+			});
+
+			await exempt;
+			assert.deepEqual(dispatched, ['exempt']);
+			await vi.advanceTimersByTimeAsync(1_000);
+			await limited;
+			assert.deepEqual(dispatched, ['exempt', 'limited']);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test('tracks concurrent operations independently when request IDs repeat', async () => {
+		let releaseFirst!: () => void;
+		let releaseSecond!: () => void;
+		const firstGate = new Promise<void>(resolve => {
+			releaseFirst = resolve;
+		});
+		const secondGate = new Promise<void>(resolve => {
+			releaseSecond = resolve;
+		});
+		const scheduler = new RequestScheduler(
+			2,
+			1_000,
+			new SlidingWindow(1, 1_000),
+			new InvalidRequestBudget(10, 1_000),
+			() => {},
+		);
+		const first = scheduler.submit({ requestId: 'duplicate', exempt: true, run: () => firstGate });
+		const second = scheduler.submit({ requestId: 'duplicate', exempt: true, run: () => secondGate });
+
+		assert.equal(scheduler.inFlightCount, 2);
+		assert.deepEqual(
+			scheduler.inFlight.map(request => request.requestId),
+			['duplicate', 'duplicate'],
+		);
+		releaseFirst();
+		await first;
+		await Promise.resolve();
+		assert.equal(scheduler.inFlightCount, 1);
+		releaseSecond();
+		await second;
+	});
 });

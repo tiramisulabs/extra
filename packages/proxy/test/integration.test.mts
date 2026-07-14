@@ -50,6 +50,7 @@ describe('ProxyApiHandler integration', () => {
 			const file = form.get('files[0]');
 			assert.ok(file && typeof file !== 'string');
 			assert.equal(file.name, 'hello.txt');
+			assert.equal(file.type, 'text/plain; charset=utf-8');
 			assert.equal(await file.text(), 'hello');
 			const collision = payloadParts.find(part => typeof part !== 'string');
 			assert.ok(collision && typeof collision !== 'string');
@@ -65,11 +66,28 @@ describe('ProxyApiHandler integration', () => {
 				auth: false,
 				body: { content: 'file' },
 				files: [
-					{ filename: 'hello.txt', contentType: 'text/plain', data: Buffer.from('hello') },
+					{ filename: 'hello.txt', contentType: 'text/plain; charset=utf-8', data: Buffer.from('hello') },
 					{ key: 'payload_json', filename: 'collision.txt', data: Buffer.from('collision') },
 				],
 			}),
 			{ ok: true },
+		);
+	});
+
+	test('preserves top-level JSON arrays used by bulk command routes', async () => {
+		const commands = [{ name: 'ping', description: 'Ping' }];
+		const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+			assert.equal(init?.body, JSON.stringify(commands));
+			return response(200, commands);
+		});
+		const fixture = await startProxy(fetcher);
+		cleanups.push(() => fixture.close());
+
+		assert.deepEqual(
+			await fixture.handler.request('PUT', '/applications/1/commands', {
+				body: commands as unknown as Record<string, unknown>,
+			}),
+			commands,
 		);
 	});
 
@@ -106,5 +124,27 @@ describe('ProxyApiHandler integration', () => {
 		const error = await handler.request('GET', '/gateway/bot').catch(value => value);
 		assert.instanceOf(error, ProxyError);
 		assert.equal(error.outcome, 'not_dispatched');
+	});
+
+	test('bounds stalled proxy requests and classifies their outcome as unknown', async () => {
+		const stalled = http.createServer(() => {});
+		await new Promise<void>(resolve => stalled.listen(0, resolve));
+		const address = stalled.address();
+		assert.ok(address && typeof address !== 'string');
+		const handler = new ProxyApiHandler({
+			url: `http://127.0.0.1:${address.port}`,
+			credential: 'service',
+			requestTimeout: 25,
+		});
+
+		try {
+			const error = await handler.request('GET', '/gateway/bot').catch(value => value);
+			assert.instanceOf(error, ProxyError);
+			assert.equal(error.outcome, 'unknown');
+			assert.match(error.message, /timed out/i);
+		} finally {
+			stalled.closeAllConnections();
+			await new Promise<void>(resolve => stalled.close(() => resolve()));
+		}
 	});
 });

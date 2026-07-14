@@ -1,3 +1,4 @@
+import http from 'node:http';
 import { SeyfertError } from 'seyfert';
 import { afterEach, assert, describe, test, vi } from 'vitest';
 import { ProxyError, type ProxyObservation } from '../src';
@@ -149,6 +150,102 @@ describe('proxy server', () => {
 			requestId,
 		});
 		assert.equal(fetcher.mock.calls.length, 0);
+	});
+
+	test('reserves admission before reading a body and bounds shutdown with a stalled upload', async () => {
+		const fixture = await startProxy(async () => response(200, {}), { maxPendingRequests: 1 });
+		cleanups.push(() => fixture.close());
+		const slow = http.request(new URL('/api', fixture.proxy.url), {
+			method: 'POST',
+			headers: {
+				authorization: `Bearer ${fixture.service.credential}`,
+				'content-length': '1024',
+				'content-type': 'application/json',
+			},
+		});
+		slow.on('error', () => {});
+		slow.flushHeaders();
+		slow.write('{"method":');
+		while (fixture.proxy.getStats().pendingRequests === 0) await new Promise(resolve => setTimeout(resolve, 1));
+
+		const overloaded = await request(fixture.proxy.url, {
+			path: '/api',
+			method: 'POST',
+			credential: fixture.service.credential,
+			contentType: 'application/json',
+			body: JSON.stringify({ method: 'GET', url: '/gateway/bot', requestId: 'overloaded' }),
+		});
+		assert.equal(overloaded.status, 503);
+		assert.equal(JSON.parse(overloaded.body).code, 'PROXY_OVERLOADED');
+
+		const started = Date.now();
+		await fixture.close(30);
+		assert.ok(Date.now() - started < 500);
+		assert.equal(fixture.proxy.getStats().state, 'closed');
+		slow.destroy();
+	});
+
+	test('stops reading an oversized chunked body after returning 413', async () => {
+		const fetcher = vi.fn<typeof fetch>(async () => response(200, {}));
+		const fixture = await startProxy(fetcher, { maxRequestBytes: 32 });
+		cleanups.push(() => fixture.close());
+		const result = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+			const req = http.request(
+				new URL('/api', fixture.proxy.url),
+				{
+					method: 'POST',
+					headers: {
+						authorization: `Bearer ${fixture.service.credential}`,
+						'content-type': 'application/json',
+					},
+				},
+				res => {
+					const chunks: Buffer[] = [];
+					res.on('data', chunk => chunks.push(Buffer.from(chunk)));
+					res.on('end', () => resolve({ status: res.statusCode ?? 500, body: Buffer.concat(chunks).toString() }));
+				},
+			);
+			req.once('error', reject);
+			req.write('x'.repeat(64));
+		});
+
+		assert.equal(result.status, 413);
+		assert.equal(JSON.parse(result.body).code, 'PROXY_PAYLOAD_TOO_LARGE');
+		assert.equal(fetcher.mock.calls.length, 0);
+	});
+
+	test('counts duplicate request IDs independently when drain times out', async () => {
+		const held = deferred<void>();
+		const fetcher = vi.fn<typeof fetch>(async () => {
+			await held.promise;
+			return response(200, { ok: true });
+		});
+		const fixture = await startProxy(fetcher);
+		cleanups.push(() => fixture.close());
+		const payload = (url: string) =>
+			JSON.stringify({ method: 'POST', url, requestId: 'duplicate', auth: false, body: { type: 4 } });
+		const first = request(fixture.proxy.url, {
+			path: '/api',
+			method: 'POST',
+			credential: fixture.service.credential,
+			contentType: 'application/json',
+			body: payload('/interactions/1/first/callback'),
+		}).catch(value => value);
+		const second = request(fixture.proxy.url, {
+			path: '/api',
+			method: 'POST',
+			credential: fixture.service.credential,
+			contentType: 'application/json',
+			body: payload('/interactions/2/second/callback'),
+		}).catch(value => value);
+		while (fixture.proxy.getStats().inFlightRequests < 2) {
+			await new Promise(resolve => setTimeout(resolve, 1));
+		}
+
+		await fixture.proxy.close({ drainTimeout: 20 });
+		assert.equal(fixture.proxy.getStats().outcomes.unknown, 2);
+		held.resolve();
+		await Promise.allSettled([first, second]);
 	});
 
 	test('drains without cancelling dispatched work and counts timeout ambiguity once', async () => {

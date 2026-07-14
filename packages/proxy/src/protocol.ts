@@ -47,7 +47,7 @@ export interface WireApiRequest {
 	method: HttpMethods;
 	url: `/${string}`;
 	query?: Record<string, unknown>;
-	body?: Record<string, unknown>;
+	body?: Record<string, unknown> | unknown[];
 	auth?: boolean;
 	reason?: string;
 	appendToFormData?: boolean;
@@ -70,7 +70,7 @@ export function parseWireRequest(value: unknown): WireApiRequest | undefined {
 	if (typeof value.url !== 'string' || !value.url.startsWith('/')) return;
 	if (!isRequestId(value.requestId)) return;
 	if (value.query !== undefined && !isRecord(value.query)) return;
-	if (value.body !== undefined && !isRecord(value.body)) return;
+	if (value.body !== undefined && !isRecord(value.body) && !Array.isArray(value.body)) return;
 	if (value.auth !== undefined && typeof value.auth !== 'boolean') return;
 	if (value.reason !== undefined && typeof value.reason !== 'string') return;
 	if (value.appendToFormData !== undefined && typeof value.appendToFormData !== 'boolean') return;
@@ -98,7 +98,7 @@ export function parseWireRequest(value: unknown): WireApiRequest | undefined {
 export function toApiRequestOptions(request: WireApiRequest, files?: ApiRequestOptions['files']): ApiRequestOptions {
 	return {
 		query: request.query,
-		body: request.body,
+		body: request.body as ApiRequestOptions['body'],
 		files,
 		auth: request.auth,
 		reason: request.reason,

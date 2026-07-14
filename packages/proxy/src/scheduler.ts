@@ -2,6 +2,7 @@ import { InvalidRequestBudget, SlidingWindow } from './gates';
 import { ProxyError, type ProxyErrorCode, proxyError } from './protocol';
 
 interface PendingEntry {
+	operationId: symbol;
 	requestId: string;
 	exempt: boolean;
 	run: () => Promise<unknown>;
@@ -10,6 +11,14 @@ interface PendingEntry {
 	timer: NodeJS.Timeout;
 	signal?: AbortSignal;
 	onAbort?: () => void;
+}
+
+export interface AdmissionReservation {
+	readonly operationId: symbol;
+}
+
+export interface InFlightRequest extends AdmissionReservation {
+	readonly requestId: string;
 }
 
 export interface SubmitOptions<T> {
@@ -27,7 +36,8 @@ export class ClientDisconnectedError extends Error {
 
 export class RequestScheduler {
 	private readonly pending: PendingEntry[] = [];
-	private readonly inFlightIds = new Set<string>();
+	private readonly reservations = new Set<symbol>();
+	private readonly inFlightRequests = new Map<symbol, string>();
 	private gateTimer?: NodeJS.Timeout;
 	private accepting = true;
 	private tokenQuarantined = false;
@@ -41,15 +51,15 @@ export class RequestScheduler {
 	) {}
 
 	get pendingCount(): number {
-		return this.pending.length;
+		return this.pending.length + this.reservations.size;
 	}
 
 	get inFlightCount(): number {
-		return this.inFlightIds.size;
+		return this.inFlightRequests.size;
 	}
 
-	get inFlight(): readonly string[] {
-		return [...this.inFlightIds];
+	get inFlight(): readonly InFlightRequest[] {
+		return [...this.inFlightRequests].map(([operationId, requestId]) => ({ operationId, requestId }));
 	}
 
 	get draining(): boolean {
@@ -80,14 +90,45 @@ export class RequestScheduler {
 		return new ProxyError(proxyError(code, 'not_dispatched', requestId, message));
 	}
 
+	reserve(requestId: string): AdmissionReservation {
+		if (!this.accepting) throw this.rejection('PROXY_DRAINING', requestId, 'Proxy is draining.');
+		if (this.quarantined) throw this.rejection('PROXY_QUARANTINED', requestId, 'Proxy is quarantined.');
+		if (this.pendingCount >= this.maxPendingRequests) {
+			throw this.rejection('PROXY_OVERLOADED', requestId, 'Proxy admission queue is full.');
+		}
+		const reservation = { operationId: Symbol(requestId) };
+		this.reservations.add(reservation.operationId);
+		this.onStateChange();
+		return reservation;
+	}
+
+	releaseReservation(reservation: AdmissionReservation): void {
+		if (!this.reservations.delete(reservation.operationId)) return;
+		this.onStateChange();
+	}
+
 	submit<T>(options: SubmitOptions<T>): Promise<T> {
+		return this.enqueue(options, Symbol(options.requestId), false);
+	}
+
+	submitReserved<T>(reservation: AdmissionReservation, options: SubmitOptions<T>): Promise<T> {
+		if (!this.reservations.delete(reservation.operationId)) {
+			return Promise.reject(
+				this.rejection('PROXY_INTERNAL', options.requestId, 'Proxy admission reservation is no longer active.'),
+			);
+		}
+		this.onStateChange();
+		return this.enqueue(options, reservation.operationId, true);
+	}
+
+	private enqueue<T>(options: SubmitOptions<T>, operationId: symbol, reserved: boolean): Promise<T> {
 		if (!this.accepting) {
 			return Promise.reject(this.rejection('PROXY_DRAINING', options.requestId, 'Proxy is draining.'));
 		}
 		if (this.quarantined) {
 			return Promise.reject(this.rejection('PROXY_QUARANTINED', options.requestId, 'Proxy is quarantined.'));
 		}
-		if (this.pending.length >= this.maxPendingRequests) {
+		if (!reserved && this.pendingCount >= this.maxPendingRequests) {
 			return Promise.reject(this.rejection('PROXY_OVERLOADED', options.requestId, 'Proxy admission queue is full.'));
 		}
 		if (options.signal?.aborted) return Promise.reject(new ClientDisconnectedError());
@@ -95,6 +136,7 @@ export class RequestScheduler {
 		return new Promise<T>((resolve, reject) => {
 			const entry: PendingEntry = {
 				...options,
+				operationId,
 				resolve: value => resolve(value as T),
 				reject,
 				timer: setTimeout(() => {
@@ -135,9 +177,10 @@ export class RequestScheduler {
 	private pump(): void {
 		if (!this.accepting || this.tokenQuarantined || this.invalidBudget.blockedFor(Date.now()) > 0) return;
 		while (this.pending.length) {
-			const entry = this.pending[0];
+			let index = 0;
+			let entry = this.pending[index];
 			if (entry.signal?.aborted) {
-				this.pending.shift();
+				this.pending.splice(index, 1);
 				this.detach(entry);
 				entry.reject(new ClientDisconnectedError());
 				continue;
@@ -145,10 +188,20 @@ export class RequestScheduler {
 			const now = Date.now();
 			const delay = entry.exempt ? 0 : this.globalGate.delay(now);
 			if (delay > 0) {
-				this.schedulePump(delay);
-				break;
+				index = this.pending.findIndex(candidate => candidate.exempt);
+				if (index === -1) {
+					this.schedulePump(delay);
+					break;
+				}
+				entry = this.pending[index];
 			}
-			this.pending.shift();
+			if (entry.signal?.aborted) {
+				this.pending.splice(index, 1);
+				this.detach(entry);
+				entry.reject(new ClientDisconnectedError());
+				continue;
+			}
+			this.pending.splice(index, 1);
 			this.detach(entry);
 			if (!entry.exempt) this.globalGate.record(now);
 			this.dispatch(entry);
@@ -167,13 +220,13 @@ export class RequestScheduler {
 	}
 
 	private dispatch(entry: PendingEntry): void {
-		this.inFlightIds.add(entry.requestId);
+		this.inFlightRequests.set(entry.operationId, entry.requestId);
 		this.onStateChange();
 		entry
 			.run()
 			.then(entry.resolve, entry.reject)
 			.finally(() => {
-				this.inFlightIds.delete(entry.requestId);
+				this.inFlightRequests.delete(entry.operationId);
 				this.onStateChange();
 			});
 	}
