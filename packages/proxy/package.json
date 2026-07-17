@@ -1,6 +1,6 @@
 {
 	"name": "@slipher/proxy",
-	"version": "0.0.7",
+	"version": "1.0.0",
 	"private": false,
 	"license": "MIT",
 	"publishConfig": {
@@ -12,17 +12,25 @@
 	"main": "./lib/index.js",
 	"module": "./lib/index.js",
 	"types": "./lib/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./lib/index.d.ts",
+			"import": "./lib/index.js",
+			"require": "./lib/index.js",
+			"default": "./lib/index.js"
+		},
+		"./package.json": "./package.json"
+	},
 	"scripts": {
 		"dev": "tsc --watch",
 		"build": "tsc",
-		"lint": "biome lint --write ./src",
-		"format": "biome format --write ./src",
-		"checkb": "biome check --write --no-errors-on-unmatched ./src",
-		"test": "vitest run ./test/",
-		"prepublish": "pnpm build"
-	},
-	"dependencies": {
-		"uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.49.0"
+		"lint": "biome lint --write ./src ./test",
+		"format": "biome format --write ./src ./test",
+		"checkb": "biome check --write --no-errors-on-unmatched ./src ./test",
+		"typecheck": "tsc --noEmit --project ./test/tsconfig.json",
+		"test": "pnpm typecheck && vitest run --config ./test/vitest.config.mts ./test/",
+		"test:contract": "vitest run --config ./test/vitest.config.mts ./test/contract.test.mts",
+		"prepublishOnly": "pnpm build"
 	},
 	"devDependencies": {
 		"@types/node": "^26.0.1",
