@@ -1,6 +1,9 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 const prefix = 'slipher.proxy.v1';
+const saltBytes = 16;
+const digestBytes = 32;
+const credentialBytes = 32;
 
 export interface ServiceCredential {
 	credential: string;
@@ -30,18 +33,18 @@ function digestCredential(credential: string, salt: Buffer): Buffer {
 export function hashServiceCredential(serviceId: string, credential: string): string {
 	validateServiceId(serviceId);
 	validateCredential(credential);
-	const salt = randomBytes(16);
-	const digest = digestCredential(credential, salt);
-	return `${prefix}.${Buffer.from(serviceId).toString('base64url')}.${salt.toString('base64url')}.${digest.toString('base64url')}`;
+	const salt = randomBytes(saltBytes);
+	return `${prefix}.${Buffer.from(serviceId).toString('base64url')}.${salt.toString('base64url')}.${digestCredential(credential, salt).toString('base64url')}`;
 }
 
 export function createServiceCredential(serviceId: string): ServiceCredential {
-	const credential = randomBytes(32).toString('base64url');
+	const credential = randomBytes(credentialBytes).toString('base64url');
 	return { credential, hash: hashServiceCredential(serviceId, credential) };
 }
 
 function parseCredentialHash(value: string): ParsedCredentialHash {
 	const encoded = value.startsWith(`${prefix}.`) ? value.slice(prefix.length + 1).split('.') : [];
+	// Buffer.from silently drops non-base64url characters, so the charset must be validated before decoding.
 	if (encoded.length !== 3 || encoded.some(part => !/^[A-Za-z0-9_-]+$/.test(part))) {
 		throw new TypeError('credentials contains an invalid service credential hash.');
 	}
@@ -50,7 +53,7 @@ function parseCredentialHash(value: string): ParsedCredentialHash {
 	const salt = Buffer.from(encodedSalt, 'base64url');
 	const digest = Buffer.from(encodedDigest, 'base64url');
 	validateServiceId(serviceId);
-	if (salt.byteLength !== 16 || digest.byteLength !== 32) {
+	if (salt.byteLength !== saltBytes || digest.byteLength !== digestBytes) {
 		throw new TypeError('credentials contains an invalid service credential hash.');
 	}
 	return { serviceId, salt, digest };
@@ -63,8 +66,7 @@ export function createCredentialAuthenticator(hashes: readonly string[]): (crede
 		let serviceId: string | undefined;
 		// Scan every active hash so a match does not reveal its position through early-return timing.
 		for (const entry of parsed) {
-			const actual = digestCredential(credential, entry.salt);
-			if (timingSafeEqual(actual, entry.digest)) serviceId = entry.serviceId;
+			if (timingSafeEqual(digestCredential(credential, entry.salt), entry.digest)) serviceId = entry.serviceId;
 		}
 		return serviceId;
 	};
