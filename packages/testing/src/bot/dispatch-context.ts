@@ -19,6 +19,8 @@ export interface DispatchDenial {
 
 export interface DispatchContext {
 	readonly dispatchId: number;
+	/** Stateful actor/session that owns this dispatch, when driven through the chronological API. */
+	readonly sessionKey?: string;
 	componentCommandExecuted: boolean;
 	collectorMatched: boolean;
 	modalMatched: boolean;

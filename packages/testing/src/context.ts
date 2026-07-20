@@ -362,7 +362,7 @@ function mockInteractionBase(
 				throw new TypeError(
 					'createComponentCollector is not available on mockCommandContext (the light unit harness has no ' +
 						'component runtime). For collector/confirm flows use createMockBot({ commands: [...] }) and drive them ' +
-						'with bot.slash(...).untilComponent(id) + bot.clickButton(id).',
+						'step-by-step with await bot.slash(...) + await bot.clickButton(id).',
 				);
 			},
 		});

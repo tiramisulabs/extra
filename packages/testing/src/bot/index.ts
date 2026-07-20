@@ -14,7 +14,7 @@
  *
  * Public API surface: this barrel re-exports an explicit, curated allowlist - the
  * names a TEST AUTHOR legitimately uses. Internal helper modules (hooks,
- * option-validation, select-resolved, defaults, dispatch, dispatch-context),
+ * option-validation, select-resolved, defaults, dispatch-context),
  * world-events internals, rest.ts request plumbing, and the WorldState write
  * surface are deliberately NOT exported here. Deep imports remain available for
  * the package's own tests; do not promote internals into this list.
@@ -51,6 +51,7 @@ export {
 	type OptionsRecordOf,
 	type OutgoingMessage,
 	type PluginInfo,
+	type RawInteractionDispatchers,
 	type RegisteredCommand,
 	type RegisteredCommandFound,
 	type RegisteredComponent,
@@ -68,6 +69,7 @@ export {
 	TEST_GUILD_ID,
 	TEST_USER_ID,
 } from './constants';
+export { Dispatch } from './dispatch';
 export { MockGateway, type MockGatewayOptions, type MockShard } from './gateway';
 export {
 	type ApiInteractionPayload,

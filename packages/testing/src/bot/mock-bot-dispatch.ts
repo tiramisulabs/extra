@@ -30,12 +30,22 @@ import { Routes } from './routes';
 import { renderedReply } from './state';
 
 export abstract class MockBotDispatchCore extends MockBotSurface {
-	abstract fillModal(
+	protected abstract dispatchSubmitModal(
 		customId: string,
 		fields: ModalFields,
 		options?: Omit<ModalSubmitInteractionOptions, 'customId' | 'fields'>,
 	): Dispatch<DispatchResult>;
 	protected abstract runInteraction(payload: ApiInteractionPayload, dispatchId: number): Promise<DispatchResult>;
+	protected abstract snapshotInteraction(payload: ApiInteractionPayload, dispatchId: number): DispatchResult;
+
+	protected performStep<T>(dispatch: Dispatch<T>, sessionKey?: string, resumedOwnerDispatchId?: number): Promise<T> {
+		return this.sessions.perform(
+			dispatch,
+			sessionKey ?? this.sessions.keyForUser(dispatch.userId),
+			resumedOwnerDispatchId,
+		);
+	}
+
 	/**
 	 * Run plugin teardown explicitly. Seyfert's `Client.close()` IS the plugin lifecycle close — it waits for
 	 * in-flight `setup` and runs each plugin's `teardown` (it does not touch the gateway, REST, or cache). This
@@ -53,7 +63,7 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 	 */
 	diagnostics(recentLimit = 20): BotDiagnostics {
 		const pending = this.dispatches
-			.filter(dispatch => !dispatch.isSettled)
+			.filter(dispatch => !dispatch.isSettled && !dispatch.isCompleted)
 			.map(dispatch => ({ id: dispatch.userId, started: dispatch.started, settled: dispatch.isSettled }));
 		const actions = this.rest.actions;
 		const recentActions = recentLimit >= 0 ? actions.slice(Math.max(0, actions.length - recentLimit)) : [...actions];
@@ -226,12 +236,10 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 	 * It can only observe work that eventually touches REST (or a tracked timer); a purely in-memory continuation
 	 * that does no REST is invisible to any drain — there is no general signal for that.
 	 *
-	 * Relation to `await dispatch`: the two are orthogonal. `await dispatch` waits for the handler to RETURN
-	 * (carrying its result/parked accessors); `settle()` waits for detached background REST to QUIESCE across all
-	 * dispatches. Use `await dispatch` for a synchronous handler; add `await bot.settle()` when the handler
-	 * fire-and-forgets background work; use `dispatch.untilComponent('id')` instead of `await dispatch` when the
-	 * handler parks on a nested collector (awaiting it would hang). `await dispatch; await bot.settle()` is the
-	 * always-safe idiom — `settle()` is a no-op when there's no background work.
+	 * Relation to an advanced raw `Dispatch`: the two are orthogonal. Awaiting the dispatch waits for the handler
+	 * to return; `settle()` waits for detached background REST to quiesce across all dispatches. Stateful
+	 * `slash`/`submitModal`/`clickButton`/`selectMenu` already stop at real input checkpoints. Add `settle()` only
+	 * when application code intentionally starts observable work without awaiting it.
 	 */
 	async settle(): Promise<void> {
 		assertRealSetImmediate();
@@ -431,7 +439,7 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 	 * Build and run a dispatch whose payload is produced asynchronously (used by lazy loading, where the command must
 	 * be imported before its options can be resolved). Mirrors {@link dispatchInteraction}'s wiring — same dispatchId,
 	 * modal/component awaiters — but takes the invoking user up front (known from the dispatch options) instead of
-	 * deriving it from the not-yet-built payload, so chaining (`.fillModal`, `.untilComponent`) works under lazy.
+	 * deriving it from the not-yet-built payload, so raw `.submitModal` / `.untilComponent` work under lazy loading.
 	 */
 	protected dispatchDeferred<R = DispatchResult>(
 		user: ApiUser | undefined,
@@ -441,22 +449,30 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 		this.assertOpen('dispatch');
 		const userId = user?.id;
 		const dispatchId = nextDispatchId();
+		let payload: ApiInteractionPayload | undefined;
 		return this.track(
 			new Dispatch<R>(
 				this.rest,
 				this.client,
 				userId,
 				async () => {
-					const payload = await buildPayload();
+					payload = await buildPayload();
 					const result = await this.runInteraction(payload, dispatchId);
 					return (wrapResult ? wrapResult(result) : result) as R;
 				},
 				(id, ownerDispatchId) => this.onModalRegistered(id, ownerDispatchId),
 				dispatchId,
-				user ? (customId, fields) => this.fillModal(customId, fields, { user }) : undefined,
+				user ? (customId, fields) => this.dispatchSubmitModal(customId, fields, { user }) : undefined,
 				id => this.modalOwners.delete(id),
 				(customId, scopeId, execution, timeoutMs) =>
 					this.awaitRenderedComponent(customId, scopeId, execution, timeoutMs),
+				() => {
+					if (!payload) {
+						throw new TypeError('The deferred interaction has not built its payload yet.');
+					}
+					const result = this.snapshotInteraction(payload, dispatchId);
+					return (wrapResult ? wrapResult(result) : result) as R;
+				},
 			),
 		);
 	}
@@ -474,10 +490,11 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 				() => this.runInteraction(payload, dispatchId),
 				(id, ownerDispatchId) => this.onModalRegistered(id, ownerDispatchId),
 				dispatchId,
-				user ? (customId, fields) => this.fillModal(customId, fields, { user }) : undefined,
+				user ? (customId, fields) => this.dispatchSubmitModal(customId, fields, { user }) : undefined,
 				id => this.modalOwners.delete(id),
 				(customId, scopeId, execution, timeoutMs) =>
 					this.awaitRenderedComponent(customId, scopeId, execution, timeoutMs),
+				() => this.snapshotInteraction(payload, dispatchId),
 			),
 		);
 	}
@@ -666,9 +683,17 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 			modalOwners: this.modalOwners,
 			drainUntilQuiescent: (dispatchId, aborted) => this.drainUntilQuiescent(dispatchId, aborted),
 			onModalDisplayed: (userId, dispatchId) => this.captureDisplayedModal(userId, dispatchId),
+			onModalTimedOut: (userId, dispatchId) => {
+				if (this.modalOwners.get(userId) === dispatchId) this.modalOwners.delete(userId);
+				this.displayedModals.delete(userId);
+				this.sessions.discardModal(dispatchId, userId);
+			},
+			onCheckpoint: checkpoint => this.sessions.recordCheckpoint(checkpoint),
+			onCheckpointSettled: checkpoint => this.sessions.discardCheckpoint(checkpoint),
 		});
 		this.canDetectComponentCommand = capabilities.canDetectComponentCommand;
 		this.canDetectCollector = capabilities.canDetectCollector;
+		this.canDetectComponentWait = capabilities.canDetectComponentWait;
 		this.canDetectModalCollector = capabilities.canDetectModalCollector;
 	}
 

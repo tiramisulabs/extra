@@ -261,7 +261,7 @@ describe('MockApiHandler', () => {
 		const stubbed = await bot.rest.request<{ name: string }>('GET', '/guilds/42');
 		expect(stubbed.name).toBe('User Stub');
 
-		bot.reset();
+		await bot.reset();
 
 		const afterReset = await bot.rest.request<{ id: string; name: string }>('GET', '/guilds/42');
 		expect(afterReset.name).not.toBe('User Stub');

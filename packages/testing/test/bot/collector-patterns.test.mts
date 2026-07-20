@@ -74,7 +74,7 @@ describe('collector patterns', () => {
 		}
 
 		const bot = await createMockBot({ components: [ConfirmModal] });
-		await bot.fillModal('confirm-modal', { name: 'x' });
+		await bot.submitModal('confirm-modal', { name: 'x' });
 		const res = await bot.clickButton('continue');
 		expect(done).toEqual(['clicked']);
 		expect(res.reply?.body).toMatchObject({ data: { content: 'created channels' } });
@@ -109,16 +109,17 @@ describe('collector patterns', () => {
 		}
 
 		const bot = await createMockBot({ commands: [SetupCommand] });
-		await bot.slash({ name: 'setup' }).fillModal('setup-modal', {});
+		await bot.slash({ name: 'setup' });
+		await bot.submitModal('setup-modal', {});
 		const res = await bot.clickButton('setup-continue');
 		expect(done).toEqual(['clicked']);
 		expect(res.reply?.body).toMatchObject({ data: { content: 'created channels' } });
 		await bot.close();
 	});
 
-	// fillModal fills a FileUpload input with attachments, so the handler's interaction.getFiles(customId) (and any
+	// submitModal fills a FileUpload input with attachments, so the handler's interaction.getFiles(customId) (and any
 	// content-type validation) sees them — not just text inputs.
-	test('fillModal fills a FileUpload input so getFiles sees the attachments', async () => {
+	test('submitModal fills a FileUpload input so getFiles sees the attachments', async () => {
 		const seen: string[] = [];
 
 		@Declare({ name: 'upload', description: 'Upload flow with a file input' })
@@ -142,7 +143,8 @@ describe('collector patterns', () => {
 		}
 
 		const bot = await createMockBot({ commands: [UploadCommand] });
-		const res = await bot.slash({ name: 'upload' }).fillModal('upload-modal', {
+		await bot.slash({ name: 'upload' });
+		const res = await bot.submitModal('upload-modal', {
 			note: 'hello',
 			attachment: [apiAttachment({ filename: 'evidence.pdf', contentType: 'application/pdf' })],
 		});
@@ -176,10 +178,8 @@ describe('collector patterns', () => {
 		const author = world.registerUser({ id: 'author-1' }); // so author.write can open the DM
 		const bot = await createMockBot({ commands: [MassDmCommand], world });
 
-		const flow = bot.slash({ name: 'massdm', guildId: guild.id, user: author });
-		await flow.untilComponent('confirm-mass-dm'); // the DM button is visible across the dispatch's actions
-		await bot.clickButton('confirm-mass-dm');
-		await flow;
+		await bot.slash({ name: 'massdm', guildId: guild.id, user: author });
+		await bot.clickButton('confirm-mass-dm', { user: author });
 
 		expect(events).toEqual(['confirmed']);
 		await bot.close();
@@ -227,18 +227,15 @@ describe('collector patterns', () => {
 		const bot = await createMockBot({ commands: [WizardCommand] });
 		await bot.slash({ name: 'wizard' });
 
-		// Awaiting the click directly would hang — its handler parks on the nested collector. untilComponent
-		// resolves when the nested button renders, proving the click is parkable and the handler is still parked.
-		const click = bot.clickButton('open');
-		await click.untilComponent('confirm-nested');
+		// The stateful click yields when the nested collector is registered and its button is rendered.
+		await bot.clickButton('open');
 		expect(events).toEqual([]);
-		rendered(click).get.button('confirm-nested');
+		rendered(bot).get.button('confirm-nested');
 
 		await bot.close();
 	});
 
-	// The bot-level rendered reader scans all recorded actions (unscoped), so a reply emitted inside a collector
-	// handler is assertable without reaching into raw bot.actions or picking which dispatch captured it.
+	// The stateful click makes the collector reply the bot's current output.
 	test('bot-level rendered sees a reply emitted inside a collector handler', async () => {
 		@Declare({ name: 'reopen', description: 'Confirm then reopen' })
 		class ReopenCommand extends Command {
@@ -262,8 +259,7 @@ describe('collector patterns', () => {
 		await bot.close();
 	});
 
-	// Text counterpart of the embed accessor above: a reply written inside a collector handler records under no
-	// dispatch, so the scoped `DispatchResult.content` misses it — bot.lastContent() (unscoped) sees it.
+	// Text counterpart of the embed accessor above: the collector reply becomes the click step's current output.
 	test('bot-level lastContent sees text written inside a collector handler', async () => {
 		@Declare({ name: 'ack', description: 'Confirm then acknowledge' })
 		class AckCommand extends Command {

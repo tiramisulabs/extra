@@ -17,6 +17,8 @@ import {
 
 export function normalizeOutput(subject: RenderedSubject, options: RenderedOptions): CanonicalOutput {
 	const source = unwrapBuilder(subject);
+	const current = asRecord(source).currentActions;
+	if (Array.isArray(current)) return fromActions(current as RecordedAction[], options);
 	const dispatchActions = dispatchActionsOf(source);
 	if (dispatchActions) return fromActions(dispatchActions.actions, options, dispatchActions.dispatchId);
 	const record = asRecord(source);

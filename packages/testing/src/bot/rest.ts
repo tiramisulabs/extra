@@ -13,6 +13,8 @@ export interface RecordedAction {
 	seq: number;
 	/** Dispatch that produced this action, for per-dispatch attribution under concurrency. */
 	dispatchId?: number;
+	/** Stateful actor/session that produced this action. Absent for raw and out-of-band REST. */
+	sessionKey?: string;
 	method: HttpMethods;
 	route: string;
 	body?: Record<string, unknown>;
@@ -833,8 +835,16 @@ export class MockApiHandler extends ApiHandler {
 			files: requestOptions.files,
 			reason: requestOptions.reason,
 		};
-		const dispatchId = dispatchStore.getStore()?.dispatchId ?? 0;
-		const action: RecordedAction = { seq: this.seq++, dispatchId, ...pending, settled: false, response: undefined };
+		const context = dispatchStore.getStore();
+		const dispatchId = context?.dispatchId ?? 0;
+		const action: RecordedAction = {
+			seq: this.seq++,
+			dispatchId,
+			...(context?.sessionKey === undefined ? {} : { sessionKey: context.sessionKey }),
+			...pending,
+			settled: false,
+			response: undefined,
+		};
 		this.actions.push(action);
 		this.inFlight.set(dispatchId, (this.inFlight.get(dispatchId) ?? 0) + 1);
 		this.notifyListeners(action, 'pending');

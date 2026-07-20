@@ -102,8 +102,8 @@ export type ComponentSelectOptions = Omit<SelectMenuInteractionOptions, 'customI
 /** Interactive component harvested from a dispatch result, bound to the message that rendered it. */
 export interface ComponentActionView extends InteractiveComponentView {
 	source?: ComponentSourceView;
-	click(options?: ComponentClickOptions): Dispatch<DispatchResult>;
-	select(values: string[], options?: ComponentSelectOptions): Dispatch<DispatchResult>;
+	click(options?: ComponentClickOptions): Promise<DispatchResult>;
+	select(values: string[], options?: ComponentSelectOptions): Promise<DispatchResult>;
 }
 
 /** Semantic result produced by interaction dispatchers. */
@@ -349,14 +349,40 @@ export interface ActorOptions {
 
 /** Bound dispatcher facade that reuses one identity across a flow. */
 export interface Actor {
-	slash<C extends SlashCommandClass>(command: C, options?: SlashClassOptions<C>): Dispatch<DispatchResult>;
-	slash(options: ChatInputInteractionOptions): Dispatch<DispatchResult>;
+	/** Visible output from this actor's most recent stateful step. */
+	readonly currentActions: readonly RecordedAction[];
+	slash<C extends SlashCommandClass>(command: C, options?: SlashClassOptions<C>): Promise<DispatchResult>;
+	slash(options: ChatInputInteractionOptions): Promise<DispatchResult>;
 	autocomplete(options: AutocompleteInteractionOptions): Dispatch<AutocompleteResult>;
 	userMenu(options: UserCommandInteractionOptions): Dispatch<UserMenuResult>;
 	messageMenu(options: MessageCommandInteractionOptions): Dispatch<MessageMenuResult>;
 	menu<C extends MenuCommandClass>(command: C, options?: MenuOptions<C>): Dispatch<MenuResultFor<C>>;
 	entryPoint(options?: EntryPointInteractionOptions): Dispatch<DispatchResult>;
-	fillModal(
+	submitModal(
+		customId: string,
+		fields?: ModalFields,
+		options?: Omit<ModalSubmitInteractionOptions, 'customId' | 'fields'>,
+	): Promise<DispatchResult>;
+	clickButton(customId: string, options?: Parameters<MockBot['clickButton']>[1]): Promise<DispatchResult>;
+	selectMenu(
+		customId: string,
+		values: string[],
+		options?: Parameters<MockBot['selectMenu']>[2],
+	): Promise<DispatchResult>;
+	say(content: string, options?: DispatchMessageOptions): Dispatch<SayResult>;
+	emit<TName extends GatewayDispatchPayload['t']>(
+		name: TName,
+		payload?: Partial<Extract<GatewayDispatchPayload, { t: TName }>['d']>,
+		options?: EmitEventOptions,
+	): Dispatch<EventDispatchResult>;
+	emit(name: string, payload?: object | readonly unknown[], options?: EmitEventOptions): Dispatch<EventDispatchResult>;
+}
+
+/** Explicit low-level dispatcher surface. Raw Dispatch awaits handler completion and exposes until/timeout controls. */
+export interface RawInteractionDispatchers {
+	slash<C extends SlashCommandClass>(command: C, options?: SlashClassOptions<C>): Dispatch<DispatchResult>;
+	slash(options: ChatInputInteractionOptions): Dispatch<DispatchResult>;
+	submitModal(
 		customId: string,
 		fields?: ModalFields,
 		options?: Omit<ModalSubmitInteractionOptions, 'customId' | 'fields'>,
@@ -367,13 +393,6 @@ export interface Actor {
 		values: string[],
 		options?: Parameters<MockBot['selectMenu']>[2],
 	): Dispatch<DispatchResult>;
-	say(content: string, options?: DispatchMessageOptions): Dispatch<SayResult>;
-	emit<TName extends GatewayDispatchPayload['t']>(
-		name: TName,
-		payload?: Partial<Extract<GatewayDispatchPayload, { t: TName }>['d']>,
-		options?: EmitEventOptions,
-	): Dispatch<EventDispatchResult>;
-	emit(name: string, payload?: object | readonly unknown[], options?: EmitEventOptions): Dispatch<EventDispatchResult>;
 }
 
 /** Autocomplete dispatch result with the responded choices lifted out semantically. */
@@ -388,7 +407,7 @@ export const DISPATCHER_VERBS = [
 	'slash',
 	'clickButton',
 	'selectMenu',
-	'fillModal',
+	'submitModal',
 	'say',
 	'autocomplete',
 	'userMenu',

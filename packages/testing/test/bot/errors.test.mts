@@ -179,12 +179,12 @@ describe('middlewares and error hooks', () => {
 		await bot.rest.request('POST', '/channels/reset/messages', { body: { content: 'before reset' } });
 		expect(bot.actions.length).toBeGreaterThan(0);
 
-		bot.reset();
+		await bot.reset();
 		expect(bot.actions).toHaveLength(0);
 		await expect(bot.slash({ name: 'also-greet' })).resolves.toMatchObject({ content: 'also' });
 
 		await bot.close();
 		await expect(bot.close()).resolves.toBeUndefined();
-		expect(() => bot.slash({ name: 'also-greet' })).toThrow(/closed/i);
+		await expect(bot.slash({ name: 'also-greet' })).rejects.toThrow(/closed/i);
 	});
 });

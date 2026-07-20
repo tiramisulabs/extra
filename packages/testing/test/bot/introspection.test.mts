@@ -65,13 +65,13 @@ describe('introspection helpers (DX-2)', () => {
 		const diag = bot.diagnostics();
 		expect(diag.recentActions.length).toBeGreaterThan(0);
 		expect(diag.recentActions.some(action => action.method === 'POST')).toBe(true);
-		expect(Array.isArray(diag.pending)).toBe(true);
+		expect(diag.pending).toEqual([]);
 		await bot.close();
 	});
 
 	test('diagnostics surfaces an un-settled (stepped but not awaited) dispatch as pending', async () => {
 		const bot = await createMockBot({ commands: [PingCommand] });
-		const dispatch = bot.slash({ name: 'ping' });
+		const dispatch = bot.dispatch.slash({ name: 'ping' });
 		await dispatch.until(action => action.method === 'POST');
 
 		const diag = bot.diagnostics();

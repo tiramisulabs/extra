@@ -152,7 +152,7 @@ describe('component flows', () => {
 		const source = bot.actions.at(-1);
 		if (!source) throw new Error('expected source message action');
 
-		expect(() => bot.clickButton('confirm', { source })).toThrow(/component "confirm".+disabled/);
+		await expect(bot.clickButton('confirm', { source })).rejects.toThrow(/component "confirm".+disabled/);
 		await bot.close();
 	});
 
@@ -197,10 +197,10 @@ describe('component flows', () => {
 		const bot = await createMockBot({ commands: [WrongSourceCommand], components: [ConfirmButton, PickComponent] });
 		await bot.slash({ name: 'wrong-source' });
 
-		expect(() => bot.clickButton('confirm', { allowSyntheticSource: true })).toThrow(
+		await expect(bot.clickButton('confirm', { allowSyntheticSource: true })).rejects.toThrow(
 			/source message ".+" does not contain a component with customId "confirm"/,
 		);
-		expect(() => bot.selectMenu('pick-synthetic', ['red'], { allowSyntheticSource: true })).toThrow(
+		await expect(bot.selectMenu('pick-synthetic', ['red'], { allowSyntheticSource: true })).rejects.toThrow(
 			/source message ".+" does not contain a component with customId "pick-synthetic"/,
 		);
 		await bot.close();
@@ -218,7 +218,7 @@ describe('component flows', () => {
 	test('component dispatch diagnoses when no component handlers are registered at all', async () => {
 		const bot = await createMockBot({ components: [] });
 
-		expect(() => bot.clickButton('poll_yes', { source: 'source-message-id' })).toThrow(
+		await expect(bot.clickButton('poll_yes', { source: 'source-message-id' })).rejects.toThrow(
 			/source message "source-message-id" was not found/,
 		);
 		await bot.close();
@@ -235,9 +235,9 @@ describe('component flows', () => {
 		});
 
 		const bot = await createMockBot({ components: [ConfirmButton], world });
-		expect(() =>
+		await expect(
 			bot.clickButton('confirm', { source: 'source-message', guildId: guild.id, channel, user: actor.user }),
-		).toThrow(/source message "source-message" does not contain a component with customId "confirm"/);
+		).rejects.toThrow(/source message "source-message" does not contain a component with customId "confirm"/);
 		await bot.close();
 	});
 
@@ -316,8 +316,8 @@ describe('component flows', () => {
 
 		const bot = await createMockBot({ commands: [PickStrictColorCommand] });
 		await bot.slash({ name: 'pick-strict-color' });
-		expect(() => bot.selectMenu('strict-pick', ['green'])).toThrow(/value "green" is not an option/);
-		expect(() => bot.selectMenu('strict-pick', ['red', 'blue'])).toThrow(/above max_values 1/);
+		await expect(bot.selectMenu('strict-pick', ['green'])).rejects.toThrow(/value "green" is not an option/);
+		await expect(bot.selectMenu('strict-pick', ['red', 'blue'])).rejects.toThrow(/above max_values 1/);
 		await bot.close();
 	});
 
@@ -338,7 +338,7 @@ describe('component flows', () => {
 
 		const bot = await createMockBot({ commands: [MenuCommand] });
 		await bot.slash({ name: 'menu' });
-		expect(() => bot.clickButton('pick')).toThrow(/is a select menu \(type 3\), not a button.+selectMenu/s);
+		await expect(bot.clickButton('pick')).rejects.toThrow(/is a select menu \(type 3\), not a button.+selectMenu/s);
 		await bot.close();
 	});
 
@@ -357,7 +357,9 @@ describe('component flows', () => {
 
 		const bot = await createMockBot({ commands: [ConfirmPanel] });
 		await bot.slash({ name: 'confirm-panel' });
-		expect(() => bot.selectMenu('go', ['x'])).toThrow(/is a button \(type 2\), not a select menu.+clickButton/s);
+		await expect(bot.selectMenu('go', ['x'])).rejects.toThrow(
+			/is a button \(type 2\), not a select menu.+clickButton/s,
+		);
 		await bot.close();
 	});
 
@@ -393,7 +395,7 @@ describe('component flows', () => {
 		await bot.close();
 
 		const missingBot = await createMockBot({ components: [RoleSelectComponent], world });
-		expect(() =>
+		await expect(
 			missingBot.selectMenu('settings/mod', ['missing-role'], {
 				componentType: 'role',
 				guildId: guild.id,
@@ -401,7 +403,7 @@ describe('component flows', () => {
 				user: actor.user,
 				allowSyntheticSource: true,
 			}),
-		).toThrow(/Seeded roles: select-guild, select-role/);
+		).rejects.toThrow(/Seeded roles: select-guild, select-role/);
 		await missingBot.close();
 	});
 
@@ -439,7 +441,7 @@ describe('component flows', () => {
 		await bot.close();
 	});
 
-	test('fillModal reaches values through ModalContext getInputValue', async () => {
+	test('submitModal reaches values through ModalContext getInputValue', async () => {
 		class ProfileModal extends ModalCommand {
 			filter(ctx: ModalContext) {
 				return ctx.customId === 'profile';
@@ -451,7 +453,7 @@ describe('component flows', () => {
 		}
 
 		const bot = await createMockBot({ components: [ProfileModal] });
-		const result = await bot.fillModal('profile', { username: 'neo' });
+		const result = await bot.submitModal('profile', { username: 'neo' });
 		expect(result.content).toBe('profile:neo');
 		await bot.close();
 	});
@@ -468,13 +470,13 @@ describe('component flows', () => {
 
 		const bot = await createMockBot({ components: [ProfileModal] });
 
-		await expect(bot.fillModal('missing-profile', { username: 'neo' })).rejects.toThrow(
+		await expect(bot.submitModal('missing-profile', { username: 'neo' })).rejects.toThrow(
 			/no handler matched customId "missing-profile".+ProfileModal \(filter rejected "missing-profile"\)/s,
 		);
 		await bot.close();
 	});
 
-	test('a modal opened from a button resolves via fillModal from the same user', async () => {
+	test('a modal opened from a button resolves via submitModal from the same user', async () => {
 		const submitted: string[] = [];
 
 		class FeedbackButton extends ComponentCommand {
@@ -502,10 +504,8 @@ describe('component flows', () => {
 		const bot = await createMockBot({ components: [FeedbackButton] });
 		const user = apiUser({ id: '777' });
 
-		const dispatch = bot.clickButton('open-feedback', { user, allowSyntheticSource: true });
-		await dispatch.untilModal();
-		const modal = await bot.fillModal('feedback-modal', { rating: '5' }, { user });
-		await dispatch;
+		await bot.clickButton('open-feedback', { user, allowSyntheticSource: true });
+		const modal = await bot.submitModal('feedback-modal', { rating: '5' }, { user });
 
 		expect(submitted).toEqual(['777']);
 		expect(modal.reply?.body).toMatchObject({ data: { content: 'thanks' } });
@@ -531,25 +531,23 @@ describe('component flows', () => {
 		}
 	}
 
-	test('fillModal aimed at the wrong customId fails loud against the displayed modal', async () => {
+	test('submitModal aimed at the wrong customId fails loud against the displayed modal', async () => {
 		const bot = await createMockBot({ components: [FeedbackModalButton] });
 		const user = apiUser({ id: '778' });
-		const dispatch = bot.clickButton('open-feedback', { user, allowSyntheticSource: true });
-		await expect(dispatch.fillModal('wrong-modal', { rating: '5' })).rejects.toThrow(
+		await bot.clickButton('open-feedback', { user, allowSyntheticSource: true });
+		await expect(bot.submitModal('wrong-modal', { rating: '5' }, { user })).rejects.toThrow(
 			/displayed modal's customId is "feedback-modal", not "wrong-modal"/,
 		);
-		await dispatch.timeoutModal();
 		await bot.close();
 	});
 
-	test('fillModal with a field key no input declares fails loud (ghost field)', async () => {
+	test('submitModal with a field key no input declares fails loud (ghost field)', async () => {
 		const bot = await createMockBot({ components: [FeedbackModalButton] });
 		const user = apiUser({ id: '779' });
-		const dispatch = bot.clickButton('open-feedback', { user, allowSyntheticSource: true });
-		await expect(dispatch.fillModal('feedback-modal', { bogus: 'x' })).rejects.toThrow(
+		await bot.clickButton('open-feedback', { user, allowSyntheticSource: true });
+		await expect(bot.submitModal('feedback-modal', { bogus: 'x' }, { user })).rejects.toThrow(
 			/field\(s\) "bogus" are not inputs on the displayed modal.+Known inputs: rating/s,
 		);
-		await dispatch.timeoutModal();
 		await bot.close();
 	});
 });

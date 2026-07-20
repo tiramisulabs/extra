@@ -218,8 +218,8 @@ describe('createMockBot', () => {
 	test('slash requires a subcommand when the command declares subcommands', async () => {
 		const bot = await createMockBot({ commands: [ConfigCommand, InventoryCommand] });
 
-		expect(() => bot.slash({ name: 'config' })).toThrow(/requires a subcommand/);
-		expect(() => bot.slash({ name: 'inventory', group: 'items' })).toThrow(/requires a subcommand/);
+		await expect(bot.slash({ name: 'config' })).rejects.toThrow(/requires a subcommand/);
+		await expect(bot.slash({ name: 'inventory', group: 'items' })).rejects.toThrow(/requires a subcommand/);
 		await bot.close();
 	});
 
@@ -290,7 +290,7 @@ describe('createMockBot', () => {
 
 	test('dispatches modals to component commands', async () => {
 		const bot = await createMockBot({ components: [ConfirmButton, FeedbackModal] });
-		const modal = await bot.fillModal('feedback', { rating: '5' });
+		const modal = await bot.submitModal('feedback', { rating: '5' });
 		expect(modal.content).toBe('Thanks!');
 		await bot.close();
 	});

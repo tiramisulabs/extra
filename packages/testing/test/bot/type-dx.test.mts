@@ -1,13 +1,32 @@
 import { ContextMenuCommand, type MenuCommandContext, type UserCommandInteraction } from 'seyfert';
 import { ApplicationCommandType } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
-import { createMockBot, type MenuResultFor, type TargetFor } from '../../src/bot/bot';
+import {
+	createMockBot,
+	type Dispatch,
+	type DispatchResult,
+	type MenuResultFor,
+	type MockBot,
+	type TargetFor,
+} from '../../src/bot/bot';
 import { type ApiMessage, type ApiUser, apiMember, apiMessage, apiUser } from '../../src/bot/payloads';
 import { mockMember, mockUser } from '../../src/factories';
 import { ReportUser } from './_setup';
 
 /** Compile-time assertion that the argument is assignable to `Expected`; the typed parameter does the checking. */
 function expectAssignable<Expected>(_value: Expected): void {}
+
+function assertStatefulInteractionTypes(bot: MockBot): void {
+	expectAssignable<Promise<DispatchResult>>(bot.slash({ name: 'type-only' }));
+	expectAssignable<Promise<DispatchResult>>(bot.submitModal('type-only'));
+	expectAssignable<Promise<DispatchResult>>(bot.clickButton('type-only'));
+	expectAssignable<Promise<void>>(bot.reset());
+	expectAssignable<Dispatch<DispatchResult>>(bot.dispatch.slash({ name: 'type-only' }));
+	expectAssignable<Dispatch<DispatchResult>>(bot.dispatch.submitModal('type-only'));
+	// @ts-expect-error fillModal was intentionally removed; submitModal is the only modal submission verb.
+	void bot.fillModal;
+}
+void assertStatefulInteractionTypes;
 
 // A context menu class that does NOT narrow `type` with `as const`. seyfert's ContextMenuCommand declares
 // `type: ApplicationCommandType.User | ApplicationCommandType.Message`, so without `as const` the property

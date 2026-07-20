@@ -40,9 +40,9 @@ const cases: MatrixCase[] = [
 		check: result => expect(result.content).toBe('Picked red'),
 	},
 	{
-		verb: 'fillModal',
+		verb: 'submitModal',
 		name: 'modal -> reply',
-		run: bot => bot.fillModal('feedback', { rating: '5' }),
+		run: bot => bot.submitModal('feedback', { rating: '5' }),
 		check: result => expect(result.content).toBe('Thanks!'),
 	},
 	{

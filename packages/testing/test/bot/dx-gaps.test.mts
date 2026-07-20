@@ -63,13 +63,13 @@ describe('#5 Dispatch is promise-like (.catch / .finally)', () => {
 });
 
 describe('#2 component inherits guildId from the source message', () => {
-	const seen: (string | undefined)[] = [];
+	const seen: { guildId: string | undefined; channelId: string }[] = [];
 
 	class GoButton extends ComponentCommand {
 		componentType = 'Button' as const;
 		customId = 'go';
 		async run(ctx: ComponentContext<'Button'>) {
-			seen.push(ctx.guildId);
+			seen.push({ guildId: ctx.guildId, channelId: (await ctx.channel()).id });
 			await ctx.write({ content: 'ok' });
 		}
 	}
@@ -94,7 +94,37 @@ describe('#2 component inherits guildId from the source message', () => {
 		await bot.slash({ name: 'open', guildId: guild.id, channel });
 		await bot.clickButton('go');
 
-		expect(seen).toEqual([guild.id]);
+		expect(seen).toEqual([{ guildId: guild.id, channelId: channel.id }]);
+		await bot.close();
+	});
+
+	test('an explicit historical source overrides the current session location', async () => {
+		seen.length = 0;
+		const world = mockWorld();
+		const currentGuild = world.registerGuild({ id: 'current-guild' });
+		const currentChannel = world.registerChannel(currentGuild.id, { id: 'current-channel' });
+		const sourceGuild = world.registerGuild({ id: 'source-guild' });
+		const sourceChannel = world.registerChannel(sourceGuild.id, { id: 'source-channel' });
+		const bot = await createMockBot({ commands: [OpenCommand], components: [GoButton], world });
+
+		await bot.slash({ name: 'open', guildId: currentGuild.id, channel: currentChannel });
+		await bot.rest.request('POST', `/channels/${sourceChannel.id}/messages`, {
+			body: {
+				content: 'historical source',
+				components: [
+					{
+						type: 1,
+						components: [{ type: 2, style: 1, custom_id: 'go', label: 'Go' }],
+					},
+				],
+			},
+		});
+		const source = bot.actions.at(-1);
+		if (!source) throw new Error('expected historical source action');
+
+		await bot.clickButton('go', { source });
+
+		expect(seen).toEqual([{ guildId: sourceGuild.id, channelId: sourceChannel.id }]);
 		await bot.close();
 	});
 });
@@ -103,16 +133,14 @@ describe('#3 + #4 await a parked collector top-to-bottom', () => {
 	const events: string[] = [];
 	const LaunchCommand = parkingCommand('launch', 'go', events);
 
-	test('untilComponent parks at waitFor and a source-less click resumes it', async () => {
+	test('stateful steps park at waitFor and a source-less click resumes it', async () => {
 		events.length = 0;
 		const bot = await createMockBot({ commands: [LaunchCommand] });
 
-		const flow = bot.slash({ name: 'launch' });
-		await flow.untilComponent('go'); // started, reply+button rendered, handler parked on waitFor
+		await bot.slash({ name: 'launch' });
 		expect(events).toEqual([]); // not resumed yet
 
-		await bot.clickButton('go'); // #3: source-less click works with exactly one dispatch in flight
-		await flow; // handler resumes past waitFor and returns
+		await bot.clickButton('go');
 
 		expect(events).toEqual(['resumed:go']);
 		await bot.close();
@@ -124,17 +152,17 @@ describe('#3 + #4 await a parked collector top-to-bottom', () => {
 		const LaunchB = parkingCommand('launch-b', 'btn-b', events);
 		const bot = await createMockBot({ commands: [LaunchA, LaunchB] });
 
-		const a = bot.slash({ name: 'launch-a' });
-		const b = bot.slash({ name: 'launch-b' });
+		const a = bot.dispatch.slash({ name: 'launch-a' });
+		const b = bot.dispatch.slash({ name: 'launch-b' });
 		const aReply = await a.untilComponent('btn-a');
 		const bReply = await b.untilComponent('btn-b');
 
 		// two parked dispatches -> "the most recent message" is a genuine race -> fail loud (thrown synchronously)
-		expect(() => bot.clickButton('btn-a')).toThrow(/2 dispatches are still running/);
+		expect(() => bot.dispatch.clickButton('btn-a')).toThrow(/2 dispatches are still running/);
 
 		// an explicit source disambiguates and settles each opener
-		await bot.clickButton('btn-a', { source: aReply });
-		await bot.clickButton('btn-b', { source: bReply });
+		await bot.dispatch.clickButton('btn-a', { source: aReply });
+		await bot.dispatch.clickButton('btn-b', { source: bReply });
 		await a;
 		await b;
 
@@ -215,16 +243,14 @@ describe('#4 regression: defer -> non-REST gap -> render collector button', () =
 		}
 	}
 
-	test('untilComponent waits across the non-REST gap, then a source-less click drives it', async () => {
+	test('the stateful slash waits across the non-REST gap, then a source-less click drives it', async () => {
 		events.length = 0;
 		const bot = await createMockBot({ commands: [ReopenCommand] });
 
-		const flow = bot.slash({ name: 'reopen' });
-		await flow.untilComponent('confirm'); // must not bail during the 40ms non-REST gap
+		await bot.slash({ name: 'reopen' });
 		expect(events).toEqual([]);
 
 		await bot.clickButton('confirm');
-		await flow;
 
 		expect(events).toEqual(['confirmed']);
 		await bot.close();
@@ -234,7 +260,7 @@ describe('#4 regression: defer -> non-REST gap -> render collector button', () =
 		events.length = 0;
 		const bot = await createMockBot({ commands: [ReopenCommand] });
 
-		const flow = bot.slash({ name: 'reopen' });
+		const flow = bot.dispatch.slash({ name: 'reopen' });
 		const reply = await flow.untilComponent('confirm');
 		await bot.clickButton('confirm', { source: reply });
 		await flow;
@@ -300,8 +326,8 @@ describe('more click/flow DX', () => {
 		}
 
 		const bot = await createMockBot({ commands: [LaunchCommand] });
-		const flow = bot.slash({ name: 'launch' });
-		await flow.untilComponent('go'); // parked on waitFor
+		const flow = bot.dispatch.slash({ name: 'launch' });
+		const source = await flow.untilComponent('go'); // parked on waitFor
 
 		// assert what the parked (not-yet-settled) flow already rendered:
 		expect(flow.lastEmbed().title).toBe('Launch');
@@ -309,7 +335,7 @@ describe('more click/flow DX', () => {
 		rendered(flow).get.button('go');
 		rendered(flow).get.embed({ title: 'Launch' });
 
-		await bot.clickButton('go');
+		await bot.dispatch.clickButton('go', { source });
 		await flow;
 		expect(events).toEqual(['clicked']);
 		await bot.close();
@@ -324,7 +350,7 @@ describe('more click/flow DX', () => {
 		}
 
 		const bot = await createMockBot({ commands: [RejectCommand] });
-		const flow = bot.slash({ name: 'reject' });
+		const flow = bot.dispatch.slash({ name: 'reject' });
 		await expect(flow.untilComponent('confirm-menu')).rejects.toThrow(/Not allowed/);
 		await bot.close();
 	});

@@ -180,7 +180,7 @@ describe('additional command surfaces', () => {
 	test('attachment options require resolved attachment payloads by default', async () => {
 		const bot = await createMockBot({ commands: [AttachmentCheckCommand] });
 
-		expect(() => bot.slash({ name: 'attachment-check', options: { file: 'attachment-id' } })).toThrow(
+		await expect(bot.slash({ name: 'attachment-check', options: { file: 'attachment-id' } })).rejects.toThrow(
 			/attachmentOption/,
 		);
 		await bot.close();
@@ -203,7 +203,7 @@ describe('additional command surfaces', () => {
 	test('mentionable options require resolved user or role payloads by default', async () => {
 		const bot = await createMockBot({ commands: [MentionableCheckCommand] });
 
-		expect(() => bot.slash({ name: 'mentionable-check', options: { target: 'mention-user' } })).toThrow(
+		await expect(bot.slash({ name: 'mentionable-check', options: { target: 'mention-user' } })).rejects.toThrow(
 			/mentionableOption/,
 		);
 		await bot.close();
@@ -380,7 +380,7 @@ describe('additional command surfaces', () => {
 	test('slash validates options before dispatching to Seyfert by default', async () => {
 		const bot = await createMockBot({ commands: [NumericCheckCommand] });
 
-		expect(() => bot.slash({ name: 'numeric-check', options: { count: 11, ratio: 1 } })).toThrow(
+		await expect(bot.slash({ name: 'numeric-check', options: { count: 11, ratio: 1 } })).rejects.toThrow(
 			/count.*greater than 10/i,
 		);
 		await bot.close();
@@ -389,7 +389,7 @@ describe('additional command surfaces', () => {
 	test('slash rejects duplicate option names in array payloads by default', async () => {
 		const bot = await createMockBot({ commands: [NumericCheckCommand] });
 
-		expect(() =>
+		await expect(
 			bot.slash({
 				name: 'numeric-check',
 				options: [
@@ -398,22 +398,22 @@ describe('additional command surfaces', () => {
 					{ name: 'ratio', value: 1 },
 				],
 			}),
-		).toThrow(/option "count" is provided more than once/);
+		).rejects.toThrow(/option "count" is provided more than once/);
 		await bot.close();
 	});
 
 	test('slash rejects non-finite and unsafe numeric option values by default', async () => {
 		const bot = await createMockBot({ commands: [NumericCheckCommand] });
 
-		expect(() => bot.slash({ name: 'numeric-check', options: { count: Number.NaN, ratio: 1 } })).toThrow(
+		await expect(bot.slash({ name: 'numeric-check', options: { count: Number.NaN, ratio: 1 } })).rejects.toThrow(
 			/count.*finite number/i,
 		);
-		expect(() => bot.slash({ name: 'numeric-check', options: { count: 1, ratio: Number.POSITIVE_INFINITY } })).toThrow(
-			/ratio.*finite number/i,
-		);
-		expect(() =>
+		await expect(
+			bot.slash({ name: 'numeric-check', options: { count: 1, ratio: Number.POSITIVE_INFINITY } }),
+		).rejects.toThrow(/ratio.*finite number/i);
+		await expect(
 			bot.slash({ name: 'numeric-check', options: { count: Number.MAX_SAFE_INTEGER + 1, ratio: 1 } }),
-		).toThrow(/count.*safe integer/i);
+		).rejects.toThrow(/count.*safe integer/i);
 		await bot.close();
 	});
 
@@ -421,7 +421,7 @@ describe('additional command surfaces', () => {
 		const channel = apiChannel({ id: 'text-channel', type: ChannelType.GuildText });
 		const bot = await createMockBot({ commands: [ChannelCheckCommand] });
 
-		expect(() =>
+		await expect(
 			bot.slash({
 				name: 'channel-check',
 				options: {
@@ -433,7 +433,7 @@ describe('additional command surfaces', () => {
 					},
 				},
 			}),
-		).toThrow(/resolved channel is missing a numeric type/);
+		).rejects.toThrow(/resolved channel is missing a numeric type/);
 		await expect(
 			bot.slash({
 				name: 'channel-check',
@@ -462,9 +462,9 @@ describe('additional command surfaces', () => {
 	test('slash throws for an unregistered subcommand target', async () => {
 		const bot = await createMockBot({ commands: [NumericCheckCommand] });
 
-		expect(() => bot.slash({ name: 'numeric-check', subcommand: 'missing', options: { count: 2, ratio: 1 } })).toThrow(
-			/subcommand "missing" is not registered/i,
-		);
+		await expect(
+			bot.slash({ name: 'numeric-check', subcommand: 'missing', options: { count: 2, ratio: 1 } }),
+		).rejects.toThrow(/subcommand "missing" is not registered/i);
 		await bot.close();
 	});
 });

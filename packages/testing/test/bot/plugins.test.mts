@@ -304,11 +304,11 @@ describe('plugins', () => {
 			content: 'menu:ctx-ok',
 		});
 		await expect(bot.entryPoint({ name: 'ctx-entry' })).resolves.toMatchObject({ content: 'entry:ctx-ok' });
-		bot.reset();
+		await bot.reset();
 		await expect(bot.clickButton('ctx-button', { allowSyntheticSource: true })).resolves.toMatchObject({
 			content: 'button:ctx-ok',
 		});
-		await expect(bot.fillModal('ctx-modal', {})).resolves.toMatchObject({ content: 'modal:ctx-ok' });
+		await expect(bot.submitModal('ctx-modal', {})).resolves.toMatchObject({ content: 'modal:ctx-ok' });
 		await bot.close();
 	});
 

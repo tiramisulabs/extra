@@ -1,4 +1,4 @@
-import { Client, Command, type CommandContext, createPlugin, Declare } from 'seyfert';
+import { Client, Command, type CommandContext, createPlugin, Declare, Modal } from 'seyfert';
 import { describe, expect, test, vi } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 
@@ -65,5 +65,31 @@ describe('createMockBot({ client })', () => {
 		expect(bot.plugins.map(info => info.name)).not.toContain('ignored-client-plugin');
 		await bot.close();
 		warn.mockRestore();
+	});
+
+	test('reopens stateful input hooks when a provided client is used by a new harness', async () => {
+		const events: string[] = [];
+
+		@Declare({ name: 'reused-client-wait', description: 'Waits after a client is reused' })
+		class ReusedClientWait extends Command {
+			async run(ctx: CommandContext) {
+				const submit = await ctx.interaction.modal(
+					new Modal().setCustomId('reused-modal').setTitle('Reused').setComponents([]),
+					{ waitFor: 30_000 },
+				);
+				events.push(submit ? 'submitted' : 'timed-out');
+			}
+		}
+
+		client = new Client();
+		const first = await createMockBot({ client });
+		await first.close();
+
+		const second = await createMockBot({ client, commands: [ReusedClientWait] });
+		await second.slash({ name: 'reused-client-wait' });
+		expect(events).toEqual([]);
+
+		await second.close();
+		expect(events).toEqual(['timed-out']);
 	});
 });

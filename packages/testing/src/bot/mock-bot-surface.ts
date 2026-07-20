@@ -9,7 +9,12 @@ import {
 } from 'seyfert';
 import { type CommandPathCatalog } from './bootstrap';
 import type { CommandRuntime, SubcommandClassRoute } from './bot-support';
-import { collectComponentCustomIds, findComponentNode, findComponentType } from './component-tree';
+import {
+	actionRendersComponent,
+	collectComponentCustomIds,
+	findComponentNode,
+	findComponentType,
+} from './component-tree';
 import { TEST_USER_ID } from './constants';
 import {
 	buildMessageResult,
@@ -29,6 +34,7 @@ import {
 } from './contracts';
 import { Dispatch, type ModalWaiter } from './dispatch';
 import { MockGateway } from './gateway';
+import { type InputCheckpoint, InteractionSessions, matchesCollector } from './interaction-session';
 import {
 	type BaseInteractionOptions,
 	type ButtonInteractionOptions,
@@ -55,12 +61,12 @@ export abstract class MockBotSurface {
 	abstract clickButton(
 		customId: string,
 		options?: Omit<ButtonInteractionOptions, 'customId' | 'message'> & ComponentSourceOptions,
-	): Dispatch<DispatchResult>;
+	): Promise<DispatchResult>;
 	abstract selectMenu(
 		customId: string,
 		values: string[],
 		options?: Omit<SelectMenuInteractionOptions, 'customId' | 'values' | 'message'> & ComponentSourceOptions,
-	): Dispatch<DispatchResult>;
+	): Promise<DispatchResult>;
 	readonly defaultUser: ApiUser = apiUser({ id: TEST_USER_ID, username: 'slipher-tester' });
 	protected readonly unregisteredMemberWarnings = new Set<string>();
 	protected readonly dispatches: Dispatch<unknown>[] = [];
@@ -82,7 +88,9 @@ export abstract class MockBotSurface {
 	/** Component/modal detection capabilities, fixed at install time from the client's component surface. */
 	protected canDetectComponentCommand = false;
 	protected canDetectCollector = false;
+	protected canDetectComponentWait = false;
 	protected canDetectModalCollector = false;
+	protected readonly sessions: InteractionSessions;
 
 	constructor(
 		readonly client: Client<true>,
@@ -101,6 +109,18 @@ export abstract class MockBotSurface {
 		protected readonly commandCatalog?: CommandPathCatalog,
 	) {
 		this.refreshSubcommandRoutes();
+		this.sessions = new InteractionSessions({
+			actions: () => this.rest.actions,
+			assertCheckpointReady: checkpoint => this.assertCheckpointReady(checkpoint),
+			onDispatchCompleted: dispatchId => {
+				for (const [userId, ownerDispatchId] of this.modalOwners) {
+					if (ownerDispatchId !== dispatchId) continue;
+					this.client.components.modals.delete(userId);
+					this.modalOwners.delete(userId);
+					this.displayedModals.delete(userId);
+				}
+			},
+		});
 	}
 
 	/**
@@ -187,6 +207,11 @@ export abstract class MockBotSurface {
 	protected track<T>(dispatch: Dispatch<T>): Dispatch<T> {
 		this.dispatches.push(dispatch as Dispatch<unknown>);
 		return dispatch;
+	}
+
+	/** Visible output from the most recently completed stateful step. `bot.actions` remains the full history. */
+	get currentActions(): readonly RecordedAction[] {
+		return this.sessions.currentActions();
 	}
 
 	protected bindComponentView(view: InteractiveComponentView, source?: MessageSource): ComponentActionView {
@@ -497,21 +522,21 @@ export abstract class MockBotSurface {
 		const pendingOpener = this.dispatches.some(dispatch => !dispatch.started && !dispatch.isSettled);
 		const hint =
 			otherUsers.length > 0
-				? `A modal IS waiting, but for a different user (${otherUsers.join(', ')}). Pass that same 'user' to fillModal.`
+				? `A modal IS waiting, but for a different user (${otherUsers.join(', ')}). Pass that same 'user' to submitModal.`
 				: pendingOpener
-					? 'The opener has not run yet — drive it in one call: `await bot.clickButton(...).fillModal(customId, fields)`.'
-					: 'Dispatch the button/command that opens the modal first, e.g. `await bot.clickButton(...).fillModal(customId, fields)`.';
+					? 'The opener has not run yet — await the opener, then call `await bot.submitModal(customId, fields)`.'
+					: 'Dispatch and await the button/command that opens the modal before calling submitModal.';
 		throw new TypeError(
-			`fillModal: no modal "${customId}" is waiting for user "${userId}" and no ModalCommand is registered. ${hint}`,
+			`submitModal: no modal "${customId}" is waiting for user "${userId}" and no ModalCommand is registered. ${hint}`,
 		);
 	}
 
 	/**
 	 * Snapshot the modal definition seyfert just displayed to `userId` (custom_id + the set of input customIds),
 	 * read from the most recent type-9 interaction callback. Lets {@link assertModalMatchesDisplayed} reject a
-	 * fillModal aimed at the wrong customId or carrying field keys that no input on the modal accepts.
+	 * submitModal aimed at the wrong customId or carrying field keys that no input on the modal accepts.
 	 */
-	protected captureDisplayedModal(userId: string, dispatchId: number | undefined): void {
+	protected captureDisplayedModal(userId: string, dispatchId: number | undefined): string | undefined {
 		for (let i = this.rest.actions.length - 1; i >= 0; i--) {
 			const action = this.rest.actions[i];
 			if (dispatchId !== undefined && action.dispatchId !== dispatchId) continue;
@@ -522,12 +547,46 @@ export abstract class MockBotSurface {
 			const inputIds = new Set<string>();
 			collectComponentCustomIds(data.components, inputIds);
 			this.displayedModals.set(userId, { customId: data.custom_id as string | undefined, inputIds });
+			return data.custom_id as string | undefined;
+		}
+		return undefined;
+	}
+
+	protected assertCheckpointReady(checkpoint: InputCheckpoint): void {
+		if (checkpoint.kind === 'modal') {
+			const displayed = this.displayedModals.get(checkpoint.userId);
+			if (!displayed) {
+				throw new TypeError(
+					`stateful step: modal checkpoint for user "${checkpoint.userId}" was registered but no modal was rendered.`,
+				);
+			}
+			if (checkpoint.customId !== undefined && displayed.customId !== checkpoint.customId) {
+				throw new TypeError(
+					`stateful step: modal checkpoint "${checkpoint.customId}" does not match rendered modal ` +
+						`"${displayed.customId ?? '(missing customId)'}".`,
+				);
+			}
 			return;
 		}
+
+		const message = this._state.rawMessage(checkpoint.channelId, checkpoint.messageId);
+		if (!message) {
+			throw new TypeError(
+				`stateful step: collector checkpoint on message "${checkpoint.messageId}" was registered, ` +
+					'but that message is not present in the simulated Discord state.',
+			);
+		}
+		const ids = new Set<string>();
+		collectComponentCustomIds(message.components, ids);
+		if ([...ids].some(customId => matchesCollector(checkpoint.match, customId))) return;
+		throw new TypeError(
+			`stateful step: collector on message "${checkpoint.messageId}" is waiting for ` +
+				`${String(checkpoint.match)}, but the rendered components are [${[...ids].join(', ') || '(none)'}].`,
+		);
 	}
 
 	/**
-	 * Cross-check a fillModal against the modal that was actually displayed: the customId must match, and every
+	 * Cross-check a submitModal against the modal that was actually displayed: the customId must match, and every
 	 * field key must correspond to a real input on the modal. Skipped when no displayed modal was captured (e.g. a
 	 * ModalCommand-only flow), so it never blocks the registry path that {@link assertModalHandleable} already guards.
 	 */
@@ -536,7 +595,7 @@ export abstract class MockBotSurface {
 		if (!displayed) return;
 		if (displayed.customId !== undefined && displayed.customId !== customId) {
 			throw new TypeError(
-				`fillModal: the displayed modal's customId is "${displayed.customId}", not "${customId}". ` +
+				`submitModal: the displayed modal's customId is "${displayed.customId}", not "${customId}". ` +
 					`Pass the customId the command opened the modal with.`,
 			);
 		}
@@ -544,7 +603,7 @@ export abstract class MockBotSurface {
 		if (ghost.length > 0) {
 			const known = [...displayed.inputIds].join(', ') || '(none)';
 			throw new TypeError(
-				`fillModal: field(s) ${ghost.map(key => `"${key}"`).join(', ')} are not inputs on the displayed modal. ` +
+				`submitModal: field(s) ${ghost.map(key => `"${key}"`).join(', ')} are not inputs on the displayed modal. ` +
 					`Known inputs: ${known}.`,
 			);
 		}
@@ -595,6 +654,70 @@ export abstract class MockBotSurface {
 		// Fall back to the most recent interaction-original message so a collector attached to an immediate
 		// reply (which produces no channel-message REST action) still has a resolvable source.
 		return this.lastSentMessage() ?? this.lastInteractionMessage;
+	}
+
+	/**
+	 * Resolve an implicit component target from the CURRENT stateful step, never from historical bot traffic.
+	 * The raw dispatcher still accepts explicit historical sources through `bot.dispatch.*`.
+	 */
+	protected resolveCurrentComponentSource(
+		sessionKey: string,
+		verb: 'clickButton' | 'selectMenu',
+		customId: string,
+	): { id: string; channel_id?: string } | undefined {
+		const candidates = new Map<string, { id: string; channel_id?: string }>();
+		for (const checkpoint of this.sessions.checkpoints(sessionKey)) {
+			if (checkpoint.kind !== 'component' || !matchesCollector(checkpoint.match, customId)) continue;
+			const message = this._state.rawMessage(checkpoint.channelId, checkpoint.messageId);
+			if (!message || !findComponentNode(message.components, customId)) continue;
+			candidates.set(checkpoint.messageId, {
+				id: checkpoint.messageId,
+				channel_id: checkpoint.channelId,
+			});
+		}
+		if (candidates.size === 1) return [...candidates.values()][0];
+		if (candidates.size > 1) {
+			throw new TypeError(
+				`${verb}: component "${customId}" is ambiguous in the current bot state; it has active waits on messages ` +
+					`${[...candidates.keys()].map(id => `"${id}"`).join(', ')}. Pass an explicit source.`,
+			);
+		}
+		const actions = this.sessions.currentActions(sessionKey);
+		for (let index = actions.length - 1; index >= 0; index--) {
+			const action = actions[index];
+			if (!actionRendersComponent(action, customId)) continue;
+			const source = this.messageSourceForRenderedAction(action);
+			if (!source) continue;
+			const message = this._state.rawMessageById(source.id);
+			if (!message || !findComponentNode(message.components, customId)) continue;
+			candidates.set(source.id, source);
+		}
+		if (candidates.size === 1) return [...candidates.values()][0];
+		if (candidates.size > 1) {
+			throw new TypeError(
+				`${verb}: component "${customId}" is ambiguous in the current bot state; it appears on messages ` +
+					`${[...candidates.keys()].map(id => `"${id}"`).join(', ')}. Pass an explicit source.`,
+			);
+		}
+		return undefined;
+	}
+
+	/** Most recent message rendered by this session's current step, regardless of its component ids. */
+	protected resolveCurrentMessageSource(sessionKey: string): { id: string; channel_id?: string } | undefined {
+		const actions = this.sessions.currentActions(sessionKey);
+		for (let index = actions.length - 1; index >= 0; index--) {
+			const source = this.messageSourceForRenderedAction(actions[index]);
+			if (source) return source;
+		}
+		return undefined;
+	}
+
+	private messageSourceForRenderedAction(action: RecordedAction): { id: string; channel_id?: string } | undefined {
+		const responseSource = this.messageSourceFrom(action.response);
+		if (responseSource) return responseSource;
+		const callback = /^\/interactions\/[^/]+\/([^/]+)\/callback$/.exec(action.route);
+		if (callback) return this.messageSourceFrom(this._state.messageForToken(callback[1]));
+		return undefined;
 	}
 
 	protected hydrateSourceMessage(
@@ -657,16 +780,9 @@ export abstract class MockBotSurface {
 		return this.rest.actions;
 	}
 
-	/**
-	 * The latest reply rendered by ANY dispatch — scanned UNSCOPED across all recorded actions. Unlike a
-	 * `DispatchResult` (scoped to one dispatch) or `Dispatch.lastEmbed` (scoped to that flow), this also sees a
-	 * reply written inside a collector handler: that followup runs after the dispatch's async context is gone, so
-	 * it records under no dispatch and is invisible to the scoped accessors. Last-write-wins: it reflects the most
-	 * recent rendering dispatch, regardless of which produced it — use `rendered(bot)` for a full rendered-output
-	 * reader, or a flow's own `flow.lastEmbed()` to assert a specific dispatch.
-	 */
+	/** Rendered output from the current stateful step. `bot.actions` remains the complete REST history. */
 	protected renderedAcrossDispatches(): { embeds: EmbedView[]; components: InteractiveComponentView[] } {
-		return renderedReply(this.rest.actions);
+		return renderedReply(this.currentActions);
 	}
 
 	lastEmbeds(): EmbedView[] {
@@ -688,13 +804,9 @@ export abstract class MockBotSurface {
 		return this.renderedAcrossDispatches().components;
 	}
 
-	/**
-	 * Latest text content rendered by ANY dispatch — scanned UNSCOPED like {@link lastEmbeds}, so a reply written
-	 * inside a collector handler or on a modal-submit token (invisible to a flow's scoped `DispatchResult.content`)
-	 * is still readable. Undefined if no content has been sent.
-	 */
+	/** Latest text content rendered by the current stateful step, or undefined when that step rendered no content. */
 	lastContent(): string | undefined {
-		return renderedReply(this.rest.actions).content;
+		return renderedReply(this.currentActions).content;
 	}
 
 	/**

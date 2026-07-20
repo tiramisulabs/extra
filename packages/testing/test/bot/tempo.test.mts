@@ -62,7 +62,7 @@ describe('actors and dispatch tempo', () => {
 		// The dispatch executor rejects (no component handler matches "nomatch"); without surfacing that
 		// rejection, until() would wait the full waitForAction timeout and report a generic "timed out" error.
 		await expect(
-			bot.clickButton('nomatch', { allowSyntheticSource: true }).until(Routes.createMessage),
+			bot.dispatch.clickButton('nomatch', { allowSyntheticSource: true }).until(Routes.createMessage),
 		).rejects.toThrow(/no handler matched customId "nomatch"/);
 		await bot.close();
 	});
@@ -110,7 +110,7 @@ describe('actors and dispatch tempo', () => {
 
 	test('until suspends the command at a matching call', async () => {
 		const bot = await createMockBot({ commands: [SlowBanCommand] });
-		const dispatch = bot.slash({ name: 'slowban' });
+		const dispatch = bot.dispatch.slash({ name: 'slowban' });
 
 		const inFlight = await dispatch.until(Routes.ban);
 		expect(inFlight.response).toBeUndefined();
@@ -124,7 +124,7 @@ describe('actors and dispatch tempo', () => {
 
 	test('checkpoints chain and advance between matching calls', async () => {
 		const bot = await createMockBot({ commands: [SlowBanCommand] });
-		const dispatch = bot.slash({ name: 'slowban' });
+		const dispatch = bot.dispatch.slash({ name: 'slowban' });
 
 		const ban = await dispatch.until(Routes.ban);
 		expect(ban.response).toBeUndefined();
@@ -140,7 +140,7 @@ describe('actors and dispatch tempo', () => {
 	test('a dispatch is lazy until awaited or stepped', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 		const bot = await createMockBot({ commands: [SlowBanCommand] });
-		bot.slash({ name: 'slowban' });
+		bot.dispatch.slash({ name: 'slowban' });
 
 		await new Promise(resolve => setImmediate(resolve));
 		expect(bot.actions).toHaveLength(0);

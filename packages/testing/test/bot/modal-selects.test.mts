@@ -43,7 +43,8 @@ describe('modal select menus', () => {
 		}
 
 		const bot = await createMockBot({ commands: [PickCommand] });
-		const result = await bot.slash({ name: 'pick' }).fillModal('pick-modal', { reasons: ['spam', 'abuse'] });
+		await bot.slash({ name: 'pick' });
+		const result = await bot.submitModal('pick-modal', { reasons: ['spam', 'abuse'] });
 		expect(result.content).toBe('reasons:spam,abuse');
 		await bot.close();
 	});
@@ -64,9 +65,10 @@ describe('modal select menus', () => {
 		}
 
 		const bot = await createMockBot({ commands: [AssignCommand] });
-		const result = await bot
-			.slash({ name: 'assign' })
-			.fillModal('assign-modal', { who: modalSelect(['user-1', 'user-2'], 'user') });
+		await bot.slash({ name: 'assign' });
+		const result = await bot.submitModal('assign-modal', {
+			who: modalSelect(['user-1', 'user-2'], 'user'),
+		});
 		expect(result.content).toBe('users:user-1,user-2');
 		await bot.close();
 	});

@@ -249,15 +249,14 @@ describe('rendered reader', () => {
 
 		const bot = await createMockBot({ commands: [UnrelatedOutput, RejectFlow] });
 		await bot.slash({ name: 'unrelated-rendered' });
-		const flow = bot.slash({ name: 'reject-flow' });
-		await flow.untilModal();
+		const flow = await bot.slash({ name: 'reject-flow' });
 
 		const flowActions = rendered(flow).raw.actions();
 		expect(flowActions).toHaveLength(1);
-		expect(flowActions.every(action => action.dispatchId === flow.dispatchId)).toBe(true);
-		expect(rendered(bot).raw.actions().length).toBeGreaterThan(flowActions.length);
+		expect(rendered(bot).raw.actions()).toEqual(flowActions);
+		expect(rendered(bot).query.message({ content: 'unrelated' })).toBeUndefined();
 
-		const ui = rendered(flow);
+		const ui = rendered(bot);
 		const modal = ui.get.modal('reject-request');
 		expect(modal.title).toBe('Reject request');
 		expect(modal.get.select('reason').label).toBe('Reason');
@@ -268,7 +267,6 @@ describe('rendered reader', () => {
 		expect(() => modal.get.input('missing')).toThrow(/Fields in modal "reject-request"/);
 		expect(() => modal.get.input('missing')).toThrow(/input#notes label="Notes"/);
 
-		await flow.timeoutModal();
 		await bot.close();
 	});
 });
