@@ -3,16 +3,16 @@ import { type FileLoadingHandler, pathIsInsideDir } from './bootstrap';
 import type { CommandRuntime, CreatedResource } from './bot-support';
 import { assertRealSetImmediate, CREATE_ROUTES, DRAIN_MAX_ITERATIONS, drainTick } from './bot-support';
 import { actionRendersComponent } from './component-tree';
-import { type BotDiagnostics, type DispatchResult, INTERACTION_WEBHOOK_ROUTES } from './contracts';
+import {
+	type BotDiagnostics,
+	type DispatchResult,
+	INTERACTION_WEBHOOK_ROUTES,
+	type RawModalSubmitOptions,
+} from './contracts';
 import { Dispatch, type ModalWaiter, type ModalWaitRegistration } from './dispatch';
 import { nextDispatchId } from './dispatch-context';
 import { installDispatchHooks as installDispatchHooksImpl } from './hooks';
-import {
-	type ApiInteractionPayload,
-	type ChatInputInteractionOptions,
-	type ModalFields,
-	type ModalSubmitInteractionOptions,
-} from './interactions';
+import { type ApiInteractionPayload, type ChatInputInteractionOptions, type ModalFields } from './interactions';
 import { MockBotSurface } from './mock-bot-surface';
 import { CommandOptionType } from './option-validation';
 import { type ApiMember, type ApiMessage, type ApiUser, apiUser } from './payloads';
@@ -33,7 +33,7 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 	protected abstract dispatchSubmitModal(
 		customId: string,
 		fields: ModalFields,
-		options?: Omit<ModalSubmitInteractionOptions, 'customId' | 'fields'>,
+		options?: RawModalSubmitOptions,
 	): Dispatch<DispatchResult>;
 	protected abstract runInteraction(payload: ApiInteractionPayload, dispatchId: number): Promise<DispatchResult>;
 	protected abstract snapshotInteraction(payload: ApiInteractionPayload, dispatchId: number): DispatchResult;
@@ -238,8 +238,8 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 	 *
 	 * Relation to an advanced raw `Dispatch`: the two are orthogonal. Awaiting the dispatch waits for the handler
 	 * to return; `settle()` waits for detached background REST to quiesce across all dispatches. Stateful
-	 * `slash`/`submitModal`/`clickButton`/`selectMenu` already stop at real input checkpoints. Add `settle()` only
-	 * when application code intentionally starts observable work without awaiting it.
+	 * interaction methods already stop at real input checkpoints. Add `settle()` only when application code
+	 * intentionally starts observable work without awaiting it.
 	 */
 	async settle(): Promise<void> {
 		assertRealSetImmediate();

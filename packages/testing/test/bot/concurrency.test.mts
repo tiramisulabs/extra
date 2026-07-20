@@ -315,7 +315,7 @@ describe('concurrent dispatch isolation', () => {
 		await bot.close();
 	});
 
-	test('source-less ComponentCommand dispatch auto-synthesizes even with another dispatch parked', async () => {
+	test('raw synthetic ComponentCommand dispatch remains independent of another parked dispatch', async () => {
 		let release!: () => void;
 		const barrier = new Promise<void>(resolve => {
 			release = resolve;
@@ -343,9 +343,8 @@ describe('concurrent dispatch isolation', () => {
 		const parked = bot.dispatch.slash({ name: 'park' });
 		void parked.until(action => action.route.includes('/never-release')).catch(() => {});
 
-		// No message resolves, but the registered ComponentCommand matches — so a source-less click auto-synthesizes
-		// and dispatches it, even with another dispatch parked in flight.
-		const result = await bot.clickButton('claim:fresh');
+		// Raw synthetic dispatch is explicit and independent of the parked flow.
+		const result = await bot.dispatch.clickButton('claim:fresh', { allowSyntheticSource: true });
 		expect(result.reply?.body).toMatchObject({ data: { content: 'clicked' } });
 		release();
 		await parked;

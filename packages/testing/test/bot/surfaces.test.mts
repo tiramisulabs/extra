@@ -257,9 +257,9 @@ describe('additional command surfaces', () => {
 		expect(payload.authorizing_integration_owners).toEqual({ '1': 'owner-user' });
 	});
 
-	test('entry point commands dispatch and capture replies', async () => {
+	test('raw entry point commands dispatch and capture replies', async () => {
 		const bot = await createMockBot({ commands: [LaunchEntryPoint] });
-		const result = await bot.entryPoint();
+		const result = await bot.dispatch.entryPoint();
 
 		expect(result.content).toBe('launched');
 		await bot.close();

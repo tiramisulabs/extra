@@ -261,7 +261,7 @@ describe('createMockBot', () => {
 
 	test('res.command is undefined for component dispatches', async () => {
 		const bot = await createMockBot({ components: [ConfirmButton] });
-		const result = await bot.clickButton('confirm', { allowSyntheticSource: true });
+		const result = await bot.dispatch.clickButton('confirm', { allowSyntheticSource: true });
 		expect(result.command).toBeUndefined();
 		await bot.close();
 	});
@@ -290,7 +290,7 @@ describe('createMockBot', () => {
 
 	test('dispatches modals to component commands', async () => {
 		const bot = await createMockBot({ components: [ConfirmButton, FeedbackModal] });
-		const modal = await bot.submitModal('feedback', { rating: '5' });
+		const modal = await bot.dispatch.submitModal('feedback', { rating: '5' }, { allowSyntheticSource: true });
 		expect(modal.content).toBe('Thanks!');
 		await bot.close();
 	});

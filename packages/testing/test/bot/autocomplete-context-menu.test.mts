@@ -218,7 +218,7 @@ describe('autocomplete and context menus', () => {
 	test('userMenu resolves the target user', async () => {
 		const bot = await createMockBot({ commands: [ReportUser] });
 		const target = apiUser({ id: '42', username: 'spammer' });
-		const result = await bot.userMenu({ name: 'Report User', target });
+		const result = await bot.dispatch.userMenu({ name: 'Report User', target });
 		expect(result.reply?.body).toMatchObject({
 			type: InteractionResponseType.ChannelMessageWithSource,
 			data: { content: 'Reported spammer' },

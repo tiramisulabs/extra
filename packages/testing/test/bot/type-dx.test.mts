@@ -6,8 +6,10 @@ import {
 	type Dispatch,
 	type DispatchResult,
 	type MenuResultFor,
+	type MessageMenuResult,
 	type MockBot,
 	type TargetFor,
+	type UserMenuResult,
 } from '../../src/bot/bot';
 import { type ApiMessage, type ApiUser, apiMember, apiMessage, apiUser } from '../../src/bot/payloads';
 import { mockMember, mockUser } from '../../src/factories';
@@ -20,9 +22,24 @@ function assertStatefulInteractionTypes(bot: MockBot): void {
 	expectAssignable<Promise<DispatchResult>>(bot.slash({ name: 'type-only' }));
 	expectAssignable<Promise<DispatchResult>>(bot.submitModal('type-only'));
 	expectAssignable<Promise<DispatchResult>>(bot.clickButton('type-only'));
+	expectAssignable<Promise<UserMenuResult>>(bot.userMenu({ name: 'type-only' }));
+	expectAssignable<Promise<MessageMenuResult>>(bot.messageMenu({ name: 'type-only' }));
+	expectAssignable<Promise<DispatchResult>>(bot.entryPoint({ name: 'type-only' }));
 	expectAssignable<Promise<void>>(bot.reset());
 	expectAssignable<Dispatch<DispatchResult>>(bot.dispatch.slash({ name: 'type-only' }));
 	expectAssignable<Dispatch<DispatchResult>>(bot.dispatch.submitModal('type-only'));
+	expectAssignable<Dispatch<UserMenuResult>>(bot.dispatch.userMenu({ name: 'type-only' }));
+	expectAssignable<Dispatch<MessageMenuResult>>(bot.dispatch.messageMenu({ name: 'type-only' }));
+	expectAssignable<Dispatch<DispatchResult>>(bot.dispatch.entryPoint({ name: 'type-only' }));
+	const actor = bot.actor({ user: apiUser() });
+	expectAssignable<Promise<UserMenuResult>>(actor.userMenu({ name: 'type-only' }));
+	expectAssignable<Promise<MessageMenuResult>>(actor.messageMenu({ name: 'type-only' }));
+	expectAssignable<Promise<DispatchResult>>(actor.entryPoint({ name: 'type-only' }));
+	expectAssignable<Promise<UserMenuResult>>(actor.menu(ReportUser, { target: apiUser({ username: 'spammer' }) }));
+	// @ts-expect-error synthetic source opt-in exists only on bot.dispatch.*.
+	bot.clickButton('type-only', { allowSyntheticSource: true });
+	// @ts-expect-error synthetic modal opt-in exists only on bot.dispatch.*.
+	bot.submitModal('type-only', {}, { allowSyntheticSource: true });
 	// @ts-expect-error fillModal was intentionally removed; submitModal is the only modal submission verb.
 	void bot.fillModal;
 }
@@ -137,6 +154,15 @@ describe('type DX: S20 menu<C> as-const target discrimination', () => {
 		const username: string = result.target.user.username;
 		expect(username).toBe('spammer');
 		await bot.close();
+	});
+
+	test('raw menu keeps the class-narrowed result type', () => {
+		const probe = (bot: MockBot) => {
+			expectAssignable<Dispatch<UserMenuResult>>(
+				bot.dispatch.menu(ReportUser, { target: apiUser({ username: 'spammer' }) }),
+			);
+		};
+		void probe;
 	});
 
 	test('as-const TargetFor narrows to the exact target type', () => {

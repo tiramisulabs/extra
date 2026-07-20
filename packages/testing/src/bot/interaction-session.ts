@@ -232,6 +232,16 @@ export class InteractionSessions {
 		return this.states.get(key)?.checkpoints ?? [];
 	}
 
+	hasModalCheckpoint(key: string, customId: string, userId: string): boolean {
+		return (
+			this.states
+				.get(key)
+				?.checkpoints.some(
+					checkpoint => checkpoint.kind === 'modal' && checkpoint.userId === userId && checkpoint.customId === customId,
+				) ?? false
+		);
+	}
+
 	consumeModal(key: string, customId: string): number | undefined {
 		const state = this.state(key);
 		const index = state.checkpoints.findIndex(
@@ -289,7 +299,56 @@ export class InteractionSessions {
 		};
 	}
 
+	componentCheckpoint(key: string, customId: string, messageId: string): ConsumedComponentCheckpoint | undefined {
+		const state = this.states.get(key);
+		const checkpoint = state?.checkpoints.find(
+			candidate =>
+				candidate.kind === 'component' &&
+				candidate.messageId === messageId &&
+				matchesCollector(candidate.match, customId),
+		);
+		if (!state || checkpoint?.kind !== 'component') return undefined;
+		return {
+			ownerDispatchId: checkpoint.ownerDispatchId,
+			sessionKey: key,
+			channelId: checkpoint.channelId,
+			...(checkpoint.guildId === undefined ? {} : { guildId: checkpoint.guildId }),
+		};
+	}
+
+	componentCheckpointBySource(customId: string, messageId: string): ConsumedComponentCheckpoint | undefined {
+		const match = this.componentCheckpointMatch(customId, messageId);
+		if (!match) return undefined;
+		return {
+			ownerDispatchId: match.checkpoint.ownerDispatchId,
+			sessionKey: match.state.key,
+			channelId: match.checkpoint.channelId,
+			...(match.checkpoint.guildId === undefined ? {} : { guildId: match.checkpoint.guildId }),
+		};
+	}
+
 	consumeComponentBySource(customId: string, messageId: string): ConsumedComponentCheckpoint | undefined {
+		const match = this.componentCheckpointMatch(customId, messageId);
+		if (!match) return undefined;
+		const index = match.state.checkpoints.indexOf(match.checkpoint);
+		if (index !== -1) match.state.checkpoints.splice(index, 1);
+		return {
+			ownerDispatchId: match.checkpoint.ownerDispatchId,
+			sessionKey: match.state.key,
+			channelId: match.checkpoint.channelId,
+			...(match.checkpoint.guildId === undefined ? {} : { guildId: match.checkpoint.guildId }),
+		};
+	}
+
+	private componentCheckpointMatch(
+		customId: string,
+		messageId: string,
+	):
+		| {
+				state: SessionState;
+				checkpoint: Extract<InputCheckpoint, { kind: 'component' }>;
+		  }
+		| undefined {
 		const matches: {
 			state: SessionState;
 			checkpoint: Extract<InputCheckpoint, { kind: 'component' }>;
@@ -312,15 +371,7 @@ export class InteractionSessions {
 			);
 		}
 		const match = matches[0];
-		if (!match) return undefined;
-		const index = match.state.checkpoints.indexOf(match.checkpoint);
-		if (index !== -1) match.state.checkpoints.splice(index, 1);
-		return {
-			ownerDispatchId: match.checkpoint.ownerDispatchId,
-			sessionKey: match.state.key,
-			channelId: match.checkpoint.channelId,
-			...(match.checkpoint.guildId === undefined ? {} : { guildId: match.checkpoint.guildId }),
-		};
+		return match;
 	}
 
 	reset(): void {

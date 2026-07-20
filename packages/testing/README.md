@@ -72,9 +72,9 @@ import { ProfileModal } from '../src/modals/profile';
 
 const leave = mockComponentContext(LeaveButton);
 
-expect(await leave.filter({ customId: 'leave:campaign:c1' })).toBe(true);
+expect(await leave.filter({ customId: 'leave:workspace:w1' })).toBe(true);
 
-const click = await leave.run({ customId: 'leave:campaign:c1' });
+const click = await leave.run({ customId: 'leave:workspace:w1' });
 expect(click.lastResponse()).toMatchObject({ content: expect.stringContaining('left') });
 
 const profile = mockModalContext(ProfileModal);
@@ -312,31 +312,45 @@ from that path.
 The normal interaction API reads chronologically:
 
 ```ts
-await bot.slash({ name: 'campaign', subcommand: 'setup' });
-rendered(bot).get.modal('dual-cpm-modal');
+await bot.slash({ name: 'profile' });
+rendered(bot).get.modal('profile-modal');
 
-await bot.submitModal('dual-cpm-modal', {
-	'client-budget': '1000',
-	'client-cpm': '2',
-	'clipper-cpm': '1',
-	objective: 'go',
+await bot.submitModal('profile-modal', {
+	'display-name': 'Ada',
 });
-rendered(bot).get.button('dual-cpm-continue');
+rendered(bot).get.button('save-profile');
 
-await bot.clickButton('dual-cpm-continue');
-rendered(bot).get.embed({ contains: /Campaign created successfully/ });
+await bot.clickButton('save-profile');
+rendered(bot).get.message({ content: 'Profile saved' });
 ```
 
-`slash()`, `submitModal()`, `clickButton()`, and `selectMenu()` update the
-bot's current interaction state. Each action resolves when its causal handlers
-finish, or when Seyfert registers the next real user-input checkpoint (a modal
-submission or `collector.waitFor(...)`) and that input is rendered. Merely
-rendering a component does not prematurely finish an action.
+`slash()`, `submitModal()`, `clickButton()`, `selectMenu()`, `userMenu()`,
+`messageMenu()`, class-first `menu()`, and `entryPoint()` are stateful. Each
+action updates that actor's current interaction state and resolves when its
+causal handlers finish, or when Seyfert registers the next real user-input
+checkpoint (a modal submission or `collector.waitFor(...)`) and that input is
+rendered. Merely rendering a component does not prematurely finish an action.
 
 This means the next source-less click/select is resolved against the current
 actor's actionable output. It cannot silently click a component left over from
-an older step. Inspect the same state between actions with `rendered(bot)` or
-`bot.currentActions`; use `bot.actions` when you need the complete REST history.
+an older step. `clickButton()` and `selectMenu()` reject when the component was
+not rendered or is disabled; `submitModal()` rejects when that actor was not
+shown the matching modal. Passing an explicit `source` intentionally addresses
+a rendered historical message, but it still validates the component.
+
+Inspect between actions without changing state. `get.*` requires exactly one
+match, `query.*` returns `undefined` when absent, and `all.*` returns every
+match. The reader finds output; Vitest, Jest, Mocha, or another runner owns
+ordinary assertions:
+
+```ts
+const screen = rendered(bot);
+const save = screen.get.button('save-profile');
+
+expect(save.disabled).toBe(false);
+expect(screen.query.embed({ title: 'Validation error' })).toBeUndefined();
+expect(screen.all.button()).toHaveLength(1);
+```
 
 Continuation actions inherit the user, guild, channel, and message context from
 the previous step. Explicit options or an explicit historical source take
@@ -355,10 +369,13 @@ timeout-driven scenarios remain available through `bot.dispatch.*`.
 
 | After you awaited | Guaranteed |
 |---|---|
-| `await bot.slash(...)` / `submitModal(...)` / `clickButton(...)` / `selectMenu(...)` | causal completion, or the next rendered input checkpoint; current bot state updated |
-| `rendered(bot)` | visible output produced by the current stateful step |
-| `bot.actions` | every recorded REST call, in order |
-| `await bot.dispatch.slash(...)` | raw handler completion |
+| A stateful action | causal completion, or the next rendered input checkpoint; that actor's current state updated |
+| `rendered(bot)` | output from the latest step of the most recently active actor |
+| `rendered(actor)` | output from that actor's latest step |
+| `rendered(result)` | output belonging to that exact result, even after later steps |
+| `bot.actions` | every recorded REST call across all steps, in order |
+| `bot.world` | persistent Discord-side entities and messages, including writes from earlier steps |
+| `await bot.dispatch.<action>(...)` | raw handler completion |
 | `raw.until(...)` resolved | the matched REST call started; `response` is still `undefined` while gated |
 | `await bot.settle()` | observable detached REST/timer work reached quiescence |
 
@@ -381,9 +398,9 @@ const result = await alice.slash({ name: 'results' });
 expect(result.content).toContain('1 vote');
 ```
 
-The four stateful interaction actions are the default testing path. For
-low-level timing tests, `bot.dispatch.*` exposes the raw lazy `Dispatch` and its
-REST gates:
+The stateful interaction actions are the default testing path. For low-level
+timing tests, `bot.dispatch.*` exposes the raw lazy `Dispatch` and its REST
+gates:
 
 ```ts
 const dispatch = bot.dispatch.slash({
@@ -567,8 +584,15 @@ await bot.selectMenu('settings/mod', [role.id], { source: sent, componentType: '
 
 Entity selects auto-resolve seeded world users, members, roles, and channels.
 Use explicit `resolved` when testing a raw Discord payload. For a
-`ComponentCommand` select-menu path without a collector, build the raw payload
-with `selectMenuInteraction()` and pass it to `dispatchInteraction()`.
+`ComponentCommand` select-menu path without a rendered source, use the explicit
+raw seam and opt into a synthetic source:
+
+```ts
+const raw = bot.dispatch.selectMenu('settings/theme', ['dark'], {
+	allowSyntheticSource: true,
+});
+const result = await raw;
+```
 
 A modal opened with `interaction.modal(..., { waitFor })` becomes the next
 stateful checkpoint. Submit it as the next chronological action:
@@ -589,7 +613,10 @@ For the "user never submitted" branch, use the explicit raw timing seam. It
 resolves Seyfert's modal wait immediately, without fake timers:
 
 ```ts
-const opener = bot.dispatch.clickButton('open-feedback', { user });
+const opener = bot.dispatch.clickButton('open-feedback', {
+	user,
+	allowSyntheticSource: true,
+});
 const timedOut = await opener.timeoutModal();
 expect(timedOut.content).toBe('timed out');
 ```

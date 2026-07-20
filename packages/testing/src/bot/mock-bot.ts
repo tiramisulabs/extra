@@ -30,7 +30,9 @@ import {
 	type MessagePart,
 	type MockSubCommandClass,
 	type OutgoingMessage,
+	type RawComponentSourceOptions,
 	type RawInteractionDispatchers,
+	type RawModalSubmitOptions,
 	type SayResult,
 	type SlashClassOptions,
 	type SlashCommandClass,
@@ -86,6 +88,11 @@ export class MockBot extends MockBotDispatchCore {
 		submitModal: (customId, fields = {}, options = {}) => this.dispatchSubmitModal(customId, fields, options),
 		clickButton: (customId, options = {}) => this.dispatchClickButton(customId, options),
 		selectMenu: (customId, values, options = {}) => this.dispatchSelectMenu(customId, values, options),
+		userMenu: options => this.createUserMenuDispatch(options),
+		messageMenu: options => this.createMessageMenuDispatch(options),
+		menu: ((command: MenuCommandClass, options?: MenuOptions<MenuCommandClass>) =>
+			this.createMenuDispatch(command, options)) as RawInteractionDispatchers['menu'],
+		entryPoint: options => this.createEntryPointDispatch(options),
 	};
 
 	protected async runInteraction(payload: ApiInteractionPayload, dispatchId: number): Promise<DispatchResult> {
@@ -125,6 +132,7 @@ export class MockBot extends MockBotDispatchCore {
 		if (payload.message) {
 			this._state.registerComponentSource(payload.token, payload.message.channel_id, payload.message.id);
 		}
+		let modalCapturedDuringExecution = false;
 		// The builders preserve Discord's payload shape while exposing a wider test input type.
 		try {
 			await dispatchStore.run(ctx, async () => {
@@ -137,6 +145,7 @@ export class MockBot extends MockBotDispatchCore {
 				]);
 			});
 		} finally {
+			modalCapturedDuringExecution = this.modalRenderCapturedDispatches.delete(dispatchId);
 			if (isModalPayload && userId) {
 				modalRegistry(this.client).delete(userId);
 				this.modalOwners.delete(userId);
@@ -166,6 +175,10 @@ export class MockBot extends MockBotDispatchCore {
 		) {
 			const customId = payload.data.custom_id ?? '(unknown)';
 			throw new TypeError(`submitModal: ${this.describeUnmatchedComponent('modal', customId)}`);
+		}
+		if (!isModalPayload && userId && !modalCapturedDuringExecution) {
+			this.captureDisplayedModal(userId, dispatchId);
+			this.modalRenderCapturedDispatches.delete(dispatchId);
 		}
 		return this.buildInteractionResult(payload, dispatchId, ctx);
 	}
@@ -494,7 +507,15 @@ export class MockBot extends MockBotDispatchCore {
 		);
 	}
 
-	userMenu(options: UserCommandInteractionOptions): Dispatch<UserMenuResult> {
+	userMenu(options: UserCommandInteractionOptions): Promise<UserMenuResult> {
+		return this.userMenuInSession(options);
+	}
+
+	private userMenuInSession(options: UserCommandInteractionOptions, sessionKey?: string): Promise<UserMenuResult> {
+		return this.performStep(this.createUserMenuDispatch(options), sessionKey);
+	}
+
+	protected createUserMenuDispatch(options: UserCommandInteractionOptions): Dispatch<UserMenuResult> {
 		const build = (prepared: UserCommandInteractionOptions): ApiInteractionPayload => {
 			const targetMember = options.targetMember ?? this.worldMemberFor(prepared.guildId, prepared.target);
 			return userCommandInteraction({ ...prepared, ...(targetMember ? { targetMember } : {}) });
@@ -506,7 +527,18 @@ export class MockBot extends MockBotDispatchCore {
 		return this.dispatchVia<UserCommandInteractionOptions, UserMenuResult>('userMenu', options, build);
 	}
 
-	messageMenu(options: MessageCommandInteractionOptions): Dispatch<MessageMenuResult> {
+	messageMenu(options: MessageCommandInteractionOptions): Promise<MessageMenuResult> {
+		return this.messageMenuInSession(options);
+	}
+
+	private messageMenuInSession(
+		options: MessageCommandInteractionOptions,
+		sessionKey?: string,
+	): Promise<MessageMenuResult> {
+		return this.performStep(this.createMessageMenuDispatch(options), sessionKey);
+	}
+
+	protected createMessageMenuDispatch(options: MessageCommandInteractionOptions): Dispatch<MessageMenuResult> {
 		const build = (prepared: MessageCommandInteractionOptions): ApiInteractionPayload => {
 			const targetMember = options.targetMember ?? this.worldMemberFor(prepared.guildId, prepared.target?.author);
 			return messageCommandInteraction({ ...prepared, ...(targetMember ? { targetMember } : {}) });
@@ -557,21 +589,63 @@ export class MockBot extends MockBotDispatchCore {
 	 * is optional). The dispatch still runs correctly; you only lose the narrowed compile-time target. See
 	 * {@link TargetFor} and {@link MenuResultFor}.
 	 */
-	menu<C extends MenuCommandClass>(command: C, options: MenuOptions<C> = {}): Dispatch<MenuResultFor<C>> {
+	menu<C extends MenuCommandClass>(command: C, options: MenuOptions<C> = {}): Promise<MenuResultFor<C>> {
+		return this.menuInSession(command, options);
+	}
+
+	private menuInSession<C extends MenuCommandClass>(
+		command: C,
+		options: MenuOptions<C> = {},
+		sessionKey?: string,
+	): Promise<MenuResultFor<C>> {
 		const instance = new command();
 		if (instance.type === ApplicationCommandType.User) {
-			return this.userMenu({
+			return this.userMenuInSession(
+				{
+					...options,
+					name: instance.name,
+				} as UserCommandInteractionOptions,
+				sessionKey,
+			) as Promise<MenuResultFor<C>>;
+		}
+		return this.messageMenuInSession(
+			{
+				...(options as MessageCommandInteractionOptions),
+				name: instance.name,
+			},
+			sessionKey,
+		) as Promise<MenuResultFor<C>>;
+	}
+
+	protected createMenuDispatch<C extends MenuCommandClass>(
+		command: C,
+		options: MenuOptions<C> = {},
+	): Dispatch<MenuResultFor<C>> {
+		const instance = new command();
+		if (instance.type === ApplicationCommandType.User) {
+			return this.createUserMenuDispatch({
 				...options,
 				name: instance.name,
 			} as UserCommandInteractionOptions) as Dispatch<MenuResultFor<C>>;
 		}
-		return this.messageMenu({
+		return this.createMessageMenuDispatch({
 			...(options as MessageCommandInteractionOptions),
 			name: instance.name,
 		}) as Dispatch<MenuResultFor<C>>;
 	}
 
-	entryPoint(options: EntryPointInteractionOptions = {}): Dispatch<DispatchResult> {
+	entryPoint(options: EntryPointInteractionOptions = {}): Promise<DispatchResult> {
+		return this.entryPointInSession(options);
+	}
+
+	private entryPointInSession(
+		options: EntryPointInteractionOptions = {},
+		sessionKey?: string,
+	): Promise<DispatchResult> {
+		return this.performStep(this.createEntryPointDispatch(options), sessionKey);
+	}
+
+	protected createEntryPointDispatch(options: EntryPointInteractionOptions = {}): Dispatch<DispatchResult> {
 		return this.dispatchVia('entryPoint', options, entryPointInteraction);
 	}
 
@@ -599,29 +673,28 @@ export class MockBot extends MockBotDispatchCore {
 			implicitSource && currentSource === undefined ? this.resolveCurrentMessageSource(sessionKey) : undefined;
 		const explicitSource = options.source === undefined ? undefined : this.resolveMessageSource(options.source);
 		const resolvedSource = currentSource ?? currentMessageSource ?? explicitSource;
-		if (implicitSource && !resolvedSource && !this.hasComponentCommand()) {
+		if (!resolvedSource) {
 			throw new TypeError(
 				`clickButton: component "${customId}" is not available in the current state for user "${userId}". ` +
 					'Await the action that renders it, inspect it with rendered(bot), or pass an explicit source.',
 			);
 		}
-		const consumed = resolvedSource
-			? implicitSource
-				? this.sessions.consumeComponent(sessionKey, customId, resolvedSource.id)
-				: this.sessions.consumeComponentBySource(customId, resolvedSource.id)
-			: undefined;
-		const sourceSessionContext = consumed ? this.sessions.context(consumed.sessionKey) : undefined;
-		const sourceMessage = resolvedSource === undefined ? undefined : this._state.rawMessageById(resolvedSource.id);
-		const sourceChannelId = resolvedSource?.channel_id ?? consumed?.channelId ?? sourceMessage?.channel_id;
+		const sourceMessage = this.hydrateSourceMessage(resolvedSource, { verb: 'clickButton', customId });
+		this.requireComponentOnMessage('clickButton', customId, sourceMessage);
+		const checkpoint = implicitSource
+			? this.sessions.componentCheckpoint(sessionKey, customId, resolvedSource.id)
+			: this.sessions.componentCheckpointBySource(customId, resolvedSource.id);
+		const sourceSessionContext = checkpoint ? this.sessions.context(checkpoint.sessionKey) : undefined;
+		const sourceChannelId = resolvedSource?.channel_id ?? checkpoint?.channelId ?? sourceMessage?.channel_id;
 		const sourceChannel = sourceChannelId === undefined ? undefined : this._state.channelById(sourceChannelId);
 		const sourceGuildId =
 			sourceMessage?.guild_id ??
-			consumed?.guildId ??
+			checkpoint?.guildId ??
 			sourceSessionContext?.guildId ??
 			(sourceChannel === undefined ? (preparedOptions.guildId ?? null) : (sourceChannel.guildId ?? null));
 		const contextualOptions = {
 			...preparedOptions,
-			...(sourceMessage !== undefined ? { guildId: sourceGuildId } : {}),
+			guildId: sourceGuildId,
 			...(sourceChannelId !== undefined
 				? {
 						channel: apiChannel({
@@ -631,32 +704,28 @@ export class MockBot extends MockBotDispatchCore {
 					}
 				: {}),
 		};
-		const prepared = resolvedSource
-			? { ...contextualOptions, source: resolvedSource.id }
-			: implicitSource
-				? { ...contextualOptions, allowSyntheticSource: true }
-				: contextualOptions;
-		const dispatch = this.dispatchClickButton(customId, prepared, implicitSource && !resolvedSource);
+		const prepared = { ...contextualOptions, source: resolvedSource.id };
+		const dispatch = this.dispatchClickButton(customId, prepared);
+		const consumed = implicitSource
+			? this.sessions.consumeComponent(sessionKey, customId, resolvedSource.id)
+			: this.sessions.consumeComponentBySource(customId, resolvedSource.id);
 		return this.performStep(dispatch, consumed?.sessionKey ?? sessionKey, consumed?.ownerDispatchId);
 	}
 
 	protected dispatchClickButton(
 		customId: string,
-		options: Omit<ButtonInteractionOptions, 'customId' | 'message'> & ComponentSourceOptions = {},
-		forceSyntheticSource = false,
+		options: Omit<ButtonInteractionOptions, 'customId' | 'message'> & RawComponentSourceOptions = {},
 	): Dispatch<DispatchResult> {
 		const { source, allowSyntheticSource, ...rest } = options;
 		const opts: ButtonInteractionOptions = { ...rest, customId };
 		return this.dispatchVia('clickButton', opts, prepared => {
-			const message = forceSyntheticSource ? undefined : this.resolveMessageSource(source);
+			const message = this.resolveMessageSource(source);
 			this.assertNoConcurrentImplicitComponentSource('clickButton', customId, source !== undefined);
-			// Auto-synthesize when no source resolves but a ComponentCommand could handle this customId (incl.
-			// RegExp/filter handlers) — unambiguous (no message ⇒ no live collector), so no flag needed.
-			const synthetic = allowSyntheticSource || (!message && this.componentCommandMatches(customId));
+			const synthetic = allowSyntheticSource === true && !message;
 			if (!message && !synthetic) {
 				throw new TypeError(
 					`clickButton: no source message resolved for "${customId}". Send the message first, pass source, ` +
-						`or set allowSyntheticSource: true for a ComponentCommand-only dispatch.`,
+						`or use bot.dispatch.clickButton(..., { allowSyntheticSource: true }) for a raw ComponentCommand-only dispatch.`,
 				);
 			}
 			if (synthetic && !message) this.assertSyntheticComponentAllowed('clickButton', customId);
@@ -702,29 +771,29 @@ export class MockBot extends MockBotDispatchCore {
 			implicitSource && currentSource === undefined ? this.resolveCurrentMessageSource(sessionKey) : undefined;
 		const explicitSource = options.source === undefined ? undefined : this.resolveMessageSource(options.source);
 		const resolvedSource = currentSource ?? currentMessageSource ?? explicitSource;
-		if (implicitSource && !resolvedSource && !this.hasComponentCommand()) {
+		if (!resolvedSource) {
 			throw new TypeError(
 				`selectMenu: component "${customId}" is not available in the current state for user "${userId}". ` +
 					'Await the action that renders it, inspect it with rendered(bot), or pass an explicit source.',
 			);
 		}
-		const consumed = resolvedSource
-			? implicitSource
-				? this.sessions.consumeComponent(sessionKey, customId, resolvedSource.id)
-				: this.sessions.consumeComponentBySource(customId, resolvedSource.id)
-			: undefined;
-		const sourceSessionContext = consumed ? this.sessions.context(consumed.sessionKey) : undefined;
-		const sourceMessage = resolvedSource === undefined ? undefined : this._state.rawMessageById(resolvedSource.id);
-		const sourceChannelId = resolvedSource?.channel_id ?? consumed?.channelId ?? sourceMessage?.channel_id;
+		const sourceMessage = this.hydrateSourceMessage(resolvedSource, { verb: 'selectMenu', customId });
+		const sourceComponent = this.requireComponentOnMessage('selectMenu', customId, sourceMessage);
+		this.assertSelectValuesMatchSource(customId, values, sourceComponent);
+		const checkpoint = implicitSource
+			? this.sessions.componentCheckpoint(sessionKey, customId, resolvedSource.id)
+			: this.sessions.componentCheckpointBySource(customId, resolvedSource.id);
+		const sourceSessionContext = checkpoint ? this.sessions.context(checkpoint.sessionKey) : undefined;
+		const sourceChannelId = resolvedSource?.channel_id ?? checkpoint?.channelId ?? sourceMessage?.channel_id;
 		const sourceChannel = sourceChannelId === undefined ? undefined : this._state.channelById(sourceChannelId);
 		const sourceGuildId =
 			sourceMessage?.guild_id ??
-			consumed?.guildId ??
+			checkpoint?.guildId ??
 			sourceSessionContext?.guildId ??
 			(sourceChannel === undefined ? (preparedOptions.guildId ?? null) : (sourceChannel.guildId ?? null));
 		const contextualOptions = {
 			...preparedOptions,
-			...(sourceMessage !== undefined ? { guildId: sourceGuildId } : {}),
+			guildId: sourceGuildId,
 			...(sourceChannelId !== undefined
 				? {
 						channel: apiChannel({
@@ -734,31 +803,29 @@ export class MockBot extends MockBotDispatchCore {
 					}
 				: {}),
 		};
-		const prepared = resolvedSource
-			? { ...contextualOptions, source: resolvedSource.id }
-			: implicitSource
-				? { ...contextualOptions, allowSyntheticSource: true }
-				: contextualOptions;
-		const dispatch = this.dispatchSelectMenu(customId, values, prepared, implicitSource && !resolvedSource);
+		const prepared = { ...contextualOptions, source: resolvedSource.id };
+		const dispatch = this.dispatchSelectMenu(customId, values, prepared);
+		const consumed = implicitSource
+			? this.sessions.consumeComponent(sessionKey, customId, resolvedSource.id)
+			: this.sessions.consumeComponentBySource(customId, resolvedSource.id);
 		return this.performStep(dispatch, consumed?.sessionKey ?? sessionKey, consumed?.ownerDispatchId);
 	}
 
 	protected dispatchSelectMenu(
 		customId: string,
 		values: string[],
-		options: Omit<SelectMenuInteractionOptions, 'customId' | 'values' | 'message'> & ComponentSourceOptions = {},
-		forceSyntheticSource = false,
+		options: Omit<SelectMenuInteractionOptions, 'customId' | 'values' | 'message'> & RawComponentSourceOptions = {},
 	): Dispatch<DispatchResult> {
 		const { source, allowSyntheticSource, ...rest } = options;
 		const opts: SelectMenuInteractionOptions = { ...rest, customId, values };
 		return this.dispatchVia('selectMenu', opts, prepared => {
-			const message = forceSyntheticSource ? undefined : this.resolveMessageSource(source);
+			const message = this.resolveMessageSource(source);
 			this.assertNoConcurrentImplicitComponentSource('selectMenu', customId, source !== undefined);
-			const synthetic = allowSyntheticSource || (!message && this.componentCommandMatches(customId));
+			const synthetic = allowSyntheticSource === true && !message;
 			if (!message && !synthetic) {
 				throw new TypeError(
 					`selectMenu: no source message resolved for "${customId}". Send the message first, pass source, ` +
-						`or set allowSyntheticSource: true for a ComponentCommand-only dispatch.`,
+						`or use bot.dispatch.selectMenu(..., { allowSyntheticSource: true }) for a raw ComponentCommand-only dispatch.`,
 				);
 			}
 			if (synthetic && !message) this.assertSyntheticComponentAllowed('selectMenu', customId);
@@ -796,6 +863,8 @@ export class MockBot extends MockBotDispatchCore {
 	): Promise<DispatchResult> {
 		const continuation = this.continuationOptions(extra, sessionKeyOverride);
 		const sessionKey = continuation.sessionKey;
+		const userId = continuation.options.user?.id ?? this.defaultUser.id;
+		this.assertStatefulModalAvailable(customId, fields, userId, sessionKey);
 		const dispatch = this.dispatchSubmitModal(customId, fields, continuation.options);
 		const resumedOwnerDispatchId = this.sessions.consumeModal(sessionKey, customId);
 		return this.performStep(dispatch, sessionKey, resumedOwnerDispatchId);
@@ -804,13 +873,15 @@ export class MockBot extends MockBotDispatchCore {
 	protected dispatchSubmitModal(
 		customId: string,
 		fields: ModalFields = {},
-		extra: Omit<ModalSubmitInteractionOptions, 'customId' | 'fields'> = {},
+		extra: RawModalSubmitOptions = {},
 	): Dispatch<DispatchResult> {
-		const opts: ModalSubmitInteractionOptions = { ...extra, customId, fields };
+		const { allowSyntheticSource, ...interactionOptions } = extra;
+		const opts: ModalSubmitInteractionOptions = { ...interactionOptions, customId, fields };
 		return this.dispatchVia('submitModal', opts, prepared => {
 			const userId = prepared.user?.id ?? this.defaultUser.id;
-			this.assertModalHandleable(customId, userId);
+			this.assertModalHandleable(customId, userId, allowSyntheticSource === true);
 			this.assertModalMatchesDisplayed(customId, fields, userId);
+			this.consumeDisplayedModal(userId);
 			return modalSubmitInteraction(prepared);
 		});
 	}
@@ -887,10 +958,11 @@ export class MockBot extends MockBotDispatchCore {
 					? this.slashInSession(commandOrOptions, { ...base, ...classOptions }, sessionKey)
 					: this.slashInSession({ ...base, ...commandOrOptions }, undefined, sessionKey),
 			autocomplete: options => this.autocomplete({ ...base, ...options }),
-			userMenu: options => this.userMenu({ ...base, ...options }),
-			messageMenu: options => this.messageMenu({ ...base, ...options }),
-			menu: (command, options) => this.menu(command, { ...base, ...options } as MenuOptions<typeof command>),
-			entryPoint: options => this.entryPoint({ ...base, ...options }),
+			userMenu: options => this.userMenuInSession({ ...base, ...options }, sessionKey),
+			messageMenu: options => this.messageMenuInSession({ ...base, ...options }, sessionKey),
+			menu: (command, options) =>
+				this.menuInSession(command, { ...base, ...options } as MenuOptions<typeof command>, sessionKey),
+			entryPoint: options => this.entryPointInSession({ ...base, ...options }, sessionKey),
 			submitModal: (customId, fields, options = {}) =>
 				this.submitModalInSession(customId, fields, { ...base, ...options }, sessionKey),
 			clickButton: (customId, options = {}) => this.clickButtonInSession(customId, { ...base, ...options }, sessionKey),
@@ -1086,6 +1158,7 @@ export class MockBot extends MockBotDispatchCore {
 		this.modalWaiters.clear();
 		this.modalOwners.clear();
 		this.displayedModals.clear();
+		this.modalRenderCapturedDispatches.clear();
 		this.sessions.reset();
 		this.unregisteredMemberWarnings.clear();
 		this.lastInteractionMessage = undefined;
@@ -1119,6 +1192,7 @@ export class MockBot extends MockBotDispatchCore {
 		this.modalWaiters.clear();
 		this.modalOwners.clear();
 		this.displayedModals.clear();
+		this.modalRenderCapturedDispatches.clear();
 		this.sessions.reset();
 		this.rest.releasePending();
 		// client.close() is seyfert's plugin lifecycle close: it awaits in-flight setup and runs each plugin's

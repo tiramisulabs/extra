@@ -55,8 +55,20 @@ describe('virtual clock', () => {
 
 			const bot = await createMockBot({ components: [FeedbackButton] });
 			const user = apiUser({ id: '777' });
+			await bot.rest.request('POST', '/channels/feedback-source/messages', {
+				body: {
+					components: [
+						{
+							type: 1,
+							components: [{ type: 2, style: 1, custom_id: 'open-feedback', label: 'Feedback' }],
+						},
+					],
+				},
+			});
+			const source = bot.actions.at(-1);
+			if (!source) throw new Error('expected feedback source action');
 
-			await bot.clickButton('open-feedback', { user, allowSyntheticSource: true });
+			await bot.clickButton('open-feedback', { user, source });
 			const modal = await bot.submitModal('feedback-modal', { rating: '5' }, { user });
 
 			expect(submitted).toEqual(['777']);
@@ -259,8 +271,20 @@ describe('virtual clock', () => {
 
 			const bot = await createMockBot({ components: [StallButton] });
 			const user = apiUser({ id: 'stall-user' });
+			await bot.rest.request('POST', '/channels/stall-source/messages', {
+				body: {
+					components: [
+						{
+							type: 1,
+							components: [{ type: 2, style: 1, custom_id: 'open-stall', label: 'Open' }],
+						},
+					],
+				},
+			});
+			const source = bot.actions.at(-1);
+			if (!source) throw new Error('expected stall source action');
 
-			await expect(bot.clickButton('open-stall', { user, allowSyntheticSource: true })).resolves.toBeDefined();
+			await expect(bot.clickButton('open-stall', { user, source })).resolves.toBeDefined();
 			await bot.close();
 		});
 
@@ -313,12 +337,27 @@ describe('virtual clock', () => {
 				},
 			});
 			const user = apiUser({ id: 'natural-timeout-user' });
+			await bot.rest.request('POST', '/channels/timed-source/messages', {
+				body: {
+					components: [
+						{
+							type: 1,
+							components: [
+								{ type: 2, style: 1, custom_id: 'open-timed:first', label: 'First' },
+								{ type: 2, style: 1, custom_id: 'open-timed:second', label: 'Second' },
+							],
+						},
+					],
+				},
+			});
+			const source = bot.actions.at(-1);
+			if (!source) throw new Error('expected timed source action');
 
-			await bot.clickButton('open-timed:first', { user, allowSyntheticSource: true });
+			await bot.clickButton('open-timed:first', { user, source });
 			await bot.advanceTime(1_000);
 			expect(outcomes).toEqual(['first:timed-out']);
 
-			await bot.clickButton('open-timed:second', { user, allowSyntheticSource: true });
+			await bot.clickButton('open-timed:second', { user, source });
 			await bot.submitModal('timed:second', {}, { user });
 			expect(outcomes).toEqual(['first:timed-out', 'second:submitted']);
 			await bot.close();

@@ -74,8 +74,14 @@ describe('collector patterns', () => {
 		}
 
 		const bot = await createMockBot({ components: [ConfirmModal] });
-		await bot.submitModal('confirm-modal', { name: 'x' });
-		const res = await bot.clickButton('continue');
+		const modal = await bot.dispatch.submitModal('confirm-modal', { name: 'x' }, { allowSyntheticSource: true });
+		const sourceId = (
+			modal.actions.find(action => action.route.includes('/callback'))?.response as
+				| { resource?: { message?: { id?: string } } }
+				| undefined
+		)?.resource?.message?.id;
+		if (!sourceId) throw new Error('expected modal reply message id');
+		const res = await bot.clickButton('continue', { source: sourceId });
 		expect(done).toEqual(['clicked']);
 		expect(res.reply?.body).toMatchObject({ data: { content: 'created channels' } });
 		await bot.close();

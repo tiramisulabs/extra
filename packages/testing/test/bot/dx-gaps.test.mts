@@ -271,7 +271,7 @@ describe('#4 regression: defer -> non-REST gap -> render collector button', () =
 });
 
 describe('more click/flow DX', () => {
-	test('clickButton auto-synthesizes a source for a registered ComponentCommand (incl. filter/dynamic customId), no flag', async () => {
+	test('raw clickButton requires opt-in to synthesize a dynamic ComponentCommand source', async () => {
 		const clicked: string[] = [];
 		class SubmitButton extends ComponentCommand {
 			componentType = 'Button' as const;
@@ -285,7 +285,8 @@ describe('more click/flow DX', () => {
 		}
 
 		const bot = await createMockBot({ components: [SubmitButton] });
-		const res = await bot.clickButton('submit:auto:c1'); // no source, no allowSyntheticSource — auto-synthesized
+		await expect(bot.clickButton('submit:auto:c1')).rejects.toThrow(/not available in the current state/);
+		const res = await bot.dispatch.clickButton('submit:auto:c1', { allowSyntheticSource: true });
 		expect(clicked).toEqual(['submit:auto:c1']);
 		expect(res.content).toBe('ok');
 		await bot.close();

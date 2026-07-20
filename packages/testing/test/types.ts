@@ -165,6 +165,12 @@ reader.get.embed('Campaign');
 reader.get.button({ customID: 'save' });
 
 declare const result: DispatchResult;
+// @ts-expect-error DispatchResult snapshots are data only; lookup belongs to rendered(result).
+result.component('save');
+// @ts-expect-error Snapshot components cannot dispatch actions; use bot.clickButton().
+result.components[0]?.click();
+// @ts-expect-error Snapshot components cannot dispatch actions; use bot.selectMenu().
+result.components[0]?.select(['x']);
 const state = outcome(result);
 
 expectType<OutcomeResponse>(state.get.response());

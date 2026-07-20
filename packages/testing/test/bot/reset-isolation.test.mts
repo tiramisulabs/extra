@@ -38,7 +38,7 @@ describe('reset() isolation (F26)', () => {
 
 		// Registry cleared: no modal waits for the user and no ModalCommand is registered, so filling throws
 		// instead of silently running the stale 'feedback' callback for an unrelated custom_id.
-		expect(() => bot.dispatch.submitModal('totally-unrelated', {}, { user })).toThrow(/no modal/i);
+		expect(() => bot.dispatch.submitModal('totally-unrelated', {}, { user })).toThrow(/not rendered/i);
 
 		// reset resolves the suspended opener through the same null branch and cancels its timer.
 		await dispatch;

@@ -18,13 +18,10 @@ import {
 import { TEST_USER_ID } from './constants';
 import {
 	buildMessageResult,
-	type ComponentActionView,
 	type ComponentSourceOptions,
-	type ComponentSourceView,
 	type DispatchResult,
 	type MessagePart,
 	type MessageResultBase,
-	type MessageSource,
 	type MockSubCommandClass,
 	type OutgoingMessage,
 	type PluginInfo,
@@ -76,7 +73,12 @@ export abstract class MockBotSurface {
 	/** The dispatch that owns the currently registered waitFor modal for a user. */
 	protected readonly modalOwners = new Map<string, number>();
 	/** Modal definition displayed to a user (customId + input customIds), captured when seyfert registers it. */
-	protected readonly displayedModals = new Map<string, { customId?: string; inputIds: Set<string> }>();
+	protected readonly displayedModals = new Map<
+		string,
+		{ customId?: string; inputIds: Set<string>; dispatchId?: number }
+	>();
+	/** Dispatches whose type-9 callback was captured eagerly by the modal registration hook. */
+	protected readonly modalRenderCapturedDispatches = new Set<number>();
 	protected virtualNowMs = Date.now();
 	protected closed = false;
 	/** Set once the fallback full scan has run, so no further on-demand command load is attempted. */
@@ -214,50 +216,8 @@ export abstract class MockBotSurface {
 		return this.sessions.currentActions();
 	}
 
-	protected bindComponentView(view: InteractiveComponentView, source?: MessageSource): ComponentActionView {
-		const sourceView: ComponentSourceView | undefined = source
-			? { messageId: source.id, ...(source.channel_id ? { channelId: source.channel_id } : {}) }
-			: undefined;
-		const sourceOption = source ? { source: source.id } : {};
-		const requireCustomId = (verb: 'click' | 'select'): string => {
-			if (!view.customId) {
-				throw new TypeError(`component.${verb}: component has no customId and cannot be dispatched.`);
-			}
-			if (view.disabled) {
-				throw new TypeError(`component.${verb}: component "${view.customId}" is disabled.`);
-			}
-			return view.customId;
-		};
-
-		return {
-			...view,
-			...(sourceView ? { source: sourceView } : {}),
-			click: (options = {}) => {
-				const customId = requireCustomId('click');
-				if (view.type !== 2) {
-					throw new TypeError(
-						`component.click: component "${customId}" is type ${view.type}, not a button. ` +
-							'Use component.select(values) for select menus.',
-					);
-				}
-				return this.clickButton(customId, { ...options, ...sourceOption });
-			},
-			select: (values, options = {}) => {
-				const customId = requireCustomId('select');
-				const isSelect = view.type === 3 || (view.type >= 5 && view.type <= 8);
-				if (!isSelect) {
-					throw new TypeError(
-						`component.select: component "${customId}" is type ${view.type}, not a select menu. ` +
-							'Use component.click() for buttons.',
-					);
-				}
-				return this.selectMenu(customId, values, { ...options, ...sourceOption });
-			},
-		};
-	}
-
 	protected messageParts(actions: RecordedAction[], parts: MessagePart[]): MessageResultBase {
-		return buildMessageResult(actions, parts, (view, source) => this.bindComponentView(view, source));
+		return buildMessageResult(actions, parts);
 	}
 
 	protected outgoingMessagePart(action: RecordedAction): MessagePart {
@@ -372,23 +332,6 @@ export abstract class MockBotSurface {
 
 	protected hasModalCommand(): boolean {
 		return this.componentCommands().some(command => command instanceof ModalCommand);
-	}
-
-	/**
-	 * True when a registered ComponentCommand could handle `customId` — by a string/RegExp `customId`, or because
-	 * it has a `filter()` (which routes dynamically at dispatch, so it can't be ruled out statically). Lets a
-	 * source-less click auto-target it without the `allowSyntheticSource` flag: with no source there's no live
-	 * collector, so a ComponentCommand is the only destination; a customId that ultimately matches none fails loud
-	 * at dispatch ("no handler matched").
-	 */
-	protected componentCommandMatches(customId: string): boolean {
-		return this.componentCommands().some(command => {
-			if (command instanceof ModalCommand) return false;
-			const handler = command as { customId?: string | RegExp; filter?: unknown };
-			if (typeof handler.customId === 'string') return handler.customId === customId;
-			if (handler.customId instanceof RegExp) return handler.customId.test(customId);
-			return typeof handler.filter === 'function';
-		});
 	}
 
 	/**
@@ -516,8 +459,9 @@ export abstract class MockBotSurface {
 		}
 	}
 
-	protected assertModalHandleable(customId: string, userId: string): void {
-		if (this.client.components.modals.has(userId) || this.hasModalCommand()) return;
+	protected assertModalHandleable(customId: string, userId: string, allowSyntheticSource: boolean): void {
+		if (this.displayedModals.has(userId)) return;
+		if (allowSyntheticSource && this.hasModalCommand()) return;
 		const otherUsers = [...this.client.components.modals.keys()].filter(id => id !== userId);
 		const pendingOpener = this.dispatches.some(dispatch => !dispatch.started && !dispatch.isSettled);
 		const hint =
@@ -527,7 +471,8 @@ export abstract class MockBotSurface {
 					? 'The opener has not run yet — await the opener, then call `await bot.submitModal(customId, fields)`.'
 					: 'Dispatch and await the button/command that opens the modal before calling submitModal.';
 		throw new TypeError(
-			`submitModal: no modal "${customId}" is waiting for user "${userId}" and no ModalCommand is registered. ${hint}`,
+			`submitModal: modal "${customId}" was not rendered for user "${userId}". ${hint} ` +
+				'Raw ModalCommand-only dispatches require bot.dispatch.submitModal(..., { allowSyntheticSource: true }).',
 		);
 	}
 
@@ -546,7 +491,12 @@ export abstract class MockBotSurface {
 			const data = body.data ?? {};
 			const inputIds = new Set<string>();
 			collectComponentCustomIds(data.components, inputIds);
-			this.displayedModals.set(userId, { customId: data.custom_id as string | undefined, inputIds });
+			this.displayedModals.set(userId, {
+				customId: data.custom_id as string | undefined,
+				inputIds,
+				...(dispatchId === undefined ? {} : { dispatchId }),
+			});
+			if (dispatchId !== undefined) this.modalRenderCapturedDispatches.add(dispatchId);
 			return data.custom_id as string | undefined;
 		}
 		return undefined;
@@ -587,8 +537,8 @@ export abstract class MockBotSurface {
 
 	/**
 	 * Cross-check a submitModal against the modal that was actually displayed: the customId must match, and every
-	 * field key must correspond to a real input on the modal. Skipped when no displayed modal was captured (e.g. a
-	 * ModalCommand-only flow), so it never blocks the registry path that {@link assertModalHandleable} already guards.
+	 * field key must correspond to a real input on the modal. Skipped only for an explicitly synthetic raw
+	 * ModalCommand dispatch, which has no rendered definition to validate.
 	 */
 	protected assertModalMatchesDisplayed(customId: string, fields: ModalFields, userId: string): void {
 		const displayed = this.displayedModals.get(userId);
@@ -607,7 +557,30 @@ export abstract class MockBotSurface {
 					`Known inputs: ${known}.`,
 			);
 		}
+	}
+
+	protected consumeDisplayedModal(userId: string): void {
 		this.displayedModals.delete(userId);
+	}
+
+	protected assertStatefulModalAvailable(
+		customId: string,
+		fields: ModalFields,
+		userId: string,
+		sessionKey: string,
+	): void {
+		const displayed = this.displayedModals.get(userId);
+		const checkpoint = this.sessions.hasModalCheckpoint(sessionKey, customId, userId);
+		const renderedInCurrentStep =
+			displayed?.dispatchId !== undefined &&
+			this.sessions.currentActions(sessionKey).some(action => action.dispatchId === displayed.dispatchId);
+		if (!displayed || (!checkpoint && !renderedInCurrentStep)) {
+			throw new TypeError(
+				`submitModal: modal "${customId}" is not available in the current state for user "${userId}". ` +
+					'Await the action that renders it and inspect it with rendered(bot) or rendered(actor).',
+			);
+		}
+		this.assertModalMatchesDisplayed(customId, fields, userId);
 	}
 
 	/** Read a `{ id, channel_id? }` message source out of a recorded REST response, or undefined if it has no id. */
