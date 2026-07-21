@@ -21,7 +21,7 @@ import {
 } from 'seyfert';
 import { ApplicationCommandType, ButtonStyle, EntryPointCommandHandlerType, TextInputStyle } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
-import { createMockBot, rendered } from '../../src';
+import { createMockBot, Routes, rendered } from '../../src';
 import { apiChannel, apiUser } from '../../src/bot/payloads';
 
 describe('stateful interaction steps', () => {
@@ -282,6 +282,17 @@ describe('stateful interaction steps', () => {
 		rendered(bot).get.message({ content: 'done:bob:alice-guild:alice-channel' });
 		rendered(alice).get.message({ content: 'done:bob:alice-guild:alice-channel' });
 		rendered(bob).get.message({ content: 'panel:bob' });
+		const callbackContents = (calls: readonly { body?: unknown }[]) =>
+			calls.map(call => {
+				const body = call.body as { data?: { content?: string } } | undefined;
+				return body?.data?.content;
+			});
+		expect(callbackContents(alice.restCalls(Routes.interactionCallback))).toContain(
+			'done:bob:alice-guild:alice-channel',
+		);
+		expect(callbackContents(bob.restCalls(Routes.interactionCallback))).not.toContain(
+			'done:bob:alice-guild:alice-channel',
+		);
 
 		await bob.clickButton('public-continue');
 		rendered(bob).get.message({ content: 'done:bob:bob-guild:bob-channel' });

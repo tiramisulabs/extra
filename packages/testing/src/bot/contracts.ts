@@ -328,7 +328,7 @@ export interface ActorOptions {
 
 /** Bound dispatcher facade that reuses one identity across a flow. */
 export interface Actor {
-	/** REST calls from this actor's most recent stateful step. */
+	/** Complete causal REST history for this actor across all of its stateful steps. */
 	readonly restCalls: RestCalls;
 	slash<C extends SlashCommandClass>(command: C, options?: SlashClassOptions<C>): Promise<DispatchResult>;
 	slash(options: ChatInputInteractionOptions): Promise<DispatchResult>;

@@ -9,6 +9,7 @@ import {
 	SubCommand,
 } from 'seyfert';
 import { HandleCommand } from 'seyfert/lib/commands/handle';
+import { registerRenderedSource } from '../rendered-output/source';
 import type { SubcommandClassRoute } from './bot-support';
 import { selectTypeForInteraction } from './component-tree';
 import { TEST_CHANNEL_ID, TEST_GUILD_ID } from './constants';
@@ -926,8 +927,8 @@ export class MockBot extends MockBotDispatchCore {
 		const sessions = this.sessions;
 		const restCalls = ((matcher?: RouteMatcher) =>
 			matcher
-				? this.snapshotRestCalls(sessions.latestActions(sessionKey), matcher)
-				: this.snapshotRestCalls(sessions.latestActions(sessionKey))) as RestCalls;
+				? this.snapshotRestCalls(sessions.ownedActions(sessionKey), matcher)
+				: this.snapshotRestCalls(sessions.ownedActions(sessionKey))) as RestCalls;
 		const mergeEventPayload = (payload: object | readonly unknown[] = {}): object | readonly unknown[] => {
 			if (Array.isArray(payload)) return payload;
 			return {
@@ -937,7 +938,7 @@ export class MockBot extends MockBotDispatchCore {
 			};
 		};
 
-		return {
+		const actor: Actor = {
 			restCalls,
 			slash: (
 				commandOrOptions: SlashCommandClass | ChatInputInteractionOptions,
@@ -961,6 +962,8 @@ export class MockBot extends MockBotDispatchCore {
 			emit: (name: string, payload: object | readonly unknown[] = {}, options?: EmitEventOptions) =>
 				this.emit(name, mergeEventPayload(payload), options),
 		};
+		registerRenderedSource(actor, () => sessions.latestActions(sessionKey));
+		return actor;
 	}
 
 	emit<TName extends GatewayDispatchPayload['t']>(

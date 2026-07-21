@@ -171,20 +171,37 @@ export type RouteParams<TRoute extends string> = [RouteParamNames<TRoute>] exten
 	? Record<string, never>
 	: Record<RouteParamNames<TRoute>, string>;
 
-export interface RouteMatcher<TRoute extends string = string> {
+declare const routeContract: unique symbol;
+
+export interface RouteMatcher<TRoute extends string = string, TBody = unknown, TResponse = unknown> {
 	method: HttpMethods;
 	route: TRoute;
+	/** Type-only request/response carrier; route descriptors have no corresponding runtime field. */
+	readonly [routeContract]?: {
+		body: TBody;
+		response: TResponse;
+	};
 }
 
 /** A read-only REST snapshot, enriched with params captured from the supplied route descriptor. */
-export type RestCall<TParams extends Record<string, string | undefined> = Record<string, undefined>> = Readonly<
-	RecordedAction & { params: TParams }
+export type RestCall<
+	TParams extends Record<string, string | undefined> = Record<string, undefined>,
+	TBody = Record<string, unknown>,
+	TResponse = unknown,
+> = Readonly<
+	Omit<RecordedAction, 'body' | 'response'> & {
+		params: TParams;
+		body?: TBody;
+		response: TResponse | undefined;
+	}
 >;
 
-/** Read the latest stateful step's REST calls, optionally narrowed by one route descriptor. */
+/** Read the bot's or actor's complete REST history, optionally narrowed by one route descriptor. */
 export interface RestCalls {
 	(): readonly RestCall[];
-	<TRoute extends string>(matcher: RouteMatcher<TRoute>): readonly RestCall<RouteParams<TRoute>>[];
+	<TRoute extends string, TBody, TResponse>(
+		matcher: RouteMatcher<TRoute, TBody, TResponse>,
+	): readonly RestCall<RouteParams<TRoute>, TBody, TResponse>[];
 }
 
 export type ActionPredicate = (action: RecordedAction) => boolean;

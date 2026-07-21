@@ -7,6 +7,7 @@ import {
 	type ResolvedPluginList,
 	SubCommand,
 } from 'seyfert';
+import { registerRenderedSource } from '../rendered-output/source';
 import { type CommandPathCatalog } from './bootstrap';
 import type { CommandRuntime, SubcommandClassRoute } from './bot-support';
 import {
@@ -122,6 +123,7 @@ export abstract class MockBotSurface {
 				}
 			},
 		});
+		registerRenderedSource(this, () => this.sessions.latestActions());
 	}
 
 	/**
@@ -211,23 +213,23 @@ export abstract class MockBotSurface {
 	}
 
 	restCalls(): readonly RestCall[];
-	restCalls<TRoute extends string>(matcher: RouteMatcher<TRoute>): readonly RestCall<RouteParams<TRoute>>[];
-	restCalls(matcher?: RouteMatcher): readonly RestCall<Record<string, string | undefined>>[] {
-		return matcher
-			? this.snapshotRestCalls(this.sessions.latestActions(), matcher)
-			: this.snapshotRestCalls(this.sessions.latestActions());
+	restCalls<TRoute extends string, TBody, TResponse>(
+		matcher: RouteMatcher<TRoute, TBody, TResponse>,
+	): readonly RestCall<RouteParams<TRoute>, TBody, TResponse>[];
+	restCalls(matcher?: RouteMatcher): readonly RestCall<Record<string, string | undefined>, unknown, unknown>[] {
+		return matcher ? this.snapshotRestCalls(this.rest.actions, matcher) : this.snapshotRestCalls(this.rest.actions);
 	}
 
 	protected snapshotRestCalls(actions: readonly RecordedAction[]): readonly RestCall[];
-	protected snapshotRestCalls<TRoute extends string>(
+	protected snapshotRestCalls<TRoute extends string, TBody, TResponse>(
 		actions: readonly RecordedAction[],
-		matcher: RouteMatcher<TRoute>,
-	): readonly RestCall<RouteParams<TRoute>>[];
+		matcher: RouteMatcher<TRoute, TBody, TResponse>,
+	): readonly RestCall<RouteParams<TRoute>, TBody, TResponse>[];
 	protected snapshotRestCalls(
 		actions: readonly RecordedAction[],
 		matcher?: RouteMatcher,
-	): readonly RestCall<Record<string, string | undefined>>[] {
-		const calls: RestCall<Record<string, string | undefined>>[] = [];
+	): readonly RestCall<Record<string, string | undefined>, unknown, unknown>[] {
+		const calls: RestCall<Record<string, string | undefined>, unknown, unknown>[] = [];
 		for (const action of actions) {
 			const params = matcher ? this.rest.matchRouteParams(matcher, action) : {};
 			if (params === undefined) continue;

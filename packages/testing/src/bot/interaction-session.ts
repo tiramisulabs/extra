@@ -234,6 +234,17 @@ export class InteractionSessions {
 		return this.scopedActions(state.latestStep);
 	}
 
+	/** Complete causal REST history for one stateful session, including work that settles after its step. */
+	ownedActions(key: string): readonly RecordedAction[] {
+		return this.deps
+			.actions()
+			.filter(
+				action =>
+					action.sessionKey === key ||
+					(action.dispatchId !== undefined && this.dispatchSession.get(action.dispatchId) === key),
+			);
+	}
+
 	checkpoints(key: string): readonly InputCheckpoint[] {
 		return this.states.get(key)?.checkpoints ?? [];
 	}

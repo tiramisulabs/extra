@@ -372,8 +372,8 @@ timeout-driven scenarios remain available through `bot.dispatch.*`.
 | `rendered(bot)` | output from the latest step of the most recently active actor |
 | `rendered(actor)` | output from that actor's latest step |
 | `rendered(result)` | output belonging to that exact result, even after later steps |
-| `bot.restCalls()` | REST calls from the latest step of the most recently active actor, in order |
-| `actor.restCalls()` | REST calls from that actor's latest step, in order |
+| `bot.restCalls()` | complete REST journal across actors, raw dispatches, and direct REST, in global order |
+| `actor.restCalls()` | complete causal REST history for that actor across all of its stateful steps |
 | `result.actions` | the exact raw REST trail attributed to that result |
 | `bot.world` | persistent Discord-side entities and messages, including writes from earlier steps |
 | `await bot.dispatch.<action>(...)` | raw handler completion |
@@ -653,9 +653,11 @@ keeps `setImmediate` real — with `timers: { advance: ms => jest.advanceTimersB
 ### REST calls
 
 Everything else the bot does goes through REST and is recorded. `restCalls()`
-reads the latest stateful step: use `bot.restCalls()` for the most recently
-active actor or `actor.restCalls()` to keep the reader pinned to one actor.
-Pass a `Routes` descriptor to narrow by endpoint and receive typed route params.
+reads that journal without changing it: use `bot.restCalls()` for the complete
+bot history, including stateful actors, raw dispatches, and direct REST, or
+`actor.restCalls()` for only the calls causally owned by that actor across all
+of its stateful steps. Pass a `Routes` descriptor to narrow by endpoint and
+infer its route params, request body, and response from Discord's REST types.
 
 Both forms always return a read-only array: zero, one, and many matches have the
 same shape. Use regular JavaScript to find, filter, or map calls, and let your
@@ -672,6 +674,7 @@ expect(edits).toHaveLength(2);
 
 const adaEdit = edits.find(call => call.params.userId === adaId);
 expect(adaEdit?.body).toMatchObject({ nick: 'Ada' });
+expect(adaEdit?.response?.user.id).toBe(adaId); // typed, without a cast
 
 const editedUserIds = edits.map(call => call.params.userId);
 expect(editedUserIds).toContain(adaId);
@@ -680,14 +683,22 @@ const failedCalls = bot.restCalls().filter(call => call.error !== undefined);
 expect(failedCalls).toHaveLength(0);
 ```
 
+For endpoints whose successful Discord response has no content, `response` is
+typed and recorded as `undefined`; use `settled` and `error` rather than
+response presence when asserting completion.
+
 `restCalls()` only reads; it does not wait or alter the flow. Await the stateful
 action first. If the handler intentionally detached timers or REST work, call
-`await bot.settle()` before reading. Use `dispatch.until(...)` instead when a
-low-level concurrency test must stop on an in-flight REST call.
+`await bot.settle()` before reading. Each read is an independent snapshot; read
+again after pending work settles to observe its populated response. `reset()`
+starts a new journal. Use `dispatch.until(...)` instead when a low-level
+concurrency test must stop on an in-flight REST call.
 
 `result.actions` deliberately remains the exact raw REST trail attributed to a
 returned result. It stays tied to that result even after a newer actor step
-becomes current; use `restCalls()` for normalized latest-step route reads.
+becomes current; use `restCalls()` for normalized full-history route reads.
+`rendered(bot)` and `rendered(actor)` remain latest-UI readers and do not expand
+to historical output when the REST journal grows.
 
 Stub specific endpoints when a command reads from the API:
 

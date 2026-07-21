@@ -2,6 +2,7 @@ import { isEphemeral } from '../bot/message-flags';
 import type { RecordedAction } from '../bot/rest';
 import { arrayValue, asRecord, normalizeEmbed, numberValue, stringValue } from '../bot/state';
 import type { MockContextResponse } from '../context';
+import { renderedActionsOf } from './source';
 import {
 	type CanonicalComponent,
 	type CanonicalMessage,
@@ -16,12 +17,9 @@ import {
 } from './types';
 
 export function normalizeOutput(subject: RenderedSubject, options: RenderedOptions): CanonicalOutput {
+	const renderedActions = renderedActionsOf(subject);
+	if (renderedActions !== undefined) return fromActions(renderedActions, options);
 	const source = unwrapBuilder(subject);
-	const restCalls = asRecord(source).restCalls;
-	if (typeof restCalls === 'function') {
-		const current = restCalls.call(source) as unknown;
-		if (Array.isArray(current)) return fromActions(withoutCapturedParams(current as RecordedAction[]), options);
-	}
 	const dispatchActions = dispatchActionsOf(source);
 	if (dispatchActions) return fromActions(dispatchActions.actions, options, dispatchActions.dispatchId);
 	const record = asRecord(source);
@@ -37,14 +35,6 @@ export function normalizeOutput(subject: RenderedSubject, options: RenderedOptio
 	if (isModalPayload(record)) return fromModals([record]);
 	if (Array.isArray(source)) return fromMessages(source, options);
 	return fromMessages([source], options);
-}
-
-function withoutCapturedParams(actions: readonly RecordedAction[]): RecordedAction[] {
-	return actions.map(action => {
-		const recorded = { ...action } as RecordedAction & { params?: unknown };
-		delete recorded.params;
-		return recorded;
-	});
 }
 
 function dispatchActionsOf(subject: unknown): { actions: readonly RecordedAction[]; dispatchId?: number } | undefined {

@@ -1,7 +1,20 @@
-import { ContextMenuCommand, type MenuCommandContext, type UserCommandInteraction } from 'seyfert';
+import {
+	ContextMenuCommand,
+	type MenuCommandContext,
+	type RESTDeleteAPIChannelMessageResult,
+	type RESTGetAPIGuildResult,
+	type RESTPatchAPIGuildMemberJSONBody,
+	type RESTPatchAPIGuildMemberResult,
+	type RESTPostAPIChannelMessageJSONBody,
+	type RESTPostAPIChannelMessageResult,
+	type RESTPostAPIChannelThreadsJSONBody,
+	type RESTPostAPIChannelThreadsResult,
+	type RESTPostAPIGuildForumThreadsJSONBody,
+	type UserCommandInteraction,
+} from 'seyfert';
 import { ApplicationCommandType } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
-import { Dispatch, type DispatchOptions, type RestCall, type RestCalls, Routes } from '../../src';
+import { Dispatch, type DispatchOptions, type RestCall, type RestCalls, type RouteMatcher, Routes } from '../../src';
 import {
 	createMockBot,
 	type DispatchResult,
@@ -23,6 +36,25 @@ function constructPublicDispatch(options: DispatchOptions<DispatchResult>): Disp
 }
 void constructPublicDispatch;
 
+type RouteBody<TMatcher> = TMatcher extends RouteMatcher<string, infer TBody, unknown> ? TBody : never;
+type RouteResponse<TMatcher> = TMatcher extends RouteMatcher<string, unknown, infer TResponse> ? TResponse : never;
+type IsExactly<TLeft, TRight> =
+	(<T>() => T extends TLeft ? 1 : 2) extends <T>() => T extends TRight ? 1 : 2
+		? (<T>() => T extends TRight ? 1 : 2) extends <T>() => T extends TLeft ? 1 : 2
+			? true
+			: false
+		: false;
+type UntypedBuiltInRoute = {
+	[TKey in keyof typeof Routes]: IsExactly<RouteBody<(typeof Routes)[TKey]>, Record<string, unknown>> extends true
+		? TKey
+		: unknown extends RouteResponse<(typeof Routes)[TKey]>
+			? TKey
+			: never;
+}[keyof typeof Routes];
+
+// Every built-in descriptor must carry a concrete body and response contract.
+expectAssignable<never>(undefined as never as UntypedBuiltInRoute);
+
 function assertStatefulInteractionTypes(bot: MockBot): void {
 	expectAssignable<Promise<DispatchResult>>(bot.slash({ name: 'type-only' }));
 	expectAssignable<Promise<DispatchResult>>(bot.submitModal('type-only'));
@@ -37,11 +69,54 @@ function assertStatefulInteractionTypes(bot: MockBot): void {
 	expectAssignable<Dispatch<MessageMenuResult>>(bot.dispatch.messageMenu({ name: 'type-only' }));
 	expectAssignable<Dispatch<DispatchResult>>(bot.dispatch.entryPoint({ name: 'type-only' }));
 	const memberEdits = bot.restCalls(Routes.editMember);
-	expectAssignable<readonly RestCall<{ guildId: string; userId: string }>[]>(memberEdits);
+	expectAssignable<
+		readonly RestCall<
+			{ guildId: string; userId: string },
+			RESTPatchAPIGuildMemberJSONBody,
+			RESTPatchAPIGuildMemberResult
+		>[]
+	>(memberEdits);
 	expectAssignable<string>(memberEdits[0].params.guildId);
 	expectAssignable<string>(memberEdits[0].params.userId);
+	expectAssignable<RESTPatchAPIGuildMemberJSONBody | undefined>(memberEdits[0].body);
+	expectAssignable<RESTPatchAPIGuildMemberResult | undefined>(memberEdits[0].response);
+
+	const messages = bot.restCalls(Routes.createMessage);
+	expectAssignable<RESTPostAPIChannelMessageJSONBody | undefined>(messages[0].body);
+	expectAssignable<RESTPostAPIChannelMessageResult | undefined>(messages[0].response);
+	expectAssignable<string>(messages[0].params.channelId);
+
+	const guilds = bot.restCalls(Routes.fetchGuild);
+	expectAssignable<undefined>(guilds[0].body);
+	expectAssignable<RESTGetAPIGuildResult | undefined>(guilds[0].response);
+	expectAssignable<string>(guilds[0].params.guildId);
+
+	const deletes = bot.restCalls(Routes.deleteMessage);
+	expectAssignable<undefined>(deletes[0].body);
+	expectAssignable<RESTDeleteAPIChannelMessageResult | undefined>(deletes[0].response);
+	expectAssignable<string>(deletes[0].params.messageId);
+
+	const threads = bot.restCalls(Routes.createThread);
+	expectAssignable<RESTPostAPIChannelThreadsJSONBody | RESTPostAPIGuildForumThreadsJSONBody | undefined>(
+		threads[0].body,
+	);
+	expectAssignable<RESTPostAPIChannelThreadsResult | undefined>(threads[0].response);
+
+	type CustomBody = { name: string };
+	type CustomResponse = { id: string; name: string };
+	const customRoute: RouteMatcher<'/widgets/:widgetId', CustomBody, CustomResponse> = {
+		method: 'POST',
+		route: '/widgets/:widgetId',
+	};
+	const customCalls = bot.restCalls(customRoute);
+	expectAssignable<string>(customCalls[0].params.widgetId);
+	expectAssignable<CustomBody | undefined>(customCalls[0].body);
+	expectAssignable<CustomResponse | undefined>(customCalls[0].response);
+
 	const noRouteParam = bot.restCalls()[0]?.params.arbitrary;
 	expectAssignable<undefined>(noRouteParam);
+	expectAssignable<Record<string, unknown> | undefined>(bot.restCalls()[0]?.body);
+	expectAssignable<unknown>(bot.restCalls()[0]?.response);
 	// @ts-expect-error no-route reads cannot invent a string route parameter.
 	const inventedRouteParam: string = noRouteParam;
 	void inventedRouteParam;

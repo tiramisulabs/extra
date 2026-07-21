@@ -20,7 +20,20 @@ describe('emitted declaration surface', () => {
 
 		const botDts = readFileSync(join(outDir, 'bot/bot.d.ts'), 'utf8');
 		const restDts = readFileSync(join(outDir, 'bot/rest.d.ts'), 'utf8');
+		const routesDts = readFileSync(join(outDir, 'bot/routes.d.ts'), 'utf8');
 		expect(botDts).toMatch(/get world\(\): WorldStateReader;/);
 		expect(restDts).not.toMatch(/readonly actions: RecordedAction\[\];/);
+		expect(restDts).toMatch(
+			/interface RouteMatcher<TRoute extends string = string, TBody = unknown, TResponse = unknown>/,
+		);
+		expect(restDts).toMatch(
+			/type RestCall<TParams extends Record<string, string \| undefined> = Record<string, undefined>, TBody = Record<string, unknown>, TResponse = unknown>/,
+		);
+		expect(routesDts).toMatch(
+			/createMessage: RouteMatcher<"\/channels\/:channelId\/messages", API\.RESTPostAPIChannelMessageJSONBody, API\.APIMessage>/,
+		);
+		expect(routesDts).toMatch(
+			/deleteMessage: RouteMatcher<"\/channels\/:channelId\/messages\/:messageId", never, undefined>/,
+		);
 	});
 });

@@ -63,7 +63,6 @@ export interface RenderedOptions {
 
 export type RenderedSubject =
 	| { readonly actions?: readonly RecordedAction[]; readonly messages?: readonly OutgoingMessage[] }
-	| { readonly restCalls?: () => readonly RecordedAction[] }
 	| { readonly responses?: readonly MockContextResponse[] }
 	| { readonly toJSON?: () => unknown }
 	| readonly unknown[]

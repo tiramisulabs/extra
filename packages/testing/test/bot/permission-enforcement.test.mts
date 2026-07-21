@@ -221,12 +221,12 @@ describe('expanded management-route enforcement (+ channel overwrites)', () => {
 		world.registerBotMember(guild.id, { roles: [role.id] });
 		const bot = await createMockBot({ world });
 
-		await expect(bot.rest.request('PUT', `/channels/${thread.id}/thread-members/@me`)).resolves.toEqual({});
+		await expect(bot.rest.request('PUT', `/channels/${thread.id}/thread-members/@me`)).resolves.toBeUndefined();
 		expect(bot.world.all.threadMember({ channelId: thread.id }).map(member => member.userId)).toContain(TEST_BOT_ID);
 		await expect(bot.rest.request('PUT', `/channels/${thread.id}/thread-members/user-1`)).rejects.toThrow(
 			/Missing Permissions/,
 		);
-		await expect(bot.rest.request('DELETE', `/channels/${thread.id}/thread-members/@me`)).resolves.toEqual({});
+		await expect(bot.rest.request('DELETE', `/channels/${thread.id}/thread-members/@me`)).resolves.toBeUndefined();
 		expect(bot.world.all.threadMember({ channelId: thread.id }).map(member => member.userId)).not.toContain(
 			TEST_BOT_ID,
 		);
