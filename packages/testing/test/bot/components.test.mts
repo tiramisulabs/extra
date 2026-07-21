@@ -147,7 +147,7 @@ describe('component flows', () => {
 				],
 			},
 		});
-		const source = bot.actions.at(-1);
+		const source = bot.rest.actions.at(-1);
 		if (!source) throw new Error('expected source message action');
 
 		await expect(bot.clickButton('confirm', { source })).rejects.toThrow(/component "confirm".+disabled/);

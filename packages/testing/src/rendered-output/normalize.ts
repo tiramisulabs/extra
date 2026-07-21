@@ -17,8 +17,11 @@ import {
 
 export function normalizeOutput(subject: RenderedSubject, options: RenderedOptions): CanonicalOutput {
 	const source = unwrapBuilder(subject);
-	const current = asRecord(source).currentActions;
-	if (Array.isArray(current)) return fromActions(current as RecordedAction[], options);
+	const restCalls = asRecord(source).restCalls;
+	if (typeof restCalls === 'function') {
+		const current = restCalls.call(source) as unknown;
+		if (Array.isArray(current)) return fromActions(withoutCapturedParams(current as RecordedAction[]), options);
+	}
 	const dispatchActions = dispatchActionsOf(source);
 	if (dispatchActions) return fromActions(dispatchActions.actions, options, dispatchActions.dispatchId);
 	const record = asRecord(source);
@@ -29,12 +32,19 @@ export function normalizeOutput(subject: RenderedSubject, options: RenderedOptio
 	const capturedCallback = fromInteractionCallback(capturedBody, options);
 	if (capturedCallback) return capturedCallback;
 	if (Array.isArray(record.responses)) return fromResponses(record.responses as MockContextResponse[]);
-	if (Array.isArray(record.messages))
-		return fromMessages(record.messages, options, record.actions as RecordedAction[] | undefined);
+	if (Array.isArray(record.messages)) return fromMessages(record.messages, options);
 	if (isMessageViewLike(record)) return fromMessages([record], options);
 	if (isModalPayload(record)) return fromModals([record]);
 	if (Array.isArray(source)) return fromMessages(source, options);
 	return fromMessages([source], options);
+}
+
+function withoutCapturedParams(actions: readonly RecordedAction[]): RecordedAction[] {
+	return actions.map(action => {
+		const recorded = { ...action } as RecordedAction & { params?: unknown };
+		delete recorded.params;
+		return recorded;
+	});
 }
 
 function dispatchActionsOf(subject: unknown): { actions: readonly RecordedAction[]; dispatchId?: number } | undefined {
@@ -50,7 +60,6 @@ function dispatchActionsOf(subject: unknown): { actions: readonly RecordedAction
 
 function fromResponses(responses: readonly MockContextResponse[]): CanonicalOutput {
 	return {
-		actions: [],
 		modals: [],
 		messages: responses.map((response, index) =>
 			normalizeMessage(response, {
@@ -62,11 +71,7 @@ function fromResponses(responses: readonly MockContextResponse[]): CanonicalOutp
 	};
 }
 
-function fromMessages(
-	messages: readonly unknown[],
-	options: RenderedOptions,
-	actions: readonly RecordedAction[] = [],
-): CanonicalOutput {
+function fromMessages(messages: readonly unknown[], options: RenderedOptions): CanonicalOutput {
 	const canonical = messages.map((message, index) =>
 		normalizeMessage(message, {
 			key: `message:${index}`,
@@ -74,12 +79,11 @@ function fromMessages(
 			transport: 'raw',
 		}),
 	);
-	return { actions, modals: [], messages: options.view === 'timeline' ? canonical : canonical };
+	return { modals: [], messages: options.view === 'timeline' ? canonical : canonical };
 }
 
 function fromModals(modals: readonly unknown[]): CanonicalOutput {
 	return {
-		actions: [],
 		messages: [],
 		modals: modals.map((modal, index) => normalizeModal(modal, index, `modal[${index}]`)),
 	};
@@ -125,20 +129,20 @@ function fromActions(
 		messages[existingIndex] = mergeMessage(messages[existingIndex], next);
 	}
 
-	return { actions: relevant, messages, modals };
+	return { messages, modals };
 }
 
 function fromInteractionCallback(body: Record<string, unknown>, options: RenderedOptions): CanonicalOutput | undefined {
 	const type = numberValue(body.type);
 	if (type === undefined) return undefined;
 	if (type === 9) return fromModals([asRecord(body.data)]);
-	if (type !== 4 && type !== 7) return { actions: [], messages: [], modals: [] };
+	if (type !== 4 && type !== 7) return { messages: [], modals: [] };
 	const message = normalizeMessage(asRecord(body.data), {
 		key: 'callback:0',
 		path: 'message[0]',
 		transport: type === 7 ? 'update' : 'reply',
 	});
-	return { actions: [], modals: [], messages: options.view === 'timeline' ? [message] : [message] };
+	return { modals: [], messages: options.view === 'timeline' ? [message] : [message] };
 }
 
 function renderedFromAction(action: RecordedAction):

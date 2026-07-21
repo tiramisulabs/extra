@@ -29,7 +29,7 @@ import type {
 	UserCommandInteractionOptions,
 } from './interactions';
 import type { ApiChannel, ApiMember, ApiMessage, ApiUser, MemberInput } from './payloads';
-import type { RecordedAction } from './rest';
+import type { RecordedAction, RestCalls } from './rest';
 import { Routes } from './routes';
 import { type EmbedView, harvestComponents, type InteractiveComponentView, normalizeEmbed } from './state';
 import type { WorldBuilder } from './world';
@@ -328,8 +328,8 @@ export interface ActorOptions {
 
 /** Bound dispatcher facade that reuses one identity across a flow. */
 export interface Actor {
-	/** Visible output from this actor's most recent stateful step. */
-	readonly currentActions: readonly RecordedAction[];
+	/** REST calls from this actor's most recent stateful step. */
+	readonly restCalls: RestCalls;
 	slash<C extends SlashCommandClass>(command: C, options?: SlashClassOptions<C>): Promise<DispatchResult>;
 	slash(options: ChatInputInteractionOptions): Promise<DispatchResult>;
 	autocomplete(options: AutocompleteInteractionOptions): Dispatch<AutocompleteResult>;

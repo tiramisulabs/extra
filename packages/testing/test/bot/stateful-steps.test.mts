@@ -88,7 +88,6 @@ describe('stateful interaction steps', () => {
 			`click-context:${guildId}:${channel.id}`,
 			'saved',
 		]);
-		expect(bot.actions.length).toBeGreaterThan(bot.currentActions.length);
 		await expect(bot.clickButton('save-profile')).rejects.toThrow(/does not contain a component/);
 
 		await bot.close();
@@ -99,6 +98,10 @@ describe('stateful interaction steps', () => {
 		const paused = new Promise<void>(resolve => {
 			release = resolve;
 		});
+		let markRendered!: () => void;
+		const renderedEarly = new Promise<void>(resolve => {
+			markRendered = resolve;
+		});
 		let resolved = false;
 
 		@Declare({ name: 'slow-panel', description: 'Render before finishing non-input work' })
@@ -108,6 +111,7 @@ describe('stateful interaction steps', () => {
 					new Button().setCustomId('eventual').setLabel('Eventual').setStyle(ButtonStyle.Primary),
 				]);
 				await ctx.write({ content: 'rendered early', components: [row] });
+				markRendered();
 				await paused;
 			}
 		}
@@ -116,7 +120,7 @@ describe('stateful interaction steps', () => {
 		const action = bot.slash({ name: 'slow-panel' }).then(() => {
 			resolved = true;
 		});
-		await bot.waitForAction(candidate => candidate.route.includes('/callback'));
+		await renderedEarly;
 		expect(resolved).toBe(false);
 
 		release();
@@ -176,11 +180,16 @@ describe('stateful interaction steps', () => {
 		const held = new Promise<void>(resolve => {
 			release = resolve;
 		});
+		let markBusy!: () => void;
+		const busyWritten = new Promise<void>(resolve => {
+			markBusy = resolve;
+		});
 
 		@Declare({ name: 'held-flow', description: 'Stays busy without asking for input' })
 		class HeldFlow extends Command {
 			async run(ctx: CommandContext) {
 				await ctx.write({ content: 'busy' });
+				markBusy();
 				await held;
 			}
 		}
@@ -194,7 +203,7 @@ describe('stateful interaction steps', () => {
 
 		const bot = await createMockBot({ commands: [HeldFlow, OtherFlow] });
 		const first = bot.slash({ name: 'held-flow' });
-		await bot.waitForAction(candidate => candidate.route.includes('/callback'));
+		await busyWritten;
 		await expect(bot.slash({ name: 'other-flow' })).rejects.toThrow(/already has a pending flow/);
 		release();
 		await first;
@@ -262,9 +271,9 @@ describe('stateful interaction steps', () => {
 		});
 
 		await Promise.all([alice.slash({ name: 'public-panel' }), bob.slash({ name: 'public-panel' })]);
-		const aliceReply = alice.currentActions.find(
-			action => (action.body as { data?: { content?: string } } | undefined)?.data?.content === 'panel:alice',
-		);
+		const aliceReply = alice
+			.restCalls()
+			.find(action => (action.body as { data?: { content?: string } } | undefined)?.data?.content === 'panel:alice');
 		const aliceMessageId = (aliceReply?.response as { resource?: { message?: { id?: string } } } | undefined)?.resource
 			?.message?.id;
 		expect(aliceMessageId).toBeTruthy();

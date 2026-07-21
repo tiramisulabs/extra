@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { Command, type CommandContext, createPlugin, Declare, MessageFlags, Middlewares } from 'seyfert';
 import { describe, expect, test, vi } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
+import { Routes } from '../../src/bot/routes';
 import { GreetCommand, globalCalls, seedGuildFixture, testMiddlewares } from './_setup';
 
 const englishLang = { greeting: 'Hello!' };
@@ -137,7 +138,7 @@ describe('middlewares and error hooks', () => {
 				user: actor.user,
 			});
 			expect(result.error).toBeInstanceOf(Error);
-			expect(bot.created('message')[0]?.error).toBeInstanceOf(Error);
+			expect(bot.restCalls(Routes.createMessage)[0]?.error).toBeInstanceOf(Error);
 			expect(logs.flat().some(value => String(value).includes('FATAL'))).toBe(false);
 		} finally {
 			await bot.close();
@@ -166,7 +167,7 @@ describe('middlewares and error hooks', () => {
 				user: actor.user,
 			});
 			expect(result.error).toBeInstanceOf(Error);
-			expect(bot.created('message')[0]?.error).toBeInstanceOf(Error);
+			expect(bot.restCalls(Routes.createMessage)[0]?.error).toBeInstanceOf(Error);
 			expect(logs.flat().some(value => String(value).includes('FATAL'))).toBe(false);
 		} finally {
 			await bot.close();
@@ -177,10 +178,10 @@ describe('middlewares and error hooks', () => {
 	test('close is idempotent and reset clears recorded REST actions for reuse', async () => {
 		const bot = await createMockBot({ commands: [AlsoGreetCommand] });
 		await bot.rest.request('POST', '/channels/reset/messages', { body: { content: 'before reset' } });
-		expect(bot.actions.length).toBeGreaterThan(0);
+		expect(bot.rest.actions.length).toBeGreaterThan(0);
 
 		await bot.reset();
-		expect(bot.actions).toHaveLength(0);
+		expect(bot.rest.actions).toHaveLength(0);
 		await expect(bot.slash({ name: 'also-greet' })).resolves.toMatchObject({ content: 'also' });
 
 		await bot.close();

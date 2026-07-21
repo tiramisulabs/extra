@@ -9,7 +9,7 @@ import { seedGuildFixture } from './_setup';
 
 describe('interaction acknowledgement (fail loud before ack)', () => {
 	const interactionTokenFromLastCallback = (bot: Awaited<ReturnType<typeof createMockBot>>) => {
-		const action = [...bot.actions]
+		const action = [...bot.restCalls()]
 			.reverse()
 			.find(entry => /\/interactions\/[^/]+\/[^/]+\/callback$/.test(entry.route));
 		const token = action?.route.match(/\/interactions\/[^/]+\/([^/]+)\/callback$/)?.[1];

@@ -73,7 +73,6 @@ export function rendered(subject: RenderedSubject, options: RenderedOptions = {}
 	};
 	return {
 		raw: {
-			actions: () => canonical.actions,
 			messages: () => canonical.messages.map(message => message.raw),
 			modals: () => canonical.modals.map(modal => modal.raw),
 		},

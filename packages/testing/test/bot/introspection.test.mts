@@ -115,7 +115,7 @@ describe('introspection helpers (DX-2)', () => {
 	});
 });
 
-describe('typed findAction (S19)', () => {
+describe('typed restCalls (S19)', () => {
 	@Declare({ name: 'say-hi', description: 'Writes a channel message' })
 	class SayHiCommand extends Command {
 		async run(ctx: CommandContext) {
@@ -124,31 +124,27 @@ describe('typed findAction (S19)', () => {
 		}
 	}
 
-	test('findAction<TBody> exposes a typed body without a cast', async () => {
+	test('a route descriptor exposes typed params and leaves payload assertions to the runner', async () => {
 		const bot = await createMockBot({ commands: [SayHiCommand] });
 		await bot.slash({ name: 'say-hi' });
 
-		const call = bot.findAction<{ content: string }>(Routes.createMessage);
-		const content: string | undefined = call?.body?.content;
-		expect(content).toBe('hello world');
+		const [call] = bot.restCalls(Routes.createMessage);
+		const channelId: string | undefined = call?.params.channelId;
+		expect(channelId).toBe('greet-channel');
+		expect(call?.body).toMatchObject({ content: 'hello world' });
 
-		// @ts-expect-error nonexistentField is not on the typed body
-		const _wrong: unknown = call?.body?.nonexistentField;
+		// @ts-expect-error nonexistentParam is not declared by Routes.createMessage.
+		const _wrong: unknown = call?.params.nonexistentParam;
 		void _wrong;
 		await bot.close();
 	});
 
-	test('findActions<TBody> and waitForAction<TBody> are likewise typed', async () => {
+	test('route reads always return arrays', async () => {
 		const bot = await createMockBot({ commands: [SayHiCommand] });
 		await bot.slash({ name: 'say-hi' });
 
-		const calls = bot.findActions<{ content: string }>(Routes.createMessage);
-		const first: string | undefined = calls[0]?.body?.content;
-		expect(first).toBe('hello world');
-
-		const awaited = await bot.waitForAction<{ content: string }>(Routes.createMessage);
-		const awaitedContent: string | undefined = awaited.body?.content;
-		expect(awaitedContent).toBe('hello world');
+		expect(bot.restCalls(Routes.createMessage)).toHaveLength(1);
+		expect(bot.restCalls(Routes.ban)).toEqual([]);
 		await bot.close();
 	});
 });

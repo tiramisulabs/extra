@@ -66,7 +66,7 @@ import { isEphemeral } from './message-flags';
 import { MockBotDispatchCore } from './mock-bot-dispatch';
 import { prepareAutocompleteOptions, prepareChatInputOptions } from './option-validation';
 import { type ApiMessage, apiChannel, apiMember, apiMessage, apiUser, memberOptionsFrom } from './payloads';
-import { isOutgoingMessagePost, type RecordedAction } from './rest';
+import { isOutgoingMessagePost, type RecordedAction, type RestCalls, type RouteMatcher } from './rest';
 import { FOLLOWUP_ROUTE, Routes, WEBHOOK_MESSAGE_ROUTE } from './routes';
 import { resolveSelectResolved } from './select-resolved';
 import { eventsInternals, modalRegistry, normalizeGatewayEventName, pluginEventNames } from './seyfert-internals';
@@ -924,6 +924,10 @@ export class MockBot extends MockBotDispatchCore {
 		const actorUserId = user?.id ?? this.defaultUser.id;
 		const sessionKey = `actor:${++this.actorSessionSequence}:user:${actorUserId}`;
 		const sessions = this.sessions;
+		const restCalls = ((matcher?: RouteMatcher) =>
+			matcher
+				? this.snapshotRestCalls(sessions.latestActions(sessionKey), matcher)
+				: this.snapshotRestCalls(sessions.latestActions(sessionKey))) as RestCalls;
 		const mergeEventPayload = (payload: object | readonly unknown[] = {}): object | readonly unknown[] => {
 			if (Array.isArray(payload)) return payload;
 			return {
@@ -934,9 +938,7 @@ export class MockBot extends MockBotDispatchCore {
 		};
 
 		return {
-			get currentActions() {
-				return sessions.currentActions(sessionKey);
-			},
+			restCalls,
 			slash: (
 				commandOrOptions: SlashCommandClass | ChatInputInteractionOptions,
 				classOptions?: SlashClassOptions<SlashCommandClass>,

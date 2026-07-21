@@ -9,7 +9,7 @@ import { describe, expect, test } from 'vitest';
 const tsc = createRequire(join(process.cwd(), 'package.json')).resolve('typescript/bin/tsc');
 
 describe('emitted declaration surface', () => {
-	test('MockBot.world is present in the package declarations', () => {
+	test('keeps public MockBot readers and strips internal REST history', () => {
 		const outDir = join(process.cwd(), 'test/.generated/declarations');
 		rmSync(outDir, { recursive: true, force: true });
 		execFileSync(
@@ -19,6 +19,8 @@ describe('emitted declaration surface', () => {
 		);
 
 		const botDts = readFileSync(join(outDir, 'bot/bot.d.ts'), 'utf8');
+		const restDts = readFileSync(join(outDir, 'bot/rest.d.ts'), 'utf8');
 		expect(botDts).toMatch(/get world\(\): WorldStateReader;/);
+		expect(restDts).not.toMatch(/readonly actions: RecordedAction\[\];/);
 	});
 });

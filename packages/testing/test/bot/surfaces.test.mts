@@ -343,15 +343,17 @@ describe('additional command surfaces', () => {
 
 		const result = await bot.slash({ name: 'route-fetch-guild', guildId: '9' });
 		expect(result.content).toBe('Stubbed');
-		expect(bot.findAction(Routes.fetchGuild)?.params).toMatchObject({ guildId: '9' });
+		expect(bot.restCalls(Routes.fetchGuild)[0]?.params).toMatchObject({ guildId: '9' });
 		await bot.close();
 	});
 
-	test('waitForAction accepts route descriptors for side effects', async () => {
+	test('restCalls reads route descriptors after the stateful step settles', async () => {
 		const bot = await createMockBot({ commands: [RouteMessageWriteCommand] });
 		await bot.slash({ name: 'route-message-write' });
 
-		await expect(bot.waitForAction(Routes.createMessage)).resolves.toMatchObject({
+		const calls = bot.restCalls(Routes.createMessage);
+		expect(calls).toHaveLength(1);
+		expect(calls[0]).toMatchObject({
 			body: { content: 'side' },
 			params: { channelId: 'route-channel' },
 		});

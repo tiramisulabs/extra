@@ -40,7 +40,7 @@ import {
 } from './interactions';
 import { type ApiMember, type ApiMessage, type ApiUser, apiMessage, apiUser, memberOptionsFrom } from './payloads';
 import { computeChannelPermissions } from './permissions';
-import { MockApiHandler, type RecordedAction } from './rest';
+import { MockApiHandler, type RecordedAction, type RestCall, type RouteMatcher, type RouteParams } from './rest';
 import {
 	arrayValue,
 	asRecord,
@@ -210,9 +210,30 @@ export abstract class MockBotSurface {
 		return dispatch;
 	}
 
-	/** Visible output from the most recently completed stateful step. `bot.actions` remains the full history. */
-	get currentActions(): readonly RecordedAction[] {
-		return this.sessions.currentActions();
+	restCalls(): readonly RestCall[];
+	restCalls<TRoute extends string>(matcher: RouteMatcher<TRoute>): readonly RestCall<RouteParams<TRoute>>[];
+	restCalls(matcher?: RouteMatcher): readonly RestCall<Record<string, string | undefined>>[] {
+		return matcher
+			? this.snapshotRestCalls(this.sessions.latestActions(), matcher)
+			: this.snapshotRestCalls(this.sessions.latestActions());
+	}
+
+	protected snapshotRestCalls(actions: readonly RecordedAction[]): readonly RestCall[];
+	protected snapshotRestCalls<TRoute extends string>(
+		actions: readonly RecordedAction[],
+		matcher: RouteMatcher<TRoute>,
+	): readonly RestCall<RouteParams<TRoute>>[];
+	protected snapshotRestCalls(
+		actions: readonly RecordedAction[],
+		matcher?: RouteMatcher,
+	): readonly RestCall<Record<string, string | undefined>>[] {
+		const calls: RestCall<Record<string, string | undefined>>[] = [];
+		for (const action of actions) {
+			const params = matcher ? this.rest.matchRouteParams(matcher, action) : {};
+			if (params === undefined) continue;
+			calls.push({ ...action, params });
+		}
+		return calls;
 	}
 
 	protected messageParts(actions: RecordedAction[], parts: MessagePart[]): MessageResultBase {
@@ -572,7 +593,7 @@ export abstract class MockBotSurface {
 		const checkpoint = this.sessions.hasModalCheckpoint(sessionKey, customId, userId);
 		const renderedInCurrentStep =
 			displayed?.dispatchId !== undefined &&
-			this.sessions.currentActions(sessionKey).some(action => action.dispatchId === displayed.dispatchId);
+			this.sessions.latestActions(sessionKey).some(action => action.dispatchId === displayed.dispatchId);
 		if (!displayed || (!checkpoint && !renderedInCurrentStep)) {
 			throw new TypeError(
 				`submitModal: modal "${customId}" is not available in the current state for user "${userId}". ` +
@@ -654,7 +675,7 @@ export abstract class MockBotSurface {
 					`${[...candidates.keys()].map(id => `"${id}"`).join(', ')}. Pass an explicit source.`,
 			);
 		}
-		const actions = this.sessions.currentActions(sessionKey);
+		const actions = this.sessions.latestActions(sessionKey);
 		for (let index = actions.length - 1; index >= 0; index--) {
 			const action = actions[index];
 			if (!actionRendersComponent(action, customId)) continue;
@@ -676,7 +697,7 @@ export abstract class MockBotSurface {
 
 	/** Most recent message rendered by this session's current step, regardless of its component ids. */
 	protected resolveCurrentMessageSource(sessionKey: string): { id: string; channel_id?: string } | undefined {
-		const actions = this.sessions.currentActions(sessionKey);
+		const actions = this.sessions.latestActions(sessionKey);
 		for (let index = actions.length - 1; index >= 0; index--) {
 			const source = this.messageSourceForRenderedAction(actions[index]);
 			if (source) return source;
@@ -748,13 +769,9 @@ export abstract class MockBotSurface {
 		);
 	}
 
-	get actions(): readonly RecordedAction[] {
-		return this.rest.actions;
-	}
-
-	/** Rendered output from the current stateful step. `bot.actions` remains the complete REST history. */
+	/** Rendered output from the current stateful step. */
 	protected renderedAcrossDispatches(): { embeds: EmbedView[]; components: InteractiveComponentView[] } {
-		return renderedReply(this.currentActions);
+		return renderedReply(this.sessions.latestActions());
 	}
 
 	lastEmbeds(): EmbedView[] {
@@ -778,7 +795,7 @@ export abstract class MockBotSurface {
 
 	/** Latest text content rendered by the current stateful step, or undefined when that step rendered no content. */
 	lastContent(): string | undefined {
-		return renderedReply(this.currentActions).content;
+		return renderedReply(this.sessions.latestActions()).content;
 	}
 
 	/**

@@ -1,7 +1,7 @@
 import { type APIInteractionResponse, ApplicationCommandType, InteractionType, SubCommand } from 'seyfert';
 import { type FileLoadingHandler, pathIsInsideDir } from './bootstrap';
-import type { CommandRuntime, CreatedResource } from './bot-support';
-import { assertRealSetImmediate, CREATE_ROUTES, DRAIN_MAX_ITERATIONS, drainTick } from './bot-support';
+import type { CommandRuntime } from './bot-support';
+import { assertRealSetImmediate, DRAIN_MAX_ITERATIONS, drainTick } from './bot-support';
 import { actionRendersComponent } from './component-tree';
 import {
 	type BotDiagnostics,
@@ -16,17 +16,7 @@ import { type ApiInteractionPayload, type ChatInputInteractionOptions, type Moda
 import { MockBotSurface } from './mock-bot-surface';
 import { CommandOptionType } from './option-validation';
 import { type ApiMember, type ApiMessage, type ApiUser, apiUser } from './payloads';
-import {
-	type ActionFilter,
-	type ActionMatcher,
-	type ActionPredicate,
-	type MatchedAction,
-	type RecordedAction,
-	type RouteActionFilter,
-	type RouteMatcher,
-	redactRouteTokens,
-	type TypedMatchedAction,
-} from './rest';
+import { type ActionPredicate, type RecordedAction, redactRouteTokens } from './rest';
 import { Routes } from './routes';
 import { renderedReply } from './state';
 
@@ -103,72 +93,6 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 		const actions = this.rest.actions;
 		const recentActions = recentLimit >= 0 ? actions.slice(Math.max(0, actions.length - recentLimit)) : [...actions];
 		return { pending, recentActions };
-	}
-
-	waitForAction<TBody = Record<string, unknown>, TResponse = unknown>(
-		matcherOrPredicate: RouteMatcher | ActionFilter | ActionPredicate,
-		timeoutMs?: number,
-	): Promise<TypedMatchedAction<TBody, TResponse>> {
-		return this.rest.waitForAction<TBody, TResponse>(matcherOrPredicate as RouteMatcher, timeoutMs);
-	}
-
-	findActions<TBody = Record<string, unknown>, TResponse = unknown>(
-		matcher: RouteMatcher | ActionPredicate,
-		params?: Record<string, string>,
-	): TypedMatchedAction<TBody, TResponse>[];
-	findActions<TBody = Record<string, unknown>, TResponse = unknown>(
-		matcher: RouteMatcher,
-		filter: RouteActionFilter,
-	): TypedMatchedAction<TBody, TResponse>[];
-	findActions<TBody = Record<string, unknown>, TResponse = unknown>(
-		matcher: ActionFilter | ActionPredicate,
-	): TypedMatchedAction<TBody, TResponse>[];
-	findActions<TBody = Record<string, unknown>, TResponse = unknown>(
-		matcher: ActionMatcher,
-		paramsOrFilter?: Record<string, string> | RouteActionFilter,
-	): TypedMatchedAction<TBody, TResponse>[];
-	findActions(matcher: ActionMatcher, paramsOrFilter?: Record<string, string> | RouteActionFilter): MatchedAction[] {
-		return this.rest.findActions(matcher, paramsOrFilter);
-	}
-
-	findAction<TBody = Record<string, unknown>, TResponse = unknown>(
-		matcher: RouteMatcher | ActionPredicate,
-		params?: Record<string, string>,
-	): TypedMatchedAction<TBody, TResponse> | undefined;
-	findAction<TBody = Record<string, unknown>, TResponse = unknown>(
-		matcher: RouteMatcher,
-		filter: RouteActionFilter,
-	): TypedMatchedAction<TBody, TResponse> | undefined;
-	findAction<TBody = Record<string, unknown>, TResponse = unknown>(
-		matcher: ActionFilter | ActionPredicate,
-	): TypedMatchedAction<TBody, TResponse> | undefined;
-	findAction<TBody = Record<string, unknown>, TResponse = unknown>(
-		matcher: ActionMatcher,
-		paramsOrFilter?: Record<string, string> | RouteActionFilter,
-	): TypedMatchedAction<TBody, TResponse> | undefined;
-	findAction(
-		matcher: ActionMatcher,
-		paramsOrFilter?: Record<string, string> | RouteActionFilter,
-	): MatchedAction | undefined {
-		return this.rest.findAction(matcher, paramsOrFilter);
-	}
-
-	/**
-	 * Semantic query over recorded REST: the entity-create calls for a resource, optionally narrowed by a partial
-	 * body match — so `bot.created('channel', { type: 2 })` reads instead of mapping `bot.actions` to
-	 * `${method} ${route}` strings. Returns the matched {@link RecordedAction}s (read `.body` for the payload).
-	 *
-	 * `'message'` is a direct channel send, not an interaction reply (use `findAction(Routes.editOriginalResponse)`
-	 * for those). See {@link CreatedResource} for the resource set.
-	 */
-	created<TBody = Record<string, unknown>>(
-		resource: CreatedResource,
-		match?: Record<string, unknown>,
-	): TypedMatchedAction<TBody>[] {
-		const route = CREATE_ROUTES[resource];
-		return (
-			match ? this.rest.findActions(route, { body: match }) : this.rest.findActions(route)
-		) as TypedMatchedAction<TBody>[];
 	}
 
 	/** Seed a vote on a poll answer (poll voters are not part of the message body), then read it via getAnswerVoters. */
@@ -573,7 +497,7 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 			// Event-driven, NOT REST-quiescence: the render can land after a non-REST gap (a DB query between
 			// deferReply and the reply), so we wait for the action itself — but bail fast if the handler finishes
 			// without ever rendering, rather than waiting out the timeout.
-			const rendered = this.rest.waitForAction(matches, timeoutMs);
+			const rendered = this.rest.waitUntilAction(matches, timeoutMs);
 			rendered.catch(() => {}); // if the completion branch wins the race, don't leave this unhandled
 			const COMPLETED = Symbol('completed');
 			const outcome = await Promise.race([

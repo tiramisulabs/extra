@@ -74,7 +74,7 @@ describe('reset() isolation (F26)', () => {
 		await execution;
 
 		await bot.reset();
-		expect(bot.actions).toHaveLength(0);
+		expect(bot.rest.actions).toHaveLength(0);
 		await bot.close();
 	});
 });

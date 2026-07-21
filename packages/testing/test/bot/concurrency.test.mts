@@ -73,7 +73,7 @@ describe('concurrent dispatch isolation', () => {
 				components: [{ type: 1, components: [{ type: 2, style: 1, custom_id: 'claim:123', label: 'Claim' }] }],
 			},
 		});
-		const source = bot.actions.at(-1);
+		const source = bot.rest.actions.at(-1);
 		if (!source) throw new Error('expected source message action');
 
 		const [a, b] = await Promise.all([
@@ -192,7 +192,7 @@ describe('concurrent dispatch isolation', () => {
 		// Run B to completion: its ban (userId 222) records with seq >= A's startSeq. A global gate would grab it.
 		const resultB = await bot.slash({ name: 'ban-b' });
 		expect(resultB.content).toBe('b-done');
-		const bBan = bot.findAction(Routes.ban, { userId: '222' });
+		const [bBan] = bot.restCalls(Routes.ban);
 		expect(bBan).toBeDefined();
 		// A's gate is still parked: B's ban did NOT resolve it (A hasn't banned yet).
 		expect(bBan?.dispatchId).not.toBe(dispatchA.dispatchId);
@@ -203,9 +203,7 @@ describe('concurrent dispatch isolation', () => {
 
 		// The gate resolved with A's dispatch and A's own ban action (userId 111), not B's (222).
 		expect(hit.dispatchId).toBe(dispatchA.dispatchId);
-		const aBan = bot.findAction(Routes.ban, { userId: '111' });
-		expect(aBan).toBeDefined();
-		expect(hit.seq).toBe(aBan?.seq);
+		expect(hit.route).toBe('/guilds/guild-a/bans/111');
 
 		const resultA = await dispatchA;
 		expect(resultA.content).toBe('a-done');
@@ -309,7 +307,7 @@ describe('concurrent dispatch isolation', () => {
 
 		const bot = await createMockBot({ components: [ClaimButton] });
 		await bot.rest.request('POST', '/interactions/no-message/no-message-token/callback', { body: { type: 6 } });
-		const action = bot.actions.at(-1)!;
+		const action = bot.rest.actions.at(-1)!;
 
 		await expect(bot.clickButton('claim:source', { source: action })).rejects.toThrow(/has no message id/);
 		await bot.close();
@@ -379,7 +377,7 @@ describe('concurrent dispatch isolation', () => {
 				],
 			},
 		});
-		const source = bot.actions.at(-1);
+		const source = bot.rest.actions.at(-1);
 		if (!source) throw new Error('expected source message action');
 		const user = {
 			id: 'same-modal-user',
@@ -436,7 +434,7 @@ describe('concurrent dispatch isolation', () => {
 				components: [{ type: 1, components: [{ type: 2, style: 1, custom_id: 'modal:later', label: 'Later' }] }],
 			},
 		});
-		const source = bot.actions.at(-1);
+		const source = bot.rest.actions.at(-1);
 		if (!source) throw new Error('expected source message action');
 		const later = bot.dispatch.clickButton('modal:later', { user, source });
 		await expect(later.untilModal()).resolves.toBeUndefined();

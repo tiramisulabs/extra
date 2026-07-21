@@ -63,6 +63,7 @@ export interface RenderedOptions {
 
 export type RenderedSubject =
 	| { readonly actions?: readonly RecordedAction[]; readonly messages?: readonly OutgoingMessage[] }
+	| { readonly restCalls?: () => readonly RecordedAction[] }
 	| { readonly responses?: readonly MockContextResponse[] }
 	| { readonly toJSON?: () => unknown }
 	| readonly unknown[]
@@ -76,7 +77,6 @@ export interface RawView<T = unknown> {
 }
 
 export interface RawOutput {
-	actions(): readonly RecordedAction[];
 	messages(): readonly RawView[];
 	modals(): readonly RawView[];
 }
@@ -457,7 +457,6 @@ export interface CanonicalModal {
 export interface CanonicalOutput {
 	messages: CanonicalMessage[];
 	modals: CanonicalModal[];
-	actions: readonly RecordedAction[];
 }
 
 export interface Scope {

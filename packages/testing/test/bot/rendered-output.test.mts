@@ -249,11 +249,8 @@ describe('rendered reader', () => {
 
 		const bot = await createMockBot({ commands: [UnrelatedOutput, RejectFlow] });
 		await bot.slash({ name: 'unrelated-rendered' });
-		const flow = await bot.slash({ name: 'reject-flow' });
+		await bot.slash({ name: 'reject-flow' });
 
-		const flowActions = rendered(flow).raw.actions();
-		expect(flowActions).toHaveLength(1);
-		expect(rendered(bot).raw.actions()).toEqual(flowActions);
 		expect(rendered(bot).query.message({ content: 'unrelated' })).toBeUndefined();
 
 		const ui = rendered(bot);

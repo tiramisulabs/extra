@@ -17,6 +17,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { modalSubmitInteraction } from '../../src/bot/interactions';
 import { apiUser } from '../../src/bot/payloads';
+import { Routes } from '../../src/bot/routes';
 import { mockWorld } from '../../src/bot/world';
 
 // seyfert's collector idle/timeout and modal waitFor timers use the bare GLOBAL setTimeout, with no injection
@@ -68,7 +69,7 @@ describe('virtual clock', () => {
 					],
 				},
 			});
-			const source = bot.actions.at(-1);
+			const source = bot.rest.actions.at(-1);
 			if (!source) throw new Error('expected feedback source action');
 
 			await bot.clickButton('open-feedback', { user, source });
@@ -180,7 +181,9 @@ describe('virtual clock', () => {
 
 			const modal = await opener.submitModal('owned-rest-modal');
 
-			expect(bot.findAction(action => action.route === '/channels/owned-delay')?.dispatchId).toBe(opener.dispatchId);
+			expect(bot.rest.actions.find(action => action.route === '/channels/owned-delay')?.dispatchId).toBe(
+				opener.dispatchId,
+			);
 			expect(modal.messages).toEqual(expect.arrayContaining([{ content: 'after owned REST' }]));
 			expect(modal.content).toBe('after owned REST');
 			await bot.close();
@@ -223,7 +226,7 @@ describe('virtual clock', () => {
 				);
 				await opener;
 
-				expect(bot.findAction(action => action.route === '/channels/raw-payload-owned-delay')?.dispatchId).toBe(
+				expect(bot.rest.actions.find(action => action.route === '/channels/raw-payload-owned-delay')?.dispatchId).toBe(
 					opener.dispatchId,
 				);
 				expect(modal.messages).toEqual(expect.arrayContaining([{ content: 'after raw payload owned REST' }]));
@@ -330,7 +333,7 @@ describe('virtual clock', () => {
 					],
 				},
 			});
-			const source = bot.actions.at(-1);
+			const source = bot.rest.actions.at(-1);
 			if (!source) throw new Error('expected modal source action');
 
 			await bot.clickButton('open:first', { user, source });
@@ -424,7 +427,7 @@ describe('virtual clock', () => {
 					],
 				},
 			});
-			const source = bot.actions.at(-1);
+			const source = bot.rest.actions.at(-1);
 			if (!source) throw new Error('expected stall source action');
 
 			await expect(bot.clickButton('open-stall', { user, source })).resolves.toBeDefined();
@@ -493,7 +496,7 @@ describe('virtual clock', () => {
 					],
 				},
 			});
-			const source = bot.actions.at(-1);
+			const source = bot.rest.actions.at(-1);
 			if (!source) throw new Error('expected timed source action');
 
 			await bot.clickButton('open-timed:first', { user, source });
@@ -573,7 +576,7 @@ describe('virtual clock', () => {
 		});
 		await bot.slash({ name: 'repeated-wait' });
 		await bot.advanceTime(5);
-		await bot.waitForAction(candidate => candidate.body?.content === 'second');
+		expect(bot.restCalls(Routes.followup).some(call => call.body?.content === 'second')).toBe(true);
 
 		const result = await bot.clickButton('same-wait');
 		expect(result.content).toBe('finished');
@@ -878,11 +881,11 @@ describe('virtual clock', () => {
 		await bot.close();
 	});
 
-	test('waitForAction still rejects on real time under faked setTimeout (control timeout is wall-clock)', async () => {
+	test('internal action waits still reject on real time under faked setTimeout', async () => {
 		const bot = await createMockBot({});
-		// With global setTimeout faked, a naive control timer would freeze and waitForAction would hang forever.
+		// With global setTimeout faked, a naive control timer would freeze and this wait would hang forever.
 		vi.useFakeTimers(FAKE_TIMER_OPTIONS);
-		await expect(bot.rest.waitForAction({ method: 'GET', route: '/never-happens' }, 50)).rejects.toThrow(/timed out/);
+		await expect(bot.rest.waitUntilAction({ method: 'GET', route: '/never-happens' }, 50)).rejects.toThrow(/timed out/);
 		vi.useRealTimers();
 		await bot.close();
 	});

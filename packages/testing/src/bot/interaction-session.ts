@@ -41,8 +41,14 @@ interface SessionState {
 	readonly errors: Map<number, unknown>;
 	readonly listeners: Set<(event: SessionEvent) => void>;
 	version: number;
-	currentActions: RecordedAction[];
+	latestStep?: StepScope;
 	context?: InteractionSessionContext;
+}
+
+/** Re-read actions from startIndex so late causal work appears; dispatch IDs fence older steps. */
+interface StepScope {
+	startIndex: number;
+	dispatchIds: ReadonlySet<number>;
 }
 
 interface SessionEvent {
@@ -203,8 +209,7 @@ export class InteractionSessions {
 					throw error;
 				}
 			}
-			state.currentActions = this.scopedActions(state, startIndex);
-			this.latestKey = key;
+			this.commitStep(state, startIndex, causalIds);
 			this.throwPendingError(state, causalIds);
 
 			if (outcome.kind === 'completed' || dispatch.isCompleted) return await execution;
@@ -215,17 +220,18 @@ export class InteractionSessions {
 			if (dispatch.dispatchId !== undefined && failure === undefined) {
 				state.errors.delete(dispatch.dispatchId);
 			}
-			state.currentActions = this.scopedActions(state, startIndex);
-			this.latestKey = key;
+			this.commitStep(state, startIndex, causalIds);
 			throw failure?.cause ?? error;
 		} finally {
 			changed.dispose();
 		}
 	}
 
-	currentActions(key = this.latestKey): readonly RecordedAction[] {
+	latestActions(key = this.latestKey): readonly RecordedAction[] {
 		if (!key) return [];
-		return this.states.get(key)?.currentActions ?? [];
+		const state = this.states.get(key);
+		if (!state?.latestStep) return [];
+		return this.scopedActions(state.latestStep);
 	}
 
 	checkpoints(key: string): readonly InputCheckpoint[] {
@@ -413,15 +419,16 @@ export class InteractionSessions {
 		return [...state.dispatches].filter(dispatch => dispatch.started && !dispatch.isCompleted);
 	}
 
-	private scopedActions(state: SessionState, startIndex: number): RecordedAction[] {
+	private commitStep(state: SessionState, startIndex: number, dispatchIds: ReadonlySet<number>): void {
+		state.latestStep = { startIndex, dispatchIds: new Set(dispatchIds) };
+		this.latestKey = state.key;
+	}
+
+	private scopedActions(scope: StepScope): RecordedAction[] {
 		return this.deps
 			.actions()
-			.slice(startIndex)
-			.filter(
-				action =>
-					action.sessionKey === state.key ||
-					(action.dispatchId !== undefined && this.dispatchSession.get(action.dispatchId) === state.key),
-			);
+			.slice(scope.startIndex)
+			.filter(action => action.dispatchId !== undefined && scope.dispatchIds.has(action.dispatchId));
 	}
 
 	private discardCheckpoints(state: SessionState, ownerDispatchId: number): void {
@@ -479,7 +486,6 @@ export class InteractionSessions {
 				errors: new Map(),
 				listeners: new Set(),
 				version: 0,
-				currentActions: [],
 			};
 			this.states.set(key, state);
 		}

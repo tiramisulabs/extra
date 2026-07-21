@@ -166,6 +166,8 @@ expectType<ButtonView | undefined>(reader.query.button('save'));
 expectType<readonly ButtonView[]>(reader.all.button('save'));
 expectType<ContainerView>(reader.get.component('container', { content: /settings/i }));
 
+// @ts-expect-error — REST inspection belongs to bot/actor.restCalls() or result.actions.
+void reader.raw.actions;
 // @ts-expect-error — component kinds are closed over the supported reader map.
 reader.get.component('not-real', {});
 // @ts-expect-error — embeds do not have string shorthand; use { title } / { contains }.

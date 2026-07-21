@@ -1,6 +1,7 @@
 import { Client, Command, type CommandContext, createPlugin, Declare, Modal } from 'seyfert';
 import { describe, expect, test, vi } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
+import { Routes } from '../../src/bot/routes';
 
 // Mirrors a production bot's module-level `export let client` singleton (e.g. a `start.ts` export):
 // commands reach Discord REST through THIS variable, not through ctx.client.
@@ -26,9 +27,9 @@ describe('createMockBot({ client })', () => {
 		expect(res.content).toBe('sent');
 
 		// REST issued through the singleton (not ctx) was captured by the mock
-		const call = bot.findAction({ method: 'POST', route: '/channels/:channelId/messages' });
-		expect(call).toBeTruthy();
-		expect(call?.body).toMatchObject({ content: 'broadcast' });
+		const calls = bot.restCalls(Routes.createMessage);
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.body).toMatchObject({ content: 'broadcast' });
 
 		await bot.close();
 	});

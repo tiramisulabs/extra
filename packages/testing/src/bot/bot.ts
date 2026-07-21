@@ -20,7 +20,6 @@ import { asClientGateway, asUsingClient, cacheStore, clientLifecycle, eventsInte
 import { WorldState, type WorldStateReader } from './state';
 import { seedCachedRole, seedWorld } from './world';
 
-export type { CreatedResource } from './bot-support';
 export * from './contracts';
 export { Dispatch, type DispatchOptions } from './dispatch';
 export { WORLD_EVENT_NAMES } from './world-events';

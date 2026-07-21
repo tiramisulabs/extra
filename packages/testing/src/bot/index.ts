@@ -27,7 +27,6 @@ export {
 	type BotDiagnostics,
 	type CapturedReply,
 	type ComponentSourceOptions,
-	type CreatedResource,
 	createMockBot,
 	DISPATCHER_VERBS,
 	type DispatchMessageOptions,
@@ -208,22 +207,18 @@ export {
 	permissionBits,
 } from './permissions';
 export {
-	type ActionFilter,
-	type ActionMatcher,
-	type ActionPredicate,
 	apiError,
 	type DiscordErrorInit,
 	DiscordErrors,
-	type MatchedAction,
 	MockApiError,
 	type PendingAction,
 	type RecordedAction,
-	type RouteActionFilter,
+	type RestCall,
+	type RestCalls,
 	type RouteMatcher,
+	type RouteParams,
 	type RouteResponder,
 	routeUrl,
-	type TypedMatchedAction,
-	type ValuePredicate,
 } from './rest';
 export { Routes } from './routes';
 export {

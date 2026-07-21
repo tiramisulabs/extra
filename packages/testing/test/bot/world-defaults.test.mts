@@ -230,7 +230,7 @@ describe('stateful world defaults', () => {
 		bot.rest.intercept(Routes.ban, () => apiError(403, 50013, 'Missing Permissions'));
 		const result = await bot.slash({ name: 'catch-rest-error' });
 		expect(result.content).toBe('no permission');
-		expect(bot.findAction(Routes.ban)).toMatchObject({ method: 'PUT' });
+		expect(bot.restCalls(Routes.ban)).toHaveLength(1);
 		await bot.close();
 	});
 

@@ -12,6 +12,7 @@ import { ButtonStyle } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
 import { rendered } from '../../src';
 import { createMockBot } from '../../src/bot/bot';
+import { Routes } from '../../src/bot/routes';
 import { mockWorld } from '../../src/bot/world';
 
 // A slash that replies with one button, then blocks on `collector.waitFor(...)` until the button is clicked —
@@ -119,7 +120,7 @@ describe('#2 component inherits guildId from the source message', () => {
 				],
 			},
 		});
-		const source = bot.actions.at(-1);
+		const source = bot.rest.actions.at(-1);
 		if (!source) throw new Error('expected historical source action');
 
 		await bot.clickButton('go', { source });
@@ -212,10 +213,10 @@ describe('#6 bot.settle() drains detached background work', () => {
 		const bot = await createMockBot({ commands: [BgCommand] });
 
 		await bot.slash({ name: 'bg' });
-		expect(bot.created('message', { content: 'background' })).toHaveLength(0); // still detached
+		expect(bot.restCalls(Routes.createMessage).filter(call => call.body?.content === 'background')).toHaveLength(0);
 
 		await bot.settle();
-		expect(bot.created('message', { content: 'background' })).toHaveLength(1); // drained
+		expect(bot.restCalls(Routes.createMessage).filter(call => call.body?.content === 'background')).toHaveLength(1);
 
 		await bot.close();
 	});
@@ -263,9 +264,9 @@ describe('#6 bot.settle() drains detached background work', () => {
 		await bot.slash({ name: 'multi-step-rest' });
 		await bot.settle();
 
-		const produced = bot.findActions(
-			action => action.method === 'GET' && action.route.startsWith(`/channels/${PRODUCER_CHANNEL_PREFIX}`),
-		);
+		const produced = bot
+			.restCalls(Routes.fetchChannel)
+			.filter(call => call.params.channelId.startsWith(PRODUCER_CHANNEL_PREFIX));
 		expect(produced).toHaveLength(3);
 		expect(produced.every(action => action.settled)).toBe(true);
 		await bot.close();
@@ -299,7 +300,7 @@ describe('#6 bot.settle() drains detached background work', () => {
 	});
 });
 
-describe('#8 bot.created() semantic query', () => {
+describe('#8 route-specific REST calls', () => {
 	@Declare({ name: 'mkrole', description: 'creates a role' })
 	class MkRoleCommand extends Command {
 		async run(ctx: CommandContext) {
@@ -308,18 +309,19 @@ describe('#8 bot.created() semantic query', () => {
 		}
 	}
 
-	test('created(resource, match?) finds entity-create calls and filters by body', async () => {
+	test('returns route calls and leaves body selection to ordinary array methods', async () => {
 		const world = mockWorld();
 		world.registerGuild({ id: '111111111111111111' });
 		const bot = await createMockBot({ commands: [MkRoleCommand], world });
 
 		await bot.slash({ name: 'mkrole', guildId: '111111111111111111' });
 
-		expect(bot.created('role')).toHaveLength(1);
-		expect(bot.created('role', { name: 'VIP' })).toHaveLength(1);
-		expect(bot.created('role', { name: 'NOPE' })).toHaveLength(0);
-		expect(bot.created('channel')).toHaveLength(0);
-		expect(bot.created('role')[0].body).toMatchObject({ name: 'VIP' });
+		const roles = bot.restCalls(Routes.createRole);
+		expect(roles).toHaveLength(1);
+		expect(roles.filter(call => call.body?.name === 'VIP')).toHaveLength(1);
+		expect(roles.filter(call => call.body?.name === 'NOPE')).toHaveLength(0);
+		expect(bot.restCalls(Routes.createChannel)).toHaveLength(0);
+		expect(roles[0]?.body).toMatchObject({ name: 'VIP' });
 		await bot.close();
 	});
 });

@@ -1,7 +1,7 @@
 import { ContextMenuCommand, type MenuCommandContext, type UserCommandInteraction } from 'seyfert';
 import { ApplicationCommandType } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
-import { Dispatch, type DispatchOptions } from '../../src';
+import { Dispatch, type DispatchOptions, type RestCall, type RestCalls, Routes } from '../../src';
 import {
 	createMockBot,
 	type DispatchResult,
@@ -36,7 +36,18 @@ function assertStatefulInteractionTypes(bot: MockBot): void {
 	expectAssignable<Dispatch<UserMenuResult>>(bot.dispatch.userMenu({ name: 'type-only' }));
 	expectAssignable<Dispatch<MessageMenuResult>>(bot.dispatch.messageMenu({ name: 'type-only' }));
 	expectAssignable<Dispatch<DispatchResult>>(bot.dispatch.entryPoint({ name: 'type-only' }));
+	const memberEdits = bot.restCalls(Routes.editMember);
+	expectAssignable<readonly RestCall<{ guildId: string; userId: string }>[]>(memberEdits);
+	expectAssignable<string>(memberEdits[0].params.guildId);
+	expectAssignable<string>(memberEdits[0].params.userId);
+	const noRouteParam = bot.restCalls()[0]?.params.arbitrary;
+	expectAssignable<undefined>(noRouteParam);
+	// @ts-expect-error no-route reads cannot invent a string route parameter.
+	const inventedRouteParam: string = noRouteParam;
+	void inventedRouteParam;
 	const actor = bot.actor({ user: apiUser() });
+	expectAssignable<RestCalls>(actor.restCalls);
+	expectAssignable<readonly RestCall[]>(actor.restCalls());
 	expectAssignable<Promise<UserMenuResult>>(actor.userMenu({ name: 'type-only' }));
 	expectAssignable<Promise<MessageMenuResult>>(actor.messageMenu({ name: 'type-only' }));
 	expectAssignable<Promise<DispatchResult>>(actor.entryPoint({ name: 'type-only' }));
@@ -47,6 +58,34 @@ function assertStatefulInteractionTypes(bot: MockBot): void {
 	bot.submitModal('type-only', {}, { allowSyntheticSource: true });
 	// @ts-expect-error fillModal was intentionally removed; submitModal is the only modal submission verb.
 	void bot.fillModal;
+	// @ts-expect-error restCalls accepts only an optional route descriptor, never a filter object.
+	bot.restCalls(Routes.editMember, { userId: 'type-only' });
+	// @ts-expect-error restCalls snapshots are read-only arrays.
+	void memberEdits.push;
+	if (memberEdits[0]) {
+		// @ts-expect-error each captured REST call is read-only.
+		memberEdits[0].route = '/changed';
+	}
+	// @ts-expect-error channelId is not a parameter in Routes.editMember.
+	void memberEdits[0]?.params.channelId;
+	// @ts-expect-error legacy single-result REST readers were removed.
+	void bot.findAction;
+	// @ts-expect-error legacy filtered REST readers were removed.
+	void bot.findActions;
+	// @ts-expect-error temporal REST assertion helpers are not part of MockBot.
+	void bot.waitForAction;
+	// @ts-expect-error resource-specific REST readers were removed.
+	void bot.created;
+	// @ts-expect-error global and current raw action aliases were removed from MockBot.
+	void bot.actions;
+	// @ts-expect-error actor action aliases were replaced by actor.restCalls().
+	void actor.currentActions;
+	// @ts-expect-error the low-level REST surface no longer owns assertion-oriented finders.
+	void bot.rest.findActions;
+	// @ts-expect-error the low-level REST surface no longer owns assertion-oriented required lookups.
+	void bot.rest.requireAction;
+	// @ts-expect-error temporal action waits are internal, not a public testing reader.
+	void bot.rest.waitForAction;
 }
 void assertStatefulInteractionTypes;
 
