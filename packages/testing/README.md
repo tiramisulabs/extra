@@ -94,7 +94,8 @@ expect(submit.lastResponse()).toBeDefined();
 import { mockChannel, mockGuild, mockMember, mockUser } from '@slipher/testing';
 
 const user = mockUser({ username: 'socram' });
-const guild = mockGuild({ name: 'Slipher Lab' });
+const guild = mockGuild({ id: 'guild-1', name: 'Slipher Lab', icon: 'guild-icon-hash' });
+guild.iconURL(); // https://cdn.discordapp.com/icons/guild-1/guild-icon-hash.png
 const channel = mockChannel({ guildId: guild.id });
 const member = mockMember({ user });
 ```

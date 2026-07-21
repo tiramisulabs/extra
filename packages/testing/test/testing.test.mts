@@ -68,6 +68,30 @@ describe('entity factories', () => {
 		assert.equal(member.nick, 'Soc');
 	});
 
+	test('mockGuild mirrors seyfert icon data and CDN URL behavior', () => {
+		const defaultGuild = mockGuild({ id: 'guild-default' });
+		const withoutIcon = mockGuild({ id: 'guild-null', icon: null });
+		const withIcon = mockGuild({ id: 'guild-one', icon: 'icon-one' });
+		const anotherGuild = mockGuild({ id: 'guild-two', icon: 'icon-two' });
+
+		assert.equal(defaultGuild.icon, null);
+		assert.equal(defaultGuild.iconURL(), undefined);
+		assert.equal(withoutIcon.icon, null);
+		assert.equal(withoutIcon.iconURL(), undefined);
+		assert.equal(withIcon.icon, 'icon-one');
+		assert.equal(withIcon.iconURL(), 'https://cdn.discordapp.com/icons/guild-one/icon-one.png');
+		assert.equal(
+			withIcon.iconURL({ extension: 'webp', size: 128 }),
+			'https://cdn.discordapp.com/icons/guild-one/icon-one.webp?size=128',
+		);
+		assert.equal(anotherGuild.icon, 'icon-two');
+		assert.equal(anotherGuild.iconURL(), 'https://cdn.discordapp.com/icons/guild-two/icon-two.png');
+
+		withIcon.icon = 'updated-icon';
+		assert.equal(withIcon.iconURL(), 'https://cdn.discordapp.com/icons/guild-one/updated-icon.png');
+		assert.equal(anotherGuild.iconURL(), 'https://cdn.discordapp.com/icons/guild-two/icon-two.png');
+	});
+
 	test('mockChannel implements seyfert type-guards from type (no stub needed)', () => {
 		const text = mockChannel({ type: ChannelType.GuildText });
 		assert.equal(text.isTextGuild(), true);
