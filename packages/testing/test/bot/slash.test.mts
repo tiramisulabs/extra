@@ -203,6 +203,34 @@ describe('createMockBot', () => {
 		await bot.close();
 	});
 
+	test('rejects instead of hanging when a denial drain cannot reach quiescence', async () => {
+		slowDenierCalls.length = 0;
+		deniedBodyRan.length = 0;
+		const bot = await createMockBot({
+			commands: [SlowDeniedCommand],
+			middlewares: testMiddlewares,
+		});
+		let release!: (value: { id: string; type: number }) => void;
+		bot.rest.intercept(
+			'GET',
+			`/channels/${SLOW_DENIER_CHANNEL_ID}`,
+			() =>
+				new Promise(resolve => {
+					release = resolve;
+				}),
+		);
+
+		try {
+			await expect(bot.slash({ name: 'slow-denied' })).rejects.toThrow(/middleware denial drain/);
+			expect(slowDenierCalls).toEqual(['slowDenier']);
+			expect(deniedBodyRan).toEqual([]);
+		} finally {
+			release({ id: SLOW_DENIER_CHANNEL_ID, type: 0 });
+			await bot.settle();
+			await bot.close();
+		}
+	}, 10_000);
+
 	test('res.command identifies the leaf for flat and subcommand dispatches', async () => {
 		const bot = await createMockBot({ commands: [GreetCommand, ConfigCommand] });
 

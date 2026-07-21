@@ -279,7 +279,7 @@ export interface PluginInfo {
 /** Plain-data snapshot for debugging a hung dispatch, surfaced by {@link MockBot.diagnostics}. */
 export interface BotDiagnostics {
 	/** Dispatches created but not yet settled. */
-	pending: { id?: string; started: boolean; settled: boolean }[];
+	pending: { dispatchId?: number; userId?: string; started: boolean; settled: boolean }[];
 	/** The most recent recorded REST actions, oldest-first. */
 	recentActions: RecordedAction[];
 }

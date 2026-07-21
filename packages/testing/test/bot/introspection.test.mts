@@ -80,6 +80,39 @@ describe('introspection helpers (DX-2)', () => {
 		await dispatch;
 		await bot.close();
 	});
+
+	test('diagnostics distinguishes concurrent dispatches from the same user', async () => {
+		const bot = await createMockBot({ commands: [PingCommand] });
+		const first = bot.dispatch.slash({ name: 'ping' });
+		const second = bot.dispatch.slash({ name: 'ping' });
+		await Promise.all([
+			first.until(action => action.method === 'POST'),
+			second.until(action => action.method === 'POST'),
+		]);
+
+		const pending = bot.diagnostics().pending;
+		expect(pending).toEqual(
+			expect.arrayContaining([
+				{
+					dispatchId: first.dispatchId,
+					userId: first.userId,
+					started: true,
+					settled: false,
+				},
+				{
+					dispatchId: second.dispatchId,
+					userId: second.userId,
+					started: true,
+					settled: false,
+				},
+			]),
+		);
+		expect(new Set(pending.map(entry => entry.dispatchId)).size).toBe(2);
+		expect(new Set(pending.map(entry => entry.userId)).size).toBe(1);
+
+		await Promise.all([first, second]);
+		await bot.close();
+	});
 });
 
 describe('typed findAction (S19)', () => {

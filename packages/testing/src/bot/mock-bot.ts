@@ -95,7 +95,11 @@ export class MockBot extends MockBotDispatchCore {
 		entryPoint: options => this.createEntryPointDispatch(options),
 	};
 
-	protected async runInteraction(payload: ApiInteractionPayload, dispatchId: number): Promise<DispatchResult> {
+	protected async runInteraction(
+		payload: ApiInteractionPayload,
+		dispatchId: number,
+		causalOwnerDispatchId?: number,
+	): Promise<DispatchResult> {
 		const isComponentPayload = payload.type === InteractionType.MessageComponent;
 		const isModalPayload = payload.type === InteractionType.ModalSubmit;
 		const user = payload.member?.user ?? payload.user;
@@ -125,8 +129,9 @@ export class MockBot extends MockBotDispatchCore {
 		// replies and returns without calling any of them leaves the chain pending forever, so command.run is
 		// structurally never reached and handleCommand.interaction never settles. The installed middleware
 		// wrappers settle this promise once a denying middleware's REST surface goes quiescent.
-		const denialSettled = new Promise<void>(resolve => {
+		const denialSettled = new Promise<void>((resolve, reject) => {
 			ctx.resolveDenial = resolve;
+			ctx.rejectDenial = reject;
 		});
 		this._state.registerInteractionToken(payload.token, payload.channel_id, payload.type, payload.application_id);
 		if (payload.message) {
@@ -151,7 +156,15 @@ export class MockBot extends MockBotDispatchCore {
 				this.modalOwners.delete(userId);
 			}
 		}
-		if (isModalPayload) await this.drainTokenUntilQuiescent(payload.application_id, payload.token, payload.id);
+		if (isModalPayload) {
+			await this.drainTokenUntilQuiescent(
+				payload.application_id,
+				payload.token,
+				payload.id,
+				dispatchId,
+				causalOwnerDispatchId,
+			);
+		}
 		const { componentCommandExecuted, collectorMatched, modalMatched } = ctx;
 		// An unhandled error inside the command/component/modal run was captured by the onRunError hook. Fail loud
 		// by default so a happy-path test surfaces the bug; 'capture' exposes it on result.error instead.
@@ -496,14 +509,14 @@ export class MockBot extends MockBotDispatchCore {
 		const userId = payload.member?.user.id ?? payload.user?.id;
 		const dispatchId = nextDispatchId();
 		return this.track(
-			new Dispatch(
-				this.rest,
-				this.client,
+			new Dispatch({
+				rest: this.rest,
+				client: this.client,
 				userId,
-				async () => withChoices(await this.runInteraction(payload, dispatchId)),
-				(id, ownerDispatchId) => this.onModalRegistered(id, ownerDispatchId),
+				executor: async () => withChoices(await this.runInteraction(payload, dispatchId)),
+				modalWaiter: (id, ownerDispatchId) => this.onModalRegistered(id, ownerDispatchId),
 				dispatchId,
-			),
+			}),
 		);
 	}
 
@@ -661,55 +674,9 @@ export class MockBot extends MockBotDispatchCore {
 		options: Omit<ButtonInteractionOptions, 'customId' | 'message'> & ComponentSourceOptions = {},
 		sessionKeyOverride?: string,
 	): Promise<DispatchResult> {
-		const continuation = this.continuationOptions(options, sessionKeyOverride);
-		const preparedOptions = continuation.options;
-		const sessionKey = continuation.sessionKey;
-		const userId = preparedOptions.user?.id ?? this.defaultUser.id;
-		const implicitSource = options.source === undefined;
-		const currentSource = implicitSource
-			? this.resolveCurrentComponentSource(sessionKey, 'clickButton', customId)
-			: undefined;
-		const currentMessageSource =
-			implicitSource && currentSource === undefined ? this.resolveCurrentMessageSource(sessionKey) : undefined;
-		const explicitSource = options.source === undefined ? undefined : this.resolveMessageSource(options.source);
-		const resolvedSource = currentSource ?? currentMessageSource ?? explicitSource;
-		if (!resolvedSource) {
-			throw new TypeError(
-				`clickButton: component "${customId}" is not available in the current state for user "${userId}". ` +
-					'Await the action that renders it, inspect it with rendered(bot), or pass an explicit source.',
-			);
-		}
-		const sourceMessage = this.hydrateSourceMessage(resolvedSource, { verb: 'clickButton', customId });
-		this.requireComponentOnMessage('clickButton', customId, sourceMessage);
-		const checkpoint = implicitSource
-			? this.sessions.componentCheckpoint(sessionKey, customId, resolvedSource.id)
-			: this.sessions.componentCheckpointBySource(customId, resolvedSource.id);
-		const sourceSessionContext = checkpoint ? this.sessions.context(checkpoint.sessionKey) : undefined;
-		const sourceChannelId = resolvedSource?.channel_id ?? checkpoint?.channelId ?? sourceMessage?.channel_id;
-		const sourceChannel = sourceChannelId === undefined ? undefined : this._state.channelById(sourceChannelId);
-		const sourceGuildId =
-			sourceMessage?.guild_id ??
-			checkpoint?.guildId ??
-			sourceSessionContext?.guildId ??
-			(sourceChannel === undefined ? (preparedOptions.guildId ?? null) : (sourceChannel.guildId ?? null));
-		const contextualOptions = {
-			...preparedOptions,
-			guildId: sourceGuildId,
-			...(sourceChannelId !== undefined
-				? {
-						channel: apiChannel({
-							id: sourceChannelId,
-							guildId: sourceGuildId,
-						}),
-					}
-				: {}),
-		};
-		const prepared = { ...contextualOptions, source: resolvedSource.id };
-		const dispatch = this.dispatchClickButton(customId, prepared);
-		const consumed = implicitSource
-			? this.sessions.consumeComponent(sessionKey, customId, resolvedSource.id)
-			: this.sessions.consumeComponentBySource(customId, resolvedSource.id);
-		return this.performStep(dispatch, consumed?.sessionKey ?? sessionKey, consumed?.ownerDispatchId);
+		return this.performComponentStep('clickButton', customId, options, sessionKeyOverride, prepared =>
+			this.dispatchClickButton(customId, prepared),
+		);
 	}
 
 	protected dispatchClickButton(
@@ -759,55 +726,76 @@ export class MockBot extends MockBotDispatchCore {
 		options: Omit<SelectMenuInteractionOptions, 'customId' | 'values' | 'message'> & ComponentSourceOptions = {},
 		sessionKeyOverride?: string,
 	): Promise<DispatchResult> {
+		return this.performComponentStep(
+			'selectMenu',
+			customId,
+			options,
+			sessionKeyOverride,
+			(prepared, sourceComponent) => {
+				this.assertSelectValuesMatchSource(customId, values, sourceComponent);
+				return this.dispatchSelectMenu(customId, values, prepared);
+			},
+		);
+	}
+
+	private async performComponentStep<O extends BaseInteractionOptions & ComponentSourceOptions>(
+		verb: 'clickButton' | 'selectMenu',
+		customId: string,
+		options: O,
+		sessionKeyOverride: string | undefined,
+		build: (prepared: O & { source: string }, sourceComponent: Record<string, unknown>) => Dispatch<DispatchResult>,
+	): Promise<DispatchResult> {
 		const continuation = this.continuationOptions(options, sessionKeyOverride);
 		const preparedOptions = continuation.options;
 		const sessionKey = continuation.sessionKey;
 		const userId = preparedOptions.user?.id ?? this.defaultUser.id;
 		const implicitSource = options.source === undefined;
-		const currentSource = implicitSource
-			? this.resolveCurrentComponentSource(sessionKey, 'selectMenu', customId)
-			: undefined;
+		const currentSource = implicitSource ? this.resolveCurrentComponentSource(sessionKey, verb, customId) : undefined;
 		const currentMessageSource =
 			implicitSource && currentSource === undefined ? this.resolveCurrentMessageSource(sessionKey) : undefined;
-		const explicitSource = options.source === undefined ? undefined : this.resolveMessageSource(options.source);
+		const explicitSource = implicitSource ? undefined : this.resolveMessageSource(options.source);
 		const resolvedSource = currentSource ?? currentMessageSource ?? explicitSource;
 		if (!resolvedSource) {
 			throw new TypeError(
-				`selectMenu: component "${customId}" is not available in the current state for user "${userId}". ` +
+				`${verb}: component "${customId}" is not available in the current state for user "${userId}". ` +
 					'Await the action that renders it, inspect it with rendered(bot), or pass an explicit source.',
 			);
 		}
-		const sourceMessage = this.hydrateSourceMessage(resolvedSource, { verb: 'selectMenu', customId });
-		const sourceComponent = this.requireComponentOnMessage('selectMenu', customId, sourceMessage);
-		this.assertSelectValuesMatchSource(customId, values, sourceComponent);
-		const checkpoint = implicitSource
-			? this.sessions.componentCheckpoint(sessionKey, customId, resolvedSource.id)
-			: this.sessions.componentCheckpointBySource(customId, resolvedSource.id);
+
+		const sourceMessage = this.hydrateSourceMessage(resolvedSource, { verb, customId });
+		const sourceComponent = this.requireComponentOnMessage(verb, customId, sourceMessage);
+		const checkpoint = this.sessions.componentCheckpoint(
+			customId,
+			resolvedSource.id,
+			implicitSource ? sessionKey : undefined,
+		);
 		const sourceSessionContext = checkpoint ? this.sessions.context(checkpoint.sessionKey) : undefined;
-		const sourceChannelId = resolvedSource?.channel_id ?? checkpoint?.channelId ?? sourceMessage?.channel_id;
+		const sourceChannelId = resolvedSource.channel_id ?? checkpoint?.channelId ?? sourceMessage.channel_id;
 		const sourceChannel = sourceChannelId === undefined ? undefined : this._state.channelById(sourceChannelId);
 		const sourceGuildId =
-			sourceMessage?.guild_id ??
+			sourceMessage.guild_id ??
 			checkpoint?.guildId ??
 			sourceSessionContext?.guildId ??
 			(sourceChannel === undefined ? (preparedOptions.guildId ?? null) : (sourceChannel.guildId ?? null));
-		const contextualOptions = {
+		const prepared = {
 			...preparedOptions,
 			guildId: sourceGuildId,
-			...(sourceChannelId !== undefined
-				? {
+			...(sourceChannelId === undefined
+				? {}
+				: {
 						channel: apiChannel({
 							id: sourceChannelId,
 							guildId: sourceGuildId,
 						}),
-					}
-				: {}),
-		};
-		const prepared = { ...contextualOptions, source: resolvedSource.id };
-		const dispatch = this.dispatchSelectMenu(customId, values, prepared);
-		const consumed = implicitSource
-			? this.sessions.consumeComponent(sessionKey, customId, resolvedSource.id)
-			: this.sessions.consumeComponentBySource(customId, resolvedSource.id);
+					}),
+			source: resolvedSource.id,
+		} as O & { source: string };
+		const dispatch = build(prepared, sourceComponent);
+		const consumed = this.sessions.consumeComponent(
+			customId,
+			resolvedSource.id,
+			implicitSource ? sessionKey : undefined,
+		);
 		return this.performStep(dispatch, consumed?.sessionKey ?? sessionKey, consumed?.ownerDispatchId);
 	}
 
@@ -881,7 +869,6 @@ export class MockBot extends MockBotDispatchCore {
 			const userId = prepared.user?.id ?? this.defaultUser.id;
 			this.assertModalHandleable(customId, userId, allowSyntheticSource === true);
 			this.assertModalMatchesDisplayed(customId, fields, userId);
-			this.consumeDisplayedModal(userId);
 			return modalSubmitInteraction(prepared);
 		});
 	}
@@ -905,11 +892,11 @@ export class MockBot extends MockBotDispatchCore {
 
 		const dispatchId = nextDispatchId();
 		return this.track(
-			new Dispatch(
-				this.rest,
-				this.client,
-				author.id,
-				async () => {
+			new Dispatch({
+				rest: this.rest,
+				client: this.client,
+				userId: author.id,
+				executor: async () => {
 					await dispatchStore.run(
 						{ dispatchId, componentCommandExecuted: false, collectorMatched: false, modalMatched: false },
 						() => this.client.handleCommand.message(raw as Parameters<HandleCommand['message']>[0], -1),
@@ -918,9 +905,9 @@ export class MockBot extends MockBotDispatchCore {
 					const parts = actions.filter(isOutgoingMessagePost).map(action => this.outgoingMessagePart(action));
 					return this.messageParts(actions, parts);
 				},
-				(id, ownerDispatchId) => this.onModalRegistered(id, ownerDispatchId),
+				modalWaiter: (id, ownerDispatchId) => this.onModalRegistered(id, ownerDispatchId),
 				dispatchId,
-			),
+			}),
 		);
 	}
 
@@ -1004,11 +991,10 @@ export class MockBot extends MockBotDispatchCore {
 		const d = payload as Record<string, unknown>;
 		const dispatchId = nextDispatchId();
 		return this.track(
-			new Dispatch<EventDispatchResult>(
-				this.rest,
-				this.client,
-				undefined,
-				async () => {
+			new Dispatch<EventDispatchResult>({
+				rest: this.rest,
+				client: this.client,
+				executor: async () => {
 					// Guard BEFORE mutating the world, so a rejected emit is a true no-op (no dirtied world state,
 					// and seyfert's cache — updated later inside runEvent — stays consistent with the world).
 					const prepared = this.prepareGatewayEventPayload(name, d);
@@ -1051,9 +1037,8 @@ export class MockBot extends MockBotDispatchCore {
 					const result = this.messageParts(actions, parts);
 					return ctx.error === undefined ? result : { ...result, error: ctx.error };
 				},
-				undefined,
 				dispatchId,
-			),
+			}),
 		);
 	}
 
@@ -1065,11 +1050,10 @@ export class MockBot extends MockBotDispatchCore {
 		this.assertOpen('emit');
 		const dispatchId = nextDispatchId();
 		return this.track(
-			new Dispatch<EventDispatchResult>(
-				this.rest,
-				this.client,
-				undefined,
-				async () => {
+			new Dispatch<EventDispatchResult>({
+				rest: this.rest,
+				client: this.client,
+				executor: async () => {
 					const handlerRan = this.eventHandlerRan(name);
 					if (!handlerRan && !allowNoHandler) {
 						throw new Error(
@@ -1095,9 +1079,8 @@ export class MockBot extends MockBotDispatchCore {
 					const result = this.messageParts(actions, parts);
 					return ctx.error === undefined ? result : { ...result, error: ctx.error };
 				},
-				undefined,
 				dispatchId,
-			),
+			}),
 		);
 	}
 
@@ -1121,6 +1104,16 @@ export class MockBot extends MockBotDispatchCore {
 		const event = events.values[name];
 		if (event && !(event.data.once && event.fired)) return true;
 		return events.getPluginListeners(name).length > 0 || events.getPluginAnyListeners().length > 0;
+	}
+
+	private clearInputRuntime(): void {
+		this.client.components.modals.clear();
+		this.client.components.values.clear();
+		this.modalWaiters.clear();
+		this.modalOwners.clear();
+		this.displayedModals.clear();
+		this.modalRenderCapturedDispatches.clear();
+		this.sessions.reset();
 	}
 
 	/**
@@ -1153,13 +1146,7 @@ export class MockBot extends MockBotDispatchCore {
 		this.rest.releasePending();
 		this.rest.resetInterceptors();
 		this.dispatches.length = 0;
-		this.client.components.modals.clear();
-		this.client.components.values.clear();
-		this.modalWaiters.clear();
-		this.modalOwners.clear();
-		this.displayedModals.clear();
-		this.modalRenderCapturedDispatches.clear();
-		this.sessions.reset();
+		this.clearInputRuntime();
 		this.unregisteredMemberWarnings.clear();
 		this.lastInteractionMessage = undefined;
 		endInputShutdown(this.client);
@@ -1187,13 +1174,7 @@ export class MockBot extends MockBotDispatchCore {
 					'Await those dispatches before closing the bot.',
 			);
 		}
-		this.client.components.modals.clear();
-		this.client.components.values.clear();
-		this.modalWaiters.clear();
-		this.modalOwners.clear();
-		this.displayedModals.clear();
-		this.modalRenderCapturedDispatches.clear();
-		this.sessions.reset();
+		this.clearInputRuntime();
 		this.rest.releasePending();
 		// client.close() is seyfert's plugin lifecycle close: it awaits in-flight setup and runs each plugin's
 		// teardown. Plugin teardown is therefore driven here symmetrically with the setup run at construction.

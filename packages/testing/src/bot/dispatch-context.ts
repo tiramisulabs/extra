@@ -25,6 +25,7 @@ export interface DispatchContext {
 	collectorMatched: boolean;
 	modalMatched: boolean;
 	resolveDenial?: () => void;
+	rejectDenial?: (error: unknown) => void;
 	/** Structured denial metadata, set by the middleware/permission wrappers when a denial is detected. */
 	denial?: DispatchDenial;
 	/** First unhandled error thrown inside the command/component/modal `run`, captured via the onRunError hook. */

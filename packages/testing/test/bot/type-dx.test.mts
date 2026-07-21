@@ -1,9 +1,9 @@
 import { ContextMenuCommand, type MenuCommandContext, type UserCommandInteraction } from 'seyfert';
 import { ApplicationCommandType } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
+import { Dispatch, type DispatchOptions } from '../../src';
 import {
 	createMockBot,
-	type Dispatch,
 	type DispatchResult,
 	type MenuResultFor,
 	type MessageMenuResult,
@@ -17,6 +17,11 @@ import { ReportUser } from './_setup';
 
 /** Compile-time assertion that the argument is assignable to `Expected`; the typed parameter does the checking. */
 function expectAssignable<Expected>(_value: Expected): void {}
+
+function constructPublicDispatch(options: DispatchOptions<DispatchResult>): Dispatch<DispatchResult> {
+	return new Dispatch(options);
+}
+void constructPublicDispatch;
 
 function assertStatefulInteractionTypes(bot: MockBot): void {
 	expectAssignable<Promise<DispatchResult>>(bot.slash({ name: 'type-only' }));

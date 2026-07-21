@@ -33,7 +33,6 @@ function stableCollectorMatch(match: ComponentCollectorMatch): ComponentCollecto
 export interface DispatchHookCapabilities {
 	canDetectComponentCommand: boolean;
 	canDetectCollector: boolean;
-	canDetectComponentWait: boolean;
 	canDetectModalCollector: boolean;
 }
 
@@ -100,7 +99,6 @@ export function installDispatchHooks(client: Client, deps: DispatchHookDeps): Di
 		capabilities: {
 			canDetectComponentCommand,
 			canDetectCollector,
-			canDetectComponentWait,
 			canDetectModalCollector,
 		},
 	};
@@ -367,9 +365,14 @@ function installMiddlewareDenialHooks(client: Client, state: DispatchHookInstall
 					if (ctx && !ctx.denial) ctx.denial = { kind: 'no-next', middleware: key };
 					void state.deps
 						.drainUntilQuiescent(ctx?.dispatchId, () => progressed)
-						.then(() => {
-							if (!progressed) ctx?.resolveDenial?.();
-						});
+						.then(
+							() => {
+								if (!progressed) ctx?.resolveDenial?.();
+							},
+							error => {
+								if (!progressed) ctx?.rejectDenial?.(error);
+							},
+						);
 				},
 				() => {},
 			);

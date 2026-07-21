@@ -2,7 +2,7 @@ import type { Dispatch } from './dispatch';
 import type { ApiChannel, ApiMember, ApiUser } from './payloads';
 import type { RecordedAction } from './rest';
 
-export type CollectorMatch = string | readonly string[] | RegExp;
+type CollectorMatch = string | readonly string[] | RegExp;
 
 export type InputCheckpoint =
 	| {
@@ -20,7 +20,7 @@ export type InputCheckpoint =
 			match: CollectorMatch;
 	  };
 
-export interface InteractionSessionContext {
+interface InteractionSessionContext {
 	user?: ApiUser;
 	member?: ApiMember;
 	guildId?: string | null;
@@ -64,13 +64,13 @@ class SessionDispatchFailure {
 	) {}
 }
 
-export interface InteractionSessionDeps {
+interface InteractionSessionDeps {
 	actions(): readonly RecordedAction[];
 	assertCheckpointReady(checkpoint: InputCheckpoint): void;
 	onDispatchCompleted?(dispatchId: number): void;
 }
 
-export interface ConsumedComponentCheckpoint {
+interface ConsumedComponentCheckpoint {
 	ownerDispatchId: number;
 	sessionKey: string;
 	channelId: string;
@@ -280,58 +280,27 @@ export class InteractionSessions {
 		}
 	}
 
-	consumeComponent(key: string, customId: string, messageId: string): ConsumedComponentCheckpoint | undefined {
-		const state = this.state(key);
-		const index = state.checkpoints.findIndex(
-			checkpoint =>
-				checkpoint.kind === 'component' &&
-				checkpoint.messageId === messageId &&
-				matchesCollector(checkpoint.match, customId),
-		);
-		if (index === -1) return undefined;
-		const [checkpoint] = state.checkpoints.splice(index, 1);
-		if (checkpoint.kind !== 'component') return undefined;
-		return {
-			ownerDispatchId: checkpoint.ownerDispatchId,
-			sessionKey: key,
-			channelId: checkpoint.channelId,
-			...(checkpoint.guildId === undefined ? {} : { guildId: checkpoint.guildId }),
-		};
+	componentCheckpoint(
+		customId: string,
+		messageId: string,
+		sessionKey?: string,
+	): ConsumedComponentCheckpoint | undefined {
+		const match = this.findComponentCheckpoint(customId, messageId, sessionKey);
+		return match ? this.projectComponentCheckpoint(match) : undefined;
 	}
 
-	componentCheckpoint(key: string, customId: string, messageId: string): ConsumedComponentCheckpoint | undefined {
-		const state = this.states.get(key);
-		const checkpoint = state?.checkpoints.find(
-			candidate =>
-				candidate.kind === 'component' &&
-				candidate.messageId === messageId &&
-				matchesCollector(candidate.match, customId),
-		);
-		if (!state || checkpoint?.kind !== 'component') return undefined;
-		return {
-			ownerDispatchId: checkpoint.ownerDispatchId,
-			sessionKey: key,
-			channelId: checkpoint.channelId,
-			...(checkpoint.guildId === undefined ? {} : { guildId: checkpoint.guildId }),
-		};
-	}
-
-	componentCheckpointBySource(customId: string, messageId: string): ConsumedComponentCheckpoint | undefined {
-		const match = this.componentCheckpointMatch(customId, messageId);
-		if (!match) return undefined;
-		return {
-			ownerDispatchId: match.checkpoint.ownerDispatchId,
-			sessionKey: match.state.key,
-			channelId: match.checkpoint.channelId,
-			...(match.checkpoint.guildId === undefined ? {} : { guildId: match.checkpoint.guildId }),
-		};
-	}
-
-	consumeComponentBySource(customId: string, messageId: string): ConsumedComponentCheckpoint | undefined {
-		const match = this.componentCheckpointMatch(customId, messageId);
+	consumeComponent(customId: string, messageId: string, sessionKey?: string): ConsumedComponentCheckpoint | undefined {
+		const match = this.findComponentCheckpoint(customId, messageId, sessionKey);
 		if (!match) return undefined;
 		const index = match.state.checkpoints.indexOf(match.checkpoint);
 		if (index !== -1) match.state.checkpoints.splice(index, 1);
+		return this.projectComponentCheckpoint(match);
+	}
+
+	private projectComponentCheckpoint(match: {
+		state: SessionState;
+		checkpoint: Extract<InputCheckpoint, { kind: 'component' }>;
+	}): ConsumedComponentCheckpoint {
 		return {
 			ownerDispatchId: match.checkpoint.ownerDispatchId,
 			sessionKey: match.state.key,
@@ -340,15 +309,28 @@ export class InteractionSessions {
 		};
 	}
 
-	private componentCheckpointMatch(
+	private findComponentCheckpoint(
 		customId: string,
 		messageId: string,
+		sessionKey?: string,
 	):
 		| {
 				state: SessionState;
 				checkpoint: Extract<InputCheckpoint, { kind: 'component' }>;
 		  }
 		| undefined {
+		if (sessionKey !== undefined) {
+			const state = this.states.get(sessionKey);
+			if (!state) return undefined;
+			const checkpoint = state.checkpoints.find(
+				candidate =>
+					candidate.kind === 'component' &&
+					candidate.messageId === messageId &&
+					matchesCollector(candidate.match, customId),
+			);
+			return checkpoint?.kind === 'component' ? { state, checkpoint } : undefined;
+		}
+
 		const matches: {
 			state: SessionState;
 			checkpoint: Extract<InputCheckpoint, { kind: 'component' }>;

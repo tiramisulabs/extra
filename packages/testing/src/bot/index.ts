@@ -68,7 +68,7 @@ export {
 	TEST_GUILD_ID,
 	TEST_USER_ID,
 } from './constants';
-export { Dispatch } from './dispatch';
+export { Dispatch, type DispatchOptions } from './dispatch';
 export { MockGateway, type MockGatewayOptions, type MockShard } from './gateway';
 export {
 	type ApiInteractionPayload,

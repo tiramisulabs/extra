@@ -172,6 +172,11 @@ describe('#3 + #4 await a parked collector top-to-bottom', () => {
 });
 
 describe('#6 bot.settle() drains detached background work', () => {
+	const RETAINED_CHANNEL_ID = 'retained-rest-channel';
+	const PRODUCER_CHANNEL_PREFIX = 'producer-step-';
+	const SECRET_TOKEN = 'SUPER-SECRET-TOKEN';
+	const SECRET_ROUTE = `/interactions/diagnostic-interaction/${SECRET_TOKEN}/callback` as const;
+
 	@Declare({ name: 'bg', description: 'replies then writes in the background' })
 	class BgCommand extends Command {
 		async run(ctx: CommandContext) {
@@ -180,6 +185,26 @@ describe('#6 bot.settle() drains detached background work', () => {
 			void new Promise<void>(resolve => setImmediate(resolve)).then(() =>
 				ctx.client.messages.write('900000000000000010', { content: 'background' }),
 			);
+		}
+	}
+
+	@Declare({ name: 'retained-rest', description: 'starts a REST request that never settles' })
+	class RetainedRestCommand extends Command {
+		async run(ctx: CommandContext) {
+			void ctx.client.channels.fetch(RETAINED_CHANNEL_ID);
+			await ctx.write({ content: 'started' });
+		}
+	}
+
+	@Declare({ name: 'multi-step-rest', description: 'starts a finite multi-step REST producer' })
+	class MultiStepRestCommand extends Command {
+		async run(ctx: CommandContext) {
+			void (async () => {
+				for (let index = 0; index < 3; index++) {
+					await ctx.client.channels.fetch(`${PRODUCER_CHANNEL_PREFIX}${index}`);
+				}
+			})();
+			await ctx.write({ content: 'started' });
 		}
 	}
 
@@ -193,6 +218,84 @@ describe('#6 bot.settle() drains detached background work', () => {
 		expect(bot.created('message', { content: 'background' })).toHaveLength(1); // drained
 
 		await bot.close();
+	});
+
+	test('rejects with pending-request diagnostics when REST never reaches quiescence', async () => {
+		const bot = await createMockBot({ commands: [RetainedRestCommand] });
+		let release!: (value: { id: string; type: number }) => void;
+		bot.rest.intercept(
+			'GET',
+			`/channels/${RETAINED_CHANNEL_ID}`,
+			() =>
+				new Promise(resolve => {
+					release = resolve;
+				}),
+		);
+
+		try {
+			await bot.slash({ name: 'retained-rest' });
+			const error = await bot.settle().catch(cause => cause);
+
+			expect(error).toBeInstanceOf(Error);
+			expect((error as Error).cause).toBeUndefined();
+			const diagnostic = (error as Error).message;
+			expect(diagnostic).toMatch(/MockBot\.settle\(\)/);
+			expect(diagnostic).toMatch(/1000 iterations/);
+			expect(diagnostic).toMatch(/1 pending REST request/);
+			expect(diagnostic).toMatch(/dispatchId=\d+/);
+			expect(diagnostic).toContain(`GET /channels/${RETAINED_CHANNEL_ID}`);
+		} finally {
+			release({ id: RETAINED_CHANNEL_ID, type: 0 });
+			await bot.settle();
+			await bot.close();
+		}
+	});
+
+	test('allows a legitimate multi-step REST producer to reach quiescence', async () => {
+		const bot = await createMockBot({ commands: [MultiStepRestCommand] });
+		bot.rest.intercept('GET', /^\/channels\/producer-step-\d+$/, async () => {
+			for (let index = 0; index < 2; index++) {
+				await new Promise<void>(resolve => setImmediate(resolve));
+			}
+			return { id: 'producer-channel', type: 0 };
+		});
+
+		await bot.slash({ name: 'multi-step-rest' });
+		await bot.settle();
+
+		const produced = bot.findActions(
+			action => action.method === 'GET' && action.route.startsWith(`/channels/${PRODUCER_CHANNEL_PREFIX}`),
+		);
+		expect(produced).toHaveLength(3);
+		expect(produced.every(action => action.settled)).toBe(true);
+		await bot.close();
+	});
+
+	test('redacts interaction tokens from exhaustion diagnostics', async () => {
+		const bot = await createMockBot({});
+		let release!: (value: { ok: true }) => void;
+		bot.rest.intercept(
+			'POST',
+			SECRET_ROUTE,
+			() =>
+				new Promise(resolve => {
+					release = resolve;
+				}),
+		);
+		const retained = bot.rest.request('POST', SECRET_ROUTE);
+
+		try {
+			const error = await bot.settle().catch(cause => cause);
+			expect(error).toBeInstanceOf(Error);
+			expect((error as Error).cause).toBeUndefined();
+			const diagnostic = (error as Error).message;
+			expect(diagnostic).not.toContain(SECRET_TOKEN);
+			expect(diagnostic).toContain('POST /interactions/diagnostic-interaction/:token/callback');
+		} finally {
+			release({ ok: true });
+			await retained;
+			await bot.close();
+		}
 	});
 });
 

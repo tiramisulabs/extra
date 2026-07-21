@@ -24,16 +24,16 @@ export interface ModalRegistry {
 
 export type ComponentCollectorMatch = string | string[] | RegExp;
 
-export interface ComponentCollectorNode {
+interface ComponentCollectorNode {
 	callback: (interaction: unknown, ...args: unknown[]) => unknown;
 	match: (customId: string) => boolean;
 }
 
-export interface ComponentCollectorState {
+interface ComponentCollectorState {
 	components: ComponentCollectorNode[];
 }
 
-export interface ComponentCollectorHandle {
+interface ComponentCollectorHandle {
 	run(match: ComponentCollectorMatch, callback: (...args: unknown[]) => unknown): void;
 	waitFor(match: ComponentCollectorMatch, timeout?: number): Promise<unknown>;
 	stop(reason?: string): void;

@@ -578,8 +578,10 @@ state or when a current step contains the same custom id on multiple messages:
 
 ```ts
 const sent = bot.lastSentMessage();
-await bot.clickButton('approve', { source: sent?.id });
-await bot.selectMenu('settings/mod', [role.id], { source: sent, componentType: 'role' });
+if (!sent) throw new Error('Expected the command to send a message.');
+
+await bot.clickButton('approve', { source: sent.id });
+await bot.selectMenu('settings/mod', [role.id], { source: sent.id, componentType: 'role' });
 ```
 
 Entity selects auto-resolve seeded world users, members, roles, and channels.

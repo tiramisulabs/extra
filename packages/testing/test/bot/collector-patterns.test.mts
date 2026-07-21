@@ -87,6 +87,40 @@ describe('collector patterns', () => {
 		await bot.close();
 	});
 
+	test('synthetic modal submit ignores an unrelated retained REST request', async () => {
+		class IsolatedModal extends ModalCommand {
+			filter(ctx: ModalContext) {
+				return ctx.customId === 'isolated-modal';
+			}
+			async run(ctx: ModalContext) {
+				await ctx.write({ content: 'modal completed' });
+			}
+		}
+
+		const bot = await createMockBot({ components: [IsolatedModal] });
+		let release!: (value: { ok: true }) => void;
+		bot.rest.intercept(
+			'GET',
+			'/retained-out-of-band',
+			() =>
+				new Promise(resolve => {
+					release = resolve;
+				}),
+		);
+		const retained = bot.rest.request('GET', '/retained-out-of-band');
+
+		try {
+			await expect(
+				bot.dispatch.submitModal('isolated-modal', {}, { allowSyntheticSource: true }),
+			).resolves.toMatchObject({ content: 'modal completed' });
+			expect(bot.rest.pendingRequests(action => action.route === '/retained-out-of-band')).toHaveLength(1);
+		} finally {
+			release({ ok: true });
+			await retained;
+			await bot.close();
+		}
+	});
+
 	// A slash command opens a modal with `{ waitFor }`, awaits the submit, and replies on that submit
 	// interaction (`editOrReply(body, true)`) IN THE SAME CONTINUATION, then a collector on that reply drives a
 	// "Continue" button. This "collector behind a Continue button after a modal" flow works because the submit

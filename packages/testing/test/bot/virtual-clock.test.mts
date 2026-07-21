@@ -8,11 +8,14 @@ import {
 	Declare,
 	Label,
 	Modal,
+	ModalCommand,
+	type ModalContext,
 	TextInput,
 } from 'seyfert';
 import { ButtonStyle, TextInputStyle } from 'seyfert/lib/types';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
+import { modalSubmitInteraction } from '../../src/bot/interactions';
 import { apiUser } from '../../src/bot/payloads';
 import { mockWorld } from '../../src/bot/world';
 
@@ -146,6 +149,146 @@ describe('virtual clock', () => {
 
 			expect(modal.content).toBe('thanks after async work');
 			await bot.close();
+		});
+
+		test('raw dispatch.submitModal includes replies after awaited REST owned by the opener', async () => {
+			class OwnedRestAfterWaitButton extends ComponentCommand {
+				componentType = 'Button' as const;
+				filter(ctx: ComponentContext<'Button'>) {
+					return ctx.customId === 'open-owned-rest';
+				}
+				async run(ctx: ComponentContext<'Button'>) {
+					const submit = await ctx.interaction.modal(
+						new Modal().setCustomId('owned-rest-modal').setTitle('Owned REST').setComponents([]),
+						{ waitFor: 30_000 },
+					);
+					if (!submit) return;
+					await ctx.client.channels.fetch('owned-delay');
+					await submit.write({ content: 'after owned REST' });
+				}
+			}
+
+			const bot = await createMockBot({ components: [OwnedRestAfterWaitButton] });
+			bot.rest.intercept('GET', '/channels/owned-delay', async () => {
+				for (let index = 0; index < 5; index++) {
+					await new Promise<void>(resolve => setImmediate(resolve));
+				}
+				return { id: 'owned-delay', type: 0 };
+			});
+			const user = apiUser({ id: 'owned-rest-modal-user' });
+			const opener = bot.dispatch.clickButton('open-owned-rest', { user, allowSyntheticSource: true });
+
+			const modal = await opener.submitModal('owned-rest-modal');
+
+			expect(bot.findAction(action => action.route === '/channels/owned-delay')?.dispatchId).toBe(opener.dispatchId);
+			expect(modal.messages).toEqual(expect.arrayContaining([{ content: 'after owned REST' }]));
+			expect(modal.content).toBe('after owned REST');
+			await bot.close();
+		});
+
+		test('public dispatchInteraction infers modal owner before awaited opener REST', async () => {
+			class RawPayloadOwnedRestButton extends ComponentCommand {
+				componentType = 'Button' as const;
+				filter(ctx: ComponentContext<'Button'>) {
+					return ctx.customId === 'open-raw-payload-owned-rest';
+				}
+				async run(ctx: ComponentContext<'Button'>) {
+					const submit = await ctx.interaction.modal(
+						new Modal().setCustomId('raw-payload-owned-rest-modal').setTitle('Raw payload').setComponents([]),
+						{ waitFor: 30_000 },
+					);
+					if (!submit) return;
+					await ctx.client.channels.fetch('raw-payload-owned-delay');
+					await submit.write({ content: 'after raw payload owned REST' });
+				}
+			}
+
+			const bot = await createMockBot({ components: [RawPayloadOwnedRestButton] });
+			bot.rest.intercept('GET', '/channels/raw-payload-owned-delay', async () => {
+				for (let index = 0; index < 5; index++) {
+					await new Promise<void>(resolve => setImmediate(resolve));
+				}
+				return { id: 'raw-payload-owned-delay', type: 0 };
+			});
+			const user = apiUser({ id: 'raw-payload-modal-user' });
+			const opener = bot.dispatch.clickButton('open-raw-payload-owned-rest', {
+				user,
+				allowSyntheticSource: true,
+			});
+
+			try {
+				await opener.untilModal();
+				const modal = await bot.dispatchInteraction(
+					modalSubmitInteraction({ customId: 'raw-payload-owned-rest-modal', user }),
+				);
+				await opener;
+
+				expect(bot.findAction(action => action.route === '/channels/raw-payload-owned-delay')?.dispatchId).toBe(
+					opener.dispatchId,
+				);
+				expect(modal.messages).toEqual(expect.arrayContaining([{ content: 'after raw payload owned REST' }]));
+				expect(modal.content).toBe('after raw payload owned REST');
+			} finally {
+				await bot.close();
+			}
+		});
+
+		test('raw modal payload ownership is isolated by user', async () => {
+			const alice = apiUser({ id: 'modal-owner-alice' });
+			const bob = apiUser({ id: 'modal-owner-bob' });
+
+			class AliceModalOpener extends ComponentCommand {
+				componentType = 'Button' as const;
+				filter(ctx: ComponentContext<'Button'>) {
+					return ctx.customId === 'open-alice-modal';
+				}
+				async run(ctx: ComponentContext<'Button'>) {
+					void ctx.client.channels.fetch('alice-owned-held');
+					await ctx.interaction.modal(new Modal().setCustomId('alice-modal').setTitle('Alice').setComponents([]), {
+						waitFor: 30_000,
+					});
+				}
+			}
+
+			class BobRawModal extends ModalCommand {
+				filter(ctx: ModalContext) {
+					return ctx.customId === 'bob-raw-modal';
+				}
+				async run(ctx: ModalContext) {
+					await ctx.write({ content: `handled:${ctx.author.id}` });
+				}
+			}
+
+			const bot = await createMockBot({ components: [AliceModalOpener, BobRawModal] });
+			let release!: (value: { id: string; type: number }) => void;
+			bot.rest.intercept(
+				'GET',
+				'/channels/alice-owned-held',
+				() =>
+					new Promise(resolve => {
+						release = resolve;
+					}),
+			);
+			const aliceOpener = bot.dispatch.clickButton('open-alice-modal', {
+				user: alice,
+				allowSyntheticSource: true,
+			});
+
+			try {
+				await aliceOpener.untilModal();
+				const bobResult = await bot.dispatchInteraction(
+					modalSubmitInteraction({ customId: 'bob-raw-modal', user: bob }),
+				);
+
+				expect(bobResult.content).toBe(`handled:${bob.id}`);
+				expect(bot.rest.pendingRequests(action => action.route === '/channels/alice-owned-held')).toHaveLength(1);
+				expect(aliceOpener.isCompleted).toBe(false);
+			} finally {
+				release({ id: 'alice-owned-held', type: 0 });
+				await aliceOpener.timeoutModal();
+				await bot.settle();
+				await bot.close();
+			}
 		});
 
 		test('back-to-back same-user modal flows do not consume a stale modal entry', async () => {

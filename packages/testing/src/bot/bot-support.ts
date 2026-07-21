@@ -57,15 +57,15 @@ export function drainTick(): Promise<void> {
 
 /**
  * Fail fast if the global setImmediate the drain relies on has been faked since module load. vi.useFakeTimers()
- * with its default toFake replaces globalThis.setImmediate, which deadlocks {@link drainTick} (it would spin to
- * the iteration cap and return non-quiescent). Only trips when a real setImmediate was captured at load and the
+ * with its default toFake replaces globalThis.setImmediate, which makes the drain spin to its iteration cap.
+ * Only trips when a real setImmediate was captured at load and the
  * current global no longer matches it; on runtimes without setImmediate the guard is skipped.
  */
-export function assertRealSetImmediate(): void {
+export function assertRealSetImmediate(operation: string): void {
 	if (!capturedSetImmediate) return;
 	if (globalThis.setImmediate === capturedSetImmediate) return;
 	throw new Error(
-		'advanceTime/flushPending: global setImmediate has been replaced by fake timers, which deadlocks the ' +
+		`${operation}: global setImmediate has been replaced by fake timers, which deadlocks the ` +
 			"mock's async drain. Fake only the timers seyfert uses: " +
 			"vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }).",
 	);

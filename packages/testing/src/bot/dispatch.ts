@@ -16,43 +16,59 @@ export interface ModalWaitRegistration {
 	dispose(): void;
 }
 
+export interface DispatchOptions<T> {
+	rest: MockApiHandler;
+	client: Client;
+	userId?: string;
+	/** This dispatch's id, used to scope recorded actions and stateful ownership. */
+	dispatchId?: number;
+	executor: () => Promise<T>;
+	/** Resolves when seyfert registers a modal for the given userId; supplied by MockBot. */
+	modalWaiter?: (userId: string, dispatchId: number | undefined) => ModalWaitRegistration;
+	/** Submits a modal as this dispatch's user; supplied by MockBot so submitModal needs no bot handle. */
+	modalFiller?: (customId: string, fields: ModalFields) => Dispatch<DispatchResult>;
+	/** Clears same-user modal ownership after timeoutModal consumes the registry entry. */
+	modalCleaner?: (userId: string) => void;
+	/** Waits for a rendered component while racing the dispatch's completion. */
+	componentAwaiter?: (
+		customId: string,
+		dispatchId: number | undefined,
+		execution: Promise<unknown>,
+		timeoutMs?: number,
+	) => Promise<RecordedAction>;
+	/** Builds the action's result from the output recorded so far when a stateful session yields at input. */
+	snapshotter?: () => T;
+}
+
 /** Lazy, step-able handle exposed by the advanced `bot.dispatch.*` surface. */
 export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 	private execution?: Promise<T>;
 	private releasePending?: () => void;
 	private settled = false;
 	private completed = false;
+	private readonly rest: MockApiHandler;
+	private readonly clientRef: Client;
+	readonly userId: string | undefined;
+	readonly dispatchId: number | undefined;
+	private readonly executor: () => Promise<T>;
+	private readonly modalWaiter?: DispatchOptions<T>['modalWaiter'];
+	private readonly modalFiller?: DispatchOptions<T>['modalFiller'];
+	private readonly modalCleaner?: DispatchOptions<T>['modalCleaner'];
+	private readonly componentAwaiter?: DispatchOptions<T>['componentAwaiter'];
+	private readonly snapshotter?: DispatchOptions<T>['snapshotter'];
 
-	constructor(
-		private readonly rest: MockApiHandler,
-		private readonly clientRef: Client,
-		readonly userId: string | undefined,
-		private readonly executor: () => Promise<T>,
-		/** Resolves when seyfert registers a modal for the given userId; supplied by MockBot. */
-		private readonly modalWaiter?: (userId: string, dispatchId: number | undefined) => ModalWaitRegistration,
-		/**
-		 * This dispatch's id, so {@link until} can scope its gate to only this dispatch's recorded actions.
-		 * Optional: a gate created without an id stays unscoped (matches any dispatch's actions).
-		 */
-		readonly dispatchId?: number,
-		/** Submits a modal as this dispatch's user; supplied by MockBot so {@link submitModal} needs no bot handle. */
-		private readonly modalFiller?: (customId: string, fields: ModalFields) => Dispatch<DispatchResult>,
-		/** Clears same-user modal ownership after timeoutModal consumes the registry entry. */
-		private readonly modalCleaner?: (userId: string) => void,
-		/**
-		 * Waits for the recorded action that renders a message bearing `customId` (event-driven, so it crosses
-		 * non-REST gaps like a DB query), raced against this dispatch completing without it; supplied by MockBot
-		 * so {@link untilComponent} needs no bot handle.
-		 */
-		private readonly componentAwaiter?: (
-			customId: string,
-			dispatchId: number | undefined,
-			execution: Promise<unknown>,
-			timeoutMs?: number,
-		) => Promise<RecordedAction>,
-		/** Builds the action's result from the output recorded so far when a stateful session yields at input. */
-		private readonly snapshotter?: () => T,
-	) {}
+	constructor(options: DispatchOptions<T>) {
+		this.rest = options.rest;
+		this.clientRef = options.client;
+		this.userId = options.userId;
+		this.dispatchId = options.dispatchId;
+		this.executor = options.executor;
+		this.modalWaiter = options.modalWaiter;
+		this.modalFiller = options.modalFiller;
+		this.modalCleaner = options.modalCleaner;
+		this.componentAwaiter = options.componentAwaiter;
+		this.snapshotter = options.snapshotter;
+	}
 
 	private start(): Promise<T> {
 		this.execution ??= this.executor().finally(() => {

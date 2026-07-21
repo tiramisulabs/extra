@@ -264,6 +264,17 @@ export function routeUrl<TRoute extends string>(
 	return route as `/${string}`;
 }
 
+const REDACTED_ROUTE_TOKEN = ':token';
+const WEBHOOK_TOKEN_SEGMENT = /(\/webhooks\/[^/?#]+\/)[^/?#]+/g;
+const INTERACTION_CALLBACK_TOKEN_SEGMENT = /(\/interactions\/[^/?#]+\/)[^/?#]+(?=\/callback(?:[/?#]|$))/g;
+
+/** Redact Discord credential-bearing path segments while preserving a useful diagnostic route shape. */
+export function redactRouteTokens(route: string): string {
+	return route
+		.replace(WEBHOOK_TOKEN_SEGMENT, `$1${REDACTED_ROUTE_TOKEN}`)
+		.replace(INTERACTION_CALLBACK_TOKEN_SEGMENT, `$1${REDACTED_ROUTE_TOKEN}`);
+}
+
 /**
  * Declarative shapes for synthetic GET fallbacks (an unhandled GET that matches no interceptor). First
  * matching row wins; routes with no row default to `{}`.
@@ -371,8 +382,8 @@ export class MockApiHandler extends ApiHandler {
 	private defaultInterceptors: Interceptor[] = [];
 	private gates: RequestGate[] = [];
 	private seq = 0;
-	/** In-flight request counts keyed by dispatchId (0 = no active dispatch). */
-	private readonly inFlight = new Map<number, number>();
+	/** Exact in-flight actions; dispatchId 0 denotes a request made outside an active dispatch. */
+	private readonly inFlight = new Set<RecordedAction>();
 	private readonly unhandled: 'warn' | 'error' | 'silent';
 	private readonly routeCache = new Map<string, { pattern: RegExp; names: string[] }>();
 	private readonly warnedRoutes = new Set<string>();
@@ -846,7 +857,7 @@ export class MockApiHandler extends ApiHandler {
 			response: undefined,
 		};
 		this.actions.push(action);
-		this.inFlight.set(dispatchId, (this.inFlight.get(dispatchId) ?? 0) + 1);
+		this.inFlight.add(action);
 		this.notifyListeners(action, 'pending');
 		const observer = this.observerRequest(url, requestOptions);
 		const notifier = this as unknown as ApiObserverNotifier;
@@ -894,26 +905,26 @@ export class MockApiHandler extends ApiHandler {
 				throw error;
 			}
 		} finally {
-			const remaining = (this.inFlight.get(dispatchId) ?? 1) - 1;
-			if (remaining > 0) this.inFlight.set(dispatchId, remaining);
-			else this.inFlight.delete(dispatchId);
+			this.inFlight.delete(action);
 		}
 	}
 
 	/**
-	 * Number of REST requests currently between request() entry and settlement (includes gated/parked requests).
-	 * With a dispatchId, counts only that dispatch's requests; without, the global total.
+	 * REST requests currently between request() entry and completion (includes gated/parked requests).
+	 * A numeric scope selects one dispatch; a predicate can express interaction-token ownership exactly.
 	 */
-	pendingRequestCount(dispatchId?: number): number {
-		if (dispatchId !== undefined) return this.inFlight.get(dispatchId) ?? 0;
-		let total = 0;
-		for (const count of this.inFlight.values()) total += count;
-		return total;
+	pendingRequests(scope?: number | ActionPredicate): RecordedAction[] {
+		if (scope === undefined) return [...this.inFlight];
+		if (typeof scope === 'number') return [...this.inFlight].filter(action => action.dispatchId === scope);
+		return [...this.inFlight].filter(scope);
 	}
 
-	hasPendingRequests(dispatchId?: number): boolean {
-		if (dispatchId !== undefined) return (this.inFlight.get(dispatchId) ?? 0) > 0;
-		return this.inFlight.size > 0;
+	pendingRequestCount(scope?: number | ActionPredicate): number {
+		return this.pendingRequests(scope).length;
+	}
+
+	hasPendingRequests(scope?: number | ActionPredicate): boolean {
+		return this.pendingRequests(scope).length > 0;
 	}
 
 	private resolveResponse(pending: PendingAction): unknown {

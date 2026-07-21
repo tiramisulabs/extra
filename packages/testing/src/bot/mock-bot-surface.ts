@@ -90,7 +90,6 @@ export abstract class MockBotSurface {
 	/** Component/modal detection capabilities, fixed at install time from the client's component surface. */
 	protected canDetectComponentCommand = false;
 	protected canDetectCollector = false;
-	protected canDetectComponentWait = false;
 	protected canDetectModalCollector = false;
 	protected readonly sessions: InteractionSessions;
 

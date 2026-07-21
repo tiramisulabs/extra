@@ -24,10 +24,36 @@ import {
 	type RecordedAction,
 	type RouteActionFilter,
 	type RouteMatcher,
+	redactRouteTokens,
 	type TypedMatchedAction,
 } from './rest';
 import { Routes } from './routes';
 import { renderedReply } from './state';
+
+interface DrainWhileOptions {
+	operation: string;
+	pending: () => readonly RecordedAction[];
+	aborted?: () => boolean;
+	maxIterations?: number;
+	tickFirst?: boolean;
+}
+
+function drainExhaustedError(operation: string, iterations: number, pending: readonly RecordedAction[]): Error {
+	const pendingCount = pending.length;
+	const pendingLabel = `${pendingCount} pending REST request${pendingCount === 1 ? '' : 's'}`;
+	const pendingDetails =
+		pendingCount === 0
+			? 'The drain remained active without a currently pending REST request.'
+			: `Pending REST requests:\n${pending
+					.map(
+						action =>
+							`- dispatchId=${action.dispatchId ?? '(unknown)'} ${action.method} ${redactRouteTokens(action.route)}`,
+					)
+					.join('\n')}`;
+	return new Error(
+		`${operation}: async drain did not reach quiescence after ${iterations} iterations (${pendingLabel}).\n${pendingDetails}`,
+	);
+}
 
 export abstract class MockBotDispatchCore extends MockBotSurface {
 	protected abstract dispatchSubmitModal(
@@ -35,7 +61,11 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 		fields: ModalFields,
 		options?: RawModalSubmitOptions,
 	): Dispatch<DispatchResult>;
-	protected abstract runInteraction(payload: ApiInteractionPayload, dispatchId: number): Promise<DispatchResult>;
+	protected abstract runInteraction(
+		payload: ApiInteractionPayload,
+		dispatchId: number,
+		causalOwnerDispatchId?: number,
+	): Promise<DispatchResult>;
 	protected abstract snapshotInteraction(payload: ApiInteractionPayload, dispatchId: number): DispatchResult;
 
 	protected performStep<T>(dispatch: Dispatch<T>, sessionKey?: string, resumedOwnerDispatchId?: number): Promise<T> {
@@ -64,7 +94,12 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 	diagnostics(recentLimit = 20): BotDiagnostics {
 		const pending = this.dispatches
 			.filter(dispatch => !dispatch.isSettled && !dispatch.isCompleted)
-			.map(dispatch => ({ id: dispatch.userId, started: dispatch.started, settled: dispatch.isSettled }));
+			.map(dispatch => ({
+				dispatchId: dispatch.dispatchId,
+				userId: dispatch.userId,
+				started: dispatch.started,
+				settled: dispatch.isSettled,
+			}));
 		const actions = this.rest.actions;
 		const recentActions = recentLimit >= 0 ? actions.slice(Math.max(0, actions.length - recentLimit)) : [...actions];
 		return { pending, recentActions };
@@ -223,8 +258,9 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 	 * drain tick yields through the REAL setImmediate captured at module load, so faking globals cannot hang it.
 	 */
 	async flushPending(scope?: Dispatch<unknown> | number): Promise<void> {
-		assertRealSetImmediate();
-		await this.drainActions(this.inferDrainDispatchId(scope));
+		const operation = 'MockBot.flushPending()';
+		assertRealSetImmediate(operation);
+		await this.drainActions(this.inferDrainDispatchId(scope), operation);
 	}
 
 	/**
@@ -242,43 +278,57 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 	 * intentionally starts observable work without awaiting it.
 	 */
 	async settle(): Promise<void> {
-		assertRealSetImmediate();
-		await this.drainActions(undefined);
+		const operation = 'MockBot.settle()';
+		assertRealSetImmediate(operation);
+		await this.drainActions(undefined, operation);
 	}
 
 	/**
 	 * The single quiescence engine behind every drain: yield macrotasks until the relevant recorded-action count
 	 * stops changing AND nothing is in flight, bounded by an iteration cap (not wall-clock, so it terminates under
-	 * frozen fake timers). `count`/`hasPending` scope what "quiet" means; `aborted` stops early; `tickFirst` yields
-	 * before the first measurement (the flushPending shape) vs after (the until-quiescent shape).
+	 * frozen fake timers). Exhausting the cap throws with the operation and pending REST requests in its
+	 * diagnostics. `count`/`hasPending` scope what "quiet" means; `aborted` stops early; `tickFirst` yields before
+	 * the first measurement (the flushPending shape) vs after (the until-quiescent shape).
 	 */
-	protected async drainWhile(
-		count: () => number,
-		hasPending: () => boolean,
-		opts: { aborted?: () => boolean; maxIterations?: number; tickFirst?: boolean } = {},
-	): Promise<void> {
-		const { aborted, maxIterations = DRAIN_MAX_ITERATIONS, tickFirst = false } = opts;
+	protected async drainWhile(count: () => number, hasPending: () => boolean, opts: DrainWhileOptions): Promise<void> {
+		const { aborted, maxIterations = DRAIN_MAX_ITERATIONS, operation, pending, tickFirst = false } = opts;
 		let lastCount = -1;
 		let iterations = 0;
-		while (!aborted?.()) {
-			if (tickFirst) await drainTick();
+		while (true) {
+			if (aborted?.()) return;
+			if (tickFirst) {
+				await drainTick();
+				if (aborted?.()) return;
+			}
 			const current = count();
 			if (current === lastCount && !hasPending()) return;
 			lastCount = current;
-			if (++iterations > maxIterations) return;
-			if (!tickFirst) await drainTick();
+			iterations++;
+			if (iterations >= maxIterations) throw drainExhaustedError(operation, iterations, pending());
+			if (!tickFirst) {
+				await drainTick();
+				if (aborted?.()) return;
+			}
 		}
 	}
 
-	protected async drainActions(dispatchId: number | undefined): Promise<void> {
+	protected async drainActions(dispatchId: number | undefined, operation: string): Promise<void> {
 		await this.drainWhile(
 			() =>
 				dispatchId === undefined
 					? this.rest.actions.length
 					: this.rest.actions.filter(action => action.dispatchId === dispatchId).length,
 			() => this.rest.hasPendingRequests(dispatchId),
-			{ tickFirst: true },
+			{
+				operation,
+				pending: () => this.pendingRestActions(dispatchId),
+				tickFirst: true,
+			},
 		);
+	}
+
+	private pendingRestActions(dispatchId?: number): RecordedAction[] {
+		return this.rest.pendingRequests(dispatchId);
 	}
 
 	/**
@@ -300,11 +350,12 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 					'and pass timers:{ advance: ms => vi.advanceTimersByTime(ms) } to createMockBot.',
 			);
 		}
-		assertRealSetImmediate();
+		const operation = `MockBot.advanceTime(${ms})`;
+		assertRealSetImmediate(operation);
 		const dispatchId = this.inferDrainDispatchId(scope);
 		await this.timers.advance(ms);
 		this.virtualNowMs += ms;
-		await this.flushPending(dispatchId);
+		await this.drainActions(dispatchId, operation);
 	}
 
 	/** Resolve the invoking user for a dispatch the same way {@link dispatchVia} does: explicit > id shorthand > default. */
@@ -451,29 +502,29 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 		const dispatchId = nextDispatchId();
 		let payload: ApiInteractionPayload | undefined;
 		return this.track(
-			new Dispatch<R>(
-				this.rest,
-				this.client,
+			new Dispatch<R>({
+				rest: this.rest,
+				client: this.client,
 				userId,
-				async () => {
+				executor: async () => {
 					payload = await buildPayload();
 					const result = await this.runInteraction(payload, dispatchId);
 					return (wrapResult ? wrapResult(result) : result) as R;
 				},
-				(id, ownerDispatchId) => this.onModalRegistered(id, ownerDispatchId),
+				modalWaiter: (id, ownerDispatchId) => this.onModalRegistered(id, ownerDispatchId),
 				dispatchId,
-				user ? (customId, fields) => this.dispatchSubmitModal(customId, fields, { user }) : undefined,
-				id => this.modalOwners.delete(id),
-				(customId, scopeId, execution, timeoutMs) =>
+				modalFiller: user ? (customId, fields) => this.dispatchSubmitModal(customId, fields, { user }) : undefined,
+				modalCleaner: id => this.modalOwners.delete(id),
+				componentAwaiter: (customId, scopeId, execution, timeoutMs) =>
 					this.awaitRenderedComponent(customId, scopeId, execution, timeoutMs),
-				() => {
+				snapshotter: () => {
 					if (!payload) {
 						throw new TypeError('The deferred interaction has not built its payload yet.');
 					}
 					const result = this.snapshotInteraction(payload, dispatchId);
 					return (wrapResult ? wrapResult(result) : result) as R;
 				},
-			),
+			}),
 		);
 	}
 
@@ -481,22 +532,31 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 		this.assertOpen('dispatchInteraction');
 		const user = payload.member?.user ?? payload.user;
 		const userId = user?.id;
+		const causalOwnerDispatchId = this.consumeCausalModalOwner(payload, userId);
 		const dispatchId = nextDispatchId();
 		return this.track(
-			new Dispatch(
-				this.rest,
-				this.client,
+			new Dispatch({
+				rest: this.rest,
+				client: this.client,
 				userId,
-				() => this.runInteraction(payload, dispatchId),
-				(id, ownerDispatchId) => this.onModalRegistered(id, ownerDispatchId),
+				executor: () => this.runInteraction(payload, dispatchId, causalOwnerDispatchId),
+				modalWaiter: (id, ownerDispatchId) => this.onModalRegistered(id, ownerDispatchId),
 				dispatchId,
-				user ? (customId, fields) => this.dispatchSubmitModal(customId, fields, { user }) : undefined,
-				id => this.modalOwners.delete(id),
-				(customId, scopeId, execution, timeoutMs) =>
+				modalFiller: user ? (customId, fields) => this.dispatchSubmitModal(customId, fields, { user }) : undefined,
+				modalCleaner: id => this.modalOwners.delete(id),
+				componentAwaiter: (customId, scopeId, execution, timeoutMs) =>
 					this.awaitRenderedComponent(customId, scopeId, execution, timeoutMs),
-				() => this.snapshotInteraction(payload, dispatchId),
-			),
+				snapshotter: () => this.snapshotInteraction(payload, dispatchId),
+			}),
 		);
+	}
+
+	/** Resolve a modal submit's user-scoped opener before consuming the displayed modal definition. */
+	private consumeCausalModalOwner(payload: ApiInteractionPayload, userId: string | undefined): number | undefined {
+		if (payload.type !== InteractionType.ModalSubmit || userId === undefined) return undefined;
+		const owner = this.displayedModals.get(userId)?.dispatchId ?? this.modalOwners.get(userId);
+		this.consumeDisplayedModal(userId);
+		return owner;
 	}
 
 	protected async awaitRenderedComponent(
@@ -635,7 +695,7 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 	 * Wait until the mock REST surface stops changing: the recorded-action count must hold steady across a
 	 * macrotask AND no request may be in flight. This replaces a fixed single-tick guess so a denial guard whose
 	 * reply needs multiple async hops (or whose REST responder awaits) still records before the dispatch settles.
-	 * Bounded by `timeoutMs` so a guard that genuinely never replies cannot hang the dispatch.
+	 * Bounded by an iteration cap so a guard that genuinely never replies rejects instead of hanging the dispatch.
 	 */
 	protected async drainUntilQuiescent(
 		dispatchId: number | undefined,
@@ -644,30 +704,48 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 	): Promise<void> {
 		// Same guard as advanceTime/flushPending: if the user faked global setImmediate, this drain (reached via
 		// the middleware denial path too) would spin silently to the cap. Fail loud with the fix instead.
-		assertRealSetImmediate();
+		const operation = `middleware denial drain (dispatchId=${dispatchId ?? '(unknown)'})`;
+		assertRealSetImmediate(operation);
 		await this.drainWhile(
-			() => this.rest.actions.filter(action => action.dispatchId === dispatchId).length,
+			() =>
+				dispatchId === undefined
+					? this.rest.actions.length
+					: this.rest.actions.filter(action => action.dispatchId === dispatchId).length,
 			() => this.rest.hasPendingRequests(dispatchId),
-			{ aborted, maxIterations },
+			{
+				aborted,
+				maxIterations,
+				operation,
+				pending: () => this.pendingRestActions(dispatchId),
+			},
 		);
 	}
 
 	protected async drainTokenUntilQuiescent(
 		applicationId: string,
 		token: string,
-		interactionId?: string,
+		interactionId: string | undefined,
+		dispatchId: number,
+		causalOwnerDispatchId?: number,
 		maxIterations = DRAIN_MAX_ITERATIONS,
 	): Promise<void> {
-		assertRealSetImmediate();
+		const operation =
+			`modal submit drain (interactionId=${interactionId ?? '(unknown)'}, applicationId=${applicationId}, ` +
+			`dispatchId=${dispatchId}, ownerDispatchId=${causalOwnerDispatchId ?? '(none)'})`;
+		const ownsAction: ActionPredicate = action =>
+			action.dispatchId === dispatchId ||
+			(causalOwnerDispatchId !== undefined && action.dispatchId === causalOwnerDispatchId) ||
+			this.isInteractionWebhookActionFor(action, applicationId, token) ||
+			this.isInteractionCallbackActionFor(action, token, interactionId);
+		assertRealSetImmediate(operation);
 		await this.drainWhile(
-			() =>
-				this.rest.actions.filter(
-					action =>
-						this.isInteractionWebhookActionFor(action, applicationId, token) ||
-						this.isInteractionCallbackActionFor(action, token, interactionId),
-				).length,
-			() => this.rest.hasPendingRequests(),
-			{ maxIterations },
+			() => this.rest.actions.filter(ownsAction).length,
+			() => this.rest.hasPendingRequests(ownsAction),
+			{
+				maxIterations,
+				operation,
+				pending: () => this.rest.pendingRequests(ownsAction),
+			},
 		);
 	}
 
@@ -693,7 +771,6 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 		});
 		this.canDetectComponentCommand = capabilities.canDetectComponentCommand;
 		this.canDetectCollector = capabilities.canDetectCollector;
-		this.canDetectComponentWait = capabilities.canDetectComponentWait;
 		this.canDetectModalCollector = capabilities.canDetectModalCollector;
 	}
 

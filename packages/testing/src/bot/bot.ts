@@ -22,7 +22,7 @@ import { seedCachedRole, seedWorld } from './world';
 
 export type { CreatedResource } from './bot-support';
 export * from './contracts';
-export { Dispatch } from './dispatch';
+export { Dispatch, type DispatchOptions } from './dispatch';
 export { WORLD_EVENT_NAMES } from './world-events';
 
 /** Public facade kept in this module so the declaration entrypoint remains stable across internal collaborators. */

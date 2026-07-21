@@ -2,7 +2,7 @@ import { createPlugin } from 'seyfert';
 import { SeyfertError } from 'seyfert/lib/common';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
-import { DiscordErrors, MockApiHandler } from '../../src/bot/rest';
+import { DiscordErrors, MockApiHandler, redactRouteTokens } from '../../src/bot/rest';
 import { Routes } from '../../src/bot/routes';
 import { mockWorld } from '../../src/bot/world';
 
@@ -15,6 +15,16 @@ declare module 'seyfert' {
 }
 
 describe('MockApiHandler', () => {
+	test.each([
+		['/webhooks/application/SUPER-SECRET-TOKEN/messages/@original', '/webhooks/application/:token/messages/@original'],
+		['/interactions/interaction/SUPER-SECRET-TOKEN/callback', '/interactions/interaction/:token/callback'],
+		['/webhooks/standalone/SUPER-SECRET-TOKEN', '/webhooks/standalone/:token'],
+	])('redacts credential-bearing route segments in %s', (route, expected) => {
+		const diagnostic = redactRouteTokens(route);
+		expect(diagnostic).toBe(expected);
+		expect(diagnostic).not.toContain('SUPER-SECRET-TOKEN');
+	});
+
 	test('records requests and answers POST with a message-shaped echo', async () => {
 		const rest = new MockApiHandler({ onUnhandledRest: 'silent' });
 		const response = await rest.request<{ id: string; content: string }>('POST', '/channels/123/messages', {
