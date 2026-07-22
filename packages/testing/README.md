@@ -329,6 +329,25 @@ causal handlers finish, or when Seyfert registers the next real user-input
 checkpoint (a modal submission or `collector.waitFor(...)`) and that input is
 rendered. Merely rendering a component does not prematurely finish an action.
 
+Those two stopping points have different synchronization boundaries:
+
+- When the causal handlers finish, the action drains their REST work to
+  quiescence. This includes fire-and-forget REST discovered across immediate
+  event-loop turns and sequential REST chains.
+- At a modal or component checkpoint, the action settles causal REST that has
+  already started, but it does not add an unconditional macrotask discovery
+  turn when the checkpoint is otherwise settled. This keeps a timer scheduled
+  immediately before that quiet checkpoint from advancing the parked flow
+  merely because the caller awaited the action. If an already-started REST
+  responder is still pending, the drain yields real event-loop turns so that
+  responder can finish; unrelated real timers may run during those required
+  turns.
+
+REST discovered after the handler result was built updates the live
+`restCalls()`, `bot.world`, `rendered(bot)`, and `rendered(actor)` views. It does
+not retroactively add entries to the returned result's `actions` or `messages`;
+that result remains an exact snapshot of its own dispatch.
+
 This means the next source-less click/select is resolved against the current
 actor's actionable output. It cannot silently click a component left over from
 an older step. `clickButton()` and `selectMenu()` reject when the component was
@@ -361,14 +380,17 @@ timeout-driven scenarios remain available through `bot.dispatch.*`.
   `DispatchResult`.
 - REST work awaited by the handler is classified into `result.edits`,
   `result.followups`, and `result.actions`.
-- For detached work the handler did not await, such as timers or
-  fire-and-forget REST calls, call `settle()` before reading `restCalls()`.
+- Completed stateful actions automatically drain their observable causal REST
+  into the live journal. `settle()` is reserved for deliberately detached work
+  outside that boundary, such as a raw dispatch, direct REST, or work released
+  through an external promise after the action/checkpoint returned.
 - Unhandled command/component/modal errors reject the action by default. Set
   `onCommandError: 'capture'` to inspect them on `result.error` instead.
 
 | After you awaited | Guaranteed |
 |---|---|
-| A stateful action | causal completion, or the next rendered input checkpoint; that actor's current state updated |
+| A completed stateful action | causal handlers and their observable REST reached quiescence; live actor state updated |
+| A stateful input checkpoint | the modal/component is rendered and already-started causal REST settled; no unconditional macrotask discovery |
 | `rendered(bot)` | output from the latest step of the most recently active actor |
 | `rendered(actor)` | output from that actor's latest step |
 | `rendered(result)` | output belonging to that exact result, even after later steps |
@@ -378,7 +400,7 @@ timeout-driven scenarios remain available through `bot.dispatch.*`.
 | `bot.world` | persistent Discord-side entities and messages, including writes from earlier steps |
 | `await bot.dispatch.<action>(...)` | raw handler completion |
 | `raw.until(...)` resolved | the matched REST call started; `response` is still `undefined` while gated |
-| `await bot.settle()` | observable detached REST/timer work reached quiescence |
+| `await bot.settle()` | currently observable, unscoped detached REST/timer work reached quiescence |
 
 ### Step-by-step flows
 
@@ -628,7 +650,8 @@ Collector `idle`/`timeout` and modal `waitFor` use seyfert's bare global
 `setTimeout`, which the mock can't own. Bridge your runner's fake clock through the
 `timers` callback — the package imports no test runner, so the bridge is yours —
 then `bot.advanceTime(ms)` fires them. Fake only `setTimeout`/`clearTimeout`:
-faking `setImmediate` deadlocks the mock's drain.
+`advanceTime()` and `settle()` require the real global `setImmediate` and fail
+fast when a runner replaces it.
 
 ```ts
 import { afterEach, vi } from 'vitest';
@@ -649,6 +672,15 @@ await bot.advanceTime(60_000); // collector onStop('idle') runs now, no real wai
 
 Jest's fake timers use the inverted option — `jest.useFakeTimers({ doNotFake: ['setImmediate'] })`
 keeps `setImmediate` real — with `timers: { advance: ms => jest.advanceTimersByTime(ms) }`.
+
+If the runner fakes `setImmediate` and only an otherwise-unstarted detached
+callback is waiting on it, a completed stateful action still resolves without
+executing that callback. This does not apply when awaited handler code or an
+already-started REST responder is itself waiting on the fake immediate: that
+promise remains pending until the runner advances it. Advance fake timers with
+the test runner, restore real timers, and then inspect or settle as needed.
+`advanceTime()` and `settle()` keep their real-`setImmediate` guard instead of
+advancing a runner's global fake implicitly.
 
 ### REST calls
 
@@ -688,11 +720,16 @@ typed and recorded as `undefined`; use `settled` and `error` rather than
 response presence when asserting completion.
 
 `restCalls()` only reads; it does not wait or alter the flow. Await the stateful
-action first. If the handler intentionally detached timers or REST work, call
-`await bot.settle()` before reading. Each read is an independent snapshot; read
-again after pending work settles to observe its populated response. `reset()`
-starts a new journal. Use `dispatch.until(...)` instead when a low-level
-concurrency test must stop on an in-flight REST call.
+action first; ordinary completed actions already settle their causal REST.
+Calls made through `bot.dispatch.*` keep raw handler-completion timing, and
+direct `bot.rest.*` calls are not adopted by an unrelated actor action. Work
+hidden behind an external promise that has not produced a REST call is likewise
+not observable to the causal drain. Await that promise directly, advance the
+responsible timer/gate, or use `await bot.settle()` for the remaining observable
+unscoped work. Each read is an independent snapshot; read again after pending
+work settles to observe its populated response. `reset()` starts a new journal.
+Use `dispatch.until(...)` instead when a low-level concurrency test must stop on
+an in-flight REST call.
 
 `result.actions` deliberately remains the exact raw REST trail attributed to a
 returned result. It stays tied to that result even after a newer actor step

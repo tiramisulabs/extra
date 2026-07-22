@@ -51,6 +51,15 @@ interface StepScope {
 	dispatchIds: ReadonlySet<number>;
 }
 
+interface StepRestScope {
+	afterSeq: number;
+	dispatchIds: ReadonlySet<number>;
+}
+
+type StepRestPhase = 'completed' | 'checkpoint';
+
+type StepRestDrain = (scope: StepRestScope, phase: StepRestPhase) => Promise<void>;
+
 interface SessionEvent {
 	version: number;
 	ownerDispatchId?: number;
@@ -150,8 +159,9 @@ export class InteractionSessions {
 
 	async perform<T>(
 		dispatch: Dispatch<T>,
-		key = defaultSessionKey(dispatch.userId),
-		resumedOwnerDispatchId?: number,
+		key: string,
+		resumedOwnerDispatchId: number | undefined,
+		drainRest: StepRestDrain,
 	): Promise<T> {
 		const state = this.state(key);
 		const activeBefore = this.active(state);
@@ -167,7 +177,9 @@ export class InteractionSessions {
 
 		this.throwPendingError(state);
 		this.move(dispatch as Dispatch<unknown>, key);
-		const startIndex = this.deps.actions().length;
+		const actionsAtStart = this.deps.actions();
+		const startIndex = actionsAtStart.length;
+		const afterSeq = actionsAtStart.at(-1)?.seq ?? -1;
 		const baseline = state.version;
 		const causalDispatches = new Set<Dispatch<unknown>>([
 			dispatch as Dispatch<unknown>,
@@ -208,6 +220,21 @@ export class InteractionSessions {
 					if (dispatch.dispatchId !== undefined) state.errors.delete(dispatch.dispatchId);
 					throw error;
 				}
+			}
+			this.throwPendingError(state, causalIds);
+			try {
+				await drainRest(
+					{
+						afterSeq,
+						dispatchIds: causalIds,
+					},
+					outcome.kind,
+				);
+			} catch (drainError) {
+				// A handler can fail while checkpoint REST is settling. Preserve the application error as the
+				// primary failure instead of masking it with a harness quiescence diagnostic.
+				this.throwPendingError(state, causalIds);
+				throw drainError;
 			}
 			this.commitStep(state, startIndex, causalIds);
 			this.throwPendingError(state, causalIds);

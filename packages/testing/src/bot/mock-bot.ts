@@ -404,6 +404,7 @@ export class MockBot extends MockBotDispatchCore {
 		classOptions?: SlashClassOptions<C>,
 		sessionKey?: string,
 	): Promise<DispatchResult> {
+		this.assertNoResetInProgress('stateful step');
 		return this.performStep(this.createSlashDispatch(commandOrOptions, classOptions), sessionKey);
 	}
 
@@ -526,6 +527,7 @@ export class MockBot extends MockBotDispatchCore {
 	}
 
 	private userMenuInSession(options: UserCommandInteractionOptions, sessionKey?: string): Promise<UserMenuResult> {
+		this.assertNoResetInProgress('stateful step');
 		return this.performStep(this.createUserMenuDispatch(options), sessionKey);
 	}
 
@@ -549,6 +551,7 @@ export class MockBot extends MockBotDispatchCore {
 		options: MessageCommandInteractionOptions,
 		sessionKey?: string,
 	): Promise<MessageMenuResult> {
+		this.assertNoResetInProgress('stateful step');
 		return this.performStep(this.createMessageMenuDispatch(options), sessionKey);
 	}
 
@@ -612,6 +615,7 @@ export class MockBot extends MockBotDispatchCore {
 		options: MenuOptions<C> = {},
 		sessionKey?: string,
 	): Promise<MenuResultFor<C>> {
+		this.assertNoResetInProgress('stateful step');
 		const instance = new command();
 		if (instance.type === ApplicationCommandType.User) {
 			return this.userMenuInSession(
@@ -656,6 +660,7 @@ export class MockBot extends MockBotDispatchCore {
 		options: EntryPointInteractionOptions = {},
 		sessionKey?: string,
 	): Promise<DispatchResult> {
+		this.assertNoResetInProgress('stateful step');
 		return this.performStep(this.createEntryPointDispatch(options), sessionKey);
 	}
 
@@ -675,6 +680,7 @@ export class MockBot extends MockBotDispatchCore {
 		options: Omit<ButtonInteractionOptions, 'customId' | 'message'> & ComponentSourceOptions = {},
 		sessionKeyOverride?: string,
 	): Promise<DispatchResult> {
+		this.assertNoResetInProgress('stateful step');
 		return this.performComponentStep('clickButton', customId, options, sessionKeyOverride, prepared =>
 			this.dispatchClickButton(customId, prepared),
 		);
@@ -727,6 +733,7 @@ export class MockBot extends MockBotDispatchCore {
 		options: Omit<SelectMenuInteractionOptions, 'customId' | 'values' | 'message'> & ComponentSourceOptions = {},
 		sessionKeyOverride?: string,
 	): Promise<DispatchResult> {
+		this.assertNoResetInProgress('stateful step');
 		return this.performComponentStep(
 			'selectMenu',
 			customId,
@@ -850,6 +857,7 @@ export class MockBot extends MockBotDispatchCore {
 		extra: Omit<ModalSubmitInteractionOptions, 'customId' | 'fields'> = {},
 		sessionKeyOverride?: string,
 	): Promise<DispatchResult> {
+		this.assertNoResetInProgress('stateful step');
 		const continuation = this.continuationOptions(extra, sessionKeyOverride);
 		const sessionKey = continuation.sessionKey;
 		const userId = continuation.options.user?.id ?? this.defaultUser.id;
@@ -1136,30 +1144,36 @@ export class MockBot extends MockBotDispatchCore {
 	 */
 	async reset(): Promise<void> {
 		this.assertOpen('reset');
-		const pendingInputError = await this.finishPendingInputs();
-		const stillRunning = this.dispatches.filter(dispatch => dispatch.started && !dispatch.isCompleted);
-		if (stillRunning.length > 0) {
-			endInputShutdown(this.client);
+		this.beginReset();
+		try {
+			const pendingInputError = await this.finishPendingInputs();
+			const stillRunning = this.dispatches.filter(dispatch => dispatch.started && !dispatch.isCompleted);
+			if (stillRunning.length > 0) {
+				if (pendingInputError !== undefined) throw pendingInputError;
+				const ids = stillRunning.map(dispatch => dispatch.dispatchId ?? '(unknown)').join(', ');
+				throw new TypeError(
+					`reset: cannot clear state while non-input dispatches are still running (${ids}). ` +
+						'Await those dispatches before resetting the bot.',
+				);
+			}
+			this.rest.clearActions();
+			this.rest.releasePending();
+			this.rest.resetInterceptors();
+			this.dispatches.length = 0;
+			this.clearInputRuntime();
+			this.unregisteredMemberWarnings.clear();
+			this.lastInteractionMessage = undefined;
 			if (pendingInputError !== undefined) throw pendingInputError;
-			const ids = stillRunning.map(dispatch => dispatch.dispatchId ?? '(unknown)').join(', ');
-			throw new TypeError(
-				`reset: cannot clear state while non-input dispatches are still running (${ids}). ` +
-					'Await those dispatches before resetting the bot.',
-			);
+		} finally {
+			endInputShutdown(this.client);
+			this.endReset();
 		}
-		this.rest.clearActions();
-		this.rest.releasePending();
-		this.rest.resetInterceptors();
-		this.dispatches.length = 0;
-		this.clearInputRuntime();
-		this.unregisteredMemberWarnings.clear();
-		this.lastInteractionMessage = undefined;
-		endInputShutdown(this.client);
-		if (pendingInputError !== undefined) throw pendingInputError;
 	}
 
 	async close(): Promise<void> {
 		if (this.closed) return;
+		this.assertNoResetInProgress('close');
+		this.assertNoActiveStatefulStep('close');
 		this.closed = true;
 		const unstarted = this.dispatches.filter(dispatch => !dispatch.started);
 		if (unstarted.length) {

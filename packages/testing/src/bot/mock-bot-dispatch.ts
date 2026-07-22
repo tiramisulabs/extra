@@ -28,24 +28,45 @@ interface DrainWhileOptions {
 	tickFirst?: boolean;
 }
 
+type RestActionScope = number | ActionPredicate | undefined;
+
+interface StatefulRestScope {
+	afterSeq: number;
+	dispatchIds: ReadonlySet<number>;
+}
+
+type StatefulRestPhase = 'completed' | 'checkpoint';
+
+const DRAIN_DIAGNOSTIC_REQUEST_LIMIT = 20;
+const CHECKPOINT_STABLE_MICROTASK_TURNS = 2;
+
 function drainExhaustedError(operation: string, iterations: number, pending: readonly RecordedAction[]): Error {
 	const pendingCount = pending.length;
 	const pendingLabel = `${pendingCount} pending REST request${pendingCount === 1 ? '' : 's'}`;
+	const shown = pending.slice(0, DRAIN_DIAGNOSTIC_REQUEST_LIMIT);
+	const omittedCount = pendingCount - shown.length;
+	const omitted =
+		omittedCount > 0
+			? `\n... ${omittedCount} additional pending REST request${omittedCount === 1 ? '' : 's'} omitted.`
+			: '';
 	const pendingDetails =
 		pendingCount === 0
 			? 'The drain remained active without a currently pending REST request.'
-			: `Pending REST requests:\n${pending
+			: `Pending REST requests:\n${shown
 					.map(
 						action =>
 							`- dispatchId=${action.dispatchId ?? '(unknown)'} ${action.method} ${redactRouteTokens(action.route)}`,
 					)
-					.join('\n')}`;
+					.join('\n')}${omitted}`;
 	return new Error(
 		`${operation}: async drain did not reach quiescence after ${iterations} iterations (${pendingLabel}).\n${pendingDetails}`,
 	);
 }
 
 export abstract class MockBotDispatchCore extends MockBotSurface {
+	private readonly activeStatefulSteps = new Set<Promise<unknown>>();
+	private resetInProgress = false;
+
 	protected abstract dispatchSubmitModal(
 		customId: string,
 		fields: ModalFields,
@@ -59,11 +80,100 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 	protected abstract snapshotInteraction(payload: ApiInteractionPayload, dispatchId: number): DispatchResult;
 
 	protected performStep<T>(dispatch: Dispatch<T>, sessionKey?: string, resumedOwnerDispatchId?: number): Promise<T> {
-		return this.sessions.perform(
-			dispatch,
-			sessionKey ?? this.sessions.keyForUser(dispatch.userId),
-			resumedOwnerDispatchId,
+		this.assertNoResetInProgress('stateful step');
+		return this.trackStatefulStep(
+			this.sessions.perform(
+				dispatch,
+				sessionKey ?? this.sessions.keyForUser(dispatch.userId),
+				resumedOwnerDispatchId,
+				(scope, phase) => this.drainStatefulRest(scope, phase),
+			),
 		);
+	}
+
+	protected beginReset(): void {
+		this.assertNoResetInProgress('reset');
+		this.assertNoActiveStatefulStep('reset');
+		this.resetInProgress = true;
+	}
+
+	protected endReset(): void {
+		this.resetInProgress = false;
+	}
+
+	protected assertNoResetInProgress(operation: 'reset' | 'close' | 'stateful step'): void {
+		if (!this.resetInProgress) return;
+		throw new TypeError(`${operation}: cannot start while reset is in progress. Await reset() before retrying.`);
+	}
+
+	protected assertNoActiveStatefulStep(operation: 'reset' | 'close'): void {
+		if (this.activeStatefulSteps.size === 0) return;
+		throw new TypeError(
+			`${operation}: cannot clear state while a stateful step is settling causal REST or otherwise in progress. ` +
+				'Await that action before retrying.',
+		);
+	}
+
+	private trackStatefulStep<T>(step: Promise<T>): Promise<T> {
+		this.activeStatefulSteps.add(step);
+		void step.then(
+			() => this.activeStatefulSteps.delete(step),
+			() => this.activeStatefulSteps.delete(step),
+		);
+		return step;
+	}
+
+	private async drainStatefulRest(scope: StatefulRestScope, phase: StatefulRestPhase): Promise<void> {
+		const ownsAction: ActionPredicate = action =>
+			action.seq > scope.afterSeq && action.dispatchId !== undefined && scope.dispatchIds.has(action.dispatchId);
+		const dispatchIds = [...scope.dispatchIds].sort((left, right) => left - right).join(', ') || '(none)';
+		const operation = `stateful step causal REST drain (dispatchIds=${dispatchIds})`;
+		if (phase === 'checkpoint') {
+			await this.drainCheckpointRest(ownsAction, `${operation}, checkpoint`);
+			return;
+		}
+		// Deliberately skip assertRealSetImmediate here. The internal tick uses the real function captured at module
+		// load; a runner-faked global setImmediate remains delayed work for advanceTime() instead of breaking every
+		// ordinary high-level action.
+		await this.drainActions(ownsAction, operation);
+	}
+
+	/**
+	 * Settle REST already visible at a user-input checkpoint, including direct microtask children, without an
+	 * unconditional macrotask discovery turn that could advance the parked modal/component flow itself.
+	 */
+	private async drainCheckpointRest(ownsAction: ActionPredicate, operation: string): Promise<void> {
+		let lastCount = this.rest.actions.filter(ownsAction).length;
+		let stableMicrotaskTurns = 0;
+		let iterations = 0;
+		while (true) {
+			const pending = this.rest.pendingRequests(ownsAction);
+			if (pending.length > 0) {
+				stableMicrotaskTurns = 0;
+				iterations++;
+				if (iterations >= DRAIN_MAX_ITERATIONS) {
+					throw drainExhaustedError(operation, iterations, pending);
+				}
+				// A currently-started responder may itself need a macrotask to finish. Yield only while such a request
+				// exists; once the checkpoint surface is clear, discovery below is microtask-only.
+				await drainTick();
+				continue;
+			}
+
+			iterations++;
+			if (iterations >= DRAIN_MAX_ITERATIONS) {
+				throw drainExhaustedError(operation, iterations, this.rest.pendingRequests(ownsAction));
+			}
+			await Promise.resolve();
+			const currentCount = this.rest.actions.filter(ownsAction).length;
+			if (currentCount === lastCount && !this.rest.hasPendingRequests(ownsAction)) {
+				stableMicrotaskTurns++;
+				if (stableMicrotaskTurns >= CHECKPOINT_STABLE_MICROTASK_TURNS) return;
+				continue;
+			}
+			lastCount = currentCount;
+			stableMicrotaskTurns = 0;
+		}
 	}
 
 	/**
@@ -236,23 +346,25 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 		}
 	}
 
-	protected async drainActions(dispatchId: number | undefined, operation: string): Promise<void> {
+	protected async drainActions(scope: RestActionScope, operation: string): Promise<void> {
 		await this.drainWhile(
 			() =>
-				dispatchId === undefined
+				scope === undefined
 					? this.rest.actions.length
-					: this.rest.actions.filter(action => action.dispatchId === dispatchId).length,
-			() => this.rest.hasPendingRequests(dispatchId),
+					: typeof scope === 'number'
+						? this.rest.actions.filter(action => action.dispatchId === scope).length
+						: this.rest.actions.filter(scope).length,
+			() => this.rest.hasPendingRequests(scope),
 			{
 				operation,
-				pending: () => this.pendingRestActions(dispatchId),
+				pending: () => this.pendingRestActions(scope),
 				tickFirst: true,
 			},
 		);
 	}
 
-	private pendingRestActions(dispatchId?: number): RecordedAction[] {
-		return this.rest.pendingRequests(dispatchId);
+	private pendingRestActions(scope?: number | ActionPredicate): RecordedAction[] {
+		return this.rest.pendingRequests(scope);
 	}
 
 	/**

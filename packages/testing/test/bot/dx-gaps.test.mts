@@ -209,14 +209,14 @@ describe('#6 bot.settle() drains detached background work', () => {
 		}
 	}
 
-	test('background REST after the reply settles only after bot.settle()', async () => {
+	test('a high-level action drains immediate causal background REST before resolving', async () => {
 		const bot = await createMockBot({ commands: [BgCommand] });
 
 		await bot.slash({ name: 'bg' });
-		expect(bot.restCalls(Routes.createMessage).filter(call => call.body?.content === 'background')).toHaveLength(0);
-
-		await bot.settle();
-		expect(bot.restCalls(Routes.createMessage).filter(call => call.body?.content === 'background')).toHaveLength(1);
+		const background = bot.restCalls(Routes.createMessage).filter(call => call.body?.content === 'background');
+		expect(background).toHaveLength(1);
+		expect(background[0]).toMatchObject({ settled: true, body: { content: 'background' } });
+		expect(background[0]?.error).toBeUndefined();
 
 		await bot.close();
 	});
@@ -234,13 +234,12 @@ describe('#6 bot.settle() drains detached background work', () => {
 		);
 
 		try {
-			await bot.slash({ name: 'retained-rest' });
-			const error = await bot.settle().catch(cause => cause);
+			const error = await bot.slash({ name: 'retained-rest' }).catch(cause => cause);
 
 			expect(error).toBeInstanceOf(Error);
 			expect((error as Error).cause).toBeUndefined();
 			const diagnostic = (error as Error).message;
-			expect(diagnostic).toMatch(/MockBot\.settle\(\)/);
+			expect(diagnostic).toMatch(/stateful step|causal REST/i);
 			expect(diagnostic).toMatch(/1000 iterations/);
 			expect(diagnostic).toMatch(/1 pending REST request/);
 			expect(diagnostic).toMatch(/dispatchId=\d+/);

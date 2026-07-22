@@ -26,7 +26,7 @@ import {
 } from '../../src/bot/bot';
 import { type ApiMessage, type ApiUser, apiMember, apiMessage, apiUser } from '../../src/bot/payloads';
 import { mockMember, mockUser } from '../../src/factories';
-import { ReportUser } from './_setup';
+import { GreetCommand, ReportUser } from './_setup';
 
 /** Compile-time assertion that the argument is assignable to `Expected`; the typed parameter does the checking. */
 function expectAssignable<Expected>(_value: Expected): void {}
@@ -57,10 +57,13 @@ expectAssignable<never>(undefined as never as UntypedBuiltInRoute);
 
 function assertStatefulInteractionTypes(bot: MockBot): void {
 	expectAssignable<Promise<DispatchResult>>(bot.slash({ name: 'type-only' }));
+	expectAssignable<Promise<DispatchResult>>(bot.slash(GreetCommand, { options: { name: 'type-only' } }));
 	expectAssignable<Promise<DispatchResult>>(bot.submitModal('type-only'));
 	expectAssignable<Promise<DispatchResult>>(bot.clickButton('type-only'));
+	expectAssignable<Promise<DispatchResult>>(bot.selectMenu('type-only', ['value']));
 	expectAssignable<Promise<UserMenuResult>>(bot.userMenu({ name: 'type-only' }));
 	expectAssignable<Promise<MessageMenuResult>>(bot.messageMenu({ name: 'type-only' }));
+	expectAssignable<Promise<UserMenuResult>>(bot.menu(ReportUser, { target: apiUser({ username: 'spammer' }) }));
 	expectAssignable<Promise<DispatchResult>>(bot.entryPoint({ name: 'type-only' }));
 	expectAssignable<Promise<void>>(bot.reset());
 	expectAssignable<Dispatch<DispatchResult>>(bot.dispatch.slash({ name: 'type-only' }));
@@ -123,6 +126,11 @@ function assertStatefulInteractionTypes(bot: MockBot): void {
 	const actor = bot.actor({ user: apiUser() });
 	expectAssignable<RestCalls>(actor.restCalls);
 	expectAssignable<readonly RestCall[]>(actor.restCalls());
+	expectAssignable<Promise<DispatchResult>>(actor.slash({ name: 'type-only' }));
+	expectAssignable<Promise<DispatchResult>>(actor.slash(GreetCommand, { options: { name: 'type-only' } }));
+	expectAssignable<Promise<DispatchResult>>(actor.submitModal('type-only'));
+	expectAssignable<Promise<DispatchResult>>(actor.clickButton('type-only'));
+	expectAssignable<Promise<DispatchResult>>(actor.selectMenu('type-only', ['value']));
 	expectAssignable<Promise<UserMenuResult>>(actor.userMenu({ name: 'type-only' }));
 	expectAssignable<Promise<MessageMenuResult>>(actor.messageMenu({ name: 'type-only' }));
 	expectAssignable<Promise<DispatchResult>>(actor.entryPoint({ name: 'type-only' }));
