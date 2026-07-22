@@ -76,7 +76,6 @@ export interface RawView<T = unknown> {
 }
 
 export interface RawOutput {
-	actions(): readonly RecordedAction[];
 	messages(): readonly RawView[];
 	modals(): readonly RawView[];
 }
@@ -457,7 +456,6 @@ export interface CanonicalModal {
 export interface CanonicalOutput {
 	messages: CanonicalMessage[];
 	modals: CanonicalModal[];
-	actions: readonly RecordedAction[];
 }
 
 export interface Scope {

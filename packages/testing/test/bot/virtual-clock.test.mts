@@ -8,12 +8,16 @@ import {
 	Declare,
 	Label,
 	Modal,
+	ModalCommand,
+	type ModalContext,
 	TextInput,
 } from 'seyfert';
 import { ButtonStyle, TextInputStyle } from 'seyfert/lib/types';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
+import { modalSubmitInteraction } from '../../src/bot/interactions';
 import { apiUser } from '../../src/bot/payloads';
+import { Routes } from '../../src/bot/routes';
 import { mockWorld } from '../../src/bot/world';
 
 // seyfert's collector idle/timeout and modal waitFor timers use the bare GLOBAL setTimeout, with no injection
@@ -28,7 +32,7 @@ describe('virtual clock', () => {
 	});
 
 	describe('event-driven untilModal', () => {
-		test('resolves the instant a modal is registered, then fillModal completes', async () => {
+		test('resolves the instant a modal is registered, then submitModal completes', async () => {
 			const submitted: string[] = [];
 
 			class FeedbackButton extends ComponentCommand {
@@ -55,18 +59,28 @@ describe('virtual clock', () => {
 
 			const bot = await createMockBot({ components: [FeedbackButton] });
 			const user = apiUser({ id: '777' });
+			await bot.rest.request('POST', '/channels/feedback-source/messages', {
+				body: {
+					components: [
+						{
+							type: 1,
+							components: [{ type: 2, style: 1, custom_id: 'open-feedback', label: 'Feedback' }],
+						},
+					],
+				},
+			});
+			const source = bot.rest.actions.at(-1);
+			if (!source) throw new Error('expected feedback source action');
 
-			const dispatch = bot.clickButton('open-feedback', { user, allowSyntheticSource: true });
-			await dispatch.untilModal();
-			const modal = await bot.fillModal('feedback-modal', { rating: '5' }, { user });
-			await dispatch;
+			await bot.clickButton('open-feedback', { user, source });
+			const modal = await bot.submitModal('feedback-modal', { rating: '5' }, { user });
 
 			expect(submitted).toEqual(['777']);
 			expect(modal.reply?.body).toMatchObject({ data: { content: 'thanks' } });
 			await bot.close();
 		});
 
-		test('dispatch.fillModal(...) runs the whole opener→submit→settle flow in one call', async () => {
+		test('raw dispatch.submitModal(...) runs the whole opener→submit→settle flow in one call', async () => {
 			const submitted: string[] = [];
 
 			class FeedbackButton extends ComponentCommand {
@@ -94,16 +108,16 @@ describe('virtual clock', () => {
 			const bot = await createMockBot({ components: [FeedbackButton] });
 			const user = apiUser({ id: '888' });
 
-			const modal = await bot
+			const modal = await bot.dispatch
 				.clickButton('open-feedback', { user, allowSyntheticSource: true })
-				.fillModal('feedback-modal', { rating: '5' });
+				.submitModal('feedback-modal', { rating: '5' });
 
 			expect(submitted).toEqual(['888']);
 			expect(modal.reply?.body).toMatchObject({ data: { content: 'thanks' } });
 			await bot.close();
 		});
 
-		test('dispatch.fillModal returns replies written after async opener continuation work', async () => {
+		test('raw dispatch.submitModal returns replies written after async opener continuation work', async () => {
 			class AsyncAfterWaitButton extends ComponentCommand {
 				componentType = 'Button' as const;
 				filter(ctx: ComponentContext<'Button'>) {
@@ -130,12 +144,154 @@ describe('virtual clock', () => {
 			const bot = await createMockBot({ components: [AsyncAfterWaitButton] });
 			const user = apiUser({ id: 'async-modal-user' });
 
-			const modal = await bot
+			const modal = await bot.dispatch
 				.clickButton('open-async-feedback', { user, allowSyntheticSource: true })
-				.fillModal('async-feedback-modal', { rating: '5' });
+				.submitModal('async-feedback-modal', { rating: '5' });
 
 			expect(modal.content).toBe('thanks after async work');
 			await bot.close();
+		});
+
+		test('raw dispatch.submitModal includes replies after awaited REST owned by the opener', async () => {
+			class OwnedRestAfterWaitButton extends ComponentCommand {
+				componentType = 'Button' as const;
+				filter(ctx: ComponentContext<'Button'>) {
+					return ctx.customId === 'open-owned-rest';
+				}
+				async run(ctx: ComponentContext<'Button'>) {
+					const submit = await ctx.interaction.modal(
+						new Modal().setCustomId('owned-rest-modal').setTitle('Owned REST').setComponents([]),
+						{ waitFor: 30_000 },
+					);
+					if (!submit) return;
+					await ctx.client.channels.fetch('owned-delay');
+					await submit.write({ content: 'after owned REST' });
+				}
+			}
+
+			const bot = await createMockBot({ components: [OwnedRestAfterWaitButton] });
+			bot.rest.intercept('GET', '/channels/owned-delay', async () => {
+				for (let index = 0; index < 5; index++) {
+					await new Promise<void>(resolve => setImmediate(resolve));
+				}
+				return { id: 'owned-delay', type: 0 };
+			});
+			const user = apiUser({ id: 'owned-rest-modal-user' });
+			const opener = bot.dispatch.clickButton('open-owned-rest', { user, allowSyntheticSource: true });
+
+			const modal = await opener.submitModal('owned-rest-modal');
+
+			expect(bot.rest.actions.find(action => action.route === '/channels/owned-delay')?.dispatchId).toBe(
+				opener.dispatchId,
+			);
+			expect(modal.messages).toEqual(expect.arrayContaining([{ content: 'after owned REST' }]));
+			expect(modal.content).toBe('after owned REST');
+			await bot.close();
+		});
+
+		test('public dispatchInteraction infers modal owner before awaited opener REST', async () => {
+			class RawPayloadOwnedRestButton extends ComponentCommand {
+				componentType = 'Button' as const;
+				filter(ctx: ComponentContext<'Button'>) {
+					return ctx.customId === 'open-raw-payload-owned-rest';
+				}
+				async run(ctx: ComponentContext<'Button'>) {
+					const submit = await ctx.interaction.modal(
+						new Modal().setCustomId('raw-payload-owned-rest-modal').setTitle('Raw payload').setComponents([]),
+						{ waitFor: 30_000 },
+					);
+					if (!submit) return;
+					await ctx.client.channels.fetch('raw-payload-owned-delay');
+					await submit.write({ content: 'after raw payload owned REST' });
+				}
+			}
+
+			const bot = await createMockBot({ components: [RawPayloadOwnedRestButton] });
+			bot.rest.intercept('GET', '/channels/raw-payload-owned-delay', async () => {
+				for (let index = 0; index < 5; index++) {
+					await new Promise<void>(resolve => setImmediate(resolve));
+				}
+				return { id: 'raw-payload-owned-delay', type: 0 };
+			});
+			const user = apiUser({ id: 'raw-payload-modal-user' });
+			const opener = bot.dispatch.clickButton('open-raw-payload-owned-rest', {
+				user,
+				allowSyntheticSource: true,
+			});
+
+			try {
+				await opener.untilModal();
+				const modal = await bot.dispatchInteraction(
+					modalSubmitInteraction({ customId: 'raw-payload-owned-rest-modal', user }),
+				);
+				await opener;
+
+				expect(bot.rest.actions.find(action => action.route === '/channels/raw-payload-owned-delay')?.dispatchId).toBe(
+					opener.dispatchId,
+				);
+				expect(modal.messages).toEqual(expect.arrayContaining([{ content: 'after raw payload owned REST' }]));
+				expect(modal.content).toBe('after raw payload owned REST');
+			} finally {
+				await bot.close();
+			}
+		});
+
+		test('raw modal payload ownership is isolated by user', async () => {
+			const alice = apiUser({ id: 'modal-owner-alice' });
+			const bob = apiUser({ id: 'modal-owner-bob' });
+
+			class AliceModalOpener extends ComponentCommand {
+				componentType = 'Button' as const;
+				filter(ctx: ComponentContext<'Button'>) {
+					return ctx.customId === 'open-alice-modal';
+				}
+				async run(ctx: ComponentContext<'Button'>) {
+					void ctx.client.channels.fetch('alice-owned-held');
+					await ctx.interaction.modal(new Modal().setCustomId('alice-modal').setTitle('Alice').setComponents([]), {
+						waitFor: 30_000,
+					});
+				}
+			}
+
+			class BobRawModal extends ModalCommand {
+				filter(ctx: ModalContext) {
+					return ctx.customId === 'bob-raw-modal';
+				}
+				async run(ctx: ModalContext) {
+					await ctx.write({ content: `handled:${ctx.author.id}` });
+				}
+			}
+
+			const bot = await createMockBot({ components: [AliceModalOpener, BobRawModal] });
+			let release!: (value: { id: string; type: number }) => void;
+			bot.rest.intercept(
+				'GET',
+				'/channels/alice-owned-held',
+				() =>
+					new Promise(resolve => {
+						release = resolve;
+					}),
+			);
+			const aliceOpener = bot.dispatch.clickButton('open-alice-modal', {
+				user: alice,
+				allowSyntheticSource: true,
+			});
+
+			try {
+				await aliceOpener.untilModal();
+				const bobResult = await bot.dispatchInteraction(
+					modalSubmitInteraction({ customId: 'bob-raw-modal', user: bob }),
+				);
+
+				expect(bobResult.content).toBe(`handled:${bob.id}`);
+				expect(bot.rest.pendingRequests(action => action.route === '/channels/alice-owned-held')).toHaveLength(1);
+				expect(aliceOpener.isCompleted).toBe(false);
+			} finally {
+				release({ id: 'alice-owned-held', type: 0 });
+				await aliceOpener.timeoutModal();
+				await bot.settle();
+				await bot.close();
+			}
 		});
 
 		test('back-to-back same-user modal flows do not consume a stale modal entry', async () => {
@@ -177,15 +333,17 @@ describe('virtual clock', () => {
 					],
 				},
 			});
-			const source = bot.actions.at(-1);
+			const source = bot.rest.actions.at(-1);
 			if (!source) throw new Error('expected modal source action');
 
-			await expect(
-				bot.clickButton('open:first', { user, source }).fillModal('modal:first', { value: '1' }),
-			).resolves.toMatchObject({ content: 'submitted:first' });
-			await expect(
-				bot.clickButton('open:second', { user, source }).fillModal('modal:second', { value: '2' }),
-			).resolves.toMatchObject({ content: 'submitted:second' });
+			await bot.clickButton('open:first', { user, source });
+			await expect(bot.submitModal('modal:first', { value: '1' }, { user })).resolves.toMatchObject({
+				content: 'submitted:first',
+			});
+			await bot.clickButton('open:second', { user, source });
+			await expect(bot.submitModal('modal:second', { value: '2' }, { user })).resolves.toMatchObject({
+				content: 'submitted:second',
+			});
 			await bot.close();
 		});
 
@@ -216,13 +374,13 @@ describe('virtual clock', () => {
 			const bot = await createMockBot({ components: [FeedbackButton] });
 			const user = apiUser({ id: 'timeout-user' });
 
-			await bot.clickButton('open-feedback', { user, allowSyntheticSource: true }).timeoutModal();
+			await bot.dispatch.clickButton('open-feedback', { user, allowSyntheticSource: true }).timeoutModal();
 
 			expect(outcomes).toEqual(['timed-out']);
 			await bot.close();
 		});
 
-		test('fillModal before the opener ran names the opener, not the user', async () => {
+		test('raw submitModal before the opener ran names the opener, not the user', async () => {
 			class FeedbackButton extends ComponentCommand {
 				componentType = 'Button' as const;
 				filter(ctx: ComponentContext<'Button'>) {
@@ -238,13 +396,13 @@ describe('virtual clock', () => {
 
 			const bot = await createMockBot({ components: [FeedbackButton] });
 			const user = apiUser({ id: '999' });
-			bot.clickButton('open-feedback', { user, allowSyntheticSource: true }); // created but never stepped/awaited
+			bot.dispatch.clickButton('open-feedback', { user, allowSyntheticSource: true }); // never stepped/awaited
 
-			expect(() => bot.fillModal('feedback-modal', { rating: '5' }, { user })).toThrow(/opener has not run/);
+			expect(() => bot.dispatch.submitModal('feedback-modal', { rating: '5' }, { user })).toThrow(/opener has not run/);
 			await bot.close();
 		});
 
-		test('awaiting a modal-opener directly fails loud instead of stalling on the waitFor timer', async () => {
+		test('a stateful modal opener yields instead of stalling on the waitFor timer', async () => {
 			class StallButton extends ComponentCommand {
 				componentType = 'Button' as const;
 				filter(ctx: ComponentContext<'Button'>) {
@@ -259,12 +417,95 @@ describe('virtual clock', () => {
 
 			const bot = await createMockBot({ components: [StallButton] });
 			const user = apiUser({ id: 'stall-user' });
+			await bot.rest.request('POST', '/channels/stall-source/messages', {
+				body: {
+					components: [
+						{
+							type: 1,
+							components: [{ type: 2, style: 1, custom_id: 'open-stall', label: 'Open' }],
+						},
+					],
+				},
+			});
+			const source = bot.rest.actions.at(-1);
+			if (!source) throw new Error('expected stall source action');
 
-			// Directly awaiting the opener (no untilModal/fillModal) would, in real seyfert, block 30s on the
-			// real-clock waitFor and silently take the timeout branch. The mock fails loud immediately instead.
-			await expect(bot.clickButton('open-stall', { user, allowSyntheticSource: true })).rejects.toThrow(
-				/awaited directly/,
+			await expect(bot.clickButton('open-stall', { user, source })).resolves.toBeDefined();
+			await bot.close();
+		});
+
+		test('awaiting a raw modal opener directly fails fast with the driving API', async () => {
+			class RawStallButton extends ComponentCommand {
+				componentType = 'Button' as const;
+				filter(ctx: ComponentContext<'Button'>) {
+					return ctx.customId === 'open-raw-stall';
+				}
+				async run(ctx: ComponentContext<'Button'>) {
+					await ctx.interaction.modal(
+						new Modal().setCustomId('raw-stall-modal').setTitle('Raw stall').setComponents([]),
+						{ waitFor: 30_000 },
+					);
+				}
+			}
+
+			const bot = await createMockBot({ components: [RawStallButton] });
+			await expect(bot.dispatch.clickButton('open-raw-stall', { allowSyntheticSource: true })).rejects.toThrow(
+				/opened.+from a raw dispatch.+raw\.submitModal/s,
 			);
+			await bot.close();
+		});
+
+		test('a natural stateful modal timeout clears ownership before the next modal', async () => {
+			vi.useFakeTimers(FAKE_TIMER_OPTIONS);
+			const outcomes: string[] = [];
+
+			class TimedModalButton extends ComponentCommand {
+				componentType = 'Button' as const;
+				filter(ctx: ComponentContext<'Button'>) {
+					return ctx.customId.startsWith('open-timed:');
+				}
+				async run(ctx: ComponentContext<'Button'>) {
+					const name = ctx.customId.split(':')[1];
+					const submit = await ctx.interaction.modal(
+						new Modal().setCustomId(`timed:${name}`).setTitle(name).setComponents([]),
+						{ waitFor: 1_000 },
+					);
+					outcomes.push(`${name}:${submit ? 'submitted' : 'timed-out'}`);
+				}
+			}
+
+			const bot = await createMockBot({
+				components: [TimedModalButton],
+				timers: {
+					advance: ms => {
+						vi.advanceTimersByTime(ms);
+					},
+				},
+			});
+			const user = apiUser({ id: 'natural-timeout-user' });
+			await bot.rest.request('POST', '/channels/timed-source/messages', {
+				body: {
+					components: [
+						{
+							type: 1,
+							components: [
+								{ type: 2, style: 1, custom_id: 'open-timed:first', label: 'First' },
+								{ type: 2, style: 1, custom_id: 'open-timed:second', label: 'Second' },
+							],
+						},
+					],
+				},
+			});
+			const source = bot.rest.actions.at(-1);
+			if (!source) throw new Error('expected timed source action');
+
+			await bot.clickButton('open-timed:first', { user, source });
+			await bot.advanceTime(1_000);
+			expect(outcomes).toEqual(['first:timed-out']);
+
+			await bot.clickButton('open-timed:second', { user, source });
+			await bot.submitModal('timed:second', {}, { user });
+			expect(outcomes).toEqual(['first:timed-out', 'second:submitted']);
 			await bot.close();
 		});
 
@@ -277,11 +518,214 @@ describe('virtual clock', () => {
 			}
 
 			const bot = await createMockBot({ commands: [NoopCommand] });
-			const dispatch = bot.slash({ name: 'noop' });
+			const dispatch = bot.dispatch.slash({ name: 'noop' });
 
 			await expect(dispatch.untilModal()).rejects.toThrow(/dispatch completed without opening a modal for user/);
 			await bot.close();
 		});
+	});
+
+	test('close surfaces a handler error that happened after the last input checkpoint', async () => {
+		vi.useFakeTimers(FAKE_TIMER_OPTIONS);
+
+		@Declare({ name: 'late-checkpoint-error', description: 'Fails after input expires' })
+		class LateCheckpointError extends Command {
+			async run(ctx: CommandContext) {
+				const row = new ActionRow<Button>().setComponents([
+					new Button().setCustomId('late-input').setLabel('Wait').setStyle(ButtonStyle.Primary),
+				]);
+				const message = await ctx.write({ content: 'Waiting', components: [row] }, true);
+				await message.createComponentCollector().waitFor('late-input', 1_000);
+				throw new Error('late checkpoint failure');
+			}
+		}
+
+		const bot = await createMockBot({
+			commands: [LateCheckpointError],
+			timers: {
+				advance: ms => {
+					vi.advanceTimersByTime(ms);
+				},
+			},
+		});
+		await bot.slash({ name: 'late-checkpoint-error' });
+		await bot.advanceTime(1_000);
+		await expect(bot.close()).rejects.toThrow('late checkpoint failure');
+	});
+
+	test('a settled waitFor timeout removes its stale checkpoint before the next wait', async () => {
+		vi.useFakeTimers(FAKE_TIMER_OPTIONS);
+
+		@Declare({ name: 'repeated-wait', description: 'Reuses a custom id after a timed out wait' })
+		class RepeatedWait extends Command {
+			async run(ctx: CommandContext) {
+				const row = new ActionRow<Button>().setComponents([
+					new Button().setCustomId('same-wait').setLabel('Continue').setStyle(ButtonStyle.Primary),
+				]);
+				const first = await ctx.write({ content: 'first', components: [row] }, true);
+				await first.createComponentCollector().waitFor(['same-wait', 'cancel'], 5);
+				const second = await ctx.interaction.followup({ content: 'second', components: [row] });
+				const click = await second.createComponentCollector().waitFor(['same-wait', 'cancel'], 1_000);
+				if (click) await click.write({ content: 'finished', components: [] });
+			}
+		}
+
+		const bot = await createMockBot({
+			commands: [RepeatedWait],
+			timers: { advance: ms => void vi.advanceTimersByTime(ms) },
+		});
+		await bot.slash({ name: 'repeated-wait' });
+		await bot.advanceTime(5);
+		expect(bot.restCalls(Routes.followup).some(call => call.body?.content === 'second')).toBe(true);
+
+		const result = await bot.clickButton('same-wait');
+		expect(result.content).toBe('finished');
+		await bot.close();
+	});
+
+	test('close cancels a modal timer and surfaces the timeout continuation error', async () => {
+		vi.useFakeTimers(FAKE_TIMER_OPTIONS);
+		const events: string[] = [];
+
+		@Declare({ name: 'close-modal-wait', description: 'Parks on a modal until close' })
+		class CloseModalWait extends Command {
+			async run(ctx: CommandContext) {
+				const submit = await ctx.interaction.modal(
+					new Modal().setCustomId('close-modal').setTitle('Close').setComponents([]),
+					{ waitFor: 30_000 },
+				);
+				events.push(submit ? 'submitted' : 'timed-out');
+				throw new Error('modal close continuation failed');
+			}
+		}
+
+		const bot = await createMockBot({ commands: [CloseModalWait] });
+		await bot.slash({ name: 'close-modal-wait' });
+
+		await expect(bot.close()).rejects.toThrow('modal close continuation failed');
+		expect(events).toEqual(['timed-out']);
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	test('close cancels a collector wait timer and surfaces the timeout continuation error', async () => {
+		vi.useFakeTimers(FAKE_TIMER_OPTIONS);
+		const events: string[] = [];
+
+		@Declare({ name: 'close-component-wait', description: 'Parks on a component until close' })
+		class CloseComponentWait extends Command {
+			async run(ctx: CommandContext) {
+				const row = new ActionRow<Button>().setComponents([
+					new Button().setCustomId('close-wait').setLabel('Wait').setStyle(ButtonStyle.Primary),
+				]);
+				const message = await ctx.write({ content: 'waiting', components: [row] }, true);
+				const click = await message.createComponentCollector().waitFor('close-wait', 30_000);
+				events.push(click ? 'clicked' : 'timed-out');
+				throw new Error('collector close continuation failed');
+			}
+		}
+
+		const bot = await createMockBot({ commands: [CloseComponentWait] });
+		await bot.slash({ name: 'close-component-wait' });
+
+		await expect(bot.close()).rejects.toThrow('collector close continuation failed');
+		expect(events).toEqual(['timed-out']);
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	test('close clears collector-level idle and timeout handles without running onStop', async () => {
+		vi.useFakeTimers(FAKE_TIMER_OPTIONS);
+		const stops: (string | undefined)[] = [];
+
+		@Declare({ name: 'close-collector-handles', description: 'Leaves collector-level timers behind' })
+		class CloseCollectorHandles extends Command {
+			async run(ctx: CommandContext) {
+				const message = await ctx.write({ content: 'collector handles' }, true);
+				message.createComponentCollector({
+					idle: 30_000,
+					timeout: 60_000,
+					onStop: reason => {
+						stops.push(`first:${reason}`);
+					},
+				});
+				message.createComponentCollector({
+					timeout: 45_000,
+					onStop: reason => {
+						stops.push(`replacement:${reason}`);
+					},
+				});
+			}
+		}
+
+		const bot = await createMockBot({ commands: [CloseCollectorHandles] });
+		await bot.slash({ name: 'close-collector-handles' });
+		await bot.close();
+
+		expect(vi.getTimerCount()).toBe(0);
+		vi.advanceTimersByTime(60_000);
+		expect(stops).toEqual([]);
+	});
+
+	test('close immediately cancels an input wait chained from another timeout branch', async () => {
+		vi.useFakeTimers(FAKE_TIMER_OPTIONS);
+		const events: string[] = [];
+
+		@Declare({ name: 'close-chained-input', description: 'Chains a collector after modal timeout' })
+		class CloseChainedInput extends Command {
+			async run(ctx: CommandContext) {
+				const submit = await ctx.interaction.modal(
+					new Modal().setCustomId('close-chain-modal').setTitle('Close').setComponents([]),
+					{ waitFor: 30_000 },
+				);
+				events.push(submit ? 'modal-submit' : 'modal-timeout');
+				const row = new ActionRow<Button>().setComponents([
+					new Button().setCustomId('close-chain-button').setLabel('Wait').setStyle(ButtonStyle.Primary),
+				]);
+				const message = await ctx.interaction.followup({ content: 'next wait', components: [row] });
+				const click = await message.createComponentCollector().waitFor('close-chain-button', 30_000);
+				events.push(click ? 'component-click' : 'component-timeout');
+			}
+		}
+
+		const bot = await createMockBot({ commands: [CloseChainedInput] });
+		await bot.slash({ name: 'close-chained-input' });
+		await bot.close();
+
+		expect(events).toEqual(['modal-timeout', 'component-timeout']);
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	test('close fails fast when a timeout continuation becomes non-cancellable application work', async () => {
+		vi.useFakeTimers(FAKE_TIMER_OPTIONS);
+		const events: string[] = [];
+		let release!: () => void;
+		const held = new Promise<void>(resolve => {
+			release = resolve;
+		});
+
+		@Declare({ name: 'close-held-continuation', description: 'Blocks after its modal timeout branch' })
+		class CloseHeldContinuation extends Command {
+			async run(ctx: CommandContext) {
+				const submit = await ctx.interaction.modal(
+					new Modal().setCustomId('close-held-modal').setTitle('Close').setComponents([]),
+					{ waitFor: 30_000 },
+				);
+				events.push(submit ? 'submitted' : 'timed-out');
+				await held;
+				events.push('released');
+			}
+		}
+
+		const bot = await createMockBot({ commands: [CloseHeldContinuation] });
+		await bot.slash({ name: 'close-held-continuation' });
+
+		await expect(bot.close()).rejects.toThrow(/non-input dispatches are still running/);
+		expect(events).toEqual(['timed-out']);
+		expect(vi.getTimerCount()).toBe(0);
+
+		release();
+		await bot.settle();
+		expect(events).toEqual(['timed-out', 'released']);
+		await bot.close();
 	});
 
 	test('advanceTime drives a 60s idle collector onStop instantly', async () => {
@@ -354,7 +798,7 @@ describe('virtual clock', () => {
 			timers: { advance: ms => void vi.advanceTimersByTime(ms) },
 		});
 
-		const flow = bot.slash({ name: 'confirmflow' });
+		const flow = bot.dispatch.slash({ name: 'confirmflow' });
 		await flow.untilComponent('confirm');
 		expect(events).toEqual([]);
 
@@ -398,7 +842,7 @@ describe('virtual clock', () => {
 		});
 		const user = apiUser({ id: '888' });
 
-		const dispatch = bot.clickButton('open-waitfor', { user, allowSyntheticSource: true });
+		const dispatch = bot.dispatch.clickButton('open-waitfor', { user, allowSyntheticSource: true });
 		await dispatch.untilModal();
 		expect(outcomes).toEqual([]);
 		await bot.advanceTime(30_000);
@@ -437,11 +881,11 @@ describe('virtual clock', () => {
 		await bot.close();
 	});
 
-	test('waitForAction still rejects on real time under faked setTimeout (control timeout is wall-clock)', async () => {
+	test('internal action waits still reject on real time under faked setTimeout', async () => {
 		const bot = await createMockBot({});
-		// With global setTimeout faked, a naive control timer would freeze and waitForAction would hang forever.
+		// With global setTimeout faked, a naive control timer would freeze and this wait would hang forever.
 		vi.useFakeTimers(FAKE_TIMER_OPTIONS);
-		await expect(bot.rest.waitForAction({ method: 'GET', route: '/never-happens' }, 50)).rejects.toThrow(/timed out/);
+		await expect(bot.rest.waitUntilAction({ method: 'GET', route: '/never-happens' }, 50)).rejects.toThrow(/timed out/);
 		vi.useRealTimers();
 		await bot.close();
 	});

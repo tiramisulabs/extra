@@ -72,9 +72,9 @@ import { ProfileModal } from '../src/modals/profile';
 
 const leave = mockComponentContext(LeaveButton);
 
-expect(await leave.filter({ customId: 'leave:campaign:c1' })).toBe(true);
+expect(await leave.filter({ customId: 'leave:workspace:w1' })).toBe(true);
 
-const click = await leave.run({ customId: 'leave:campaign:c1' });
+const click = await leave.run({ customId: 'leave:workspace:w1' });
 expect(click.lastResponse()).toMatchObject({ content: expect.stringContaining('left') });
 
 const profile = mockModalContext(ProfileModal);
@@ -94,7 +94,8 @@ expect(submit.lastResponse()).toBeDefined();
 import { mockChannel, mockGuild, mockMember, mockUser } from '@slipher/testing';
 
 const user = mockUser({ username: 'socram' });
-const guild = mockGuild({ name: 'Slipher Lab' });
+const guild = mockGuild({ id: 'guild-1', name: 'Slipher Lab', icon: 'guild-icon-hash' });
+guild.iconURL(); // https://cdn.discordapp.com/icons/guild-1/guild-icon-hash.png
 const channel = mockChannel({ guildId: guild.id });
 const member = mockMember({ user });
 ```
@@ -309,26 +310,97 @@ from that path.
 
 ### Execution model
 
-Every dispatcher returns a lazy `Dispatch`. Await it directly for one-shot runs, or
-call `dispatch.until(Routes.ban)` first to step through the same dispatch. For a
-dispatch that opens a modal, drive it in one call with `.fillModal(...)` /
-`.timeoutModal()` (see below). Awaiting always releases any active checkpoint, so it
-cannot deadlock.
+The normal interaction API reads chronologically:
 
-- Immediate replies, deferrals, and modal opens are captured in `result.replies`.
-- REST work awaited by the command is classified into `result.edits`,
-  `result.followups`, and dispatch-scoped `result.actions`.
-- `waitForAction()` is for work your command did not await: timers,
-  fire-and-forget promises, queue/scheduler side effects.
-- Dispatches do not reject for command errors; Seyfert routes them through error
-  hooks, and you assert the user-facing error reply.
+```ts
+await bot.slash({ name: 'profile' });
+await bot.submitModal('profile-modal', {
+	'display-name': 'Ada',
+});
+await bot.clickButton('save-profile');
+
+expect(rendered(bot).get.message({ content: 'Profile saved' })).toBeDefined();
+```
+
+`slash()`, `submitModal()`, `clickButton()`, `selectMenu()`, `userMenu()`,
+`messageMenu()`, class-first `menu()`, and `entryPoint()` are stateful. Each
+action updates that actor's current interaction state and resolves when its
+causal handlers finish, or when Seyfert registers the next real user-input
+checkpoint (a modal submission or `collector.waitFor(...)`) and that input is
+rendered. Merely rendering a component does not prematurely finish an action.
+
+Those two stopping points have different synchronization boundaries:
+
+- When the causal handlers finish, the action drains their REST work to
+  quiescence. This includes fire-and-forget REST discovered across immediate
+  event-loop turns and sequential REST chains.
+- At a modal or component checkpoint, the action settles causal REST that has
+  already started, but it does not add an unconditional macrotask discovery
+  turn when the checkpoint is otherwise settled. This keeps a timer scheduled
+  immediately before that quiet checkpoint from advancing the parked flow
+  merely because the caller awaited the action. If an already-started REST
+  responder is still pending, the drain yields real event-loop turns so that
+  responder can finish; unrelated real timers may run during those required
+  turns.
+
+REST discovered after the handler result was built updates the live
+`restCalls()`, `bot.world`, `rendered(bot)`, and `rendered(actor)` views. It does
+not retroactively add entries to the returned result's `actions` or `messages`;
+that result remains an exact snapshot of its own dispatch.
+
+This means the next source-less click/select is resolved against the current
+actor's actionable output. It cannot silently click a component left over from
+an older step. `clickButton()` and `selectMenu()` reject when the component was
+not rendered or is disabled; `submitModal()` rejects when that actor was not
+shown the matching modal. Passing an explicit `source` intentionally addresses
+a rendered historical message, but it still validates the component.
+`rendered()` is optional: it only inspects output for assertions or diagnostics
+and never advances or synchronizes the flow.
+
+When you do inspect output, `get.*` requires exactly one match, `query.*`
+returns `undefined` when absent, and `all.*` returns every match. The reader
+finds output; Vitest, Jest, Mocha, or another runner owns ordinary assertions:
+
+```ts
+const screen = rendered(bot);
+const save = screen.get.button('save-profile');
+
+expect(save.disabled).toBe(false);
+expect(screen.query.embed({ title: 'Validation error' })).toBeUndefined();
+expect(screen.all.button()).toHaveLength(1);
+```
+
+Continuation actions inherit the user, guild, channel, and message context from
+the previous step. Explicit options or an explicit historical source take
+precedence. Use different actors for independent flows; overlapping stateful
+actions for the same actor session fail immediately. Raw concurrent and
+timeout-driven scenarios remain available through `bot.dispatch.*`.
+
+- Immediate replies, deferrals, and modal opens are captured in the returned
+  `DispatchResult`.
+- REST work awaited by the handler is classified into `result.edits`,
+  `result.followups`, and `result.actions`.
+- Completed stateful actions automatically drain their observable causal REST
+  into the live journal. `settle()` is reserved for deliberately detached work
+  outside that boundary, such as a raw dispatch, direct REST, or work released
+  through an external promise after the action/checkpoint returned.
+- Unhandled command/component/modal errors reject the action by default. Set
+  `onCommandError: 'capture'` to inspect them on `result.error` instead.
 
 | After you awaited | Guaranteed |
 |---|---|
-| `await dispatch` | everything `run()` awaited: replies, edits, followups, and dispatch actions |
-| `dispatch.until(...)` resolved | the matched call started; `response` is still `undefined` while suspended |
-| `await emit(...)` | REST work the handler awaited |
-| nothing | only `waitForAction(...)` observes fire-and-forget work |
+| A completed stateful action | causal handlers and their observable REST reached quiescence; live actor state updated |
+| A stateful input checkpoint | the modal/component is rendered and already-started causal REST settled; no unconditional macrotask discovery |
+| `rendered(bot)` | output from the latest step of the most recently active actor |
+| `rendered(actor)` | output from that actor's latest step |
+| `rendered(result)` | output belonging to that exact result, even after later steps |
+| `bot.restCalls()` | complete REST journal across actors, raw dispatches, and direct REST, in global order |
+| `actor.restCalls()` | complete causal REST history for that actor across all of its stateful steps |
+| `result.actions` | the exact raw REST trail attributed to that result |
+| `bot.world` | persistent Discord-side entities and messages, including writes from earlier steps |
+| `await bot.dispatch.<action>(...)` | raw handler completion |
+| `raw.until(...)` resolved | the matched REST call started; `response` is still `undefined` while gated |
+| `await bot.settle()` | currently observable, unscoped detached REST/timer work reached quiescence |
 
 ### Step-by-step flows
 
@@ -349,11 +421,15 @@ const result = await alice.slash({ name: 'results' });
 expect(result.content).toContain('1 vote');
 ```
 
-To pause inside a single command, step the same dispatch instead of awaiting it
-immediately:
+The stateful interaction actions are the default testing path. For low-level
+timing tests, `bot.dispatch.*` exposes the raw lazy `Dispatch` and its REST
+gates:
 
 ```ts
-const dispatch = bot.slash({ name: 'ban', options: { user: userOption(target) } });
+const dispatch = bot.dispatch.slash({
+	name: 'ban',
+	options: { user: userOption(target) },
+});
 
 const ban = await dispatch.until(Routes.ban);
 expect(ban.body).toMatchObject({ delete_message_seconds: 0 });
@@ -370,7 +446,7 @@ await bot.autocomplete({ name: 'search', focused: 'query', value: 'sey' });
 await bot.userMenu({ name: 'Report User', target: apiUser({ id: '42' }) });
 await bot.clickButton('confirm');
 await bot.selectMenu('pick-color', ['red']);
-await bot.fillModal('feedback', { rating: '5' });
+await bot.submitModal('feedback', { rating: '5' });
 await bot.say('!echo -text hello');
 await bot.emit('GUILD_MEMBER_ADD', rawMemberPayload);
 ```
@@ -500,9 +576,9 @@ expect(result.reply?.body).toMatchObject({
 ### Component collectors and modals
 
 For messages with component collectors, fetch the message, register the collector,
-then dispatch the component. `clickButton()` and `selectMenu()` default to the
-latest message-shaped REST response (`lastSentMessage()`), so most tests do not
-thread message ids by hand:
+then dispatch the component. Stateful `clickButton()` and `selectMenu()` use the
+current actor's rendered component/checkpoint, so most tests do not thread
+message ids by hand:
 
 ```ts
 class PollCommand extends Command {
@@ -519,42 +595,54 @@ await bot.slash({ name: 'poll' });
 await bot.clickButton('poll/yes');
 ```
 
-Pass `source` when a flow has multiple messages:
+Pass `source` when you intentionally address a message outside the current
+state or when a current step contains the same custom id on multiple messages:
 
 ```ts
 const sent = bot.lastSentMessage();
-await bot.clickButton('approve', { source: sent?.id });
-await bot.selectMenu('settings/mod', [role.id], { source: sent, componentType: 'role' });
+if (!sent) throw new Error('Expected the command to send a message.');
+
+await bot.clickButton('approve', { source: sent.id });
+await bot.selectMenu('settings/mod', [role.id], { source: sent.id, componentType: 'role' });
 ```
 
 Entity selects auto-resolve seeded world users, members, roles, and channels.
 Use explicit `resolved` when testing a raw Discord payload. For a
-`ComponentCommand` select-menu path without a collector, build the raw payload
-with `selectMenuInteraction()` and pass it to `dispatchInteraction()`.
-
-A dispatch that opens a modal (`interaction.modal(..., { waitFor })`) is driven in one
-call — the open → resolve → settle handshake is handled for you. Submit it with
-`.fillModal(...)`, or take its timeout branch with `.timeoutModal()`:
+`ComponentCommand` select-menu path without a rendered source, use the explicit
+raw seam and opt into a synthetic source:
 
 ```ts
-// the user submitted the modal
-const modal = await bot.clickButton('open-feedback', { user }).fillModal('feedback-modal', { rating: '5' });
-expect(modal.content).toBe('thanks');
-
-// the user never submitted — the waitFor expires (instant, no fake-timer setup)
-const timedOut = await bot.clickButton('open-feedback', { user }).timeoutModal();
-expect(timedOut.content).toBe('timed out');
+const raw = bot.dispatch.selectMenu('settings/theme', ['dark'], {
+	allowSyntheticSource: true,
+});
+const result = await raw;
 ```
 
-The `DispatchResult` returned by `.fillModal(...)` is scoped to the modal-submit
-interaction. If the opener resumes after `await interaction.modal(...)` and writes
-visible output from that continuation, assert through `rendered(bot)` or another
-bot-level state reader when that cross-dispatch output is the contract. Use
-`rendered(flow)` for the modal that the opener displayed before submission.
+A modal opened with `interaction.modal(..., { waitFor })` becomes the next
+stateful checkpoint. Submit it as the next chronological action:
 
-Awaiting a modal-opener directly (without `.fillModal()`/`.timeoutModal()`) fails loud,
-since in real seyfert it would stall on the `waitFor` timer and silently take the
-timeout branch.
+```ts
+await bot.clickButton('open-feedback', { user });
+await bot.submitModal('feedback-modal', { rating: '5' }, { user });
+expect(rendered(bot).get.message({ content: 'thanks' })).toBeDefined();
+```
+
+The modal submit waits for both its own interaction and the opener continuation
+it resumed. If that continuation renders a button, the following source-less
+`clickButton()` uses that exact message whether or not you inspect it with
+`rendered(bot)` first.
+
+For the "user never submitted" branch, use the explicit raw timing seam. It
+resolves Seyfert's modal wait immediately, without fake timers:
+
+```ts
+const opener = bot.dispatch.clickButton('open-feedback', {
+	user,
+	allowSyntheticSource: true,
+});
+const timedOut = await opener.timeoutModal();
+expect(timedOut.content).toBe('timed out');
+```
 
 ### Testing timed behavior
 
@@ -562,7 +650,8 @@ Collector `idle`/`timeout` and modal `waitFor` use seyfert's bare global
 `setTimeout`, which the mock can't own. Bridge your runner's fake clock through the
 `timers` callback — the package imports no test runner, so the bridge is yours —
 then `bot.advanceTime(ms)` fires them. Fake only `setTimeout`/`clearTimeout`:
-faking `setImmediate` deadlocks the mock's drain.
+`advanceTime()` and `settle()` require the real global `setImmediate` and fail
+fast when a runner replaces it.
 
 ```ts
 import { afterEach, vi } from 'vitest';
@@ -584,18 +673,69 @@ await bot.advanceTime(60_000); // collector onStop('idle') runs now, no real wai
 Jest's fake timers use the inverted option — `jest.useFakeTimers({ doNotFake: ['setImmediate'] })`
 keeps `setImmediate` real — with `timers: { advance: ms => jest.advanceTimersByTime(ms) }`.
 
-### Recorded actions
+If the runner fakes `setImmediate` and only an otherwise-unstarted detached
+callback is waiting on it, a completed stateful action still resolves without
+executing that callback. This does not apply when awaited handler code or an
+already-started REST responder is itself waiting on the fake immediate: that
+promise remains pending until the runner advances it. Advance fake timers with
+the test runner, restore real timers, and then inspect or settle as needed.
+`advanceTime()` and `settle()` keep their real-`setImmediate` guard instead of
+advancing a runner's global fake implicitly.
 
-Everything else the bot does goes through REST and is recorded:
+### REST calls
+
+Everything else the bot does goes through REST and is recorded. `restCalls()`
+reads that journal without changing it: use `bot.restCalls()` for the complete
+bot history, including stateful actors, raw dispatches, and direct REST, or
+`actor.restCalls()` for only the calls causally owned by that actor across all
+of its stateful steps. Pass a `Routes` descriptor to narrow by endpoint and
+infer its route params, request body, and response from Discord's REST types.
+
+Both forms always return a read-only array: zero, one, and many matches have the
+same shape. Use regular JavaScript to find, filter, or map calls, and let your
+test runner assert cardinality and values:
 
 ```ts
 import { Routes } from '@slipher/testing';
 
-const edit = await bot.waitForAction(Routes.editOriginalResponse);
-expect(edit.body).toMatchObject({ content: 'done' });
+await bot.slash({ name: 'sync-members' });
+const adaId = 'user-ada';
 
-bot.actions; // every call, in order: { seq, method, route, body, query, response }
+const edits = bot.restCalls(Routes.editMember);
+expect(edits).toHaveLength(2);
+
+const adaEdit = edits.find(call => call.params.userId === adaId);
+expect(adaEdit?.body).toMatchObject({ nick: 'Ada' });
+expect(adaEdit?.response?.user.id).toBe(adaId); // typed, without a cast
+
+const editedUserIds = edits.map(call => call.params.userId);
+expect(editedUserIds).toContain(adaId);
+
+const failedCalls = bot.restCalls().filter(call => call.error !== undefined);
+expect(failedCalls).toHaveLength(0);
 ```
+
+For endpoints whose successful Discord response has no content, `response` is
+typed and recorded as `undefined`; use `settled` and `error` rather than
+response presence when asserting completion.
+
+`restCalls()` only reads; it does not wait or alter the flow. Await the stateful
+action first; ordinary completed actions already settle their causal REST.
+Calls made through `bot.dispatch.*` keep raw handler-completion timing, and
+direct `bot.rest.*` calls are not adopted by an unrelated actor action. Work
+hidden behind an external promise that has not produced a REST call is likewise
+not observable to the causal drain. Await that promise directly, advance the
+responsible timer/gate, or use `await bot.settle()` for the remaining observable
+unscoped work. Each read is an independent snapshot; read again after pending
+work settles to observe its populated response. `reset()` starts a new journal.
+Use `dispatch.until(...)` instead when a low-level concurrency test must stop on
+an in-flight REST call.
+
+`result.actions` deliberately remains the exact raw REST trail attributed to a
+returned result. It stays tied to that result even after a newer actor step
+becomes current; use `restCalls()` for normalized full-history route reads.
+`rendered(bot)` and `rendered(actor)` remain latest-UI readers and do not expand
+to historical output when the REST journal grows.
 
 Stub specific endpoints when a command reads from the API:
 
@@ -799,8 +939,9 @@ test('/ban bans the target and confirms', async () => {
 	});
 
 	expect(result.content).toBe('Banned spammer');
-	const ban = await bot.waitForAction(Routes.ban);
-	expect(ban.reason).toBe('raid');
+	const ban = bot.restCalls(Routes.ban).find(call => call.params.userId === target.id);
+	expect(ban).toBeDefined();
+	expect(ban?.reason).toBe('raid');
 });
 ```
 
@@ -894,9 +1035,10 @@ in tests.
   name, and `registeredCommands()` to see whether the file path was discovered
   and whether a command was found after import.
 - **My collector never fires** - send a real message first, click as the same
-  user, and avoid passing a stale `source`.
-- **My modal flow hangs** - `waitFor` uses real timers; the usual cause is a
-  different user between the opener dispatch and `fillModal()`.
+  user, await each action in order, and avoid passing a stale `source`.
+- **My modal cannot be submitted** - await the action that opens it, then call
+  `submitModal()` as the same user. Use `rendered(bot).get.modal(...)` only to
+  inspect whether the modal was actually shown.
 - **`no interceptor or world entity matched GET ...`** - seed the world,
   `intercept()` the route, or set `onUnhandledRest: 'silent'` for that test.
 - **Decorator/transform errors on `@Declare`** - enable
@@ -908,22 +1050,19 @@ in tests.
 
 ### Current defaults
 
-The package is pre-1.0. Current defaults: the single default user
-(`TEST_USER_ID`), strict `onUnhandledRest: 'error'`, opt-in REST fallback shapes
-under `onUnhandledRest: 'warn' | 'silent'`, and newest-first message lists. An
+Current defaults: the single default user (`TEST_USER_ID`), strict
+`onUnhandledRest: 'error'`, opt-in REST fallback shapes under
+`onUnhandledRest: 'warn' | 'silent'`, and newest-first message lists. An
 unhandled error inside a command/component/modal/event handler **rejects the
-`Dispatch` by default** (`onCommandError: 'throw'`);
+stateful action or raw `Dispatch` by default** (`onCommandError: 'throw'`);
 pass `onCommandError: 'capture'` to surface it on `result.error` instead. The
 read-only `bot.world` (`WorldStateReader`) is the supported way to assert on the
 ~20 entity types the views don't surface (pins, reactions, bans, webhooks,
 emojis, invites, automod rules, scheduled events, poll voters, …).
 
-During 0.x, prefer direct supported entry points over subclassing exported
-classes: build bot tests through `createMockBot()`, seed worlds through
-`mockWorld()`, and use named dispatchers such as `slash()`, `clickButton()`, and
-`emit()`.
-Unspecified and subject to change during 0.x: `mockId()` format, warning text,
-`RecordedAction.seq`, and `MockGateway`.
+Build bot tests through `createMockBot()`, seed worlds through `mockWorld()`,
+and use named actions such as `slash()`, `submitModal()`, `clickButton()`, and
+`emit()` rather than subclassing exported classes.
 
 ### Scope
 

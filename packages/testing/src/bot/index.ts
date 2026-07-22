@@ -14,7 +14,7 @@
  *
  * Public API surface: this barrel re-exports an explicit, curated allowlist - the
  * names a TEST AUTHOR legitimately uses. Internal helper modules (hooks,
- * option-validation, select-resolved, defaults, dispatch, dispatch-context),
+ * option-validation, select-resolved, defaults, dispatch-context),
  * world-events internals, rest.ts request plumbing, and the WorldState write
  * surface are deliberately NOT exported here. Deep imports remain available for
  * the package's own tests; do not promote internals into this list.
@@ -26,11 +26,7 @@ export {
 	type AutocompleteResult,
 	type BotDiagnostics,
 	type CapturedReply,
-	type ComponentActionView,
-	type ComponentClickOptions,
-	type ComponentSelectOptions,
-	type ComponentSourceView,
-	type CreatedResource,
+	type ComponentSourceOptions,
 	createMockBot,
 	DISPATCHER_VERBS,
 	type DispatchMessageOptions,
@@ -51,6 +47,9 @@ export {
 	type OptionsRecordOf,
 	type OutgoingMessage,
 	type PluginInfo,
+	type RawComponentSourceOptions,
+	type RawInteractionDispatchers,
+	type RawModalSubmitOptions,
 	type RegisteredCommand,
 	type RegisteredCommandFound,
 	type RegisteredComponent,
@@ -68,6 +67,7 @@ export {
 	TEST_GUILD_ID,
 	TEST_USER_ID,
 } from './constants';
+export { Dispatch, type DispatchOptions } from './dispatch';
 export { MockGateway, type MockGatewayOptions, type MockShard } from './gateway';
 export {
 	type ApiInteractionPayload,
@@ -207,22 +207,18 @@ export {
 	permissionBits,
 } from './permissions';
 export {
-	type ActionFilter,
-	type ActionMatcher,
-	type ActionPredicate,
 	apiError,
 	type DiscordErrorInit,
 	DiscordErrors,
-	type MatchedAction,
 	MockApiError,
 	type PendingAction,
 	type RecordedAction,
-	type RouteActionFilter,
+	type RestCall,
+	type RestCalls,
 	type RouteMatcher,
+	type RouteParams,
 	type RouteResponder,
 	routeUrl,
-	type TypedMatchedAction,
-	type ValuePredicate,
 } from './rest';
 export { Routes } from './routes';
 export {

@@ -5,6 +5,7 @@ import {
 	type ComponentContext,
 	createStringOption,
 	Declare,
+	type Guild,
 	ModalCommand,
 	type ModalContext,
 	Options,
@@ -21,6 +22,7 @@ import {
 	type MockModalContext,
 	mockCommandContext,
 	mockComponentContext,
+	mockGuild,
 	mockModalContext,
 	type OutcomeCapturedError,
 	type OutcomeDenial,
@@ -39,6 +41,13 @@ const typedContext = mockCommandContext<{ reason: string; count: number }>({
 });
 expectType<string>(typedContext.options.reason);
 expectType<number>(typedContext.options.count);
+
+const typedGuild = mockGuild({ icon: 'guild-icon' });
+expectType<string | null>(typedGuild.icon);
+expectType<string | undefined>(typedGuild.iconURL({ extension: 'webp', size: 128 }));
+expectType<Pick<Guild, 'icon' | 'iconURL'>>(typedGuild);
+// @ts-expect-error — guild icon hashes are strings or null, matching seyfert's guild shape.
+mockGuild({ icon: 123 });
 
 // Class-first form: options are INFERRED from the command's `run(ctx: CommandContext<typeof options>)` annotation.
 const banOptions = { reason: createStringOption({ description: 'why', required: true }) };
@@ -157,6 +166,8 @@ expectType<ButtonView | undefined>(reader.query.button('save'));
 expectType<readonly ButtonView[]>(reader.all.button('save'));
 expectType<ContainerView>(reader.get.component('container', { content: /settings/i }));
 
+// @ts-expect-error — REST inspection belongs to bot/actor.restCalls() or result.actions.
+void reader.raw.actions;
 // @ts-expect-error — component kinds are closed over the supported reader map.
 reader.get.component('not-real', {});
 // @ts-expect-error — embeds do not have string shorthand; use { title } / { contains }.
@@ -165,6 +176,12 @@ reader.get.embed('Campaign');
 reader.get.button({ customID: 'save' });
 
 declare const result: DispatchResult;
+// @ts-expect-error DispatchResult snapshots are data only; lookup belongs to rendered(result).
+result.component('save');
+// @ts-expect-error Snapshot components cannot dispatch actions; use bot.clickButton().
+result.components[0]?.click();
+// @ts-expect-error Snapshot components cannot dispatch actions; use bot.selectMenu().
+result.components[0]?.select(['x']);
 const state = outcome(result);
 
 expectType<OutcomeResponse>(state.get.response());

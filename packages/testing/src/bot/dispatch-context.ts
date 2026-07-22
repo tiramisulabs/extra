@@ -19,10 +19,13 @@ export interface DispatchDenial {
 
 export interface DispatchContext {
 	readonly dispatchId: number;
+	/** Stateful actor/session that owns this dispatch, when driven through the chronological API. */
+	readonly sessionKey?: string;
 	componentCommandExecuted: boolean;
 	collectorMatched: boolean;
 	modalMatched: boolean;
 	resolveDenial?: () => void;
+	rejectDenial?: (error: unknown) => void;
 	/** Structured denial metadata, set by the middleware/permission wrappers when a denial is detected. */
 	denial?: DispatchDenial;
 	/** First unhandled error thrown inside the command/component/modal `run`, captured via the onRunError hook. */

@@ -11,3 +11,9 @@ quote_type = single
 
 [Makefile]
 indent_style = tab
+
+[packages/testing/README.md]
+end_of_line = lf
+
+[**/*.snap]
+end_of_line = lf

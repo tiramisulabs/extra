@@ -12,6 +12,7 @@ import { ButtonStyle } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
 import { rendered } from '../../src';
 import { createMockBot } from '../../src/bot/bot';
+import { Routes } from '../../src/bot/routes';
 import { mockWorld } from '../../src/bot/world';
 
 // A slash that replies with one button, then blocks on `collector.waitFor(...)` until the button is clicked —
@@ -63,13 +64,13 @@ describe('#5 Dispatch is promise-like (.catch / .finally)', () => {
 });
 
 describe('#2 component inherits guildId from the source message', () => {
-	const seen: (string | undefined)[] = [];
+	const seen: { guildId: string | undefined; channelId: string }[] = [];
 
 	class GoButton extends ComponentCommand {
 		componentType = 'Button' as const;
 		customId = 'go';
 		async run(ctx: ComponentContext<'Button'>) {
-			seen.push(ctx.guildId);
+			seen.push({ guildId: ctx.guildId, channelId: (await ctx.channel()).id });
 			await ctx.write({ content: 'ok' });
 		}
 	}
@@ -94,7 +95,37 @@ describe('#2 component inherits guildId from the source message', () => {
 		await bot.slash({ name: 'open', guildId: guild.id, channel });
 		await bot.clickButton('go');
 
-		expect(seen).toEqual([guild.id]);
+		expect(seen).toEqual([{ guildId: guild.id, channelId: channel.id }]);
+		await bot.close();
+	});
+
+	test('an explicit historical source overrides the current session location', async () => {
+		seen.length = 0;
+		const world = mockWorld();
+		const currentGuild = world.registerGuild({ id: 'current-guild' });
+		const currentChannel = world.registerChannel(currentGuild.id, { id: 'current-channel' });
+		const sourceGuild = world.registerGuild({ id: 'source-guild' });
+		const sourceChannel = world.registerChannel(sourceGuild.id, { id: 'source-channel' });
+		const bot = await createMockBot({ commands: [OpenCommand], components: [GoButton], world });
+
+		await bot.slash({ name: 'open', guildId: currentGuild.id, channel: currentChannel });
+		await bot.rest.request('POST', `/channels/${sourceChannel.id}/messages`, {
+			body: {
+				content: 'historical source',
+				components: [
+					{
+						type: 1,
+						components: [{ type: 2, style: 1, custom_id: 'go', label: 'Go' }],
+					},
+				],
+			},
+		});
+		const source = bot.rest.actions.at(-1);
+		if (!source) throw new Error('expected historical source action');
+
+		await bot.clickButton('go', { source });
+
+		expect(seen).toEqual([{ guildId: sourceGuild.id, channelId: sourceChannel.id }]);
 		await bot.close();
 	});
 });
@@ -103,16 +134,14 @@ describe('#3 + #4 await a parked collector top-to-bottom', () => {
 	const events: string[] = [];
 	const LaunchCommand = parkingCommand('launch', 'go', events);
 
-	test('untilComponent parks at waitFor and a source-less click resumes it', async () => {
+	test('stateful steps park at waitFor and a source-less click resumes it', async () => {
 		events.length = 0;
 		const bot = await createMockBot({ commands: [LaunchCommand] });
 
-		const flow = bot.slash({ name: 'launch' });
-		await flow.untilComponent('go'); // started, reply+button rendered, handler parked on waitFor
+		await bot.slash({ name: 'launch' });
 		expect(events).toEqual([]); // not resumed yet
 
-		await bot.clickButton('go'); // #3: source-less click works with exactly one dispatch in flight
-		await flow; // handler resumes past waitFor and returns
+		await bot.clickButton('go');
 
 		expect(events).toEqual(['resumed:go']);
 		await bot.close();
@@ -124,17 +153,17 @@ describe('#3 + #4 await a parked collector top-to-bottom', () => {
 		const LaunchB = parkingCommand('launch-b', 'btn-b', events);
 		const bot = await createMockBot({ commands: [LaunchA, LaunchB] });
 
-		const a = bot.slash({ name: 'launch-a' });
-		const b = bot.slash({ name: 'launch-b' });
+		const a = bot.dispatch.slash({ name: 'launch-a' });
+		const b = bot.dispatch.slash({ name: 'launch-b' });
 		const aReply = await a.untilComponent('btn-a');
 		const bReply = await b.untilComponent('btn-b');
 
 		// two parked dispatches -> "the most recent message" is a genuine race -> fail loud (thrown synchronously)
-		expect(() => bot.clickButton('btn-a')).toThrow(/2 dispatches are still running/);
+		expect(() => bot.dispatch.clickButton('btn-a')).toThrow(/2 dispatches are still running/);
 
 		// an explicit source disambiguates and settles each opener
-		await bot.clickButton('btn-a', { source: aReply });
-		await bot.clickButton('btn-b', { source: bReply });
+		await bot.dispatch.clickButton('btn-a', { source: aReply });
+		await bot.dispatch.clickButton('btn-b', { source: bReply });
 		await a;
 		await b;
 
@@ -144,6 +173,11 @@ describe('#3 + #4 await a parked collector top-to-bottom', () => {
 });
 
 describe('#6 bot.settle() drains detached background work', () => {
+	const RETAINED_CHANNEL_ID = 'retained-rest-channel';
+	const PRODUCER_CHANNEL_PREFIX = 'producer-step-';
+	const SECRET_TOKEN = 'SUPER-SECRET-TOKEN';
+	const SECRET_ROUTE = `/interactions/diagnostic-interaction/${SECRET_TOKEN}/callback` as const;
+
 	@Declare({ name: 'bg', description: 'replies then writes in the background' })
 	class BgCommand extends Command {
 		async run(ctx: CommandContext) {
@@ -155,20 +189,117 @@ describe('#6 bot.settle() drains detached background work', () => {
 		}
 	}
 
-	test('background REST after the reply settles only after bot.settle()', async () => {
+	@Declare({ name: 'retained-rest', description: 'starts a REST request that never settles' })
+	class RetainedRestCommand extends Command {
+		async run(ctx: CommandContext) {
+			void ctx.client.channels.fetch(RETAINED_CHANNEL_ID);
+			await ctx.write({ content: 'started' });
+		}
+	}
+
+	@Declare({ name: 'multi-step-rest', description: 'starts a finite multi-step REST producer' })
+	class MultiStepRestCommand extends Command {
+		async run(ctx: CommandContext) {
+			void (async () => {
+				for (let index = 0; index < 3; index++) {
+					await ctx.client.channels.fetch(`${PRODUCER_CHANNEL_PREFIX}${index}`);
+				}
+			})();
+			await ctx.write({ content: 'started' });
+		}
+	}
+
+	test('a high-level action drains immediate causal background REST before resolving', async () => {
 		const bot = await createMockBot({ commands: [BgCommand] });
 
 		await bot.slash({ name: 'bg' });
-		expect(bot.created('message', { content: 'background' })).toHaveLength(0); // still detached
-
-		await bot.settle();
-		expect(bot.created('message', { content: 'background' })).toHaveLength(1); // drained
+		const background = bot.restCalls(Routes.createMessage).filter(call => call.body?.content === 'background');
+		expect(background).toHaveLength(1);
+		expect(background[0]).toMatchObject({ settled: true, body: { content: 'background' } });
+		expect(background[0]?.error).toBeUndefined();
 
 		await bot.close();
 	});
+
+	test('rejects with pending-request diagnostics when REST never reaches quiescence', async () => {
+		const bot = await createMockBot({ commands: [RetainedRestCommand] });
+		let release!: (value: { id: string; type: number }) => void;
+		bot.rest.intercept(
+			'GET',
+			`/channels/${RETAINED_CHANNEL_ID}`,
+			() =>
+				new Promise(resolve => {
+					release = resolve;
+				}),
+		);
+
+		try {
+			const error = await bot.slash({ name: 'retained-rest' }).catch(cause => cause);
+
+			expect(error).toBeInstanceOf(Error);
+			expect((error as Error).cause).toBeUndefined();
+			const diagnostic = (error as Error).message;
+			expect(diagnostic).toMatch(/stateful step|causal REST/i);
+			expect(diagnostic).toMatch(/1000 iterations/);
+			expect(diagnostic).toMatch(/1 pending REST request/);
+			expect(diagnostic).toMatch(/dispatchId=\d+/);
+			expect(diagnostic).toContain(`GET /channels/${RETAINED_CHANNEL_ID}`);
+		} finally {
+			release({ id: RETAINED_CHANNEL_ID, type: 0 });
+			await bot.settle();
+			await bot.close();
+		}
+	});
+
+	test('allows a legitimate multi-step REST producer to reach quiescence', async () => {
+		const bot = await createMockBot({ commands: [MultiStepRestCommand] });
+		bot.rest.intercept('GET', /^\/channels\/producer-step-\d+$/, async () => {
+			for (let index = 0; index < 2; index++) {
+				await new Promise<void>(resolve => setImmediate(resolve));
+			}
+			return { id: 'producer-channel', type: 0 };
+		});
+
+		await bot.slash({ name: 'multi-step-rest' });
+		await bot.settle();
+
+		const produced = bot
+			.restCalls(Routes.fetchChannel)
+			.filter(call => call.params.channelId.startsWith(PRODUCER_CHANNEL_PREFIX));
+		expect(produced).toHaveLength(3);
+		expect(produced.every(action => action.settled)).toBe(true);
+		await bot.close();
+	});
+
+	test('redacts interaction tokens from exhaustion diagnostics', async () => {
+		const bot = await createMockBot({});
+		let release!: (value: { ok: true }) => void;
+		bot.rest.intercept(
+			'POST',
+			SECRET_ROUTE,
+			() =>
+				new Promise(resolve => {
+					release = resolve;
+				}),
+		);
+		const retained = bot.rest.request('POST', SECRET_ROUTE);
+
+		try {
+			const error = await bot.settle().catch(cause => cause);
+			expect(error).toBeInstanceOf(Error);
+			expect((error as Error).cause).toBeUndefined();
+			const diagnostic = (error as Error).message;
+			expect(diagnostic).not.toContain(SECRET_TOKEN);
+			expect(diagnostic).toContain('POST /interactions/diagnostic-interaction/:token/callback');
+		} finally {
+			release({ ok: true });
+			await retained;
+			await bot.close();
+		}
+	});
 });
 
-describe('#8 bot.created() semantic query', () => {
+describe('#8 route-specific REST calls', () => {
 	@Declare({ name: 'mkrole', description: 'creates a role' })
 	class MkRoleCommand extends Command {
 		async run(ctx: CommandContext) {
@@ -177,18 +308,19 @@ describe('#8 bot.created() semantic query', () => {
 		}
 	}
 
-	test('created(resource, match?) finds entity-create calls and filters by body', async () => {
+	test('returns route calls and leaves body selection to ordinary array methods', async () => {
 		const world = mockWorld();
 		world.registerGuild({ id: '111111111111111111' });
 		const bot = await createMockBot({ commands: [MkRoleCommand], world });
 
 		await bot.slash({ name: 'mkrole', guildId: '111111111111111111' });
 
-		expect(bot.created('role')).toHaveLength(1);
-		expect(bot.created('role', { name: 'VIP' })).toHaveLength(1);
-		expect(bot.created('role', { name: 'NOPE' })).toHaveLength(0);
-		expect(bot.created('channel')).toHaveLength(0);
-		expect(bot.created('role')[0].body).toMatchObject({ name: 'VIP' });
+		const roles = bot.restCalls(Routes.createRole);
+		expect(roles).toHaveLength(1);
+		expect(roles.filter(call => call.body?.name === 'VIP')).toHaveLength(1);
+		expect(roles.filter(call => call.body?.name === 'NOPE')).toHaveLength(0);
+		expect(bot.restCalls(Routes.createChannel)).toHaveLength(0);
+		expect(roles[0]?.body).toMatchObject({ name: 'VIP' });
 		await bot.close();
 	});
 });
@@ -215,16 +347,14 @@ describe('#4 regression: defer -> non-REST gap -> render collector button', () =
 		}
 	}
 
-	test('untilComponent waits across the non-REST gap, then a source-less click drives it', async () => {
+	test('the stateful slash waits across the non-REST gap, then a source-less click drives it', async () => {
 		events.length = 0;
 		const bot = await createMockBot({ commands: [ReopenCommand] });
 
-		const flow = bot.slash({ name: 'reopen' });
-		await flow.untilComponent('confirm'); // must not bail during the 40ms non-REST gap
+		await bot.slash({ name: 'reopen' });
 		expect(events).toEqual([]);
 
 		await bot.clickButton('confirm');
-		await flow;
 
 		expect(events).toEqual(['confirmed']);
 		await bot.close();
@@ -234,7 +364,7 @@ describe('#4 regression: defer -> non-REST gap -> render collector button', () =
 		events.length = 0;
 		const bot = await createMockBot({ commands: [ReopenCommand] });
 
-		const flow = bot.slash({ name: 'reopen' });
+		const flow = bot.dispatch.slash({ name: 'reopen' });
 		const reply = await flow.untilComponent('confirm');
 		await bot.clickButton('confirm', { source: reply });
 		await flow;
@@ -245,7 +375,7 @@ describe('#4 regression: defer -> non-REST gap -> render collector button', () =
 });
 
 describe('more click/flow DX', () => {
-	test('clickButton auto-synthesizes a source for a registered ComponentCommand (incl. filter/dynamic customId), no flag', async () => {
+	test('raw clickButton requires opt-in to synthesize a dynamic ComponentCommand source', async () => {
 		const clicked: string[] = [];
 		class SubmitButton extends ComponentCommand {
 			componentType = 'Button' as const;
@@ -259,7 +389,8 @@ describe('more click/flow DX', () => {
 		}
 
 		const bot = await createMockBot({ components: [SubmitButton] });
-		const res = await bot.clickButton('submit:auto:c1'); // no source, no allowSyntheticSource — auto-synthesized
+		await expect(bot.clickButton('submit:auto:c1')).rejects.toThrow(/not available in the current state/);
+		const res = await bot.dispatch.clickButton('submit:auto:c1', { allowSyntheticSource: true });
 		expect(clicked).toEqual(['submit:auto:c1']);
 		expect(res.content).toBe('ok');
 		await bot.close();
@@ -300,8 +431,8 @@ describe('more click/flow DX', () => {
 		}
 
 		const bot = await createMockBot({ commands: [LaunchCommand] });
-		const flow = bot.slash({ name: 'launch' });
-		await flow.untilComponent('go'); // parked on waitFor
+		const flow = bot.dispatch.slash({ name: 'launch' });
+		const source = await flow.untilComponent('go'); // parked on waitFor
 
 		// assert what the parked (not-yet-settled) flow already rendered:
 		expect(flow.lastEmbed().title).toBe('Launch');
@@ -309,7 +440,7 @@ describe('more click/flow DX', () => {
 		rendered(flow).get.button('go');
 		rendered(flow).get.embed({ title: 'Launch' });
 
-		await bot.clickButton('go');
+		await bot.dispatch.clickButton('go', { source });
 		await flow;
 		expect(events).toEqual(['clicked']);
 		await bot.close();
@@ -324,7 +455,7 @@ describe('more click/flow DX', () => {
 		}
 
 		const bot = await createMockBot({ commands: [RejectCommand] });
-		const flow = bot.slash({ name: 'reject' });
+		const flow = bot.dispatch.slash({ name: 'reject' });
 		await expect(flow.untilComponent('confirm-menu')).rejects.toThrow(/Not allowed/);
 		await bot.close();
 	});

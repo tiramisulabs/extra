@@ -29,7 +29,7 @@ import type {
 	UserCommandInteractionOptions,
 } from './interactions';
 import type { ApiChannel, ApiMember, ApiMessage, ApiUser, MemberInput } from './payloads';
-import type { RecordedAction } from './rest';
+import type { RecordedAction, RestCalls } from './rest';
 import { Routes } from './routes';
 import { type EmbedView, harvestComponents, type InteractiveComponentView, normalizeEmbed } from './state';
 import type { WorldBuilder } from './world';
@@ -71,6 +71,15 @@ export interface OutgoingMessage {
 
 export type ComponentSourceOptions = {
 	source?: string | RecordedAction;
+};
+
+/** Source controls reserved for the low-level `bot.dispatch.*` surface. */
+export type RawComponentSourceOptions = ComponentSourceOptions & {
+	allowSyntheticSource?: boolean;
+};
+
+/** Modal controls reserved for the low-level `bot.dispatch.*` surface. */
+export type RawModalSubmitOptions = Omit<ModalSubmitInteractionOptions, 'customId' | 'fields'> & {
 	allowSyntheticSource?: boolean;
 };
 
@@ -86,25 +95,6 @@ export const INTERACTION_WEBHOOK_ROUTES = [
 
 export type MessageSource = { id: string; channel_id?: string };
 export type MessagePart = { body: OutgoingMessage; source?: MessageSource };
-type BindComponentView = (view: InteractiveComponentView, source?: MessageSource) => ComponentActionView;
-
-export interface ComponentSourceView {
-	messageId: string;
-	channelId?: string;
-}
-
-export type ComponentClickOptions = Omit<ButtonInteractionOptions, 'customId' | 'message'> &
-	Omit<ComponentSourceOptions, 'source'>;
-
-export type ComponentSelectOptions = Omit<SelectMenuInteractionOptions, 'customId' | 'values' | 'message'> &
-	Omit<ComponentSourceOptions, 'source'>;
-
-/** Interactive component harvested from a dispatch result, bound to the message that rendered it. */
-export interface ComponentActionView extends InteractiveComponentView {
-	source?: ComponentSourceView;
-	click(options?: ComponentClickOptions): Dispatch<DispatchResult>;
-	select(values: string[], options?: ComponentSelectOptions): Dispatch<DispatchResult>;
-}
 
 /** Semantic result produced by interaction dispatchers. */
 export interface DispatchResult {
@@ -136,10 +126,8 @@ export interface DispatchResult {
 	embedViews: EmbedView[];
 	/** First parsed embed view, for the common single-embed assertion. */
 	embedView?: EmbedView;
-	/** Interactive components collected from `messages[].components`. */
-	components: ComponentActionView[];
-	/** Lookup for an interactive component by label or customId. */
-	component(labelOrCustomId: string): ComponentActionView | undefined;
+	/** Data-only normalized components collected from `messages[].components`; dispatch actions through `bot.*`. */
+	components: InteractiveComponentView[];
 	/** Components-v2 TextDisplay (type 10) contents, in dispatch order. */
 	textDisplays: string[];
 	/** Files flattened from `messages`, in dispatch order. */
@@ -208,10 +196,8 @@ export interface MessageResultBase {
 	embedViews: EmbedView[];
 	/** First parsed embed view, for the common single-embed assertion. */
 	embedView?: EmbedView;
-	/** Interactive components collected from `messages[].components`. */
-	components: ComponentActionView[];
-	/** Lookup for an interactive component by label or customId. */
-	component(labelOrCustomId: string): ComponentActionView | undefined;
+	/** Data-only normalized components collected from `messages[].components`; dispatch actions through `bot.*`. */
+	components: InteractiveComponentView[];
 	/** Components-v2 TextDisplay (type 10) contents, in dispatch order. */
 	textDisplays: string[];
 }
@@ -293,25 +279,21 @@ export interface PluginInfo {
 /** Plain-data snapshot for debugging a hung dispatch, surfaced by {@link MockBot.diagnostics}. */
 export interface BotDiagnostics {
 	/** Dispatches created but not yet settled. */
-	pending: { id?: string; started: boolean; settled: boolean }[];
+	pending: { dispatchId?: number; userId?: string; started: boolean; settled: boolean }[];
 	/** The most recent recorded REST actions, oldest-first. */
 	recentActions: RecordedAction[];
 }
 
-export function buildMessageResult(
-	actions: RecordedAction[],
-	parts: MessagePart[],
-	bindComponentView: BindComponentView,
-): MessageResultBase {
+export function buildMessageResult(actions: RecordedAction[], parts: MessagePart[]): MessageResultBase {
 	const messages = parts.map(part => part.body);
 	const embeds = messages.flatMap(message => message.embeds ?? []);
 	const files = messages.flatMap(message => message.files ?? []);
 	const embedViews = embeds.map(normalizeEmbed);
-	const components: ComponentActionView[] = [];
+	const components: InteractiveComponentView[] = [];
 	const textDisplays: string[] = [];
 	for (const part of parts) {
 		const harvested = harvestComponents((part.body as { components?: unknown }).components);
-		components.push(...harvested.components.map(component => bindComponentView(component, part.source)));
+		components.push(...harvested.components);
 		textDisplays.push(...harvested.textDisplays);
 	}
 	return {
@@ -322,9 +304,6 @@ export function buildMessageResult(
 		content: messages.at(-1)?.content,
 		embedViews,
 		components,
-		component(labelOrCustomId: string) {
-			return components.find(view => view.customId === labelOrCustomId || view.label === labelOrCustomId);
-		},
 		textDisplays,
 		get embed() {
 			return embeds[0];
@@ -349,24 +328,26 @@ export interface ActorOptions {
 
 /** Bound dispatcher facade that reuses one identity across a flow. */
 export interface Actor {
-	slash<C extends SlashCommandClass>(command: C, options?: SlashClassOptions<C>): Dispatch<DispatchResult>;
-	slash(options: ChatInputInteractionOptions): Dispatch<DispatchResult>;
+	/** Complete causal REST history for this actor across all of its stateful steps. */
+	readonly restCalls: RestCalls;
+	slash<C extends SlashCommandClass>(command: C, options?: SlashClassOptions<C>): Promise<DispatchResult>;
+	slash(options: ChatInputInteractionOptions): Promise<DispatchResult>;
 	autocomplete(options: AutocompleteInteractionOptions): Dispatch<AutocompleteResult>;
-	userMenu(options: UserCommandInteractionOptions): Dispatch<UserMenuResult>;
-	messageMenu(options: MessageCommandInteractionOptions): Dispatch<MessageMenuResult>;
-	menu<C extends MenuCommandClass>(command: C, options?: MenuOptions<C>): Dispatch<MenuResultFor<C>>;
-	entryPoint(options?: EntryPointInteractionOptions): Dispatch<DispatchResult>;
-	fillModal(
+	userMenu(options: UserCommandInteractionOptions): Promise<UserMenuResult>;
+	messageMenu(options: MessageCommandInteractionOptions): Promise<MessageMenuResult>;
+	menu<C extends MenuCommandClass>(command: C, options?: MenuOptions<C>): Promise<MenuResultFor<C>>;
+	entryPoint(options?: EntryPointInteractionOptions): Promise<DispatchResult>;
+	submitModal(
 		customId: string,
 		fields?: ModalFields,
 		options?: Omit<ModalSubmitInteractionOptions, 'customId' | 'fields'>,
-	): Dispatch<DispatchResult>;
-	clickButton(customId: string, options?: Parameters<MockBot['clickButton']>[1]): Dispatch<DispatchResult>;
+	): Promise<DispatchResult>;
+	clickButton(customId: string, options?: Parameters<MockBot['clickButton']>[1]): Promise<DispatchResult>;
 	selectMenu(
 		customId: string,
 		values: string[],
 		options?: Parameters<MockBot['selectMenu']>[2],
-	): Dispatch<DispatchResult>;
+	): Promise<DispatchResult>;
 	say(content: string, options?: DispatchMessageOptions): Dispatch<SayResult>;
 	emit<TName extends GatewayDispatchPayload['t']>(
 		name: TName,
@@ -374,6 +355,26 @@ export interface Actor {
 		options?: EmitEventOptions,
 	): Dispatch<EventDispatchResult>;
 	emit(name: string, payload?: object | readonly unknown[], options?: EmitEventOptions): Dispatch<EventDispatchResult>;
+}
+
+/** Explicit low-level dispatcher surface. Raw Dispatch awaits handler completion and exposes until/timeout controls. */
+export interface RawInteractionDispatchers {
+	slash<C extends SlashCommandClass>(command: C, options?: SlashClassOptions<C>): Dispatch<DispatchResult>;
+	slash(options: ChatInputInteractionOptions): Dispatch<DispatchResult>;
+	submitModal(customId: string, fields?: ModalFields, options?: RawModalSubmitOptions): Dispatch<DispatchResult>;
+	clickButton(
+		customId: string,
+		options?: Omit<ButtonInteractionOptions, 'customId' | 'message'> & RawComponentSourceOptions,
+	): Dispatch<DispatchResult>;
+	selectMenu(
+		customId: string,
+		values: string[],
+		options?: Omit<SelectMenuInteractionOptions, 'customId' | 'values' | 'message'> & RawComponentSourceOptions,
+	): Dispatch<DispatchResult>;
+	userMenu(options: UserCommandInteractionOptions): Dispatch<UserMenuResult>;
+	messageMenu(options: MessageCommandInteractionOptions): Dispatch<MessageMenuResult>;
+	menu<C extends MenuCommandClass>(command: C, options?: MenuOptions<C>): Dispatch<MenuResultFor<C>>;
+	entryPoint(options?: EntryPointInteractionOptions): Dispatch<DispatchResult>;
 }
 
 /** Autocomplete dispatch result with the responded choices lifted out semantically. */
@@ -388,7 +389,7 @@ export const DISPATCHER_VERBS = [
 	'slash',
 	'clickButton',
 	'selectMenu',
-	'fillModal',
+	'submitModal',
 	'say',
 	'autocomplete',
 	'userMenu',

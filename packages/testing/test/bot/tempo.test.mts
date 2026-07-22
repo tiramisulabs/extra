@@ -60,19 +60,18 @@ describe('actors and dispatch tempo', () => {
 		const bot = await createMockBot({ components: [OnlyFooButton] });
 
 		// The dispatch executor rejects (no component handler matches "nomatch"); without surfacing that
-		// rejection, until() would wait the full waitForAction timeout and report a generic "timed out" error.
+		// rejection, until() would otherwise wait for its control timeout and report a generic timeout error.
 		await expect(
-			bot.clickButton('nomatch', { allowSyntheticSource: true }).until(Routes.createMessage),
+			bot.dispatch.clickButton('nomatch', { allowSyntheticSource: true }).until(Routes.createMessage),
 		).rejects.toThrow(/no handler matched customId "nomatch"/);
 		await bot.close();
 	});
 
-	test('waitForAction with a plain route matcher resolves after the response is populated', async () => {
+	test('restCalls exposes the populated response after a stateful step', async () => {
 		const bot = await createMockBot({ commands: [RouteWriteCommand] });
-		const pending = bot.waitForAction(Routes.createMessage);
 		await bot.slash({ name: 'route-write' });
 
-		const write = await pending;
+		const [write] = bot.restCalls(Routes.createMessage);
 		expect((write.response as { id?: string }).id).toBeDefined();
 		await bot.close();
 	});
@@ -110,12 +109,11 @@ describe('actors and dispatch tempo', () => {
 
 	test('until suspends the command at a matching call', async () => {
 		const bot = await createMockBot({ commands: [SlowBanCommand] });
-		const dispatch = bot.slash({ name: 'slowban' });
+		const dispatch = bot.dispatch.slash({ name: 'slowban' });
 
 		const inFlight = await dispatch.until(Routes.ban);
 		expect(inFlight.response).toBeUndefined();
-		expect(bot.findActions(Routes.ban)).toHaveLength(1);
-		expect(bot.findAction(Routes.ban)?.params).toMatchObject({ guildId: '1', userId: '42' });
+		expect(bot.rest.matchRouteParams(Routes.ban, inFlight)).toMatchObject({ guildId: '1', userId: '42' });
 
 		const result = await dispatch;
 		expect(result.content).toBe('logged');
@@ -124,7 +122,7 @@ describe('actors and dispatch tempo', () => {
 
 	test('checkpoints chain and advance between matching calls', async () => {
 		const bot = await createMockBot({ commands: [SlowBanCommand] });
-		const dispatch = bot.slash({ name: 'slowban' });
+		const dispatch = bot.dispatch.slash({ name: 'slowban' });
 
 		const ban = await dispatch.until(Routes.ban);
 		expect(ban.response).toBeUndefined();
@@ -140,10 +138,10 @@ describe('actors and dispatch tempo', () => {
 	test('a dispatch is lazy until awaited or stepped', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 		const bot = await createMockBot({ commands: [SlowBanCommand] });
-		bot.slash({ name: 'slowban' });
+		bot.dispatch.slash({ name: 'slowban' });
 
 		await new Promise(resolve => setImmediate(resolve));
-		expect(bot.actions).toHaveLength(0);
+		expect(bot.rest.actions).toHaveLength(0);
 		await bot.close();
 		expect(warn).toHaveBeenCalledWith(expect.stringContaining('dispatch(es) were created but never awaited'));
 		warn.mockRestore();

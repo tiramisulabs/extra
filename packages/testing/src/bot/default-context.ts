@@ -132,7 +132,6 @@ export function registerGuildCrud(rest: MockApiHandler, config: GuildCrudConfig)
 				apiError(404, config.unknownCode, config.unknownMessage ?? 'Unknown');
 			}
 			await drop(params.guildId, params[idParam]);
-			return {};
 		});
 	}
 }

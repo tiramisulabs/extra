@@ -1,13 +1,176 @@
-import { ContextMenuCommand, type MenuCommandContext, type UserCommandInteraction } from 'seyfert';
+import {
+	ContextMenuCommand,
+	type MenuCommandContext,
+	type RESTDeleteAPIChannelMessageResult,
+	type RESTGetAPIGuildResult,
+	type RESTPatchAPIGuildMemberJSONBody,
+	type RESTPatchAPIGuildMemberResult,
+	type RESTPostAPIChannelMessageJSONBody,
+	type RESTPostAPIChannelMessageResult,
+	type RESTPostAPIChannelThreadsJSONBody,
+	type RESTPostAPIChannelThreadsResult,
+	type RESTPostAPIGuildForumThreadsJSONBody,
+	type UserCommandInteraction,
+} from 'seyfert';
 import { ApplicationCommandType } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
-import { createMockBot, type MenuResultFor, type TargetFor } from '../../src/bot/bot';
+import { Dispatch, type DispatchOptions, type RestCall, type RestCalls, type RouteMatcher, Routes } from '../../src';
+import {
+	createMockBot,
+	type DispatchResult,
+	type MenuResultFor,
+	type MessageMenuResult,
+	type MockBot,
+	type TargetFor,
+	type UserMenuResult,
+} from '../../src/bot/bot';
 import { type ApiMessage, type ApiUser, apiMember, apiMessage, apiUser } from '../../src/bot/payloads';
 import { mockMember, mockUser } from '../../src/factories';
-import { ReportUser } from './_setup';
+import { GreetCommand, ReportUser } from './_setup';
 
 /** Compile-time assertion that the argument is assignable to `Expected`; the typed parameter does the checking. */
 function expectAssignable<Expected>(_value: Expected): void {}
+
+function constructPublicDispatch(options: DispatchOptions<DispatchResult>): Dispatch<DispatchResult> {
+	return new Dispatch(options);
+}
+void constructPublicDispatch;
+
+type RouteBody<TMatcher> = TMatcher extends RouteMatcher<string, infer TBody, unknown> ? TBody : never;
+type RouteResponse<TMatcher> = TMatcher extends RouteMatcher<string, unknown, infer TResponse> ? TResponse : never;
+type IsExactly<TLeft, TRight> =
+	(<T>() => T extends TLeft ? 1 : 2) extends <T>() => T extends TRight ? 1 : 2
+		? (<T>() => T extends TRight ? 1 : 2) extends <T>() => T extends TLeft ? 1 : 2
+			? true
+			: false
+		: false;
+type UntypedBuiltInRoute = {
+	[TKey in keyof typeof Routes]: IsExactly<RouteBody<(typeof Routes)[TKey]>, Record<string, unknown>> extends true
+		? TKey
+		: unknown extends RouteResponse<(typeof Routes)[TKey]>
+			? TKey
+			: never;
+}[keyof typeof Routes];
+
+// Every built-in descriptor must carry a concrete body and response contract.
+expectAssignable<never>(undefined as never as UntypedBuiltInRoute);
+
+function assertStatefulInteractionTypes(bot: MockBot): void {
+	expectAssignable<Promise<DispatchResult>>(bot.slash({ name: 'type-only' }));
+	expectAssignable<Promise<DispatchResult>>(bot.slash(GreetCommand, { options: { name: 'type-only' } }));
+	expectAssignable<Promise<DispatchResult>>(bot.submitModal('type-only'));
+	expectAssignable<Promise<DispatchResult>>(bot.clickButton('type-only'));
+	expectAssignable<Promise<DispatchResult>>(bot.selectMenu('type-only', ['value']));
+	expectAssignable<Promise<UserMenuResult>>(bot.userMenu({ name: 'type-only' }));
+	expectAssignable<Promise<MessageMenuResult>>(bot.messageMenu({ name: 'type-only' }));
+	expectAssignable<Promise<UserMenuResult>>(bot.menu(ReportUser, { target: apiUser({ username: 'spammer' }) }));
+	expectAssignable<Promise<DispatchResult>>(bot.entryPoint({ name: 'type-only' }));
+	expectAssignable<Promise<void>>(bot.reset());
+	expectAssignable<Dispatch<DispatchResult>>(bot.dispatch.slash({ name: 'type-only' }));
+	expectAssignable<Dispatch<DispatchResult>>(bot.dispatch.submitModal('type-only'));
+	expectAssignable<Dispatch<UserMenuResult>>(bot.dispatch.userMenu({ name: 'type-only' }));
+	expectAssignable<Dispatch<MessageMenuResult>>(bot.dispatch.messageMenu({ name: 'type-only' }));
+	expectAssignable<Dispatch<DispatchResult>>(bot.dispatch.entryPoint({ name: 'type-only' }));
+	const memberEdits = bot.restCalls(Routes.editMember);
+	expectAssignable<
+		readonly RestCall<
+			{ guildId: string; userId: string },
+			RESTPatchAPIGuildMemberJSONBody,
+			RESTPatchAPIGuildMemberResult
+		>[]
+	>(memberEdits);
+	expectAssignable<string>(memberEdits[0].params.guildId);
+	expectAssignable<string>(memberEdits[0].params.userId);
+	expectAssignable<RESTPatchAPIGuildMemberJSONBody | undefined>(memberEdits[0].body);
+	expectAssignable<RESTPatchAPIGuildMemberResult | undefined>(memberEdits[0].response);
+
+	const messages = bot.restCalls(Routes.createMessage);
+	expectAssignable<RESTPostAPIChannelMessageJSONBody | undefined>(messages[0].body);
+	expectAssignable<RESTPostAPIChannelMessageResult | undefined>(messages[0].response);
+	expectAssignable<string>(messages[0].params.channelId);
+
+	const guilds = bot.restCalls(Routes.fetchGuild);
+	expectAssignable<undefined>(guilds[0].body);
+	expectAssignable<RESTGetAPIGuildResult | undefined>(guilds[0].response);
+	expectAssignable<string>(guilds[0].params.guildId);
+
+	const deletes = bot.restCalls(Routes.deleteMessage);
+	expectAssignable<undefined>(deletes[0].body);
+	expectAssignable<RESTDeleteAPIChannelMessageResult | undefined>(deletes[0].response);
+	expectAssignable<string>(deletes[0].params.messageId);
+
+	const threads = bot.restCalls(Routes.createThread);
+	expectAssignable<RESTPostAPIChannelThreadsJSONBody | RESTPostAPIGuildForumThreadsJSONBody | undefined>(
+		threads[0].body,
+	);
+	expectAssignable<RESTPostAPIChannelThreadsResult | undefined>(threads[0].response);
+
+	type CustomBody = { name: string };
+	type CustomResponse = { id: string; name: string };
+	const customRoute: RouteMatcher<'/widgets/:widgetId', CustomBody, CustomResponse> = {
+		method: 'POST',
+		route: '/widgets/:widgetId',
+	};
+	const customCalls = bot.restCalls(customRoute);
+	expectAssignable<string>(customCalls[0].params.widgetId);
+	expectAssignable<CustomBody | undefined>(customCalls[0].body);
+	expectAssignable<CustomResponse | undefined>(customCalls[0].response);
+
+	const noRouteParam = bot.restCalls()[0]?.params.arbitrary;
+	expectAssignable<undefined>(noRouteParam);
+	expectAssignable<Record<string, unknown> | undefined>(bot.restCalls()[0]?.body);
+	expectAssignable<unknown>(bot.restCalls()[0]?.response);
+	// @ts-expect-error no-route reads cannot invent a string route parameter.
+	const inventedRouteParam: string = noRouteParam;
+	void inventedRouteParam;
+	const actor = bot.actor({ user: apiUser() });
+	expectAssignable<RestCalls>(actor.restCalls);
+	expectAssignable<readonly RestCall[]>(actor.restCalls());
+	expectAssignable<Promise<DispatchResult>>(actor.slash({ name: 'type-only' }));
+	expectAssignable<Promise<DispatchResult>>(actor.slash(GreetCommand, { options: { name: 'type-only' } }));
+	expectAssignable<Promise<DispatchResult>>(actor.submitModal('type-only'));
+	expectAssignable<Promise<DispatchResult>>(actor.clickButton('type-only'));
+	expectAssignable<Promise<DispatchResult>>(actor.selectMenu('type-only', ['value']));
+	expectAssignable<Promise<UserMenuResult>>(actor.userMenu({ name: 'type-only' }));
+	expectAssignable<Promise<MessageMenuResult>>(actor.messageMenu({ name: 'type-only' }));
+	expectAssignable<Promise<DispatchResult>>(actor.entryPoint({ name: 'type-only' }));
+	expectAssignable<Promise<UserMenuResult>>(actor.menu(ReportUser, { target: apiUser({ username: 'spammer' }) }));
+	// @ts-expect-error synthetic source opt-in exists only on bot.dispatch.*.
+	bot.clickButton('type-only', { allowSyntheticSource: true });
+	// @ts-expect-error synthetic modal opt-in exists only on bot.dispatch.*.
+	bot.submitModal('type-only', {}, { allowSyntheticSource: true });
+	// @ts-expect-error fillModal was intentionally removed; submitModal is the only modal submission verb.
+	void bot.fillModal;
+	// @ts-expect-error restCalls accepts only an optional route descriptor, never a filter object.
+	bot.restCalls(Routes.editMember, { userId: 'type-only' });
+	// @ts-expect-error restCalls snapshots are read-only arrays.
+	void memberEdits.push;
+	if (memberEdits[0]) {
+		// @ts-expect-error each captured REST call is read-only.
+		memberEdits[0].route = '/changed';
+	}
+	// @ts-expect-error channelId is not a parameter in Routes.editMember.
+	void memberEdits[0]?.params.channelId;
+	// @ts-expect-error legacy single-result REST readers were removed.
+	void bot.findAction;
+	// @ts-expect-error legacy filtered REST readers were removed.
+	void bot.findActions;
+	// @ts-expect-error temporal REST assertion helpers are not part of MockBot.
+	void bot.waitForAction;
+	// @ts-expect-error resource-specific REST readers were removed.
+	void bot.created;
+	// @ts-expect-error global and current raw action aliases were removed from MockBot.
+	void bot.actions;
+	// @ts-expect-error actor action aliases were replaced by actor.restCalls().
+	void actor.currentActions;
+	// @ts-expect-error the low-level REST surface no longer owns assertion-oriented finders.
+	void bot.rest.findActions;
+	// @ts-expect-error the low-level REST surface no longer owns assertion-oriented required lookups.
+	void bot.rest.requireAction;
+	// @ts-expect-error temporal action waits are internal, not a public testing reader.
+	void bot.rest.waitForAction;
+}
+void assertStatefulInteractionTypes;
 
 // A context menu class that does NOT narrow `type` with `as const`. seyfert's ContextMenuCommand declares
 // `type: ApplicationCommandType.User | ApplicationCommandType.Message`, so without `as const` the property
@@ -118,6 +281,15 @@ describe('type DX: S20 menu<C> as-const target discrimination', () => {
 		const username: string = result.target.user.username;
 		expect(username).toBe('spammer');
 		await bot.close();
+	});
+
+	test('raw menu keeps the class-narrowed result type', () => {
+		const probe = (bot: MockBot) => {
+			expectAssignable<Dispatch<UserMenuResult>>(
+				bot.dispatch.menu(ReportUser, { target: apiUser({ username: 'spammer' }) }),
+			);
+		};
+		void probe;
 	});
 
 	test('as-const TargetFor narrows to the exact target type', () => {

@@ -1,6 +1,7 @@
-import { Client, Command, type CommandContext, createPlugin, Declare } from 'seyfert';
+import { Client, Command, type CommandContext, createPlugin, Declare, Modal } from 'seyfert';
 import { describe, expect, test, vi } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
+import { Routes } from '../../src/bot/routes';
 
 // Mirrors a production bot's module-level `export let client` singleton (e.g. a `start.ts` export):
 // commands reach Discord REST through THIS variable, not through ctx.client.
@@ -26,9 +27,9 @@ describe('createMockBot({ client })', () => {
 		expect(res.content).toBe('sent');
 
 		// REST issued through the singleton (not ctx) was captured by the mock
-		const call = bot.findAction({ method: 'POST', route: '/channels/:channelId/messages' });
-		expect(call).toBeTruthy();
-		expect(call?.body).toMatchObject({ content: 'broadcast' });
+		const calls = bot.restCalls(Routes.createMessage);
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.body).toMatchObject({ content: 'broadcast' });
 
 		await bot.close();
 	});
@@ -65,5 +66,31 @@ describe('createMockBot({ client })', () => {
 		expect(bot.plugins.map(info => info.name)).not.toContain('ignored-client-plugin');
 		await bot.close();
 		warn.mockRestore();
+	});
+
+	test('reopens stateful input hooks when a provided client is used by a new harness', async () => {
+		const events: string[] = [];
+
+		@Declare({ name: 'reused-client-wait', description: 'Waits after a client is reused' })
+		class ReusedClientWait extends Command {
+			async run(ctx: CommandContext) {
+				const submit = await ctx.interaction.modal(
+					new Modal().setCustomId('reused-modal').setTitle('Reused').setComponents([]),
+					{ waitFor: 30_000 },
+				);
+				events.push(submit ? 'submitted' : 'timed-out');
+			}
+		}
+
+		client = new Client();
+		const first = await createMockBot({ client });
+		await first.close();
+
+		const second = await createMockBot({ client, commands: [ReusedClientWait] });
+		await second.slash({ name: 'reused-client-wait' });
+		expect(events).toEqual([]);
+
+		await second.close();
+		expect(events).toEqual(['timed-out']);
 	});
 });

@@ -1,4 +1,10 @@
-import { PermissionFlagsBits } from 'seyfert';
+import {
+	type APIMessage,
+	InteractionType,
+	PermissionFlagsBits,
+	type RESTAPIInteractionCallbackResourceObject,
+	type RESTPostAPIInteractionCallbackResult,
+} from 'seyfert';
 import type { WorldDefaultContext } from './default-context';
 import {
 	bodyRecord,
@@ -161,14 +167,12 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 	rest.intercept(Routes.deleteWebhook, (_pending, params) => {
 		if (world && !hooks.state.webhookById(params.webhookId)) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
 		hooks.state.removeWebhook(params.webhookId);
-		return {};
 	});
 	rest.intercept(Routes.deleteWebhookToken, (_pending, params) => {
 		const webhook = hooks.state.webhookById(params.webhookId);
 		if (webhook && webhook.token !== params.webhookToken) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
 		if (world && !webhook) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
 		hooks.state.removeWebhook(params.webhookId);
-		return {};
 	});
 	rest.intercept(Routes.listGuildWebhooks, (_pending, params) => {
 		requireGuild(params.guildId);
@@ -183,6 +187,25 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 		// only legal for component (3) and modal-submit (5) interactions, never an application command (2); a
 		// modal callback (9) cannot answer a modal submit (5). Skipped when the origin type is unknown (lenient).
 		const origin = hooks.state.interactionOrigin(params.token);
+		const interactionType =
+			origin === undefined
+				? body.type === 1
+					? InteractionType.Ping
+					: body.type === 8
+						? InteractionType.ApplicationCommandAutocomplete
+						: body.type === 6 || body.type === 7
+							? InteractionType.MessageComponent
+							: InteractionType.ApplicationCommand
+				: (origin as InteractionType);
+		const callbackResult = (
+			resource?: RESTAPIInteractionCallbackResourceObject,
+		): RESTPostAPIInteractionCallbackResult | undefined => {
+			if (!pending.query?.with_response) return undefined;
+			return {
+				interaction: { id: params.id, type: interactionType },
+				...(resource === undefined ? {} : { resource }),
+			};
+		};
 		if (origin !== undefined) {
 			if ((body.type === 6 || body.type === 7) && origin !== 3 && origin !== 5) {
 				apiError(
@@ -218,7 +241,7 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 					hooks.state.editMessage(source.channelId, source.messageId, body.data ?? {});
 				}
 			}
-			return {};
+			return callbackResult();
 		}
 		// Autocomplete result (type 8): Discord caps choices at 25 and each choice name at 1..100 chars.
 		if (body.type === 8) {
@@ -237,12 +260,14 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 				}
 			}
 		}
-		if (body.type !== 4) return {};
+		if (body.type !== 4) return callbackResult();
 		assertAttachmentRefs(body.data ?? {}, pending.files);
 		const channelId = hooks.state.channelForToken(params.token);
-		if (!channelId) return {};
+		if (!channelId) return callbackResult();
 		const message = hooks.state.addOriginalResponse(params.token, channelId, body.data ?? {}, hooks.botId);
-		return pending.query?.with_response ? { resource: { type: body.type, message } } : {};
+		// WorldState keeps nested Discord payload arrays intentionally loose, but addOriginalResponse just
+		// normalized this message from the typed interaction body; narrow it at the authoritative REST boundary.
+		return callbackResult({ type: body.type, message: message as APIMessage });
 	});
 
 	rest.intercept(Routes.createDm, pending => {
@@ -333,7 +358,6 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 		// F13: deleting a non-existent message is a 404 (deleting another user's message IS allowed with perms).
 		if (world) requireMessage(params.channelId, params.messageId);
 		hooks.state.deleteMessage(params.channelId, params.messageId);
-		return {};
 	});
 	rest.intercept(Routes.bulkDeleteMessages, (pending, params) => {
 		requireChannel(params.channelId);
@@ -344,7 +368,6 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: messages must contain between 2 and 100 items');
 		}
 		for (const messageId of ids) hooks.state.deleteMessage(params.channelId, String(messageId));
-		return {};
 	});
 	rest.intercept(Routes.fetchPins, (_pending, params) => {
 		requireChannel(params.channelId);
@@ -361,13 +384,11 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 			apiError(400, ErrorCode.MaxPinnedMessages, 'Maximum number of pinned messages reached (50)');
 		}
 		hooks.state.pinMessage(params.channelId, params.messageId);
-		return {};
 	});
 	rest.intercept(Routes.unpinMessage, (_pending, params) => {
 		requireMessage(params.channelId, params.messageId);
 		requireChannelPerm(params.channelId, PermissionFlagsBits.ManageMessages);
 		hooks.state.unpinMessage(params.channelId, params.messageId);
-		return {};
 	});
 	rest.intercept(Routes.fetchArchivedThreads, (_pending, params) => {
 		requireChannel(params.channelId);
@@ -413,7 +434,6 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 	rest.intercept(Routes.deleteOriginalResponse, (_pending, params) => {
 		requireInteractionWebhook(params.applicationId, params.interactionToken);
 		hooks.state.deleteOriginalResponse(params.interactionToken);
-		return {};
 	});
 	rest.intercept(Routes.editWebhookMessage, (pending, params) => {
 		const channelId = resolveWebhookChannel(params.applicationId, params.interactionToken);
@@ -437,11 +457,10 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 		if (channelId) {
 			requireMessage(channelId, params.messageId);
 			hooks.state.deleteMessage(channelId, params.messageId);
-			return {};
+			return;
 		}
 		requireInteractionWebhook(params.applicationId, params.interactionToken);
 		hooks.state.deleteWebhookMessage(params.interactionToken, params.messageId);
-		return {};
 	});
 	rest.intercept(Routes.followup, (pending, params) => {
 		// Same route shape as a webhook execute. A registered webhook id (or the `wh-` sendLog encoding)

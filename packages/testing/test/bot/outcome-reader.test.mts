@@ -161,7 +161,7 @@ describe('outcome reader', () => {
 
 	test('response({ kind: "deferUpdate" }) passes for component defer update', async () => {
 		const bot = await createMockBot({ components: [DeferUpdateButton] });
-		const result = await bot.clickButton('outcome-ack', { allowSyntheticSource: true });
+		const result = await bot.dispatch.clickButton('outcome-ack', { allowSyntheticSource: true });
 
 		const response = outcome(result).get.response({ kind: 'deferUpdate' });
 		expect(response.deferred).toBe(true);

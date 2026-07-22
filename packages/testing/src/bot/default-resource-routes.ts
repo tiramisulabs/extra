@@ -82,7 +82,6 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 		requireManageableRole(params.guildId, params.roleId);
 		hooks.state.removeRole(params.guildId, params.roleId);
 		await removeCachedRole(params.guildId, params.roleId);
-		return {};
 	});
 	registerGuildCrud(rest, {
 		idParam: 'emojiId',
@@ -189,7 +188,6 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 			params.userId === '@me' ? PermissionFlagsBits.ViewChannel : PermissionFlagsBits.SendMessagesInThreads,
 		);
 		hooks.state.addThreadMember(params.channelId, resolveThreadUser(params.userId));
-		return {};
 	});
 	rest.intercept(Routes.removeThreadMember, (_pending, params) => {
 		requireChannel(params.channelId);
@@ -198,7 +196,6 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 			params.userId === '@me' ? PermissionFlagsBits.ViewChannel : PermissionFlagsBits.SendMessagesInThreads,
 		);
 		hooks.state.removeThreadMember(params.channelId, resolveThreadUser(params.userId));
-		return {};
 	});
 	rest.intercept(Routes.listThreadMembers, (_pending, params) => {
 		requireChannel(params.channelId);
@@ -319,7 +316,6 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 		}
 		hooks.state.removeStageInstance(params.channelId);
 		await removeCachedStage(params.channelId, stage?.guild_id ?? guildOfChannel(params.channelId));
-		return {};
 	});
 	rest.intercept(Routes.fetchAuditLogs, (_pending, params) => {
 		requireGuild(params.guildId);
@@ -352,7 +348,6 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 		requireHierarchy(params.guildId, params.userId);
 		await removeMember(params.guildId, params.userId, true);
 		await hooks.cacheSet('bans', params.userId, params.guildId, { reason: null, user: resolveUser(params.userId) });
-		return {};
 	});
 	rest.intercept(Routes.kick, async (_pending, params) => {
 		requireGuild(params.guildId);
@@ -360,7 +355,6 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 		if (world && !findMember(params.guildId, params.userId)) apiError(404, ErrorCode.UnknownMember, 'Unknown Member');
 		requireHierarchy(params.guildId, params.userId);
 		await removeMember(params.guildId, params.userId, false);
-		return {};
 	});
 	rest.intercept(Routes.unban, async (_pending, params) => {
 		requireGuild(params.guildId);
@@ -370,7 +364,6 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 		}
 		hooks.state.unban(params.guildId, params.userId);
 		await hooks.cacheRemove('bans', params.userId, params.guildId);
-		return {};
 	});
 	rest.intercept(Routes.fetchBans, (_pending, params) => {
 		requireGuild(params.guildId);
@@ -391,18 +384,15 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 		requireChannelPerm(params.channelId, PermissionFlagsBits.ManageRoles);
 		hooks.state.setChannelOverwrite(params.channelId, params.overwriteId, bodyRecord(pending.body));
 		await syncOverwriteCache(params.channelId);
-		return {};
 	});
 	rest.intercept(Routes.deleteChannelPermission, async (_pending, params) => {
 		requireChannel(params.channelId);
 		requireChannelPerm(params.channelId, PermissionFlagsBits.ManageRoles);
 		hooks.state.removeChannelOverwrite(params.channelId, params.overwriteId);
 		await syncOverwriteCache(params.channelId);
-		return {};
 	});
 	rest.intercept(Routes.triggerTyping, (_pending, params) => {
 		requireChannel(params.channelId);
-		return {};
 	});
 
 	const reactionEventBase = (channelId: string, messageId: string) => {
@@ -449,7 +439,6 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 			apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
 		hooks.state.addReaction(params.channelId, params.messageId, params.emoji, hooks.botId);
 		await emitReaction('MESSAGE_REACTION_ADD', params.channelId, params.messageId, params.emoji, hooks.botId);
-		return {};
 	});
 	// Reaction REMOVAL parity with addReaction: a reaction op against a message that does not exist is a 404,
 	// not a silent no-op. Only the message's existence is gated (removing an absent reaction from a real
@@ -458,7 +447,6 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 		requireMessage(params.channelId, params.messageId);
 		hooks.state.removeReaction(params.channelId, params.messageId, params.emoji, hooks.botId);
 		await emitReaction('MESSAGE_REACTION_REMOVE', params.channelId, params.messageId, params.emoji, hooks.botId);
-		return {};
 	});
 	rest.intercept(Routes.removeUserReaction, async (_pending, params) => {
 		// `@me` collides with the own-reaction route shape; route it to the bot user for parity.
@@ -466,7 +454,6 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 		requireMessage(params.channelId, params.messageId);
 		hooks.state.removeReaction(params.channelId, params.messageId, params.emoji, userId);
 		await emitReaction('MESSAGE_REACTION_REMOVE', params.channelId, params.messageId, params.emoji, userId);
-		return {};
 	});
 	rest.intercept(Routes.removeEmojiReactions, async (_pending, params) => {
 		requireMessage(params.channelId, params.messageId);
@@ -477,7 +464,6 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 				emoji: emojiPayload(params.emoji),
 			});
 		}
-		return {};
 	});
 	rest.intercept(Routes.removeAllReactions, async (_pending, params) => {
 		requireMessage(params.channelId, params.messageId);
@@ -485,7 +471,6 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 		if (hooks.simulateGateway) {
 			await hooks.emit('MESSAGE_REACTION_REMOVE_ALL', reactionEventBase(params.channelId, params.messageId));
 		}
-		return {};
 	});
 	rest.intercept(Routes.listReactions, (_pending, params) => {
 		requireMessage(params.channelId, params.messageId);
@@ -515,7 +500,6 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 				hooks.state.setMemberRoles(params.guildId, params.userId, roles);
 				await emitMemberUpdate(params.guildId, entry.member);
 			}
-			return {};
 		});
 	interceptRoleMutation(Routes.addRole, (member, roleId) =>
 		member.roles.includes(roleId) ? undefined : [...member.roles, roleId],

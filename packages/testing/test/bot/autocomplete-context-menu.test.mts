@@ -153,8 +153,10 @@ describe('autocomplete and context menus', () => {
 		const bot = await createMockBot({ commands: [TooMany] });
 		// seyfert's autocomplete runner swallows the 400 (as it does against real Discord), so the dispatch resolves;
 		// the over-limit respond is rejected at the callback boundary and recorded as an errored action.
-		await bot.autocomplete({ name: 'too-many', focused: 'q', value: 'x' });
-		expect(bot.actions.some(action => /at most 25 choices/.test(String((action.error as Error)?.message)))).toBe(true);
+		const result = await bot.autocomplete({ name: 'too-many', focused: 'q', value: 'x' });
+		expect(result.actions.some(action => /at most 25 choices/.test(String((action.error as Error)?.message)))).toBe(
+			true,
+		);
 		await bot.close();
 	});
 
@@ -218,7 +220,7 @@ describe('autocomplete and context menus', () => {
 	test('userMenu resolves the target user', async () => {
 		const bot = await createMockBot({ commands: [ReportUser] });
 		const target = apiUser({ id: '42', username: 'spammer' });
-		const result = await bot.userMenu({ name: 'Report User', target });
+		const result = await bot.dispatch.userMenu({ name: 'Report User', target });
 		expect(result.reply?.body).toMatchObject({
 			type: InteractionResponseType.ChannelMessageWithSource,
 			data: { content: 'Reported spammer' },

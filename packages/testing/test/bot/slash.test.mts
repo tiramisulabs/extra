@@ -203,6 +203,34 @@ describe('createMockBot', () => {
 		await bot.close();
 	});
 
+	test('rejects instead of hanging when a denial drain cannot reach quiescence', async () => {
+		slowDenierCalls.length = 0;
+		deniedBodyRan.length = 0;
+		const bot = await createMockBot({
+			commands: [SlowDeniedCommand],
+			middlewares: testMiddlewares,
+		});
+		let release!: (value: { id: string; type: number }) => void;
+		bot.rest.intercept(
+			'GET',
+			`/channels/${SLOW_DENIER_CHANNEL_ID}`,
+			() =>
+				new Promise(resolve => {
+					release = resolve;
+				}),
+		);
+
+		try {
+			await expect(bot.slash({ name: 'slow-denied' })).rejects.toThrow(/middleware denial drain/);
+			expect(slowDenierCalls).toEqual(['slowDenier']);
+			expect(deniedBodyRan).toEqual([]);
+		} finally {
+			release({ id: SLOW_DENIER_CHANNEL_ID, type: 0 });
+			await bot.settle();
+			await bot.close();
+		}
+	}, 10_000);
+
 	test('res.command identifies the leaf for flat and subcommand dispatches', async () => {
 		const bot = await createMockBot({ commands: [GreetCommand, ConfigCommand] });
 
@@ -218,8 +246,8 @@ describe('createMockBot', () => {
 	test('slash requires a subcommand when the command declares subcommands', async () => {
 		const bot = await createMockBot({ commands: [ConfigCommand, InventoryCommand] });
 
-		expect(() => bot.slash({ name: 'config' })).toThrow(/requires a subcommand/);
-		expect(() => bot.slash({ name: 'inventory', group: 'items' })).toThrow(/requires a subcommand/);
+		await expect(bot.slash({ name: 'config' })).rejects.toThrow(/requires a subcommand/);
+		await expect(bot.slash({ name: 'inventory', group: 'items' })).rejects.toThrow(/requires a subcommand/);
 		await bot.close();
 	});
 
@@ -261,7 +289,7 @@ describe('createMockBot', () => {
 
 	test('res.command is undefined for component dispatches', async () => {
 		const bot = await createMockBot({ components: [ConfirmButton] });
-		const result = await bot.clickButton('confirm', { allowSyntheticSource: true });
+		const result = await bot.dispatch.clickButton('confirm', { allowSyntheticSource: true });
 		expect(result.command).toBeUndefined();
 		await bot.close();
 	});
@@ -290,7 +318,7 @@ describe('createMockBot', () => {
 
 	test('dispatches modals to component commands', async () => {
 		const bot = await createMockBot({ components: [ConfirmButton, FeedbackModal] });
-		const modal = await bot.fillModal('feedback', { rating: '5' });
+		const modal = await bot.dispatch.submitModal('feedback', { rating: '5' }, { allowSyntheticSource: true });
 		expect(modal.content).toBe('Thanks!');
 		await bot.close();
 	});

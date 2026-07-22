@@ -2,7 +2,7 @@ import { createPlugin } from 'seyfert';
 import { SeyfertError } from 'seyfert/lib/common';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
-import { DiscordErrors, MockApiHandler } from '../../src/bot/rest';
+import { DiscordErrors, MockApiHandler, redactRouteTokens } from '../../src/bot/rest';
 import { Routes } from '../../src/bot/routes';
 import { mockWorld } from '../../src/bot/world';
 
@@ -15,6 +15,16 @@ declare module 'seyfert' {
 }
 
 describe('MockApiHandler', () => {
+	test.each([
+		['/webhooks/application/SUPER-SECRET-TOKEN/messages/@original', '/webhooks/application/:token/messages/@original'],
+		['/interactions/interaction/SUPER-SECRET-TOKEN/callback', '/interactions/interaction/:token/callback'],
+		['/webhooks/standalone/SUPER-SECRET-TOKEN', '/webhooks/standalone/:token'],
+	])('redacts credential-bearing route segments in %s', (route, expected) => {
+		const diagnostic = redactRouteTokens(route);
+		expect(diagnostic).toBe(expected);
+		expect(diagnostic).not.toContain('SUPER-SECRET-TOKEN');
+	});
+
 	test('records requests and answers POST with a message-shaped echo', async () => {
 		const rest = new MockApiHandler({ onUnhandledRest: 'silent' });
 		const response = await rest.request<{ id: string; content: string }>('POST', '/channels/123/messages', {
@@ -32,25 +42,6 @@ describe('MockApiHandler', () => {
 			query: { wait: true },
 			reason: 'cleanup',
 		});
-		expect(
-			rest.findActions({ method: 'POST', route: /\/channels\/123\/messages$/, body: { content: 'hello' } }),
-		).toHaveLength(1);
-		expect(
-			rest.findActions(Routes.createMessage, {
-				params: { channelId: '123' },
-				body: { content: 'hello' },
-				query: { wait: true },
-				response: { content: 'hello' },
-			}),
-		).toHaveLength(1);
-		expect(
-			rest.findActions({
-				method: 'POST',
-				route: '/channels/:channelId/messages',
-				params: { channelId: '123' },
-				body: { content: 'hello' },
-			}),
-		).toHaveLength(1);
 	});
 
 	test('world-backed missing fetches fail, while explicit silent fallbacks are stamped synthetic', async () => {
@@ -61,7 +52,7 @@ describe('MockApiHandler', () => {
 
 		const real = await bot.rest.request<{ id: string }>('GET', `/channels/${channel.id}`);
 		expect(real.id).toBe(channel.id);
-		expect(bot.actions.at(-1)?.synthetic).toBeFalsy();
+		expect(bot.rest.actions.at(-1)?.synthetic).toBeFalsy();
 
 		await expect(bot.rest.request('GET', '/channels/does-not-exist')).rejects.toMatchObject({
 			code: DiscordErrors.UnknownChannel.code,
@@ -71,7 +62,7 @@ describe('MockApiHandler', () => {
 		const synthetic = await createMockBot({ onUnhandledRest: 'silent' });
 		const ghost = await synthetic.rest.request<{ id: string }>('GET', '/channels/does-not-exist');
 		expect(ghost.id).toBe('does-not-exist');
-		expect(synthetic.actions.at(-1)?.synthetic).toBe(true);
+		expect(synthetic.rest.actions.at(-1)?.synthetic).toBe(true);
 		await synthetic.close();
 	});
 
@@ -82,14 +73,17 @@ describe('MockApiHandler', () => {
 		expect(response.name).toBe('Stubbed');
 	});
 
-	test('routeUrl, call and requireAction support typed route params', async () => {
+	test('routeUrl and call support typed route params', async () => {
 		const rest = new MockApiHandler();
 		rest.intercept(Routes.fetchGuild, (_action, params) => ({ id: params.guildId, name: 'Typed' }));
 
 		expect(rest.routeUrl(Routes.fetchGuild, { guildId: '999' })).toBe('/guilds/999');
 		const response = (await rest.call(Routes.fetchGuild, { guildId: '999' })) as { id: string; name: string };
 		expect(response).toEqual({ id: '999', name: 'Typed' });
-		expect(rest.requireAction(Routes.fetchGuild, { guildId: '999' }).params.guildId).toBe('999');
+		const recorded = rest.actions[0];
+		expect(recorded).toBeDefined();
+		if (!recorded) throw new Error('Expected the typed REST call to be recorded.');
+		expect(rest.matchRouteParams(Routes.fetchGuild, recorded)?.guildId).toBe('999');
 	});
 
 	test('notifies plugin REST observers for mock success, failure, and ratelimits', async () => {
@@ -191,24 +185,16 @@ describe('MockApiHandler', () => {
 		expect(response.id).toBeTypeOf('string');
 	});
 
-	test('waitForAction resolves on matching action and rejects on timeout', async () => {
+	test('internal action wait resolves on a matching action and rejects on timeout', async () => {
 		const rest = new MockApiHandler({ onUnhandledRest: 'silent' });
-		const pending = rest.waitForAction(Routes.followup, 1000);
+		const pending = rest.waitUntilAction(Routes.followup, 1000);
 		await rest.request('POST', '/webhooks/app/token');
 		await expect(pending).resolves.toMatchObject({ method: 'POST' });
 
-		const byResponse = rest.waitForAction({
-			method: 'POST',
-			route: '/channels/:channelId/messages',
-			response: { content: 'done' },
-		});
-		await rest.request('POST', '/channels/1/messages', { body: { content: 'done' } });
-		await expect(byResponse).resolves.toMatchObject({ response: { content: 'done' }, params: { channelId: '1' } });
-
-		await expect(rest.waitForAction(action => action.route === '/never', 20)).rejects.toThrow(/Actions seen/);
+		await expect(rest.waitUntilAction(action => action.route === '/never', 20)).rejects.toThrow(/timed out/i);
 	});
 
-	test('waitForAction waits for an existing pending action to settle', async () => {
+	test('internal action wait waits for an existing pending action to settle', async () => {
 		const rest = new MockApiHandler();
 		let release!: (value: unknown) => void;
 		rest.intercept(
@@ -221,7 +207,7 @@ describe('MockApiHandler', () => {
 		);
 
 		const request = rest.request('GET', '/slow');
-		const action = rest.waitForAction({ method: 'GET', route: '/slow' });
+		const action = rest.waitUntilAction({ method: 'GET', route: '/slow' });
 		await Promise.resolve();
 		expect(rest.actions[0]?.response).toBeUndefined();
 
@@ -230,11 +216,11 @@ describe('MockApiHandler', () => {
 		await expect(request).resolves.toEqual({ ok: true });
 	});
 
-	test('waitForAction treats a settled undefined response as complete', async () => {
+	test('internal action wait treats a settled undefined response as complete', async () => {
 		const rest = new MockApiHandler();
 		rest.intercept('GET', '/void', () => undefined);
 
-		const action = rest.waitForAction({ method: 'GET', route: '/void' });
+		const action = rest.waitUntilAction({ method: 'GET', route: '/void' });
 		await expect(rest.request('GET', '/void')).resolves.toBeUndefined();
 		await expect(action).resolves.toMatchObject({ settled: true, response: undefined });
 	});
@@ -245,14 +231,10 @@ describe('MockApiHandler', () => {
 			throw new Error('stub failed');
 		});
 
-		const byError = rest.waitForAction({ method: 'GET', route: '/explode', error: 'stub failed' });
+		const byError = rest.waitUntilAction({ method: 'GET', route: '/explode' });
 		await expect(rest.request('GET', '/explode')).rejects.toThrow('stub failed');
 		await expect(byError).resolves.toMatchObject({ error: expect.any(Error) });
 		expect(rest.actions[0]?.error).toBeInstanceOf(Error);
-		expect(
-			rest.findActions({ method: 'GET', route: '/explode', error: (error: unknown) => error instanceof Error }),
-		).toHaveLength(1);
-		expect(rest.findActions({ method: 'GET', route: '/explode', error: 'stub failed' })).toHaveLength(1);
 	});
 
 	test('reset drops user interceptors but keeps world defaults answering', async () => {
@@ -261,7 +243,7 @@ describe('MockApiHandler', () => {
 		const stubbed = await bot.rest.request<{ name: string }>('GET', '/guilds/42');
 		expect(stubbed.name).toBe('User Stub');
 
-		bot.reset();
+		await bot.reset();
 
 		const afterReset = await bot.rest.request<{ id: string; name: string }>('GET', '/guilds/42');
 		expect(afterReset.name).not.toBe('User Stub');
@@ -301,7 +283,7 @@ describe('MockApiHandler.fail', () => {
 		expect(metadata.status).toBe(403);
 		expect(metadata.statusText).toBe('Forbidden');
 		expect(metadata.response.code).toBe(50013);
-		expect(rest.findActions(Routes.ban)).toHaveLength(1);
+		expect(rest.actions.filter(action => rest.matches(Routes.ban, action))).toHaveLength(1);
 	});
 
 	test('synthesizes statusText for a raw shape and passes retryAfter through', async () => {

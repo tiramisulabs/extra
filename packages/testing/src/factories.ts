@@ -36,6 +36,7 @@ export interface MockGuildOptions {
 	name?: string;
 	preferredLocale?: string;
 	ownerId?: string;
+	icon?: string | null;
 }
 
 export interface MockChannelOptions {
@@ -132,7 +133,9 @@ export interface MockGuild extends SnowflakeDerived {
 	ownerId: string;
 	/** Wire field; mirrors {@link ownerId}. */
 	owner_id: string;
-	icon: null;
+	icon: string | null;
+	/** Guild icon CDN url, or `undefined` when no icon — mirrors seyfert's `BaseGuild.iconURL`. */
+	iconURL(options?: CDNUrlOptions): string | undefined;
 	features: string[];
 	roles: never[];
 	description: null;
@@ -275,7 +278,10 @@ export function mockGuild(options: MockGuildOptions = {}): MockGuild {
 		preferred_locale: preferredLocale,
 		ownerId,
 		owner_id: ownerId,
-		icon: null,
+		icon: options.icon ?? null,
+		iconURL(iconOptions?: CDNUrlOptions) {
+			return this.icon ? cdn().icons(this.id).get(this.icon, iconOptions) : undefined;
+		},
 		features: [],
 		roles: [],
 		description: null,

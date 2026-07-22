@@ -16,41 +16,59 @@ export interface ModalWaitRegistration {
 	dispose(): void;
 }
 
-/** Lazy, step-able handle returned by every user-action dispatcher. */
+export interface DispatchOptions<T> {
+	rest: MockApiHandler;
+	client: Client;
+	userId?: string;
+	/** This dispatch's id, used to scope recorded actions and stateful ownership. */
+	dispatchId?: number;
+	executor: () => Promise<T>;
+	/** Resolves when seyfert registers a modal for the given userId; supplied by MockBot. */
+	modalWaiter?: (userId: string, dispatchId: number | undefined) => ModalWaitRegistration;
+	/** Submits a modal as this dispatch's user; supplied by MockBot so submitModal needs no bot handle. */
+	modalFiller?: (customId: string, fields: ModalFields) => Dispatch<DispatchResult>;
+	/** Clears same-user modal ownership after timeoutModal consumes the registry entry. */
+	modalCleaner?: (userId: string) => void;
+	/** Waits for a rendered component while racing the dispatch's completion. */
+	componentAwaiter?: (
+		customId: string,
+		dispatchId: number | undefined,
+		execution: Promise<unknown>,
+		timeoutMs?: number,
+	) => Promise<RecordedAction>;
+	/** Builds the action's result from the output recorded so far when a stateful session yields at input. */
+	snapshotter?: () => T;
+}
+
+/** Lazy, step-able handle exposed by the advanced `bot.dispatch.*` surface. */
 export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 	private execution?: Promise<T>;
 	private releasePending?: () => void;
 	private settled = false;
 	private completed = false;
+	private readonly rest: MockApiHandler;
+	private readonly clientRef: Client;
+	readonly userId: string | undefined;
+	readonly dispatchId: number | undefined;
+	private readonly executor: () => Promise<T>;
+	private readonly modalWaiter?: DispatchOptions<T>['modalWaiter'];
+	private readonly modalFiller?: DispatchOptions<T>['modalFiller'];
+	private readonly modalCleaner?: DispatchOptions<T>['modalCleaner'];
+	private readonly componentAwaiter?: DispatchOptions<T>['componentAwaiter'];
+	private readonly snapshotter?: DispatchOptions<T>['snapshotter'];
 
-	constructor(
-		private readonly rest: MockApiHandler,
-		private readonly clientRef: Client,
-		readonly userId: string | undefined,
-		private readonly executor: () => Promise<T>,
-		/** Resolves when seyfert registers a modal for the given userId; supplied by MockBot. */
-		private readonly modalWaiter?: (userId: string, dispatchId: number | undefined) => ModalWaitRegistration,
-		/**
-		 * This dispatch's id, so {@link until} can scope its gate to only this dispatch's recorded actions.
-		 * Optional: a gate created without an id stays unscoped (matches any dispatch's actions).
-		 */
-		readonly dispatchId?: number,
-		/** Submits a modal as this dispatch's user; supplied by MockBot so {@link fillModal} needs no bot handle. */
-		private readonly modalFiller?: (customId: string, fields: ModalFields) => Dispatch<DispatchResult>,
-		/** Clears same-user modal ownership after timeoutModal consumes the registry entry. */
-		private readonly modalCleaner?: (userId: string) => void,
-		/**
-		 * Waits for the recorded action that renders a message bearing `customId` (event-driven, so it crosses
-		 * non-REST gaps like a DB query), raced against this dispatch completing without it; supplied by MockBot
-		 * so {@link untilComponent} needs no bot handle.
-		 */
-		private readonly componentAwaiter?: (
-			customId: string,
-			dispatchId: number | undefined,
-			execution: Promise<unknown>,
-			timeoutMs?: number,
-		) => Promise<RecordedAction>,
-	) {}
+	constructor(options: DispatchOptions<T>) {
+		this.rest = options.rest;
+		this.clientRef = options.client;
+		this.userId = options.userId;
+		this.dispatchId = options.dispatchId;
+		this.executor = options.executor;
+		this.modalWaiter = options.modalWaiter;
+		this.modalFiller = options.modalFiller;
+		this.modalCleaner = options.modalCleaner;
+		this.componentAwaiter = options.componentAwaiter;
+		this.snapshotter = options.snapshotter;
+	}
 
 	private start(): Promise<T> {
 		this.execution ??= this.executor().finally(() => {
@@ -69,6 +87,24 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 
 	get isCompleted(): boolean {
 		return this.completed;
+	}
+
+	/** @internal Start the raw handler without changing Dispatch's public completion semantics. */
+	startForSession(): Promise<T> {
+		return this.start();
+	}
+
+	/** @internal The already-started completion promise, used by the stateful session coordinator. */
+	completionForSession(): Promise<T> | undefined {
+		return this.execution;
+	}
+
+	/** @internal Build a partial result at a real input checkpoint. */
+	snapshotForSession(): T {
+		if (!this.snapshotter) {
+			throw new TypeError('This dispatch cannot produce a result before its handler completes.');
+		}
+		return this.snapshotter();
 	}
 
 	private releaseCheckpoint(): void {
@@ -103,13 +139,13 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 	 * handler to completion. It drains the dispatch's pending async, so a handler that replies, attaches a
 	 * collector, then parks on `collector.waitFor(...)` settles right up to the park instead of blocking the
 	 * await for the full collector timeout. Read top-to-bottom afterwards: the dispatch is left in flight, so a
-	 * source-less {@link MockBot.clickButton} resolves against that reply, and `await dispatch` settles the rest.
+	 * pass the returned action as the raw click's source, then `await dispatch` to settle the rest.
 	 *
 	 * ```ts
-	 * const flow = bot.slash({ name: 'setup' });
-	 * await flow.untilComponent('continue');   // reply sent, collector attached, handler parked
-	 * await bot.clickButton('continue');        // drives the collector
-	 * await flow;                               // handler resumes and returns
+	 * const flow = bot.dispatch.slash({ name: 'setup' });
+	 * const source = await flow.untilComponent('continue'); // handler parked
+	 * await bot.dispatch.clickButton('continue', { source }); // drives the collector
+	 * await flow; // handler resumes and returns
 	 * ```
 	 *
 	 * The wait is event-driven, so it tolerates non-REST gaps (a DB query between `deferReply` and the reply).
@@ -174,7 +210,7 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 
 	/**
 	 * @internal Low-level primitive: resolve the instant seyfert registers a modal for this dispatch's user. Used
-	 * by {@link fillModal} / {@link timeoutModal}, which are the supported one-call ways to drive a modal — prefer
+	 * by {@link submitModal} / {@link timeoutModal}, which are the supported one-call ways to drive a modal — prefer
 	 * those. Awaited as an event (no wall-clock poll), so it works under frozen/fake timers; fails fast if the
 	 * dispatch completes without opening a modal.
 	 */
@@ -213,9 +249,9 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 	 * settles the opener so its post-`modal()` continuation (e.g. `submit.write(...)`) runs, returning the
 	 * modal-submit result. The whole open → submit → settle handshake is internal; the user only writes this.
 	 */
-	async fillModal(customId: string, fields: ModalFields = {}): Promise<DispatchResult> {
+	async submitModal(customId: string, fields: ModalFields = {}): Promise<DispatchResult> {
 		if (!this.modalFiller) {
-			throw new TypeError('Dispatch.fillModal: this dispatch type cannot open modals.');
+			throw new TypeError('Dispatch.submitModal: this dispatch type cannot open modals.');
 		}
 		await this.untilModal();
 		const submit = await this.modalFiller(customId, fields);
@@ -227,7 +263,7 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 	 * Drive a modal opened by this dispatch to its TIMEOUT in ONE call: it resolves the opener's
 	 * `interaction.modal({ waitFor })` with `null` — exactly as the real waitFor timer would on expiry, but
 	 * instantly and with no fake-timer setup — so the handler runs its timeout branch, then returns the opener's
-	 * result. The counterpart of {@link fillModal} for the "user never submitted" path.
+	 * result. The counterpart of {@link submitModal} for the "user never submitted" path.
 	 */
 	async timeoutModal(): Promise<T> {
 		if (!this.userId) {

@@ -9,6 +9,7 @@ import {
 	SubCommand,
 } from 'seyfert';
 import { HandleCommand } from 'seyfert/lib/commands/handle';
+import { registerRenderedSource } from '../rendered-output/source';
 import type { SubcommandClassRoute } from './bot-support';
 import { selectTypeForInteraction } from './component-tree';
 import { TEST_CHANNEL_ID, TEST_GUILD_ID } from './constants';
@@ -30,6 +31,9 @@ import {
 	type MessagePart,
 	type MockSubCommandClass,
 	type OutgoingMessage,
+	type RawComponentSourceOptions,
+	type RawInteractionDispatchers,
+	type RawModalSubmitOptions,
 	type SayResult,
 	type SlashClassOptions,
 	type SlashCommandClass,
@@ -37,6 +41,7 @@ import {
 } from './contracts';
 import { Dispatch } from './dispatch';
 import { type DispatchContext, dispatchStore, nextDispatchId } from './dispatch-context';
+import { beginInputShutdown, endInputShutdown } from './hooks';
 import {
 	type ApiInteractionPayload,
 	type AutocompleteInteractionOptions,
@@ -61,38 +66,79 @@ import {
 import { isEphemeral } from './message-flags';
 import { MockBotDispatchCore } from './mock-bot-dispatch';
 import { prepareAutocompleteOptions, prepareChatInputOptions } from './option-validation';
-import { type ApiMessage, apiMember, apiMessage, apiUser, memberOptionsFrom } from './payloads';
-import { isOutgoingMessagePost, type RecordedAction } from './rest';
+import { type ApiMessage, apiChannel, apiMember, apiMessage, apiUser, memberOptionsFrom } from './payloads';
+import { isOutgoingMessagePost, type RecordedAction, type RestCalls, type RouteMatcher } from './rest';
 import { FOLLOWUP_ROUTE, Routes, WEBHOOK_MESSAGE_ROUTE } from './routes';
 import { resolveSelectResolved } from './select-resolved';
 import { eventsInternals, modalRegistry, normalizeGatewayEventName, pluginEventNames } from './seyfert-internals';
 import { numberValue } from './state';
 import { applyWorldEvent, WORLD_EVENT_NAMES } from './world-events';
 
+const INPUT_SHUTDOWN_GRACE_MS = 250;
+const realSetTimeout = setTimeout.bind(globalThis);
+const realClearTimeout = clearTimeout.bind(globalThis);
+
 export class MockBot extends MockBotDispatchCore {
-	protected async runInteraction(payload: ApiInteractionPayload, dispatchId: number): Promise<DispatchResult> {
-		const replies: CapturedReply[] = [];
+	private actorSessionSequence = 0;
+
+	readonly dispatch: RawInteractionDispatchers = {
+		slash: ((
+			commandOrOptions: SlashCommandClass | ChatInputInteractionOptions,
+			classOptions?: SlashClassOptions<SlashCommandClass>,
+		) => this.createSlashDispatch(commandOrOptions, classOptions)) as RawInteractionDispatchers['slash'],
+		submitModal: (customId, fields = {}, options = {}) => this.dispatchSubmitModal(customId, fields, options),
+		clickButton: (customId, options = {}) => this.dispatchClickButton(customId, options),
+		selectMenu: (customId, values, options = {}) => this.dispatchSelectMenu(customId, values, options),
+		userMenu: options => this.createUserMenuDispatch(options),
+		messageMenu: options => this.createMessageMenuDispatch(options),
+		menu: ((command: MenuCommandClass, options?: MenuOptions<MenuCommandClass>) =>
+			this.createMenuDispatch(command, options)) as RawInteractionDispatchers['menu'],
+		entryPoint: options => this.createEntryPointDispatch(options),
+	};
+
+	protected async runInteraction(
+		payload: ApiInteractionPayload,
+		dispatchId: number,
+		causalOwnerDispatchId?: number,
+	): Promise<DispatchResult> {
 		const isComponentPayload = payload.type === InteractionType.MessageComponent;
 		const isModalPayload = payload.type === InteractionType.ModalSubmit;
 		const user = payload.member?.user ?? payload.user;
 		const userId = user?.id;
+		const sessionKey = this.sessions.keyForDispatch(dispatchId);
 		const ctx: DispatchContext = {
 			dispatchId,
+			...(sessionKey === undefined ? {} : { sessionKey }),
 			componentCommandExecuted: false,
 			collectorMatched: false,
 			modalMatched: false,
 		};
+		this.sessions.captureContext(dispatchId, {
+			...(user === undefined ? {} : { user }),
+			...(payload.member === undefined ? {} : { member: payload.member }),
+			guildId: payload.guild_id ?? null,
+			channel: payload.channel,
+			locale: payload.locale,
+			...(payload.guild_locale === undefined ? {} : { guildLocale: payload.guild_locale }),
+			applicationId: payload.application_id,
+			permissions: payload.app_permissions,
+			...(payload.member?.permissions === undefined ? {} : { memberPermissions: payload.member.permissions }),
+			context: payload.context,
+			integrationOwners: payload.authorizing_integration_owners,
+		});
 		// Denial detection: seyfert's __runMiddlewares only resolves on next()/stop(). A guard that
 		// replies and returns without calling any of them leaves the chain pending forever, so command.run is
 		// structurally never reached and handleCommand.interaction never settles. The installed middleware
 		// wrappers settle this promise once a denying middleware's REST surface goes quiescent.
-		const denialSettled = new Promise<void>(resolve => {
+		const denialSettled = new Promise<void>((resolve, reject) => {
 			ctx.resolveDenial = resolve;
+			ctx.rejectDenial = reject;
 		});
 		this._state.registerInteractionToken(payload.token, payload.channel_id, payload.type, payload.application_id);
 		if (payload.message) {
 			this._state.registerComponentSource(payload.token, payload.message.channel_id, payload.message.id);
 		}
+		let modalCapturedDuringExecution = false;
 		// The builders preserve Discord's payload shape while exposing a wider test input type.
 		try {
 			await dispatchStore.run(ctx, async () => {
@@ -105,12 +151,21 @@ export class MockBot extends MockBotDispatchCore {
 				]);
 			});
 		} finally {
+			modalCapturedDuringExecution = this.modalRenderCapturedDispatches.delete(dispatchId);
 			if (isModalPayload && userId) {
 				modalRegistry(this.client).delete(userId);
 				this.modalOwners.delete(userId);
 			}
 		}
-		if (isModalPayload) await this.drainTokenUntilQuiescent(payload.application_id, payload.token, payload.id);
+		if (isModalPayload) {
+			await this.drainTokenUntilQuiescent(
+				payload.application_id,
+				payload.token,
+				payload.id,
+				dispatchId,
+				causalOwnerDispatchId,
+			);
+		}
 		const { componentCommandExecuted, collectorMatched, modalMatched } = ctx;
 		// An unhandled error inside the command/component/modal run was captured by the onRunError hook. Fail loud
 		// by default so a happy-path test surfaces the bug; 'capture' exposes it on result.error instead.
@@ -133,8 +188,25 @@ export class MockBot extends MockBotDispatchCore {
 			!componentCommandExecuted
 		) {
 			const customId = payload.data.custom_id ?? '(unknown)';
-			throw new TypeError(`fillModal: ${this.describeUnmatchedComponent('modal', customId)}`);
+			throw new TypeError(`submitModal: ${this.describeUnmatchedComponent('modal', customId)}`);
 		}
+		if (!isModalPayload && userId && !modalCapturedDuringExecution) {
+			this.captureDisplayedModal(userId, dispatchId);
+			this.modalRenderCapturedDispatches.delete(dispatchId);
+		}
+		return this.buildInteractionResult(payload, dispatchId, ctx);
+	}
+
+	protected snapshotInteraction(payload: ApiInteractionPayload, dispatchId: number): DispatchResult {
+		return this.buildInteractionResult(payload, dispatchId);
+	}
+
+	private buildInteractionResult(
+		payload: ApiInteractionPayload,
+		dispatchId: number,
+		ctx?: DispatchContext,
+	): DispatchResult {
+		const replies: CapturedReply[] = [];
 		// This dispatch owns the actions it stamped, plus any interaction-token-routed action (callback, followups,
 		// original-response edits) for THIS interaction's token. The latter may be emitted from a different async
 		// frame — e.g. a modal submit whose reply is written inside the opener command's resumed continuation — so
@@ -205,7 +277,7 @@ export class MockBot extends MockBotDispatchCore {
 		const messageResult = this.messageParts(actions, parts);
 		const command = this.commandLeaf(payload);
 		const target = this.commandTarget(payload);
-		const denial = ctx.denial;
+		const denial = ctx?.denial;
 
 		return {
 			...messageResult,
@@ -216,7 +288,7 @@ export class MockBot extends MockBotDispatchCore {
 			target,
 			denied: denial !== undefined,
 			denial,
-			...(ctx.error === undefined ? {} : { error: ctx.error }),
+			...(ctx?.error === undefined ? {} : { error: ctx.error }),
 			get reply() {
 				return replies[0];
 			},
@@ -251,6 +323,28 @@ export class MockBot extends MockBotDispatchCore {
 			get content() {
 				return [...messageResult.messages].reverse().find(message => typeof message.content === 'string')?.content;
 			},
+		};
+	}
+
+	private continuationOptions<O extends BaseInteractionOptions>(
+		options: O,
+		sessionKeyOverride?: string,
+	): { options: O; sessionKey: string } {
+		const explicitUser = options.user ?? (options.userId === undefined ? undefined : apiUser({ id: options.userId }));
+		const sessionKey =
+			sessionKeyOverride ??
+			(explicitUser
+				? this.sessions.keyForUser(explicitUser.id)
+				: (this.sessions.latestSessionKey() ?? this.sessions.keyForUser(this.defaultUser.id)));
+		const inherited = this.sessions.context(sessionKey);
+		const user = explicitUser ?? inherited?.user ?? this.defaultUser;
+		return {
+			sessionKey,
+			options: {
+				...(inherited ?? {}),
+				...options,
+				user,
+			} as O,
 		};
 	}
 
@@ -296,9 +390,25 @@ export class MockBot extends MockBotDispatchCore {
 	 * Without a typed `run` the option bag degrades to an empty record (graceful, no compile error), mirroring the
 	 * `menu(Class)` precedent. Pass `{ name, ... }` for concise raw name-based dispatch.
 	 */
-	slash<C extends SlashCommandClass>(command: C, options?: SlashClassOptions<C>): Dispatch<DispatchResult>;
-	slash(options: ChatInputInteractionOptions): Dispatch<DispatchResult>;
-	slash<C extends SlashCommandClass>(
+	slash<C extends SlashCommandClass>(command: C, options?: SlashClassOptions<C>): Promise<DispatchResult>;
+	slash(options: ChatInputInteractionOptions): Promise<DispatchResult>;
+	async slash<C extends SlashCommandClass>(
+		commandOrOptions: C | ChatInputInteractionOptions,
+		classOptions?: SlashClassOptions<C>,
+	): Promise<DispatchResult> {
+		return this.slashInSession(commandOrOptions, classOptions);
+	}
+
+	private slashInSession<C extends SlashCommandClass>(
+		commandOrOptions: C | ChatInputInteractionOptions,
+		classOptions?: SlashClassOptions<C>,
+		sessionKey?: string,
+	): Promise<DispatchResult> {
+		this.assertNoResetInProgress('stateful step');
+		return this.performStep(this.createSlashDispatch(commandOrOptions, classOptions), sessionKey);
+	}
+
+	protected createSlashDispatch<C extends SlashCommandClass>(
 		commandOrOptions: C | ChatInputInteractionOptions,
 		classOptions?: SlashClassOptions<C>,
 	): Dispatch<DispatchResult> {
@@ -401,18 +511,27 @@ export class MockBot extends MockBotDispatchCore {
 		const userId = payload.member?.user.id ?? payload.user?.id;
 		const dispatchId = nextDispatchId();
 		return this.track(
-			new Dispatch(
-				this.rest,
-				this.client,
+			new Dispatch({
+				rest: this.rest,
+				client: this.client,
 				userId,
-				async () => withChoices(await this.runInteraction(payload, dispatchId)),
-				(id, ownerDispatchId) => this.onModalRegistered(id, ownerDispatchId),
+				executor: async () => withChoices(await this.runInteraction(payload, dispatchId)),
+				modalWaiter: (id, ownerDispatchId) => this.onModalRegistered(id, ownerDispatchId),
 				dispatchId,
-			),
+			}),
 		);
 	}
 
-	userMenu(options: UserCommandInteractionOptions): Dispatch<UserMenuResult> {
+	userMenu(options: UserCommandInteractionOptions): Promise<UserMenuResult> {
+		return this.userMenuInSession(options);
+	}
+
+	private userMenuInSession(options: UserCommandInteractionOptions, sessionKey?: string): Promise<UserMenuResult> {
+		this.assertNoResetInProgress('stateful step');
+		return this.performStep(this.createUserMenuDispatch(options), sessionKey);
+	}
+
+	protected createUserMenuDispatch(options: UserCommandInteractionOptions): Dispatch<UserMenuResult> {
 		const build = (prepared: UserCommandInteractionOptions): ApiInteractionPayload => {
 			const targetMember = options.targetMember ?? this.worldMemberFor(prepared.guildId, prepared.target);
 			return userCommandInteraction({ ...prepared, ...(targetMember ? { targetMember } : {}) });
@@ -424,7 +543,19 @@ export class MockBot extends MockBotDispatchCore {
 		return this.dispatchVia<UserCommandInteractionOptions, UserMenuResult>('userMenu', options, build);
 	}
 
-	messageMenu(options: MessageCommandInteractionOptions): Dispatch<MessageMenuResult> {
+	messageMenu(options: MessageCommandInteractionOptions): Promise<MessageMenuResult> {
+		return this.messageMenuInSession(options);
+	}
+
+	private messageMenuInSession(
+		options: MessageCommandInteractionOptions,
+		sessionKey?: string,
+	): Promise<MessageMenuResult> {
+		this.assertNoResetInProgress('stateful step');
+		return this.performStep(this.createMessageMenuDispatch(options), sessionKey);
+	}
+
+	protected createMessageMenuDispatch(options: MessageCommandInteractionOptions): Dispatch<MessageMenuResult> {
 		const build = (prepared: MessageCommandInteractionOptions): ApiInteractionPayload => {
 			const targetMember = options.targetMember ?? this.worldMemberFor(prepared.guildId, prepared.target?.author);
 			return messageCommandInteraction({ ...prepared, ...(targetMember ? { targetMember } : {}) });
@@ -475,40 +606,100 @@ export class MockBot extends MockBotDispatchCore {
 	 * is optional). The dispatch still runs correctly; you only lose the narrowed compile-time target. See
 	 * {@link TargetFor} and {@link MenuResultFor}.
 	 */
-	menu<C extends MenuCommandClass>(command: C, options: MenuOptions<C> = {}): Dispatch<MenuResultFor<C>> {
+	menu<C extends MenuCommandClass>(command: C, options: MenuOptions<C> = {}): Promise<MenuResultFor<C>> {
+		return this.menuInSession(command, options);
+	}
+
+	private menuInSession<C extends MenuCommandClass>(
+		command: C,
+		options: MenuOptions<C> = {},
+		sessionKey?: string,
+	): Promise<MenuResultFor<C>> {
+		this.assertNoResetInProgress('stateful step');
 		const instance = new command();
 		if (instance.type === ApplicationCommandType.User) {
-			return this.userMenu({
+			return this.userMenuInSession(
+				{
+					...options,
+					name: instance.name,
+				} as UserCommandInteractionOptions,
+				sessionKey,
+			) as Promise<MenuResultFor<C>>;
+		}
+		return this.messageMenuInSession(
+			{
+				...(options as MessageCommandInteractionOptions),
+				name: instance.name,
+			},
+			sessionKey,
+		) as Promise<MenuResultFor<C>>;
+	}
+
+	protected createMenuDispatch<C extends MenuCommandClass>(
+		command: C,
+		options: MenuOptions<C> = {},
+	): Dispatch<MenuResultFor<C>> {
+		const instance = new command();
+		if (instance.type === ApplicationCommandType.User) {
+			return this.createUserMenuDispatch({
 				...options,
 				name: instance.name,
 			} as UserCommandInteractionOptions) as Dispatch<MenuResultFor<C>>;
 		}
-		return this.messageMenu({
+		return this.createMessageMenuDispatch({
 			...(options as MessageCommandInteractionOptions),
 			name: instance.name,
 		}) as Dispatch<MenuResultFor<C>>;
 	}
 
-	entryPoint(options: EntryPointInteractionOptions = {}): Dispatch<DispatchResult> {
+	entryPoint(options: EntryPointInteractionOptions = {}): Promise<DispatchResult> {
+		return this.entryPointInSession(options);
+	}
+
+	private entryPointInSession(
+		options: EntryPointInteractionOptions = {},
+		sessionKey?: string,
+	): Promise<DispatchResult> {
+		this.assertNoResetInProgress('stateful step');
+		return this.performStep(this.createEntryPointDispatch(options), sessionKey);
+	}
+
+	protected createEntryPointDispatch(options: EntryPointInteractionOptions = {}): Dispatch<DispatchResult> {
 		return this.dispatchVia('entryPoint', options, entryPointInteraction);
 	}
 
-	clickButton(
+	async clickButton(
 		customId: string,
 		options: Omit<ButtonInteractionOptions, 'customId' | 'message'> & ComponentSourceOptions = {},
+	): Promise<DispatchResult> {
+		return this.clickButtonInSession(customId, options);
+	}
+
+	private async clickButtonInSession(
+		customId: string,
+		options: Omit<ButtonInteractionOptions, 'customId' | 'message'> & ComponentSourceOptions = {},
+		sessionKeyOverride?: string,
+	): Promise<DispatchResult> {
+		this.assertNoResetInProgress('stateful step');
+		return this.performComponentStep('clickButton', customId, options, sessionKeyOverride, prepared =>
+			this.dispatchClickButton(customId, prepared),
+		);
+	}
+
+	protected dispatchClickButton(
+		customId: string,
+		options: Omit<ButtonInteractionOptions, 'customId' | 'message'> & RawComponentSourceOptions = {},
 	): Dispatch<DispatchResult> {
 		const { source, allowSyntheticSource, ...rest } = options;
 		const opts: ButtonInteractionOptions = { ...rest, customId };
 		return this.dispatchVia('clickButton', opts, prepared => {
 			const message = this.resolveMessageSource(source);
 			this.assertNoConcurrentImplicitComponentSource('clickButton', customId, source !== undefined);
-			// Auto-synthesize when no source resolves but a ComponentCommand could handle this customId (incl.
-			// RegExp/filter handlers) — unambiguous (no message ⇒ no live collector), so no flag needed.
-			const synthetic = allowSyntheticSource || (!message && this.componentCommandMatches(customId));
+			const synthetic = allowSyntheticSource === true && !message;
 			if (!message && !synthetic) {
 				throw new TypeError(
 					`clickButton: no source message resolved for "${customId}". Send the message first, pass source, ` +
-						`or set allowSyntheticSource: true for a ComponentCommand-only dispatch.`,
+						`or use bot.dispatch.clickButton(..., { allowSyntheticSource: true }) for a raw ComponentCommand-only dispatch.`,
 				);
 			}
 			if (synthetic && !message) this.assertSyntheticComponentAllowed('clickButton', customId);
@@ -528,21 +719,109 @@ export class MockBot extends MockBotDispatchCore {
 		});
 	}
 
-	selectMenu(
+	async selectMenu(
 		customId: string,
 		values: string[],
 		options: Omit<SelectMenuInteractionOptions, 'customId' | 'values' | 'message'> & ComponentSourceOptions = {},
+	): Promise<DispatchResult> {
+		return this.selectMenuInSession(customId, values, options);
+	}
+
+	private async selectMenuInSession(
+		customId: string,
+		values: string[],
+		options: Omit<SelectMenuInteractionOptions, 'customId' | 'values' | 'message'> & ComponentSourceOptions = {},
+		sessionKeyOverride?: string,
+	): Promise<DispatchResult> {
+		this.assertNoResetInProgress('stateful step');
+		return this.performComponentStep(
+			'selectMenu',
+			customId,
+			options,
+			sessionKeyOverride,
+			(prepared, sourceComponent) => {
+				this.assertSelectValuesMatchSource(customId, values, sourceComponent);
+				return this.dispatchSelectMenu(customId, values, prepared);
+			},
+		);
+	}
+
+	private async performComponentStep<O extends BaseInteractionOptions & ComponentSourceOptions>(
+		verb: 'clickButton' | 'selectMenu',
+		customId: string,
+		options: O,
+		sessionKeyOverride: string | undefined,
+		build: (prepared: O & { source: string }, sourceComponent: Record<string, unknown>) => Dispatch<DispatchResult>,
+	): Promise<DispatchResult> {
+		const continuation = this.continuationOptions(options, sessionKeyOverride);
+		const preparedOptions = continuation.options;
+		const sessionKey = continuation.sessionKey;
+		const userId = preparedOptions.user?.id ?? this.defaultUser.id;
+		const implicitSource = options.source === undefined;
+		const currentSource = implicitSource ? this.resolveCurrentComponentSource(sessionKey, verb, customId) : undefined;
+		const currentMessageSource =
+			implicitSource && currentSource === undefined ? this.resolveCurrentMessageSource(sessionKey) : undefined;
+		const explicitSource = implicitSource ? undefined : this.resolveMessageSource(options.source);
+		const resolvedSource = currentSource ?? currentMessageSource ?? explicitSource;
+		if (!resolvedSource) {
+			throw new TypeError(
+				`${verb}: component "${customId}" is not available in the current state for user "${userId}". ` +
+					'Await the action that renders it, inspect it with rendered(bot), or pass an explicit source.',
+			);
+		}
+
+		const sourceMessage = this.hydrateSourceMessage(resolvedSource, { verb, customId });
+		const sourceComponent = this.requireComponentOnMessage(verb, customId, sourceMessage);
+		const checkpoint = this.sessions.componentCheckpoint(
+			customId,
+			resolvedSource.id,
+			implicitSource ? sessionKey : undefined,
+		);
+		const sourceSessionContext = checkpoint ? this.sessions.context(checkpoint.sessionKey) : undefined;
+		const sourceChannelId = resolvedSource.channel_id ?? checkpoint?.channelId ?? sourceMessage.channel_id;
+		const sourceChannel = sourceChannelId === undefined ? undefined : this._state.channelById(sourceChannelId);
+		const sourceGuildId =
+			sourceMessage.guild_id ??
+			checkpoint?.guildId ??
+			sourceSessionContext?.guildId ??
+			(sourceChannel === undefined ? (preparedOptions.guildId ?? null) : (sourceChannel.guildId ?? null));
+		const prepared = {
+			...preparedOptions,
+			guildId: sourceGuildId,
+			...(sourceChannelId === undefined
+				? {}
+				: {
+						channel: apiChannel({
+							id: sourceChannelId,
+							guildId: sourceGuildId,
+						}),
+					}),
+			source: resolvedSource.id,
+		} as O & { source: string };
+		const dispatch = build(prepared, sourceComponent);
+		const consumed = this.sessions.consumeComponent(
+			customId,
+			resolvedSource.id,
+			implicitSource ? sessionKey : undefined,
+		);
+		return this.performStep(dispatch, consumed?.sessionKey ?? sessionKey, consumed?.ownerDispatchId);
+	}
+
+	protected dispatchSelectMenu(
+		customId: string,
+		values: string[],
+		options: Omit<SelectMenuInteractionOptions, 'customId' | 'values' | 'message'> & RawComponentSourceOptions = {},
 	): Dispatch<DispatchResult> {
 		const { source, allowSyntheticSource, ...rest } = options;
 		const opts: SelectMenuInteractionOptions = { ...rest, customId, values };
 		return this.dispatchVia('selectMenu', opts, prepared => {
 			const message = this.resolveMessageSource(source);
 			this.assertNoConcurrentImplicitComponentSource('selectMenu', customId, source !== undefined);
-			const synthetic = allowSyntheticSource || (!message && this.componentCommandMatches(customId));
+			const synthetic = allowSyntheticSource === true && !message;
 			if (!message && !synthetic) {
 				throw new TypeError(
 					`selectMenu: no source message resolved for "${customId}". Send the message first, pass source, ` +
-						`or set allowSyntheticSource: true for a ComponentCommand-only dispatch.`,
+						`or use bot.dispatch.selectMenu(..., { allowSyntheticSource: true }) for a raw ComponentCommand-only dispatch.`,
 				);
 			}
 			if (synthetic && !message) this.assertSyntheticComponentAllowed('selectMenu', customId);
@@ -564,15 +843,40 @@ export class MockBot extends MockBotDispatchCore {
 		});
 	}
 
-	fillModal(
+	async submitModal(
 		customId: string,
 		fields: ModalFields = {},
 		extra: Omit<ModalSubmitInteractionOptions, 'customId' | 'fields'> = {},
+	): Promise<DispatchResult> {
+		return this.submitModalInSession(customId, fields, extra);
+	}
+
+	private async submitModalInSession(
+		customId: string,
+		fields: ModalFields = {},
+		extra: Omit<ModalSubmitInteractionOptions, 'customId' | 'fields'> = {},
+		sessionKeyOverride?: string,
+	): Promise<DispatchResult> {
+		this.assertNoResetInProgress('stateful step');
+		const continuation = this.continuationOptions(extra, sessionKeyOverride);
+		const sessionKey = continuation.sessionKey;
+		const userId = continuation.options.user?.id ?? this.defaultUser.id;
+		this.assertStatefulModalAvailable(customId, fields, userId, sessionKey);
+		const dispatch = this.dispatchSubmitModal(customId, fields, continuation.options);
+		const resumedOwnerDispatchId = this.sessions.consumeModal(sessionKey, customId);
+		return this.performStep(dispatch, sessionKey, resumedOwnerDispatchId);
+	}
+
+	protected dispatchSubmitModal(
+		customId: string,
+		fields: ModalFields = {},
+		extra: RawModalSubmitOptions = {},
 	): Dispatch<DispatchResult> {
-		const opts: ModalSubmitInteractionOptions = { ...extra, customId, fields };
-		return this.dispatchVia('fillModal', opts, prepared => {
+		const { allowSyntheticSource, ...interactionOptions } = extra;
+		const opts: ModalSubmitInteractionOptions = { ...interactionOptions, customId, fields };
+		return this.dispatchVia('submitModal', opts, prepared => {
 			const userId = prepared.user?.id ?? this.defaultUser.id;
-			this.assertModalHandleable(customId, userId);
+			this.assertModalHandleable(customId, userId, allowSyntheticSource === true);
 			this.assertModalMatchesDisplayed(customId, fields, userId);
 			return modalSubmitInteraction(prepared);
 		});
@@ -597,11 +901,11 @@ export class MockBot extends MockBotDispatchCore {
 
 		const dispatchId = nextDispatchId();
 		return this.track(
-			new Dispatch(
-				this.rest,
-				this.client,
-				author.id,
-				async () => {
+			new Dispatch({
+				rest: this.rest,
+				client: this.client,
+				userId: author.id,
+				executor: async () => {
 					await dispatchStore.run(
 						{ dispatchId, componentCommandExecuted: false, collectorMatched: false, modalMatched: false },
 						() => this.client.handleCommand.message(raw as Parameters<HandleCommand['message']>[0], -1),
@@ -610,9 +914,9 @@ export class MockBot extends MockBotDispatchCore {
 					const parts = actions.filter(isOutgoingMessagePost).map(action => this.outgoingMessagePart(action));
 					return this.messageParts(actions, parts);
 				},
-				(id, ownerDispatchId) => this.onModalRegistered(id, ownerDispatchId),
+				modalWaiter: (id, ownerDispatchId) => this.onModalRegistered(id, ownerDispatchId),
 				dispatchId,
-			),
+			}),
 		);
 	}
 
@@ -626,6 +930,13 @@ export class MockBot extends MockBotDispatchCore {
 			options.channel ??
 			(entry ? this._world?.channels.find(candidate => candidate.guild_id === entry.guildId) : undefined);
 		const base = { user, guildId, channel };
+		const actorUserId = user?.id ?? this.defaultUser.id;
+		const sessionKey = `actor:${++this.actorSessionSequence}:user:${actorUserId}`;
+		const sessions = this.sessions;
+		const restCalls = ((matcher?: RouteMatcher) =>
+			matcher
+				? this.snapshotRestCalls(sessions.ownedActions(sessionKey), matcher)
+				: this.snapshotRestCalls(sessions.ownedActions(sessionKey))) as RestCalls;
 		const mergeEventPayload = (payload: object | readonly unknown[] = {}): object | readonly unknown[] => {
 			if (Array.isArray(payload)) return payload;
 			return {
@@ -635,26 +946,32 @@ export class MockBot extends MockBotDispatchCore {
 			};
 		};
 
-		return {
+		const actor: Actor = {
+			restCalls,
 			slash: (
 				commandOrOptions: SlashCommandClass | ChatInputInteractionOptions,
 				classOptions?: SlashClassOptions<SlashCommandClass>,
 			) =>
 				typeof commandOrOptions === 'function'
-					? this.slash(commandOrOptions, { ...base, ...classOptions })
-					: this.slash({ ...base, ...commandOrOptions }),
+					? this.slashInSession(commandOrOptions, { ...base, ...classOptions }, sessionKey)
+					: this.slashInSession({ ...base, ...commandOrOptions }, undefined, sessionKey),
 			autocomplete: options => this.autocomplete({ ...base, ...options }),
-			userMenu: options => this.userMenu({ ...base, ...options }),
-			messageMenu: options => this.messageMenu({ ...base, ...options }),
-			menu: (command, options) => this.menu(command, { ...base, ...options } as MenuOptions<typeof command>),
-			entryPoint: options => this.entryPoint({ ...base, ...options }),
-			fillModal: (customId, fields, options = {}) => this.fillModal(customId, fields, { ...base, ...options }),
-			clickButton: (customId, options = {}) => this.clickButton(customId, { ...base, ...options }),
-			selectMenu: (customId, values, options = {}) => this.selectMenu(customId, values, { ...base, ...options }),
+			userMenu: options => this.userMenuInSession({ ...base, ...options }, sessionKey),
+			messageMenu: options => this.messageMenuInSession({ ...base, ...options }, sessionKey),
+			menu: (command, options) =>
+				this.menuInSession(command, { ...base, ...options } as MenuOptions<typeof command>, sessionKey),
+			entryPoint: options => this.entryPointInSession({ ...base, ...options }, sessionKey),
+			submitModal: (customId, fields, options = {}) =>
+				this.submitModalInSession(customId, fields, { ...base, ...options }, sessionKey),
+			clickButton: (customId, options = {}) => this.clickButtonInSession(customId, { ...base, ...options }, sessionKey),
+			selectMenu: (customId, values, options = {}) =>
+				this.selectMenuInSession(customId, values, { ...base, ...options }, sessionKey),
 			say: (content, options = {}) => this.say(content, { ...base, ...options }),
 			emit: (name: string, payload: object | readonly unknown[] = {}, options?: EmitEventOptions) =>
 				this.emit(name, mergeEventPayload(payload), options),
 		};
+		registerRenderedSource(actor, () => sessions.latestActions(sessionKey));
+		return actor;
 	}
 
 	emit<TName extends GatewayDispatchPayload['t']>(
@@ -687,11 +1004,10 @@ export class MockBot extends MockBotDispatchCore {
 		const d = payload as Record<string, unknown>;
 		const dispatchId = nextDispatchId();
 		return this.track(
-			new Dispatch<EventDispatchResult>(
-				this.rest,
-				this.client,
-				undefined,
-				async () => {
+			new Dispatch<EventDispatchResult>({
+				rest: this.rest,
+				client: this.client,
+				executor: async () => {
 					// Guard BEFORE mutating the world, so a rejected emit is a true no-op (no dirtied world state,
 					// and seyfert's cache — updated later inside runEvent — stays consistent with the world).
 					const prepared = this.prepareGatewayEventPayload(name, d);
@@ -734,9 +1050,8 @@ export class MockBot extends MockBotDispatchCore {
 					const result = this.messageParts(actions, parts);
 					return ctx.error === undefined ? result : { ...result, error: ctx.error };
 				},
-				undefined,
 				dispatchId,
-			),
+			}),
 		);
 	}
 
@@ -748,11 +1063,10 @@ export class MockBot extends MockBotDispatchCore {
 		this.assertOpen('emit');
 		const dispatchId = nextDispatchId();
 		return this.track(
-			new Dispatch<EventDispatchResult>(
-				this.rest,
-				this.client,
-				undefined,
-				async () => {
+			new Dispatch<EventDispatchResult>({
+				rest: this.rest,
+				client: this.client,
+				executor: async () => {
 					const handlerRan = this.eventHandlerRan(name);
 					if (!handlerRan && !allowNoHandler) {
 						throw new Error(
@@ -778,9 +1092,8 @@ export class MockBot extends MockBotDispatchCore {
 					const result = this.messageParts(actions, parts);
 					return ctx.error === undefined ? result : { ...result, error: ctx.error };
 				},
-				undefined,
 				dispatchId,
-			),
+			}),
 		);
 	}
 
@@ -806,6 +1119,16 @@ export class MockBot extends MockBotDispatchCore {
 		return events.getPluginListeners(name).length > 0 || events.getPluginAnyListeners().length > 0;
 	}
 
+	private clearInputRuntime(): void {
+		this.client.components.modals.clear();
+		this.client.components.values.clear();
+		this.modalWaiters.clear();
+		this.modalOwners.clear();
+		this.displayedModals.clear();
+		this.modalRenderCapturedDispatches.clear();
+		this.sessions.reset();
+	}
+
 	/**
 	 * Clear recorded REST traffic and transient per-dispatch handler state between phases of a test.
 	 *
@@ -816,40 +1139,93 @@ export class MockBot extends MockBotDispatchCore {
 	 *
 	 * Does NOT clear: the seeded WORLD (guilds/channels/messages/members and the bans/reactions/voice/pin state),
 	 * the registered commands/components/events, or seyfert's cache. `reset()` is "new REST traffic, same bot and
-	 * world" — for a truly clean slate (fresh world + cache), create a new bot with `createMockBot(...)`.
+	 * world" — for a truly clean slate (fresh world + cache), create a new bot with `createMockBot(...)`. Await it:
+	 * active modal/component waits take their natural null branch before the state is cleared.
 	 */
-	reset(): void {
+	async reset(): Promise<void> {
 		this.assertOpen('reset');
-		this.rest.clearActions();
-		this.rest.releasePending();
-		this.rest.resetInterceptors();
-		this.dispatches.length = 0;
-		this.client.components.modals.clear();
-		this.client.components.values.clear();
-		this.modalWaiters.clear();
-		this.modalOwners.clear();
-		this.displayedModals.clear();
-		this.unregisteredMemberWarnings.clear();
-		this.lastInteractionMessage = undefined;
+		this.beginReset();
+		try {
+			const pendingInputError = await this.finishPendingInputs();
+			const stillRunning = this.dispatches.filter(dispatch => dispatch.started && !dispatch.isCompleted);
+			if (stillRunning.length > 0) {
+				if (pendingInputError !== undefined) throw pendingInputError;
+				const ids = stillRunning.map(dispatch => dispatch.dispatchId ?? '(unknown)').join(', ');
+				throw new TypeError(
+					`reset: cannot clear state while non-input dispatches are still running (${ids}). ` +
+						'Await those dispatches before resetting the bot.',
+				);
+			}
+			this.rest.clearActions();
+			this.rest.releasePending();
+			this.rest.resetInterceptors();
+			this.dispatches.length = 0;
+			this.clearInputRuntime();
+			this.unregisteredMemberWarnings.clear();
+			this.lastInteractionMessage = undefined;
+			if (pendingInputError !== undefined) throw pendingInputError;
+		} finally {
+			endInputShutdown(this.client);
+			this.endReset();
+		}
 	}
 
 	async close(): Promise<void> {
 		if (this.closed) return;
+		this.assertNoResetInProgress('close');
+		this.assertNoActiveStatefulStep('close');
 		this.closed = true;
 		const unstarted = this.dispatches.filter(dispatch => !dispatch.started);
 		if (unstarted.length) {
 			console.warn(`[@slipher/testing] ${unstarted.length} dispatch(es) were created but never awaited or stepped.`);
 		}
-		// Drop modal registries so a stray deferred resolution can't fire after close. We do NOT auto-resolve a
-		// still-registered modal: that would run the handler's timeout branch (side effects) after the bot is shut.
-		this.client.components.modals.clear();
-		this.modalWaiters.clear();
-		this.modalOwners.clear();
-		this.displayedModals.clear();
+		// Resolve live user-input waits through their natural null branch while every dependency is still alive.
+		// The hook stays in shutdown mode, so a modal/collector chained by that branch is cancelled immediately.
+		const pendingInputError = await this.finishPendingInputs();
+		const stillRunning = this.dispatches.filter(dispatch => dispatch.started && !dispatch.isCompleted);
+		if (stillRunning.length > 0) {
+			endInputShutdown(this.client);
+			this.closed = false;
+			if (pendingInputError !== undefined) throw pendingInputError;
+			const ids = stillRunning.map(dispatch => dispatch.dispatchId ?? '(unknown)').join(', ');
+			throw new TypeError(
+				`close: cannot close while non-input dispatches are still running (${ids}). ` +
+					'Await those dispatches before closing the bot.',
+			);
+		}
+		this.clearInputRuntime();
 		this.rest.releasePending();
 		// client.close() is seyfert's plugin lifecycle close: it awaits in-flight setup and runs each plugin's
 		// teardown. Plugin teardown is therefore driven here symmetrically with the setup run at construction.
 		await this.client.close();
+		if (pendingInputError !== undefined) throw pendingInputError;
+	}
+
+	private async finishPendingInputs(): Promise<unknown | undefined> {
+		const completions = new Map<number, Promise<unknown>>();
+		for (const dispatch of this.dispatches) {
+			if (dispatch.dispatchId === undefined || !dispatch.started || dispatch.isCompleted) continue;
+			const completion = dispatch.completionForSession();
+			if (completion) completions.set(dispatch.dispatchId, completion);
+		}
+		const owners = beginInputShutdown(this.client);
+		const ownerCompletions = [...owners].flatMap(ownerDispatchId => {
+			const completion = completions.get(ownerDispatchId);
+			return completion ? [completion] : [];
+		});
+		const settled =
+			ownerCompletions.length === 0
+				? []
+				: await new Promise<PromiseSettledResult<unknown>[] | undefined>(resolve => {
+						const timer = realSetTimeout(() => resolve(undefined), INPUT_SHUTDOWN_GRACE_MS);
+						void Promise.allSettled(ownerCompletions).then(results => {
+							realClearTimeout(timer);
+							resolve(results);
+						});
+					});
+		const pendingSessionError = this.sessions.takePendingError();
+		if (pendingSessionError !== undefined) return pendingSessionError;
+		return settled?.find((result): result is PromiseRejectedResult => result.status === 'rejected')?.reason;
 	}
 
 	async [Symbol.asyncDispose](): Promise<void> {

@@ -1,109 +1,421 @@
+import type * as API from 'seyfert';
 import type { RouteMatcher } from './rest';
 
+function defineRoute<TBody, TResponse>() {
+	return <const TRoute extends string>(
+		matcher: Pick<RouteMatcher<TRoute>, 'method' | 'route'>,
+	): RouteMatcher<TRoute, TBody, TResponse> => matcher;
+}
+
 export const Routes = {
-	ban: { method: 'PUT', route: '/guilds/:guildId/bans/:userId' },
-	unban: { method: 'DELETE', route: '/guilds/:guildId/bans/:userId' },
-	kick: { method: 'DELETE', route: '/guilds/:guildId/members/:userId' },
-	editMember: { method: 'PATCH', route: '/guilds/:guildId/members/:userId' },
-	addRole: { method: 'PUT', route: '/guilds/:guildId/members/:userId/roles/:roleId' },
-	removeRole: { method: 'DELETE', route: '/guilds/:guildId/members/:userId/roles/:roleId' },
-	createMessage: { method: 'POST', route: '/channels/:channelId/messages' },
-	editMessage: { method: 'PATCH', route: '/channels/:channelId/messages/:messageId' },
-	deleteMessage: { method: 'DELETE', route: '/channels/:channelId/messages/:messageId' },
-	bulkDeleteMessages: { method: 'POST', route: '/channels/:channelId/messages/bulk-delete' },
-	createDm: { method: 'POST', route: '/users/@me/channels' },
-	createRole: { method: 'POST', route: '/guilds/:guildId/roles' },
-	editRole: { method: 'PATCH', route: '/guilds/:guildId/roles/:roleId' },
-	deleteRole: { method: 'DELETE', route: '/guilds/:guildId/roles/:roleId' },
-	editGuild: { method: 'PATCH', route: '/guilds/:guildId' },
-	fetchBan: { method: 'GET', route: '/guilds/:guildId/bans/:userId' },
-	editChannelPermissions: { method: 'PUT', route: '/channels/:channelId/permissions/:overwriteId' },
-	deleteChannelPermission: { method: 'DELETE', route: '/channels/:channelId/permissions/:overwriteId' },
-	createChannel: { method: 'POST', route: '/guilds/:guildId/channels' },
-	deleteChannel: { method: 'DELETE', route: '/channels/:channelId' },
-	createThread: { method: 'POST', route: '/channels/:channelId/threads' },
-	addReaction: { method: 'PUT', route: '/channels/:channelId/messages/:messageId/reactions/:emoji/@me' },
-	removeOwnReaction: { method: 'DELETE', route: '/channels/:channelId/messages/:messageId/reactions/:emoji/@me' },
-	removeUserReaction: { method: 'DELETE', route: '/channels/:channelId/messages/:messageId/reactions/:emoji/:userId' },
-	removeAllReactions: { method: 'DELETE', route: '/channels/:channelId/messages/:messageId/reactions' },
-	removeEmojiReactions: { method: 'DELETE', route: '/channels/:channelId/messages/:messageId/reactions/:emoji' },
-	listReactions: { method: 'GET', route: '/channels/:channelId/messages/:messageId/reactions/:emoji' },
-	fetchChannel: { method: 'GET', route: '/channels/:channelId' },
-	fetchMembers: { method: 'GET', route: '/guilds/:guildId/members' },
-	fetchMember: { method: 'GET', route: '/guilds/:guildId/members/:userId' },
-	fetchGuild: { method: 'GET', route: '/guilds/:guildId' },
-	fetchUser: { method: 'GET', route: '/users/:userId' },
-	fetchOriginalResponse: { method: 'GET', route: '/webhooks/:applicationId/:interactionToken/messages/@original' },
-	editOriginalResponse: { method: 'PATCH', route: '/webhooks/:applicationId/:interactionToken/messages/@original' },
-	deleteOriginalResponse: { method: 'DELETE', route: '/webhooks/:applicationId/:interactionToken/messages/@original' },
-	fetchWebhookMessage: { method: 'GET', route: '/webhooks/:applicationId/:interactionToken/messages/:messageId' },
-	editWebhookMessage: { method: 'PATCH', route: '/webhooks/:applicationId/:interactionToken/messages/:messageId' },
-	deleteWebhookMessage: { method: 'DELETE', route: '/webhooks/:applicationId/:interactionToken/messages/:messageId' },
-	followup: { method: 'POST', route: '/webhooks/:applicationId/:interactionToken' },
-	interactionCallback: { method: 'POST', route: '/interactions/:id/:token/callback' },
-	listChannelWebhooks: { method: 'GET', route: '/channels/:channelId/webhooks' },
-	createWebhook: { method: 'POST', route: '/channels/:channelId/webhooks' },
-	fetchMessages: { method: 'GET', route: '/channels/:channelId/messages' },
-	fetchMessage: { method: 'GET', route: '/channels/:channelId/messages/:messageId' },
-	fetchRoles: { method: 'GET', route: '/guilds/:guildId/roles' },
-	fetchChannels: { method: 'GET', route: '/guilds/:guildId/channels' },
-	fetchBans: { method: 'GET', route: '/guilds/:guildId/bans' },
-	fetchPins: { method: 'GET', route: '/channels/:channelId/messages/pins' },
-	editChannel: { method: 'PATCH', route: '/channels/:channelId' },
-	createInvite: { method: 'POST', route: '/channels/:channelId/invites' },
-	pinMessage: { method: 'PUT', route: '/channels/:channelId/messages/pins/:messageId' },
-	unpinMessage: { method: 'DELETE', route: '/channels/:channelId/messages/pins/:messageId' },
-	fetchArchivedThreads: { method: 'GET', route: '/channels/:channelId/threads/archived/:type' },
-	startThreadFromMessage: { method: 'POST', route: '/channels/:channelId/messages/:messageId/threads' },
-	crosspostMessage: { method: 'POST', route: '/channels/:channelId/messages/:messageId/crosspost' },
-	triggerTyping: { method: 'POST', route: '/channels/:channelId/typing' },
-	createEmoji: { method: 'POST', route: '/guilds/:guildId/emojis' },
-	fetchEmojis: { method: 'GET', route: '/guilds/:guildId/emojis' },
-	fetchEmoji: { method: 'GET', route: '/guilds/:guildId/emojis/:emojiId' },
-	editEmoji: { method: 'PATCH', route: '/guilds/:guildId/emojis/:emojiId' },
-	deleteEmoji: { method: 'DELETE', route: '/guilds/:guildId/emojis/:emojiId' },
-	listChannelInvites: { method: 'GET', route: '/channels/:channelId/invites' },
-	listGuildInvites: { method: 'GET', route: '/guilds/:guildId/invites' },
-	fetchInvite: { method: 'GET', route: '/invites/:code' },
-	deleteInvite: { method: 'DELETE', route: '/invites/:code' },
-	bulkBan: { method: 'POST', route: '/guilds/:guildId/bulk-bans' },
-	fetchAutoModRules: { method: 'GET', route: '/guilds/:guildId/auto-moderation/rules' },
-	createAutoModRule: { method: 'POST', route: '/guilds/:guildId/auto-moderation/rules' },
-	fetchAutoModRule: { method: 'GET', route: '/guilds/:guildId/auto-moderation/rules/:ruleId' },
-	editAutoModRule: { method: 'PATCH', route: '/guilds/:guildId/auto-moderation/rules/:ruleId' },
-	deleteAutoModRule: { method: 'DELETE', route: '/guilds/:guildId/auto-moderation/rules/:ruleId' },
-	addThreadMember: { method: 'PUT', route: '/channels/:channelId/thread-members/:userId' },
-	removeThreadMember: { method: 'DELETE', route: '/channels/:channelId/thread-members/:userId' },
-	listThreadMembers: { method: 'GET', route: '/channels/:channelId/thread-members' },
-	fetchThreadMember: { method: 'GET', route: '/channels/:channelId/thread-members/:userId' },
-	fetchActiveThreads: { method: 'GET', route: '/guilds/:guildId/threads/active' },
-	endPoll: { method: 'POST', route: '/channels/:channelId/polls/:messageId/expire' },
-	getPollAnswerVoters: { method: 'GET', route: '/channels/:channelId/polls/:messageId/answers/:answerId' },
-	createSticker: { method: 'POST', route: '/guilds/:guildId/stickers' },
-	fetchStickers: { method: 'GET', route: '/guilds/:guildId/stickers' },
-	fetchSticker: { method: 'GET', route: '/guilds/:guildId/stickers/:stickerId' },
-	editSticker: { method: 'PATCH', route: '/guilds/:guildId/stickers/:stickerId' },
-	deleteSticker: { method: 'DELETE', route: '/guilds/:guildId/stickers/:stickerId' },
-	fetchScheduledEvents: { method: 'GET', route: '/guilds/:guildId/scheduled-events' },
-	createScheduledEvent: { method: 'POST', route: '/guilds/:guildId/scheduled-events' },
-	fetchScheduledEvent: { method: 'GET', route: '/guilds/:guildId/scheduled-events/:eventId' },
-	deleteScheduledEvent: { method: 'DELETE', route: '/guilds/:guildId/scheduled-events/:eventId' },
-	fetchGuildTemplate: { method: 'GET', route: '/guilds/templates/:code' },
-	listGuildTemplates: { method: 'GET', route: '/guilds/:guildId/templates' },
-	createGuildTemplate: { method: 'POST', route: '/guilds/:guildId/templates' },
-	listGuildSoundboardSounds: { method: 'GET', route: '/guilds/:guildId/soundboard-sounds' },
-	listDefaultSoundboardSounds: { method: 'GET', route: '/soundboard-default-sounds' },
-	createStageInstance: { method: 'POST', route: '/stage-instances' },
-	fetchStageInstance: { method: 'GET', route: '/stage-instances/:channelId' },
-	deleteStageInstance: { method: 'DELETE', route: '/stage-instances/:channelId' },
-	fetchAuditLogs: { method: 'GET', route: '/guilds/:guildId/audit-logs' },
-	fetchWebhook: { method: 'GET', route: '/webhooks/:webhookId' },
-	fetchWebhookToken: { method: 'GET', route: '/webhooks/:webhookId/:webhookToken' },
-	editWebhook: { method: 'PATCH', route: '/webhooks/:webhookId' },
-	editWebhookToken: { method: 'PATCH', route: '/webhooks/:webhookId/:webhookToken' },
-	deleteWebhook: { method: 'DELETE', route: '/webhooks/:webhookId' },
-	deleteWebhookToken: { method: 'DELETE', route: '/webhooks/:webhookId/:webhookToken' },
-	listGuildWebhooks: { method: 'GET', route: '/guilds/:guildId/webhooks' },
+	ban: defineRoute<API.RESTPutAPIGuildBanJSONBody | undefined, API.RESTPutAPIGuildBanResult>()({
+		method: 'PUT',
+		route: '/guilds/:guildId/bans/:userId',
+	}),
+	unban: defineRoute<never, API.RESTDeleteAPIGuildBanResult>()({
+		method: 'DELETE',
+		route: '/guilds/:guildId/bans/:userId',
+	}),
+	kick: defineRoute<never, API.RESTDeleteAPIGuildMemberResult>()({
+		method: 'DELETE',
+		route: '/guilds/:guildId/members/:userId',
+	}),
+	editMember: defineRoute<API.RESTPatchAPIGuildMemberJSONBody, API.RESTPatchAPIGuildMemberResult>()({
+		method: 'PATCH',
+		route: '/guilds/:guildId/members/:userId',
+	}),
+	addRole: defineRoute<never, API.RESTPutAPIGuildMemberRoleResult>()({
+		method: 'PUT',
+		route: '/guilds/:guildId/members/:userId/roles/:roleId',
+	}),
+	removeRole: defineRoute<never, API.RESTDeleteAPIGuildMemberRoleResult>()({
+		method: 'DELETE',
+		route: '/guilds/:guildId/members/:userId/roles/:roleId',
+	}),
+	createMessage: defineRoute<API.RESTPostAPIChannelMessageJSONBody, API.RESTPostAPIChannelMessageResult>()({
+		method: 'POST',
+		route: '/channels/:channelId/messages',
+	}),
+	editMessage: defineRoute<API.RESTPatchAPIChannelMessageJSONBody, API.RESTPatchAPIChannelMessageResult>()({
+		method: 'PATCH',
+		route: '/channels/:channelId/messages/:messageId',
+	}),
+	deleteMessage: defineRoute<never, API.RESTDeleteAPIChannelMessageResult>()({
+		method: 'DELETE',
+		route: '/channels/:channelId/messages/:messageId',
+	}),
+	bulkDeleteMessages: defineRoute<
+		API.RESTPostAPIChannelMessagesBulkDeleteJSONBody,
+		API.RESTPostAPIChannelMessagesBulkDeleteResult
+	>()({ method: 'POST', route: '/channels/:channelId/messages/bulk-delete' }),
+	createDm: defineRoute<API.RESTPostAPICurrentUserCreateDMChannelJSONBody, API.APIDMChannel>()({
+		method: 'POST',
+		route: '/users/@me/channels',
+	}),
+	createRole: defineRoute<API.RESTPostAPIGuildRoleJSONBody, API.RESTPostAPIGuildRoleResult>()({
+		method: 'POST',
+		route: '/guilds/:guildId/roles',
+	}),
+	editRole: defineRoute<API.RESTPatchAPIGuildRoleJSONBody, API.RESTPatchAPIGuildRoleResult>()({
+		method: 'PATCH',
+		route: '/guilds/:guildId/roles/:roleId',
+	}),
+	deleteRole: defineRoute<never, API.RESTDeleteAPIGuildRoleResult>()({
+		method: 'DELETE',
+		route: '/guilds/:guildId/roles/:roleId',
+	}),
+	editGuild: defineRoute<API.RESTPatchAPIGuildJSONBody, API.RESTPatchAPIGuildResult>()({
+		method: 'PATCH',
+		route: '/guilds/:guildId',
+	}),
+	fetchBan: defineRoute<never, API.RESTGetAPIGuildBanResult>()({
+		method: 'GET',
+		route: '/guilds/:guildId/bans/:userId',
+	}),
+	editChannelPermissions: defineRoute<API.RESTPutAPIChannelPermissionJSONBody, API.RESTPutAPIChannelPermissionResult>()(
+		{ method: 'PUT', route: '/channels/:channelId/permissions/:overwriteId' },
+	),
+	deleteChannelPermission: defineRoute<never, API.RESTDeleteAPIChannelPermissionResult>()({
+		method: 'DELETE',
+		route: '/channels/:channelId/permissions/:overwriteId',
+	}),
+	createChannel: defineRoute<API.RESTPostAPIGuildChannelJSONBody, API.RESTPostAPIGuildChannelResult>()({
+		method: 'POST',
+		route: '/guilds/:guildId/channels',
+	}),
+	deleteChannel: defineRoute<never, API.RESTDeleteAPIChannelResult>()({
+		method: 'DELETE',
+		route: '/channels/:channelId',
+	}),
+	createThread: defineRoute<
+		API.RESTPostAPIChannelThreadsJSONBody | API.RESTPostAPIGuildForumThreadsJSONBody,
+		API.RESTPostAPIChannelThreadsResult
+	>()({ method: 'POST', route: '/channels/:channelId/threads' }),
+	addReaction: defineRoute<never, API.RESTPutAPIChannelMessageReactionResult>()({
+		method: 'PUT',
+		route: '/channels/:channelId/messages/:messageId/reactions/:emoji/@me',
+	}),
+	removeOwnReaction: defineRoute<never, API.RESTDeleteAPIChannelMessageOwnReactionResult>()({
+		method: 'DELETE',
+		route: '/channels/:channelId/messages/:messageId/reactions/:emoji/@me',
+	}),
+	removeUserReaction: defineRoute<never, API.RESTDeleteAPIChannelMessageUserReactionResult>()({
+		method: 'DELETE',
+		route: '/channels/:channelId/messages/:messageId/reactions/:emoji/:userId',
+	}),
+	removeAllReactions: defineRoute<never, API.RESTDeleteAPIChannelAllMessageReactionsResult>()({
+		method: 'DELETE',
+		route: '/channels/:channelId/messages/:messageId/reactions',
+	}),
+	removeEmojiReactions: defineRoute<never, API.RESTDeleteAPIChannelMessageReactionResult>()({
+		method: 'DELETE',
+		route: '/channels/:channelId/messages/:messageId/reactions/:emoji',
+	}),
+	listReactions: defineRoute<never, API.RESTGetAPIChannelMessageReactionUsersResult>()({
+		method: 'GET',
+		route: '/channels/:channelId/messages/:messageId/reactions/:emoji',
+	}),
+	fetchChannel: defineRoute<never, API.RESTGetAPIChannelResult>()({
+		method: 'GET',
+		route: '/channels/:channelId',
+	}),
+	fetchMembers: defineRoute<never, API.RESTGetAPIGuildMembersResult>()({
+		method: 'GET',
+		route: '/guilds/:guildId/members',
+	}),
+	fetchMember: defineRoute<never, API.RESTGetAPIGuildMemberResult>()({
+		method: 'GET',
+		route: '/guilds/:guildId/members/:userId',
+	}),
+	fetchGuild: defineRoute<never, API.RESTGetAPIGuildResult>()({
+		method: 'GET',
+		route: '/guilds/:guildId',
+	}),
+	fetchUser: defineRoute<never, API.RESTGetAPIUserResult>()({ method: 'GET', route: '/users/:userId' }),
+	fetchOriginalResponse: defineRoute<never, API.RESTGetAPIInteractionOriginalResponseResult>()({
+		method: 'GET',
+		route: '/webhooks/:applicationId/:interactionToken/messages/@original',
+	}),
+	editOriginalResponse: defineRoute<
+		API.RESTPatchAPIInteractionOriginalResponseJSONBody,
+		API.RESTPatchAPIInteractionOriginalResponseResult
+	>()({ method: 'PATCH', route: '/webhooks/:applicationId/:interactionToken/messages/@original' }),
+	deleteOriginalResponse: defineRoute<never, API.RESTDeleteAPIInteractionOriginalResponseResult>()({
+		method: 'DELETE',
+		route: '/webhooks/:applicationId/:interactionToken/messages/@original',
+	}),
+	fetchWebhookMessage: defineRoute<never, API.RESTGetAPIWebhookWithTokenMessageResult>()({
+		method: 'GET',
+		route: '/webhooks/:applicationId/:interactionToken/messages/:messageId',
+	}),
+	editWebhookMessage: defineRoute<
+		API.RESTPatchAPIWebhookWithTokenMessageJSONBody,
+		API.RESTPatchAPIWebhookWithTokenMessageResult
+	>()({ method: 'PATCH', route: '/webhooks/:applicationId/:interactionToken/messages/:messageId' }),
+	deleteWebhookMessage: defineRoute<never, API.RESTDeleteAPIWebhookWithTokenMessageResult>()({
+		method: 'DELETE',
+		route: '/webhooks/:applicationId/:interactionToken/messages/:messageId',
+	}),
+	followup: defineRoute<API.RESTPostAPIInteractionFollowupJSONBody, API.RESTPostAPIInteractionFollowupResult>()({
+		method: 'POST',
+		route: '/webhooks/:applicationId/:interactionToken',
+	}),
+	interactionCallback: defineRoute<
+		API.RESTPostAPIInteractionCallbackJSONBody,
+		API.RESTPostAPIInteractionCallbackResult | undefined
+	>()({ method: 'POST', route: '/interactions/:id/:token/callback' }),
+	listChannelWebhooks: defineRoute<never, API.RESTGetAPIGuildWebhooksResult>()({
+		method: 'GET',
+		route: '/channels/:channelId/webhooks',
+	}),
+	createWebhook: defineRoute<API.RESTPostAPIChannelWebhookJSONBody, API.RESTPostAPIChannelWebhookResult>()({
+		method: 'POST',
+		route: '/channels/:channelId/webhooks',
+	}),
+	fetchMessages: defineRoute<never, API.RESTGetAPIChannelMessagesResult>()({
+		method: 'GET',
+		route: '/channels/:channelId/messages',
+	}),
+	fetchMessage: defineRoute<never, API.RESTGetAPIChannelMessageResult>()({
+		method: 'GET',
+		route: '/channels/:channelId/messages/:messageId',
+	}),
+	fetchRoles: defineRoute<never, API.RESTGetAPIGuildRolesResult>()({
+		method: 'GET',
+		route: '/guilds/:guildId/roles',
+	}),
+	fetchChannels: defineRoute<never, API.RESTGetAPIGuildChannelsResult>()({
+		method: 'GET',
+		route: '/guilds/:guildId/channels',
+	}),
+	fetchBans: defineRoute<never, API.RESTGetAPIGuildBansResult>()({
+		method: 'GET',
+		route: '/guilds/:guildId/bans',
+	}),
+	fetchPins: defineRoute<never, API.RESTGetAPIChannelMessagesPinsResult>()({
+		method: 'GET',
+		route: '/channels/:channelId/messages/pins',
+	}),
+	editChannel: defineRoute<API.RESTPatchAPIChannelJSONBody, API.RESTPatchAPIChannelResult>()({
+		method: 'PATCH',
+		route: '/channels/:channelId',
+	}),
+	createInvite: defineRoute<API.RESTPostAPIChannelInviteJSONBody, API.RESTPostAPIChannelInviteResult>()({
+		method: 'POST',
+		route: '/channels/:channelId/invites',
+	}),
+	pinMessage: defineRoute<never, API.RESTPutAPIChannelMessagesPinResult>()({
+		method: 'PUT',
+		route: '/channels/:channelId/messages/pins/:messageId',
+	}),
+	unpinMessage: defineRoute<never, API.RESTDeleteAPIChannelMessagesPinResult>()({
+		method: 'DELETE',
+		route: '/channels/:channelId/messages/pins/:messageId',
+	}),
+	fetchArchivedThreads: defineRoute<
+		never,
+		API.RESTGetAPIChannelThreadsArchivedPublicResult | API.RESTGetAPIChannelThreadsArchivedPrivateResult
+	>()({ method: 'GET', route: '/channels/:channelId/threads/archived/:type' }),
+	startThreadFromMessage: defineRoute<
+		API.RESTPostAPIChannelMessagesThreadsJSONBody,
+		API.RESTPostAPIChannelMessagesThreadsResult
+	>()({ method: 'POST', route: '/channels/:channelId/messages/:messageId/threads' }),
+	crosspostMessage: defineRoute<never, API.RESTPostAPIChannelMessageCrosspostResult>()({
+		method: 'POST',
+		route: '/channels/:channelId/messages/:messageId/crosspost',
+	}),
+	triggerTyping: defineRoute<never, API.RESTPostAPIChannelTypingResult>()({
+		method: 'POST',
+		route: '/channels/:channelId/typing',
+	}),
+	createEmoji: defineRoute<API.RESTPostAPIGuildEmojiJSONBody, API.RESTPostAPIGuildEmojiResult>()({
+		method: 'POST',
+		route: '/guilds/:guildId/emojis',
+	}),
+	fetchEmojis: defineRoute<never, API.RESTGetAPIGuildEmojisResult>()({
+		method: 'GET',
+		route: '/guilds/:guildId/emojis',
+	}),
+	fetchEmoji: defineRoute<never, API.RESTGetAPIGuildEmojiResult>()({
+		method: 'GET',
+		route: '/guilds/:guildId/emojis/:emojiId',
+	}),
+	editEmoji: defineRoute<API.RESTPatchAPIGuildEmojiJSONBody, API.RESTPatchAPIGuildEmojiResult>()({
+		method: 'PATCH',
+		route: '/guilds/:guildId/emojis/:emojiId',
+	}),
+	deleteEmoji: defineRoute<never, API.RESTDeleteAPIGuildEmojiResult>()({
+		method: 'DELETE',
+		route: '/guilds/:guildId/emojis/:emojiId',
+	}),
+	listChannelInvites: defineRoute<never, API.RESTGetAPIChannelInvitesResult>()({
+		method: 'GET',
+		route: '/channels/:channelId/invites',
+	}),
+	listGuildInvites: defineRoute<never, API.RESTGetAPIGuildInvitesResult>()({
+		method: 'GET',
+		route: '/guilds/:guildId/invites',
+	}),
+	fetchInvite: defineRoute<never, API.RESTGetAPIInviteResult>()({
+		method: 'GET',
+		route: '/invites/:code',
+	}),
+	deleteInvite: defineRoute<never, API.RESTDeleteAPIInviteResult>()({
+		method: 'DELETE',
+		route: '/invites/:code',
+	}),
+	bulkBan: defineRoute<API.RESTPostAPIGuildBulkBanJSONBody, API.RESTPostAPIGuildBulkBanResult>()({
+		method: 'POST',
+		route: '/guilds/:guildId/bulk-bans',
+	}),
+	fetchAutoModRules: defineRoute<never, API.RESTGetAPIAutoModerationRulesResult>()({
+		method: 'GET',
+		route: '/guilds/:guildId/auto-moderation/rules',
+	}),
+	createAutoModRule: defineRoute<API.RESTPostAPIAutoModerationRuleJSONBody, API.RESTPostAPIAutoModerationRuleResult>()({
+		method: 'POST',
+		route: '/guilds/:guildId/auto-moderation/rules',
+	}),
+	fetchAutoModRule: defineRoute<never, API.RESTGetAPIAutoModerationRuleResult>()({
+		method: 'GET',
+		route: '/guilds/:guildId/auto-moderation/rules/:ruleId',
+	}),
+	editAutoModRule: defineRoute<API.RESTPatchAPIAutoModerationRuleJSONBody, API.RESTPatchAPIAutoModerationRuleResult>()({
+		method: 'PATCH',
+		route: '/guilds/:guildId/auto-moderation/rules/:ruleId',
+	}),
+	deleteAutoModRule: defineRoute<never, API.RESTDeleteAPIAutoModerationRuleResult>()({
+		method: 'DELETE',
+		route: '/guilds/:guildId/auto-moderation/rules/:ruleId',
+	}),
+	addThreadMember: defineRoute<never, API.RESTPutAPIChannelThreadMembersResult>()({
+		method: 'PUT',
+		route: '/channels/:channelId/thread-members/:userId',
+	}),
+	removeThreadMember: defineRoute<never, API.RESTDeleteAPIChannelThreadMembersResult>()({
+		method: 'DELETE',
+		route: '/channels/:channelId/thread-members/:userId',
+	}),
+	listThreadMembers: defineRoute<never, API.RESTGetAPIChannelThreadMembersResult>()({
+		method: 'GET',
+		route: '/channels/:channelId/thread-members',
+	}),
+	fetchThreadMember: defineRoute<never, API.RESTGetAPIChannelThreadMemberResult>()({
+		method: 'GET',
+		route: '/channels/:channelId/thread-members/:userId',
+	}),
+	fetchActiveThreads: defineRoute<never, API.RESTGetAPIGuildThreadsResult>()({
+		method: 'GET',
+		route: '/guilds/:guildId/threads/active',
+	}),
+	endPoll: defineRoute<never, API.RESTPostAPIPollExpireResult>()({
+		method: 'POST',
+		route: '/channels/:channelId/polls/:messageId/expire',
+	}),
+	getPollAnswerVoters: defineRoute<never, API.RESTGetAPIPollAnswerVotersResult>()({
+		method: 'GET',
+		route: '/channels/:channelId/polls/:messageId/answers/:answerId',
+	}),
+	createSticker: defineRoute<
+		Omit<API.RESTPostAPIGuildStickerFormDataBody, 'file'>,
+		API.RESTPostAPIGuildStickerResult
+	>()({ method: 'POST', route: '/guilds/:guildId/stickers' }),
+	fetchStickers: defineRoute<never, API.RESTGetAPIGuildStickersResult>()({
+		method: 'GET',
+		route: '/guilds/:guildId/stickers',
+	}),
+	fetchSticker: defineRoute<never, API.RESTGetAPIGuildStickerResult>()({
+		method: 'GET',
+		route: '/guilds/:guildId/stickers/:stickerId',
+	}),
+	editSticker: defineRoute<API.RESTPatchAPIGuildStickerJSONBody, API.RESTPatchAPIGuildStickerResult>()({
+		method: 'PATCH',
+		route: '/guilds/:guildId/stickers/:stickerId',
+	}),
+	deleteSticker: defineRoute<never, API.RESTDeleteAPIGuildStickerResult>()({
+		method: 'DELETE',
+		route: '/guilds/:guildId/stickers/:stickerId',
+	}),
+	fetchScheduledEvents: defineRoute<never, API.RESTGetAPIGuildScheduledEventsResult>()({
+		method: 'GET',
+		route: '/guilds/:guildId/scheduled-events',
+	}),
+	createScheduledEvent: defineRoute<
+		API.RESTPostAPIGuildScheduledEventJSONBody,
+		API.RESTPostAPIGuildScheduledEventResult
+	>()({ method: 'POST', route: '/guilds/:guildId/scheduled-events' }),
+	fetchScheduledEvent: defineRoute<never, API.RESTGetAPIGuildScheduledEventResult>()({
+		method: 'GET',
+		route: '/guilds/:guildId/scheduled-events/:eventId',
+	}),
+	deleteScheduledEvent: defineRoute<never, API.RESTDeleteAPIGuildScheduledEventResult>()({
+		method: 'DELETE',
+		route: '/guilds/:guildId/scheduled-events/:eventId',
+	}),
+	fetchGuildTemplate: defineRoute<never, API.RESTGetAPITemplateResult>()({
+		method: 'GET',
+		route: '/guilds/templates/:code',
+	}),
+	listGuildTemplates: defineRoute<never, API.RESTGetAPIGuildTemplatesResult>()({
+		method: 'GET',
+		route: '/guilds/:guildId/templates',
+	}),
+	createGuildTemplate: defineRoute<API.RESTPostAPIGuildTemplatesJSONBody, API.RESTPostAPIGuildTemplatesResult>()({
+		method: 'POST',
+		route: '/guilds/:guildId/templates',
+	}),
+	listGuildSoundboardSounds: defineRoute<never, API.RESTGetAPIGuildSoundboardSoundsResult>()({
+		method: 'GET',
+		route: '/guilds/:guildId/soundboard-sounds',
+	}),
+	listDefaultSoundboardSounds: defineRoute<never, API.RESTGetAPISoundboardDefaultSoundsResult>()({
+		method: 'GET',
+		route: '/soundboard-default-sounds',
+	}),
+	createStageInstance: defineRoute<API.RESTPostAPIStageInstanceJSONBody, API.RESTPostAPIStageInstanceResult>()({
+		method: 'POST',
+		route: '/stage-instances',
+	}),
+	fetchStageInstance: defineRoute<never, API.RESTGetAPIStageInstanceResult>()({
+		method: 'GET',
+		route: '/stage-instances/:channelId',
+	}),
+	deleteStageInstance: defineRoute<never, API.RESTDeleteAPIStageInstanceResult>()({
+		method: 'DELETE',
+		route: '/stage-instances/:channelId',
+	}),
+	fetchAuditLogs: defineRoute<never, API.RESTGetAPIAuditLogResult>()({
+		method: 'GET',
+		route: '/guilds/:guildId/audit-logs',
+	}),
+	fetchWebhook: defineRoute<never, API.RESTGetAPIWebhookResult>()({
+		method: 'GET',
+		route: '/webhooks/:webhookId',
+	}),
+	fetchWebhookToken: defineRoute<never, API.RESTGetAPIWebhookWithTokenResult>()({
+		method: 'GET',
+		route: '/webhooks/:webhookId/:webhookToken',
+	}),
+	editWebhook: defineRoute<API.RESTPatchAPIWebhookJSONBody, API.RESTPatchAPIWebhookResult>()({
+		method: 'PATCH',
+		route: '/webhooks/:webhookId',
+	}),
+	editWebhookToken: defineRoute<API.RESTPatchAPIWebhookWithTokenJSONBody, API.RESTPatchAPIWebhookWithTokenResult>()({
+		method: 'PATCH',
+		route: '/webhooks/:webhookId/:webhookToken',
+	}),
+	deleteWebhook: defineRoute<never, API.RESTDeleteAPIWebhookResult>()({
+		method: 'DELETE',
+		route: '/webhooks/:webhookId',
+	}),
+	deleteWebhookToken: defineRoute<never, API.RESTDeleteAPIWebhookWithTokenResult>()({
+		method: 'DELETE',
+		route: '/webhooks/:webhookId/:webhookToken',
+	}),
+	listGuildWebhooks: defineRoute<never, API.RESTGetAPIGuildWebhooksResult>()({
+		method: 'GET',
+		route: '/guilds/:guildId/webhooks',
+	}),
 } as const satisfies Record<string, RouteMatcher>;
 
 /**
