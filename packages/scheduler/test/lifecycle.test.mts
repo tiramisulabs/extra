@@ -1,6 +1,7 @@
 import { createPlugin, definePlugins, HttpClient } from 'seyfert';
 import { assert, describe, test } from 'vitest';
 import {
+	type CronerFactoryOptions,
 	createScheduler,
 	memory,
 	persistent,
@@ -39,7 +40,7 @@ function createFakeCroner() {
 	const jobs: FakeCronerJob[] = [];
 	return {
 		jobs,
-		factory: (_expression: string, _options: Record<string, unknown>, runner: () => unknown) => {
+		factory: (_expression: string, _options: CronerFactoryOptions, runner: () => unknown) => {
 			const job = new FakeCronerJob(runner);
 			jobs.push(job);
 			return job;

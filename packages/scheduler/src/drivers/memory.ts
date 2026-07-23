@@ -3,6 +3,7 @@ import { runTask, ScheduledTask } from '../task';
 import type {
 	Awaitable,
 	CronerFactory,
+	CronerFactoryOptions,
 	CronerJob,
 	MemorySchedulerOptions,
 	ScheduledTaskDefinition,
@@ -51,13 +52,22 @@ class MemorySchedulerDriver implements SchedulerDriver {
 	schedule(definition: ScheduledTaskDefinition) {
 		const task = new ScheduledTask(definition);
 		const expression = definition.kind === 'interval' ? '* * * * * *' : definition.expression!;
-		const options: Record<string, unknown> = {
+		const options: CronerFactoryOptions = {
+			catch: true,
 			name: definition.id,
 			paused: true,
 		};
 
 		if (definition.kind === 'interval') {
 			options.interval = definition.intervalMs! / 1_000;
+		} else if (definition.timezone !== undefined) {
+			options.timezone = definition.timezone;
+		}
+
+		if (definition.overlap === 'skip') {
+			options.protect = () => {
+				this.host?.emit('skipped', { task, reason: 'overlap' });
+			};
 		}
 
 		let job: CronerJob | undefined;
@@ -114,7 +124,7 @@ class MemorySchedulerDriver implements SchedulerDriver {
 	}
 }
 
-function defaultCronerFactory(expression: string, options: Record<string, unknown>, runner: () => Awaitable<unknown>) {
+function defaultCronerFactory(expression: string, options: CronerFactoryOptions, runner: () => Awaitable<unknown>) {
 	const croner = loadCroner();
 	const Cron = croner.Cron;
 
@@ -123,6 +133,6 @@ function defaultCronerFactory(expression: string, options: Record<string, unknow
 
 function loadCroner() {
 	return requireOptionalModule('croner', '@slipher/scheduler requires "croner" for the memory driver') as {
-		Cron: new (expression: string, options: Record<string, unknown>, runner: () => Awaitable<unknown>) => unknown;
+		Cron: new (expression: string, options: CronerFactoryOptions, runner: () => Awaitable<unknown>) => unknown;
 	};
 }
