@@ -92,9 +92,20 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 	}
 
 	schedule(definition: ScheduledTaskDefinition) {
+		if (definition.overlap === 'skip') {
+			throw new Error(
+				'@slipher/scheduler persistent driver does not support overlap: "skip"; use memory() or coordinate overlap inside the task',
+			);
+		}
+
 		const task = new ScheduledTask(definition);
 		const repeat =
-			definition.kind === 'interval' ? { every: definition.intervalMs! } : { pattern: definition.expression! };
+			definition.kind === 'interval'
+				? { every: definition.intervalMs }
+				: {
+						pattern: definition.expression,
+						...(definition.timezone !== undefined ? { tz: definition.timezone } : {}),
+					};
 		const template = {
 			name: definition.id,
 			data: { taskId: definition.id },

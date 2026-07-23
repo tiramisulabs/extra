@@ -8,7 +8,15 @@ import {
 	type UsingClient,
 	type WorkerClient,
 } from 'seyfert';
-import { createScheduler, memory, persistent, type SchedulerRegistry, scheduler } from '../src';
+import {
+	type Awaitable,
+	type CronerFactory,
+	createScheduler,
+	memory,
+	persistent,
+	type SchedulerRegistry,
+	scheduler,
+} from '../src';
 
 declare function expectType<T>(value: T): void;
 declare const context: CommandContext;
@@ -52,3 +60,33 @@ scheduler({});
 createScheduler({ driver: memory(), purgeOrphansOnStartup: true });
 
 createScheduler({ driver: persistent({ purgeOrphansOnStartup: true }) });
+
+const customCroner: CronerFactory = (expression, options, runner) => {
+	expectType<string>(expression);
+	expectType<string>(options.name);
+	expectType<true>(options.catch);
+	expectType<true>(options.paused);
+	expectType<number | undefined>(options.interval);
+	expectType<string | undefined>(options.timezone);
+	expectType<(() => void) | undefined>(options.protect);
+	expectType<Awaitable<unknown>>(runner());
+
+	// @ts-expect-error Slipher does not pass arbitrary Croner options
+	void options.unref;
+	return {};
+};
+
+createScheduler({ driver: memory({ croner: customCroner }) }).cron('daily', '0 0 * * *', () => undefined, {
+	overlap: 'skip',
+	timezone: 'Etc/UTC',
+});
+
+createScheduler({ driver: memory() }).interval('heartbeat', '1m', () => undefined, {
+	overlap: 'allow',
+});
+
+// @ts-expect-error timezone only applies to cron tasks
+createScheduler({ driver: memory() }).interval('heartbeat', '1m', () => undefined, { timezone: 'Etc/UTC' });
+
+// @ts-expect-error overlap is a closed policy
+createScheduler({ driver: memory() }).cron('daily', '0 0 * * *', () => undefined, { overlap: 'queue' });

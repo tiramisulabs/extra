@@ -1,17 +1,24 @@
 import type {
+	CronSchedulerDecoratorOptions,
 	DurationInput,
-	ScheduleKind,
 	SchedulerDecoratorOptions,
 	SchedulerTaskConstructor,
 	SchedulerTaskSource,
 } from './types';
 
-interface TaskMetadata {
-	kind: ScheduleKind;
-	schedule: DurationInput;
-	propertyKey: string | symbol;
-	options?: SchedulerDecoratorOptions;
-}
+type TaskMetadata =
+	| {
+			kind: 'cron';
+			schedule: string;
+			propertyKey: string | symbol;
+			options?: CronSchedulerDecoratorOptions;
+	  }
+	| {
+			kind: 'interval';
+			schedule: DurationInput;
+			propertyKey: string | symbol;
+			options?: SchedulerDecoratorOptions;
+	  };
 
 const taskMetadata = new WeakMap<Function, TaskMetadata[]>();
 
