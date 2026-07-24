@@ -4,7 +4,7 @@ Cron and interval task scheduling for Seyfert bots — in the current process, o
 
 ## How it works
 
-You define tasks two ways — `@Cron`/`@Interval` decorated classes, or `registry.cron(...)` / `registry.interval(...)` calls. Each task has a stable `id`, runs on its schedule, and emits lifecycle events (`scheduled`, `started`, `completed`, `failed`, `paused`, `resumed`, `removed`).
+You define tasks two ways — `@Cron`/`@Interval` decorated classes, or `registry.cron(...)` / `registry.interval(...)` calls. Each task has a stable `id`, runs on its schedule, and emits lifecycle events (`scheduled`, `started`, `completed`, `failed`, `skipped`, `paused`, `resumed`, `removed`).
 
 A **driver** decides where schedules live: `memory()` runs them in the current process; `persistent()` runs them on BullMQ/Redis so they survive restarts and coordinate across replicas — same task code either way.
 
@@ -127,7 +127,11 @@ When you use the registry without the Seyfert plugin, call `registry.setup()` af
 import { Cron, Interval, type ScheduledTask } from '@slipher/scheduler';
 
 class Tasks {
-	@Cron('0 9 * * *', { id: 'morning-report' })
+	@Cron('0 9 * * *', {
+		id: 'morning-report',
+		overlap: 'skip',
+		timezone: 'America/Santo_Domingo',
+	})
 	report(task: ScheduledTask) {
 		return task.id;
 	}
@@ -145,7 +149,35 @@ When using `persistent()`, every decorated task must provide an explicit non-emp
 
 `memory()` intervals tick at 1-second resolution. Values below or between whole seconds, such as `'500ms'` or `'1.5s'`, pass duration parsing but Croner rounds them to the next whole-second tick. If you need sub-second precision, use a different scheduling mechanism.
 
-Cron timezone follows the selected driver. `memory()` delegates cron evaluation to Croner with its default runtime timezone. `persistent()` delegates repeated cron scheduling to BullMQ with no Slipher timezone override. If timezone matters, run workers with an explicit process timezone such as `TZ=UTC` and write cron expressions for that timezone; a first-class scheduler timezone option can be added later without changing task definitions.
+Cron tasks accept a `timezone`:
+
+```ts
+registry.cron(
+	'morning-report',
+	'0 9 * * *',
+	async () => {
+		// run work
+	},
+	{ timezone: 'America/Santo_Domingo' },
+);
+```
+
+`memory()` passes the timezone to Croner and `persistent()` passes it to BullMQ. Without this option, both drivers preserve their scheduling library's default timezone.
+
+Tasks allow overlapping runs by default, preserving the existing behavior. With `memory()`, use `overlap: 'skip'` to omit a tick while the previous run is still pending:
+
+```ts
+registry.interval(
+	'refresh-cache',
+	'30s',
+	async () => {
+		// run work
+	},
+	{ overlap: 'skip' },
+);
+```
+
+The persistent driver rejects `overlap: 'skip'`: BullMQ does not provide that per-task, cross-replica guarantee. Coordinate inside the task when using `persistent()`. Task failures still emit `failed`; the memory driver settles the rejected Croner callback after that event so it does not become an unhandled rejection.
 
 `persistent()` uses BullMQ job schedulers so repeated jobs are coordinated outside a single process:
 
@@ -226,9 +258,15 @@ registry.on('completed', ({ task, result }) => {
 	void task.id;
 	void result;
 });
+
+registry.on('skipped', ({ task, reason }) => {
+	if (reason === 'overlap') {
+		void task.id;
+	}
+});
 ```
 
-Supported events: `scheduled`, `started`, `completed`, `failed`, `paused`, `resumed`, `removed`, and `error`. Persistent BullMQ resources emit `error` with `{ source, error }`, where `source` is `queue`, `queue-events`, or `worker`; these transport errors are also sent to the configured logger.
+Supported events: `scheduled`, `started`, `completed`, `failed`, `skipped`, `paused`, `resumed`, `removed`, and `error`. A memory task configured with `overlap: 'skip'` emits `skipped` with `{ task, reason: 'overlap' }` without incrementing its run count. Persistent BullMQ resources emit `error` with `{ source, error }`, where `source` is `queue`, `queue-events`, or `worker`; these transport errors are also sent to the configured logger.
 
 With `memory()`, events are in-process. With `persistent()`, the worker emits lifecycle events immediately in the replica running the task, while BullMQ `QueueEvents` mirrors the same outcome to the other replicas without duplicating it locally. `QueueEvents` uses one extra Redis connection per scheduler queue per replica.
 

@@ -6,6 +6,7 @@ import { ScheduledTask } from './task';
 import type {
 	Awaitable,
 	CreateSchedulerOptions,
+	CronScheduledTaskOptions,
 	ScheduledTaskDefinition,
 	ScheduledTaskOptions,
 	SchedulerClientLike,
@@ -81,7 +82,7 @@ export class SchedulerRegistry extends SchedulerEmitter {
 		});
 	}
 
-	cron(id: string, expression: string, runner: SchedulerRunner, options?: ScheduledTaskOptions) {
+	cron(id: string, expression: string, runner: SchedulerRunner, options?: CronScheduledTaskOptions) {
 		const normalizedExpression = expression.trim();
 
 		if (!normalizedExpression) {

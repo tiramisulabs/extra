@@ -8,6 +8,8 @@ export type Awaitable<T> = T | Promise<T>;
 
 export type ScheduleKind = 'cron' | 'interval';
 
+export type SchedulerOverlapPolicy = 'allow' | 'skip';
+
 export type ScheduledTaskStatus = 'scheduled' | 'running' | 'paused' | 'completed' | 'failed' | 'removed';
 
 export type SchedulerRunner = (task: ScheduledTask) => Awaitable<unknown>;
@@ -23,8 +25,13 @@ export interface SchedulerLogger {
 export interface ScheduledTaskOptions {
 	data?: Record<string, unknown>;
 	explicitId?: boolean;
+	overlap?: SchedulerOverlapPolicy;
 	runImmediately?: boolean;
 	source?: string;
+}
+
+export interface CronScheduledTaskOptions extends ScheduledTaskOptions {
+	timezone?: string;
 }
 
 export interface ScheduledTaskSnapshot {
@@ -33,6 +40,8 @@ export interface ScheduledTaskSnapshot {
 	status: ScheduledTaskStatus;
 	expression?: string;
 	intervalMs?: number;
+	overlap: SchedulerOverlapPolicy;
+	timezone?: string;
 	runCount: number;
 	createdAt: Date;
 	lastRunAt?: Date;
@@ -46,6 +55,7 @@ export interface SchedulerEventPayloads {
 	started: { task: ScheduledTask };
 	completed: { task: ScheduledTask; result: unknown };
 	failed: { task: ScheduledTask; error: unknown };
+	skipped: { task: ScheduledTask; reason: 'overlap' };
 	paused: { task: ScheduledTask };
 	resumed: { task: ScheduledTask };
 	removed: { task: ScheduledTask };
@@ -74,7 +84,7 @@ export interface SchedulerDriver {
 	close?(): Awaitable<void>;
 }
 
-export interface ScheduledTaskDefinition extends ScheduledTaskOptions {
+export interface ScheduledTaskDefinition extends CronScheduledTaskOptions {
 	id: string;
 	explicitId?: boolean;
 	kind: ScheduleKind;
@@ -99,6 +109,10 @@ export type SchedulerTaskSource = SchedulerTaskConstructor | object;
 
 export interface SchedulerDecoratorOptions extends ScheduledTaskOptions {
 	id?: string;
+}
+
+export interface CronSchedulerDecoratorOptions extends SchedulerDecoratorOptions {
+	timezone?: string;
 }
 
 export interface SchedulerPlugin
@@ -127,9 +141,19 @@ export interface CronerJob {
 	nextRun?(): Date | null | undefined;
 }
 
+export interface CronerFactoryOptions {
+	/** Keeps runTask() failures observable through "failed" while allowing Croner to release its internal run state. */
+	catch: true;
+	interval?: number;
+	name: string;
+	paused: true;
+	protect?: () => void;
+	timezone?: string;
+}
+
 export type CronerFactory = (
 	expression: string,
-	options: Record<string, unknown>,
+	options: CronerFactoryOptions,
 	runner: () => Awaitable<unknown>,
 ) => CronerJob;
 

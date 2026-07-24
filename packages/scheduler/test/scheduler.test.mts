@@ -1,6 +1,8 @@
+import { Cron as Croner } from 'croner';
 import { assert, describe, test } from 'vitest';
 import {
 	Cron,
+	type CronerFactoryOptions,
 	createScheduler,
 	Interval,
 	memory,
@@ -15,12 +17,13 @@ import { parseDuration } from '../src/duration';
 import { createFakeBullMQ } from './fake-bullmq';
 
 class FakeCronerJob {
+	private busy = false;
 	paused: boolean;
 	stopped = false;
 
 	constructor(
 		readonly expression: string,
-		readonly options: Record<string, unknown>,
+		readonly options: CronerFactoryOptions,
 		private readonly runner: () => unknown,
 	) {
 		this.paused = options.paused === true;
@@ -28,7 +31,18 @@ class FakeCronerJob {
 
 	trigger() {
 		if (this.paused) return undefined;
-		return this.runner();
+		if (this.busy && this.options.protect) {
+			this.options.protect();
+			return undefined;
+		}
+
+		this.busy = true;
+		return Promise.resolve()
+			.then(() => this.runner())
+			.catch(() => undefined)
+			.finally(() => {
+				this.busy = false;
+			});
 	}
 
 	pause() {
@@ -50,7 +64,7 @@ class FakeCronerJob {
 
 function createFakeCroner() {
 	const jobs: FakeCronerJob[] = [];
-	const factory = (expression: string, options: Record<string, unknown>, runner: () => unknown) => {
+	const factory = (expression: string, options: CronerFactoryOptions, runner: () => unknown) => {
 		const job = new FakeCronerJob(expression, options, runner);
 		jobs.push(job);
 		return job;
@@ -132,6 +146,119 @@ describe('scheduler', () => {
 		assert.equal(croner.jobs[0]!.stopped, true);
 	});
 
+	test('settles rejected Croner callbacks after emitting failed and releases Croner state', async () => {
+		let job: Croner | undefined;
+		const registry = createScheduler({
+			driver: memory({
+				croner(expression, options, runner) {
+					job = new Croner(expression, options, async () => {
+						await runner();
+					});
+					return job;
+				},
+			}),
+		});
+		const failure = new Error('memory task failed');
+		const task = registry.interval('failing', '1h', () => {
+			throw failure;
+		});
+		const failed = waitForEvent(registry, 'failed');
+		const unhandled: unknown[] = [];
+		const onUnhandled = (error: unknown) => unhandled.push(error);
+		process.on('unhandledRejection', onUnhandled);
+
+		try {
+			await registry.setup({ initialized: true });
+			void job!.trigger();
+			const payload = await failed;
+			await new Promise<void>(resolve => setImmediate(resolve));
+
+			assert.equal(payload.task, task);
+			assert.equal(payload.error, failure);
+			assert.equal(task.status, 'failed');
+			assert.equal(task.lastError, failure);
+			assert.equal(job!.isBusy(), false);
+			assert.deepEqual(unhandled, []);
+		} finally {
+			process.off('unhandledRejection', onUnhandled);
+			await registry.close();
+		}
+	});
+
+	test('allows overlapping memory runs by default', async () => {
+		const croner = createFakeCroner();
+		const registry = createScheduler({ driver: memory({ croner: croner.factory }) });
+		const releases: Array<() => void> = [];
+		let active = 0;
+		let maxActive = 0;
+		const task = registry.interval('allow-overlap', '1s', async () => {
+			active += 1;
+			maxActive = Math.max(maxActive, active);
+			await new Promise<void>(resolve => releases.push(resolve));
+			active -= 1;
+		});
+
+		await registry.setup({ initialized: true });
+		const first = croner.jobs[0]!.trigger();
+		await flushMicrotasks();
+		const second = croner.jobs[0]!.trigger();
+		await flushMicrotasks();
+
+		assert.equal(task.overlap, 'allow');
+		assert.equal(task.runCount, 2);
+		assert.equal(maxActive, 2);
+		for (const release of releases) release();
+		await Promise.all([first, second]);
+		await registry.close();
+	});
+
+	test('skips overlapping memory runs and emits the task and reason', async () => {
+		const croner = createFakeCroner();
+		const registry = createScheduler({ driver: memory({ croner: croner.factory }) });
+		let release: (() => void) | undefined;
+		const task = registry.interval(
+			'skip-overlap',
+			'1s',
+			() =>
+				new Promise<void>(resolve => {
+					release = resolve;
+				}),
+			{ overlap: 'skip' },
+		);
+		const skipped = waitForEvent(registry, 'skipped');
+
+		await registry.setup({ initialized: true });
+		const first = croner.jobs[0]!.trigger();
+		await flushMicrotasks();
+		const second = croner.jobs[0]!.trigger();
+		const payload = await skipped;
+
+		assert.equal(second, undefined);
+		assert.equal(payload.task, task);
+		assert.equal(payload.reason, 'overlap');
+		assert.equal(task.overlap, 'skip');
+		assert.equal(task.status, 'running');
+		assert.equal(task.runCount, 1);
+		release?.();
+		await first;
+		assert.equal(task.status, 'completed');
+		await registry.close();
+	});
+
+	test('passes cron timezone to Croner and exposes the effective task contract', () => {
+		const croner = createFakeCroner();
+		const registry = createScheduler({ driver: memory({ croner: croner.factory }) });
+		const task = registry.cron('morning-report', '0 9 * * *', () => undefined, {
+			timezone: 'America/Santo_Domingo',
+		});
+
+		assert.equal(croner.jobs[0]!.options.timezone, 'America/Santo_Domingo');
+		assert.equal(croner.jobs[0]!.options.catch, true);
+		assert.equal(task.timezone, 'America/Santo_Domingo');
+		assert.equal(task.snapshot().timezone, 'America/Santo_Domingo');
+		assert.equal(task.snapshot().overlap, 'allow');
+	});
+
 	test('keeps memory Croner jobs paused until setup completes', async () => {
 		const events: string[] = [];
 		const registry = createScheduler({
@@ -181,7 +308,7 @@ describe('scheduler', () => {
 		}
 
 		applyMethodDecorator(Interval('5m', { id: 'heartbeat' }), MaintenanceTasks.prototype, 'heartbeat');
-		applyMethodDecorator(Cron('0 0 * * *', { id: 'daily' }), MaintenanceTasks.prototype, 'daily');
+		applyMethodDecorator(Cron('0 0 * * *', { id: 'daily', timezone: 'Etc/UTC' }), MaintenanceTasks.prototype, 'daily');
 
 		const plugin = scheduler({
 			driver: memory({ croner: croner.factory }),
@@ -220,6 +347,7 @@ describe('scheduler', () => {
 			plugin.registry.list().map(task => task.id),
 			['heartbeat', 'daily'],
 		);
+		assert.equal(croner.jobs[1]!.options.timezone, 'Etc/UTC');
 
 		await croner.jobs[0]!.trigger();
 		await croner.jobs[1]!.trigger();
@@ -309,10 +437,15 @@ describe('scheduler', () => {
 		});
 		const runs: string[] = [];
 
-		registry.cron('daily', '0 0 * * *', task => {
-			runs.push(task.id);
-			return 'cron-result';
-		});
+		registry.cron(
+			'daily',
+			'0 0 * * *',
+			task => {
+				runs.push(task.id);
+				return 'cron-result';
+			},
+			{ timezone: 'Etc/UTC' },
+		);
 		registry.interval('heartbeat', '30s', task => {
 			runs.push(task.id);
 			return 'interval-result';
@@ -334,7 +467,7 @@ describe('scheduler', () => {
 		assert.deepEqual(bullmq.state.queues[0]!.schedulers, [
 			{
 				id: 'daily',
-				repeat: { pattern: '0 0 * * *' },
+				repeat: { pattern: '0 0 * * *', tz: 'Etc/UTC' },
 				template: { name: 'daily', data: { taskId: 'daily' } },
 			},
 			{
@@ -371,6 +504,18 @@ describe('scheduler', () => {
 		assert.equal(bullmq.state.queues[0]!.closed, true);
 		assert.equal(bullmq.state.queueEvents[0]!.closed, true);
 		assert.equal(bullmq.state.workers[0]!.closed, true);
+	});
+
+	test('rejects unsupported persistent overlap skipping without creating a partial task', () => {
+		const bullmq = createFakeBullMQ();
+		const registry = createScheduler({ driver: persistent({ bullmq: bullmq.module }) });
+
+		assert.throws(
+			() => registry.interval('exclusive', '1m', () => undefined, { overlap: 'skip' }),
+			/does not support overlap: "skip"/,
+		);
+		assert.equal(registry.get('exclusive'), undefined);
+		assert.deepEqual(registry.list(), []);
 	});
 
 	test('updates persistent task snapshots before emitting queue lifecycle events', async () => {
