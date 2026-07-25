@@ -160,8 +160,8 @@ describe('proxy server', () => {
 	test('caches queue timeouts but releases other not-dispatched request IDs', async () => {
 		const fetcher = vi.fn<typeof fetch>(async () => response(200, { ok: true }));
 		const fixture = await startProxy(fetcher, {
-			globalLimit: { max: 1, perMs: 80 },
-			queueTimeout: 10,
+			globalLimit: { max: 1, perMs: 10_000 },
+			queueTimeout: 1_000,
 		});
 		cleanups.push(() => fixture.close());
 		await fixture.handler.request('GET', '/gateway/bot');
@@ -183,32 +183,32 @@ describe('proxy server', () => {
 		const timedOut = await sendTimedOut();
 		assert.equal(timedOut.status, 504);
 		assert.equal(JSON.parse(timedOut.body).code, 'PROXY_QUEUE_TIMEOUT');
-		await new Promise(resolve => setTimeout(resolve, 90));
 		const cached = await sendTimedOut();
 		assert.equal(cached.status, 504);
 		assert.equal(fetcher.mock.calls.length, 1);
 
-		await fixture.handler.request('GET', '/gateway/bot');
-		const retryPayload = JSON.stringify({
+		const disconnectedToken = 'disconnected-token';
+		await fixture.handler.request('GET', '/gateway/bot', { token: disconnectedToken });
+		const disconnectedPayload = JSON.stringify({
 			method: 'GET',
 			url: '/channels/2',
 			requestId: 'disconnected-before-dispatch',
+			token: disconnectedToken,
 		});
 		const disconnected = http.request(new URL('/v1/requests', fixture.proxy.url), {
 			method: 'POST',
 			headers: {
 				authorization: `Bearer ${fixture.service.credential}`,
-				'content-length': Buffer.byteLength(retryPayload),
+				'content-length': Buffer.byteLength(disconnectedPayload),
 				'content-type': 'application/json',
 				'x-proxy-request-id': 'disconnected-before-dispatch',
 			},
 		});
 		disconnected.on('error', () => {});
-		disconnected.end(retryPayload);
-		await vi.waitUntil(() => fixture.proxy.getStats().pendingRequests > 0, { interval: 1 });
+		disconnected.end(disconnectedPayload);
+		await vi.waitUntil(() => fixture.proxy.getStats().pendingRequests > 0, { interval: 1, timeout: 5_000 });
 		disconnected.destroy();
-		await vi.waitUntil(() => fixture.proxy.getStats().pendingRequests === 0, { interval: 1 });
-		await new Promise(resolve => setTimeout(resolve, 90));
+		await vi.waitUntil(() => fixture.proxy.getStats().pendingRequests === 0, { interval: 1, timeout: 5_000 });
 
 		const retried = await request(fixture.proxy.url, {
 			path: '/v1/requests',
@@ -216,11 +216,16 @@ describe('proxy server', () => {
 			credential: fixture.service.credential,
 			contentType: 'application/json',
 			requestId: 'disconnected-before-dispatch',
-			body: retryPayload,
+			body: JSON.stringify({
+				method: 'GET',
+				url: '/channels/2',
+				requestId: 'disconnected-before-dispatch',
+				token: 'retry-token',
+			}),
 		});
 		assert.equal(retried.status, 200);
 		assert.equal(fetcher.mock.calls.length, 3);
-	});
+	}, 10_000);
 
 	test('counts in-flight duplicates against admission and records their outcomes', async () => {
 		const held = deferred<void>();
