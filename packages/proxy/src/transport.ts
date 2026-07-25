@@ -1,21 +1,20 @@
 import type { BlobPart } from 'node:buffer';
 import type { IncomingHttpHeaders } from 'node:http';
 import type { RawFile } from 'seyfert';
-import { isRecord } from './internal';
-import { isRequestId, parseWireRequest, type WireApiRequest } from './protocol';
+import { isRecord, PayloadTooLargeError } from './internal';
+import { parseWireRequest, type WireApiRequest } from './protocol';
 
 export interface EncodedRequest {
 	body: Buffer;
 	contentType: string;
 }
 
-export interface TokenOverrideRequest {
-	tokenOverride: true;
-	requestId?: string;
-}
+type DecodedProxyRequest = WireApiRequest & { files?: RawFile[] };
 
-export type DecodedApiRequest = WireApiRequest & { files?: RawFile[] };
-export type DecodedProxyRequest = DecodedApiRequest | TokenOverrideRequest;
+interface ProxyPayloadLimits {
+	maxFiles?: number;
+	maxMetadataBytes?: number;
+}
 
 function fileDataToBlobPart(data: RawFile['data']): BlobPart {
 	return typeof data === 'boolean' || typeof data === 'number' ? String(data) : (data as BlobPart);
@@ -48,32 +47,32 @@ export async function encodeProxyRequest(
 	return { body: Buffer.from(await response.arrayBuffer()), contentType };
 }
 
-function decodeRawRequest(raw: unknown): DecodedProxyRequest | undefined {
-	if (isRecord(raw) && raw.token !== undefined) {
-		return { tokenOverride: true, ...(isRequestId(raw.requestId) ? { requestId: raw.requestId } : {}) };
-	}
-	return parseWireRequest(raw);
-}
-
 async function parseMultipart(
 	body: Buffer,
 	contentType: string,
-): Promise<(WireApiRequest & { files: RawFile[] }) | TokenOverrideRequest | undefined> {
+	limits: ProxyPayloadLimits,
+): Promise<(WireApiRequest & { files: RawFile[] }) | undefined> {
 	const form = await new Response(body, { headers: { 'content-type': contentType } }).formData();
 	const payload = form.get('payload_json');
 	if (typeof payload !== 'string') return;
+	if (limits.maxMetadataBytes !== undefined && Buffer.byteLength(payload) > limits.maxMetadataBytes) {
+		throw new PayloadTooLargeError('Proxy request metadata exceeds maxMetadataBytes.');
+	}
 	let raw: unknown;
 	try {
 		raw = JSON.parse(payload);
 	} catch {
 		return;
 	}
-	const request = decodeRawRequest(raw);
-	if (!request || 'tokenOverride' in request) return request;
+	const request = parseWireRequest(raw);
+	if (!request) return;
 
 	const files: RawFile[] = [];
 	for (const [key, value] of form.entries()) {
 		if (key === 'payload_json' || typeof value === 'string') continue;
+		if (limits.maxFiles !== undefined && files.length >= limits.maxFiles) {
+			throw new PayloadTooLargeError('Proxy request exceeds maxFiles.');
+		}
 		// FormData iteration preserves insertion order, which pairs each part with its original RawFile key.
 		const originalKey = request.fileKeys?.[files.length];
 		files.push({
@@ -90,10 +89,14 @@ async function parseMultipart(
 export async function decodeProxyRequest(
 	body: Buffer,
 	headers: IncomingHttpHeaders,
+	limits: ProxyPayloadLimits = {},
 ): Promise<DecodedProxyRequest | undefined> {
 	const contentType = headers['content-type'];
 	if (contentType?.toLowerCase().startsWith('multipart/form-data')) {
-		return parseMultipart(body, contentType);
+		return parseMultipart(body, contentType, limits);
+	}
+	if (limits.maxMetadataBytes !== undefined && body.byteLength > limits.maxMetadataBytes) {
+		throw new PayloadTooLargeError('Proxy request metadata exceeds maxMetadataBytes.');
 	}
 	let raw: unknown;
 	try {
@@ -102,5 +105,5 @@ export async function decodeProxyRequest(
 		return;
 	}
 	if (!isRecord(raw)) return;
-	return decodeRawRequest(raw);
+	return parseWireRequest(raw);
 }

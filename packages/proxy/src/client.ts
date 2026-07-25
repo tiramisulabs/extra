@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import http from 'node:http';
 import https from 'node:https';
 import { ApiHandler, type ApiRequestOptions, type HttpMethods, SeyfertError } from 'seyfert';
-import { positiveInteger, toError } from './internal';
+import { positiveInteger, proxyApiHandlerMarker, toError } from './internal';
 import {
 	type DiscordErrorEnvelope,
 	ProxyError,
@@ -18,8 +18,6 @@ export interface ProxyApiHandlerOptions {
 	credential: string;
 	requestTimeout?: number;
 }
-
-const DEFAULT_REQUEST_TIMEOUT = 30_000;
 
 interface TransportResult {
 	status: number;
@@ -37,15 +35,17 @@ function resolveEndpoint(value: string | URL): URL {
 	if (url.protocol !== 'http:' && url.protocol !== 'https:') {
 		throw new TypeError('ProxyApiHandler url must use http: or https:.');
 	}
-	url.pathname = `${url.pathname.replace(/\/$/, '')}/api`;
-	url.search = '';
-	url.hash = '';
+	if (url.username || url.password) throw new TypeError('ProxyApiHandler url must not include credentials.');
+	if (url.pathname !== '/' || url.search || url.hash) {
+		throw new TypeError('ProxyApiHandler url must not include a pathname, query, or hash.');
+	}
+	url.pathname = '/v1/requests';
 	return url;
 }
 
 function localProxyError(requestId: string, outcome: 'not_dispatched' | 'unknown', cause: unknown): ProxyError {
 	return new ProxyError(
-		proxyError('PROXY_INTERNAL', outcome, requestId, `Proxy transport failed: ${toError(cause).message}`),
+		proxyError('PROXY_INTERNAL', outcome, requestId, `Proxy transport failed: ${toError(cause).message}`, 'transport'),
 		{ cause },
 	);
 }
@@ -55,23 +55,24 @@ function requestProxy(
 	credential: string,
 	encoded: EncodedRequest,
 	requestId: string,
-	requestTimeout: number,
+	requestTimeout: number | undefined,
 ): Promise<TransportResult> {
 	return new Promise((resolve, reject) => {
-		let connected = false;
-		let finished = false;
+		let socketConnected = false;
+		let requestFinished = false;
 		let dispatched = false;
-		let timer: NodeJS.Timeout;
+		let timer: NodeJS.Timeout | undefined;
 		const succeed = (result: TransportResult) => {
-			clearTimeout(timer);
+			if (timer) clearTimeout(timer);
 			resolve(result);
 		};
 		const fail = (error: ProxyError) => {
-			clearTimeout(timer);
+			if (timer) clearTimeout(timer);
 			reject(error);
 		};
+		// Once the socket is connected and the request stream finished, delivery can no longer be proven absent.
 		const markDispatched = () => {
-			if (connected && finished) dispatched = true;
+			if (socketConnected && requestFinished) dispatched = true;
 		};
 		const transport = endpoint.protocol === 'https:' ? https : http;
 		const request = transport.request(
@@ -82,6 +83,7 @@ function requestProxy(
 					authorization: `Bearer ${credential}`,
 					'content-length': encoded.body.byteLength,
 					'content-type': encoded.contentType,
+					'x-proxy-request-id': requestId,
 				},
 			},
 			response => {
@@ -96,26 +98,28 @@ function requestProxy(
 		);
 		request.once('socket', socket => {
 			if (!socket.connecting) {
-				connected = true;
+				socketConnected = true;
 				markDispatched();
 			} else if (endpoint.protocol === 'https:') {
 				socket.once('secureConnect', () => {
-					connected = true;
+					socketConnected = true;
 					markDispatched();
 				});
 			} else {
 				socket.once('connect', () => {
-					connected = true;
+					socketConnected = true;
 					markDispatched();
 				});
 			}
 		});
 		request.once('finish', () => {
-			finished = true;
+			requestFinished = true;
 			markDispatched();
 		});
-		timer = setTimeout(() => request.destroy(new ProxyRequestTimeoutError()), requestTimeout);
-		timer.unref();
+		if (requestTimeout !== undefined) {
+			timer = setTimeout(() => request.destroy(new ProxyRequestTimeoutError()), requestTimeout);
+			timer.unref();
+		}
 		request.once('error', error => {
 			const outcome = error instanceof ProxyRequestTimeoutError || dispatched ? 'unknown' : 'not_dispatched';
 			fail(localProxyError(requestId, outcome, error));
@@ -150,14 +154,16 @@ function decodeEnvelope(result: TransportResult, requestId: string): ProxyRespon
 export class ProxyApiHandler extends ApiHandler {
 	readonly endpoint: URL;
 	private readonly credential: string;
-	private readonly requestTimeout: number;
+	private readonly requestTimeout: number | undefined;
 
 	constructor(options: ProxyApiHandlerOptions) {
 		if (!options.credential) throw new TypeError('ProxyApiHandler credential must not be empty.');
 		super({ token: 'INVALID', workerProxy: false });
+		Object.defineProperty(this, proxyApiHandlerMarker, { value: true });
 		this.endpoint = resolveEndpoint(options.url);
 		this.credential = options.credential;
-		this.requestTimeout = positiveInteger(options.requestTimeout ?? DEFAULT_REQUEST_TIMEOUT, 'requestTimeout');
+		this.requestTimeout =
+			options.requestTimeout === undefined ? undefined : positiveInteger(options.requestTimeout, 'requestTimeout');
 	}
 
 	override async request<T = unknown>(
@@ -166,16 +172,6 @@ export class ProxyApiHandler extends ApiHandler {
 		request: ApiRequestOptions = {},
 	): Promise<T> {
 		const requestId = randomUUID();
-		if (request.token !== undefined) {
-			throw new ProxyError(
-				proxyError(
-					'PROXY_TOKEN_OVERRIDE_UNSUPPORTED',
-					'not_dispatched',
-					requestId,
-					'ApiRequestOptions.token is not supported by ProxyApiHandler.',
-				),
-			);
-		}
 		const wire: WireApiRequest = {
 			method,
 			url,
@@ -185,9 +181,10 @@ export class ProxyApiHandler extends ApiHandler {
 			...(request.auth === undefined ? {} : { auth: request.auth }),
 			...(request.reason === undefined ? {} : { reason: request.reason }),
 			...(request.appendToFormData === undefined ? {} : { appendToFormData: request.appendToFormData }),
+			...(request.token === undefined ? {} : { token: request.token }),
 		};
 
-		const origin = {} as { stack?: string };
+		const origin = new Error();
 		Error.captureStackTrace?.(origin, this.request);
 		let encoded: EncodedRequest;
 		try {

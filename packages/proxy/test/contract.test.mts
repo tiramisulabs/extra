@@ -2,6 +2,7 @@ import http from 'node:http';
 import { ApiHandler, SeyfertError } from 'seyfert';
 import { afterEach, assert, describe, test } from 'vitest';
 import { ProxyApiHandler } from '../src';
+import { parseResponseEnvelope } from '../src/protocol';
 
 let server: http.Server | undefined;
 
@@ -37,5 +38,51 @@ describe('Seyfert ApiHandler contract', () => {
 		assert.equal(error.code, 'API_FORBIDDEN_50013');
 		assert.equal(error.metadata.status, 403);
 		assert.match(error.stack, /contract\.test\.mts/);
+	});
+});
+
+describe('proxy response contract', () => {
+	test('normalizes response envelopes at the wire boundary', () => {
+		assert.deepEqual(parseResponseEnvelope({ kind: 'success', status: 200, body: { ok: true }, extra: true }), {
+			kind: 'success',
+			status: 200,
+			body: { ok: true },
+		});
+		assert.deepEqual(
+			parseResponseEnvelope({
+				kind: 'discord_error',
+				status: 403,
+				body: { code: 50013 },
+				error: { code: 'API_FORBIDDEN_50013', metadata: { status: 403 }, extra: true },
+				extra: true,
+			}),
+			{
+				kind: 'discord_error',
+				status: 403,
+				body: { code: 50013 },
+				error: { code: 'API_FORBIDDEN_50013', metadata: { status: 403 } },
+			},
+		);
+		assert.deepEqual(
+			parseResponseEnvelope({
+				kind: 'proxy_error',
+				code: 'PROXY_OVERLOADED',
+				outcome: 'not_dispatched',
+				message: 'Proxy admission capacity is full.',
+				requestId: 'request-1',
+				phase: 'admission',
+				instanceId: 'proxy-1',
+				extra: true,
+			}),
+			{
+				kind: 'proxy_error',
+				code: 'PROXY_OVERLOADED',
+				outcome: 'not_dispatched',
+				message: 'Proxy admission capacity is full.',
+				requestId: 'request-1',
+				phase: 'admission',
+				instanceId: 'proxy-1',
+			},
+		);
 	});
 });

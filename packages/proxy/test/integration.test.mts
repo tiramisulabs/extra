@@ -1,8 +1,8 @@
 import http from 'node:http';
-import { WorkerClient } from 'seyfert';
+import { ApiHandler, WorkerClient } from 'seyfert';
 import { afterEach, assert, describe, test, vi } from 'vitest';
-import { ProxyApiHandler, ProxyError } from '../src';
-import { response, startProxy } from './helpers.mts';
+import { createProxy, createServiceCredential, ProxyApiHandler, ProxyError } from '../src';
+import { deferred, response, startProxy } from './helpers.mts';
 
 const cleanups: (() => Promise<void>)[] = [];
 
@@ -91,16 +91,128 @@ describe('ProxyApiHandler integration', () => {
 		);
 	});
 
-	test('rejects token overrides before opening a connection', async () => {
+	test('routes token overrides through isolated ApiHandler contexts', async () => {
+		const authorizations: (string | undefined)[] = [];
+		const createRestForToken = vi.fn((token: string) => new ApiHandler({ token, workerProxy: false }));
+		const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+			authorizations.push((init?.headers as Record<string, string>).Authorization);
+			return response(200, {});
+		});
+		const fixture = await startProxy(fetcher, { createRestForToken });
+		cleanups.push(() => fixture.close());
+
+		await fixture.handler.request('GET', '/gateway/bot');
+		await fixture.handler.request('GET', '/gateway/bot', { token: 'other' });
+		await fixture.handler.request('GET', '/users/@me', { token: 'other' });
+		assert.deepEqual(authorizations, ['Bot discord-token', 'Bot other', 'Bot other']);
+		assert.equal(createRestForToken.mock.calls.length, 1);
+	});
+
+	test('creates one context for concurrent requests after default token rotation', async () => {
+		const factoryRelease = deferred<void>();
+		const createRestForToken = vi.fn(async (token: string) => {
+			await factoryRelease.promise;
+			return new ApiHandler({ token, workerProxy: false });
+		});
+		const fixture = await startProxy(async () => response(200, {}), { createRestForToken });
+		cleanups.push(() => fixture.close());
+		fixture.rest.options.token = 'rotated';
+
+		const first = fixture.handler.request('GET', '/channels/1');
+		const second = fixture.handler.request('GET', '/channels/2');
+		await vi.waitUntil(() => createRestForToken.mock.calls.length > 0, { interval: 1 });
+		await new Promise(resolve => setImmediate(resolve));
+
+		assert.equal(createRestForToken.mock.calls.length, 1);
+		factoryRelease.resolve();
+		await Promise.all([first, second]);
+		assert.equal(createRestForToken.mock.calls.length, 1);
+	});
+
+	test('rejects a factory that reuses an evicted handler for another token', async () => {
+		const shared = new ApiHandler({ token: 'first', workerProxy: false });
+		const fixture = await startProxy(async () => response(200, {}), {
+			maxTokenContexts: 1,
+			createRestForToken: token => {
+				shared.options.token = token;
+				return shared;
+			},
+		});
+		cleanups.push(() => fixture.close());
+
+		await fixture.handler.request('GET', '/gateway/bot', { token: 'first' });
+		const error = await fixture.handler.request('GET', '/gateway/bot', { token: 'second' }).catch(value => value);
+
+		assert.instanceOf(error, ProxyError);
+		assert.equal(error.code, 'PROXY_TOKEN_CONTEXT_UNAVAILABLE');
+		assert.equal(error.outcome, 'not_dispatched');
+	});
+
+	test('rejects worker-proxy handlers returned by the context factory', async () => {
+		const fixture = await startProxy(async () => response(200, {}), {
+			createRestForToken: token => {
+				const rest = new ApiHandler({ token, workerProxy: false });
+				rest.options.workerProxy = true;
+				return rest;
+			},
+		});
+		cleanups.push(() => fixture.close());
+
+		const error = await fixture.handler.request('GET', '/gateway/bot', { token: 'other' }).catch(value => value);
+
+		assert.instanceOf(error, ProxyError);
+		assert.equal(error.code, 'PROXY_TOKEN_CONTEXT_UNAVAILABLE');
+		assert.equal(error.outcome, 'not_dispatched');
+	});
+
+	test('does not evict a token context before an exhausted route bucket resets', async () => {
+		const createRestForToken = vi.fn((token: string) => new ApiHandler({ token, workerProxy: false }));
+		const fixture = await startProxy(
+			async () =>
+				response(
+					200,
+					{ ok: true },
+					{ 'x-ratelimit-limit': '1', 'x-ratelimit-remaining': '0', 'x-ratelimit-reset-after': '0.04' },
+				),
+			{ createRestForToken, maxTokenContexts: 1 },
+		);
+		cleanups.push(() => fixture.close());
+
+		await fixture.handler.request('GET', '/channels/1', { token: 'first' });
+		const blocked = await fixture.handler.request('GET', '/channels/2', { token: 'second' }).catch(value => value);
+		assert.instanceOf(blocked, ProxyError);
+		assert.equal(blocked.code, 'PROXY_TOKEN_CONTEXT_UNAVAILABLE');
+
+		await new Promise(resolve => setTimeout(resolve, 50));
+		assert.deepEqual(await fixture.handler.request('GET', '/channels/2', { token: 'second' }), { ok: true });
+		assert.equal(createRestForToken.mock.calls.length, 2);
+	});
+
+	test('rejects an override as not dispatched when the deployment has no context factory', async () => {
 		const fetcher = vi.fn<typeof fetch>(async () => response(200, {}));
-		const fixture = await startProxy(fetcher);
+		const fixture = await startProxy(fetcher, { createRestForToken: undefined });
 		cleanups.push(() => fixture.close());
 
 		const error = await fixture.handler.request('GET', '/gateway/bot', { token: 'other' }).catch(value => value);
 		assert.instanceOf(error, ProxyError);
-		assert.equal(error.code, 'PROXY_TOKEN_OVERRIDE_UNSUPPORTED');
+		assert.equal(error.code, 'PROXY_TOKEN_CONTEXT_UNAVAILABLE');
 		assert.equal(error.outcome, 'not_dispatched');
+		assert.equal(error.phase, 'admission');
+		assert.equal(error.instanceId, fixture.proxy.instanceId);
 		assert.equal(fetcher.mock.calls.length, 0);
+	});
+
+	test('rejects proxy base URLs with a path instead of silently rewriting them', () => {
+		assert.throws(() => new ProxyApiHandler({ url: 'https://proxy.internal/base', credential: 'service' }), /pathname/);
+	});
+
+	test('rejects ProxyApiHandler as the central Discord handler', async () => {
+		const service = createServiceCredential('loop-guard');
+		const handler = new ProxyApiHandler({ url: 'http://127.0.0.1:4444', credential: service.credential });
+
+		const error = await createProxy({ rest: handler, credentials: [service.hash], port: 0 }).catch(value => value);
+		assert.instanceOf(error, ProxyError);
+		assert.equal(error.code, 'PROXY_UNSUPPORTED_SEYFERT');
 	});
 
 	test('returns undefined for a successful empty Discord response', async () => {

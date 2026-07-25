@@ -1,5 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
+/** @internal Kept neutral so server compatibility checks do not depend on the client implementation. */
+export const proxyApiHandlerMarker = Symbol.for('@slipher/proxy/ProxyApiHandler');
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -34,9 +37,13 @@ export function writeEmpty(res: ServerResponse, status: number): void {
 	res.end();
 }
 
-export async function readRequestBody(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
+export async function readRequestBody(
+	req: IncomingMessage,
+	maxBytes?: number,
+	reserveBytes?: (bytes: number) => void,
+): Promise<Buffer> {
 	const declaredLength = Number(req.headers['content-length']);
-	if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+	if (maxBytes !== undefined && Number.isFinite(declaredLength) && declaredLength > maxBytes) {
 		req.pause();
 		throw new PayloadTooLargeError();
 	}
@@ -58,9 +65,16 @@ export async function readRequestBody(req: IncomingMessage, maxBytes: number): P
 		const onData = (chunk: Buffer | string) => {
 			const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
 			size += buffer.byteLength;
-			if (size > maxBytes) {
+			if (maxBytes !== undefined && size > maxBytes) {
 				req.pause();
 				fail(new PayloadTooLargeError());
+				return;
+			}
+			try {
+				reserveBytes?.(buffer.byteLength);
+			} catch (error) {
+				req.pause();
+				fail(toError(error));
 				return;
 			}
 			chunks.push(buffer);
@@ -80,7 +94,28 @@ export async function readRequestBody(req: IncomingMessage, maxBytes: number): P
 }
 
 export class PayloadTooLargeError extends Error {
-	constructor() {
-		super('Request payload exceeds maxRequestBytes.');
+	constructor(message = 'Request payload exceeds its configured limit.') {
+		super(message);
+	}
+}
+
+export class BufferedBytesBudget {
+	private used = 0;
+
+	constructor(private readonly limit: number | undefined) {}
+
+	reserve(bytes: number): void {
+		if (this.limit !== undefined && this.used + bytes > this.limit) {
+			throw new PayloadTooLargeError('Aggregate admitted bytes exceed maxBufferedBytes.');
+		}
+		this.used += bytes;
+	}
+
+	release(bytes: number): void {
+		this.used = Math.max(0, this.used - bytes);
+	}
+
+	get size(): number {
+		return this.used;
 	}
 }

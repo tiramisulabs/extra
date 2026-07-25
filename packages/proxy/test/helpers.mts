@@ -1,23 +1,28 @@
 import http from 'node:http';
+import { ApiHandler } from 'seyfert';
 import { createProxy, createServiceCredential, ProxyApiHandler, type ProxyServerOptions } from '../src';
 
 export async function startProxy(
 	fetcher: typeof fetch,
-	options: Partial<Omit<ProxyServerOptions, 'token' | 'credentials' | 'port'>> = {},
+	options: Partial<Omit<ProxyServerOptions, 'rest' | 'credentials' | 'port'>> = {},
 ) {
 	const originalFetch = globalThis.fetch;
 	globalThis.fetch = fetcher;
 	const service = createServiceCredential('test-service');
+	const rest = new ApiHandler({ token: 'discord-token', workerProxy: false });
+	const { authenticate, ...serverOptions } = options;
 	const proxy = await createProxy({
-		token: 'discord-token',
-		credentials: [service.hash],
+		rest,
+		createRestForToken: token => new ApiHandler({ token, workerProxy: false }),
+		...(authenticate ? { authenticate } : { credentials: [service.hash] }),
 		port: 0,
-		...options,
+		...serverOptions,
 	});
 	const handler = new ProxyApiHandler({ url: proxy.url, credential: service.credential });
 	return {
 		proxy,
 		handler,
+		rest,
 		service,
 		async close(drainTimeout = 1_000) {
 			await proxy.close({ drainTimeout });
@@ -35,7 +40,14 @@ export function response(status: number, body: unknown, headers: Record<string, 
 
 export function request(
 	url: string,
-	options: { path: string; credential?: string; method?: string; body?: string; contentType?: string },
+	options: {
+		path: string;
+		credential?: string;
+		method?: string;
+		body?: string;
+		contentType?: string;
+		requestId?: string;
+	},
 ): Promise<{ status: number; body: string }> {
 	return new Promise((resolve, reject) => {
 		const target = new URL(options.path, url);
@@ -47,6 +59,7 @@ export function request(
 					...(options.credential ? { authorization: `Bearer ${options.credential}` } : {}),
 					...(options.body === undefined ? {} : { 'content-length': Buffer.byteLength(options.body) }),
 					...(options.contentType ? { 'content-type': options.contentType } : {}),
+					...(options.requestId ? { 'x-proxy-request-id': options.requestId } : {}),
 				},
 			},
 			res => {

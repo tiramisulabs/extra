@@ -16,8 +16,12 @@ interface ParsedCredentialHash {
 	digest: Buffer;
 }
 
+export function isServiceId(value: unknown): value is string {
+	return typeof value === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(value);
+}
+
 function validateServiceId(serviceId: string): void {
-	if (!/^[A-Za-z0-9._:-]{1,128}$/.test(serviceId)) {
+	if (!isServiceId(serviceId)) {
 		throw new TypeError('serviceId must contain 1 to 128 safe identifier characters.');
 	}
 }

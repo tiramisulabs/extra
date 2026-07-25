@@ -9,9 +9,15 @@ export {
 	type ProxyErrorCode,
 	type ProxyErrorEnvelope,
 	type ProxyOutcome,
+	type ProxyPhase,
 } from './protocol';
 export {
+	type CreateRestForToken,
 	createProxy,
+	type GateOptions,
+	type ProxyAuthenticationContext,
+	type ProxyAuthenticationResult,
+	type ProxyAuthenticator,
 	type ProxyCloseOptions,
 	type ProxyObservation,
 	type ProxyObserver,

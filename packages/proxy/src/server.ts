@@ -1,9 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { ApiHandler, SeyfertError } from 'seyfert';
-import { createCredentialAuthenticator } from './credentials';
-import { isInteractionCallback, SlidingWindow } from './gates';
 import {
+	type CreateRestForToken,
+	type GateOptions,
+	isCompatibleApiHandler,
+	RestContextManager,
+	TokenContextUnavailableError,
+} from './contexts';
+import { createCredentialAuthenticator, isServiceId } from './credentials';
+import { RequestDeduplicator, requestFingerprint } from './deduplication';
+import { SlidingWindow } from './gates';
+import {
+	BufferedBytesBudget,
 	nonNegativeInteger,
 	PayloadTooLargeError,
 	positiveInteger,
@@ -14,9 +23,13 @@ import {
 } from './internal';
 import {
 	type DiscordErrorEnvelope,
+	isRequestId,
 	ProxyError,
 	type ProxyErrorCode,
+	type ProxyErrorEnvelope,
 	type ProxyOutcome,
+	type ProxyPhase,
+	type ProxyResponseEnvelope,
 	proxyError,
 	type SuccessEnvelope,
 	toApiRequestOptions,
@@ -27,25 +40,48 @@ import {
 	type InFlightRequest,
 	RequestScheduler,
 } from './scheduler';
-import { type DecodedProxyRequest, decodeProxyRequest } from './transport';
+import { decodeProxyRequest } from './transport';
 
-const DEFAULT_MAX_PENDING_REQUESTS = 512;
-const DEFAULT_QUEUE_TIMEOUT = 5_000;
-const DEFAULT_MAX_REQUEST_BYTES = 10 * 1024 * 1024 + 64 * 1024;
-const DEFAULT_INVALID_MAX = 10_000;
-const DEFAULT_INVALID_WINDOW = 600_000;
-const GLOBAL_GATE_LIMIT = 50;
-const GLOBAL_GATE_WINDOW = 1_000;
+export type { CreateRestForToken, GateOptions } from './contexts';
 
-export interface ProxyServerOptions {
-	token: string;
-	credentials: string[];
+interface ProxyServerBaseOptions {
+	rest: ApiHandler;
+	createRestForToken?: CreateRestForToken;
 	port: number;
-	maxPendingRequests?: number;
+	host?: string;
+	maxTokenContexts?: number;
+	maxAdmittedRequests?: number;
 	queueTimeout?: number;
 	maxRequestBytes?: number;
+	maxBufferedBytes?: number;
+	maxFiles?: number;
+	maxMetadataBytes?: number;
+	deduplication?: { ttl?: number; maxEntries?: number };
+	globalLimit?: Partial<GateOptions>;
+	unauthenticatedLimit?: Partial<GateOptions>;
 	invalidWindow?: { max: number; perMs: number };
 }
+
+export interface ProxyAuthenticationContext {
+	readonly method: string;
+	readonly path: string;
+	readonly remoteAddress?: string;
+}
+
+export interface ProxyAuthenticationResult {
+	readonly serviceId: string;
+}
+
+export type ProxyAuthenticator = (
+	credential: string,
+	context: ProxyAuthenticationContext,
+) => ProxyAuthenticationResult | null | undefined | Promise<ProxyAuthenticationResult | null | undefined>;
+
+export type ProxyServerOptions = ProxyServerBaseOptions &
+	(
+		| { credentials: readonly string[]; authenticate?: never }
+		| { authenticate: ProxyAuthenticator; credentials?: never }
+	);
 
 export interface ProxyCloseOptions {
 	drainTimeout: number;
@@ -53,16 +89,21 @@ export interface ProxyCloseOptions {
 
 export interface ProxyStats {
 	instanceId: string;
-	state: 'ready' | 'draining' | 'quarantined' | 'closed';
+	state: 'ready' | 'draining' | 'quarantined' | 'unavailable' | 'closed';
 	pendingRequests: number;
 	inFlightRequests: number;
+	admittedRequests: number;
+	bufferedBytes: number;
+	tokenContexts: number;
+	deduplicationEntries: number;
 	invalidBudgetRemaining: number;
-	globalGateOccupancy: number;
+	authenticatedGateOccupancy: number;
+	unauthenticatedGateOccupancy: number;
 	outcomes: Record<ProxyOutcome, number>;
 }
 
 export type ProxyObservation =
-	| { type: 'state'; at: number; instanceId: string }
+	| { type: 'state'; at: number; instanceId: string; state: ProxyStats['state'] }
 	| {
 			type: 'request';
 			at: number;
@@ -86,23 +127,163 @@ export interface ProxyServer {
 	close(options: ProxyCloseOptions): Promise<void>;
 }
 
+interface RpcResponse {
+	status: number;
+	envelope: ProxyResponseEnvelope;
+	outcome: ProxyOutcome;
+	code?: ProxyErrorCode;
+}
+
+interface ValidatedOptions {
+	rest: ApiHandler;
+	createRestForToken?: CreateRestForToken;
+	authenticate: ProxyAuthenticator;
+	port: number;
+	host: string;
+	maxTokenContexts: number;
+	maxAdmittedRequests: number;
+	queueTimeout: number;
+	maxRequestBytes?: number;
+	maxBufferedBytes?: number;
+	maxFiles?: number;
+	maxMetadataBytes?: number;
+	deduplication: { ttl: number; maxEntries: number };
+	globalLimit: GateOptions;
+	unauthenticatedLimit: GateOptions;
+	invalidWindow: GateOptions;
+}
+
+const defaultOptions = {
+	host: '127.0.0.1',
+	maxTokenContexts: 128,
+	maxAdmittedRequests: 512,
+	queueTimeout: 5_000,
+	deduplication: {
+		ttl: 5 * 60_000,
+		maxEntries: 10_000,
+	},
+	globalLimit: {
+		max: 50,
+		perMs: 1_000,
+	},
+	unauthenticatedLimit: {
+		max: 50,
+		perMs: 1_000,
+	},
+	invalidWindow: {
+		max: 10_000,
+		perMs: 600_000,
+	},
+} as const satisfies Pick<
+	ValidatedOptions,
+	| 'host'
+	| 'maxTokenContexts'
+	| 'maxAdmittedRequests'
+	| 'queueTimeout'
+	| 'deduplication'
+	| 'globalLimit'
+	| 'unauthenticatedLimit'
+	| 'invalidWindow'
+>;
+
 function proxyStatus(code: ProxyErrorCode): number {
 	switch (code) {
 		case 'PROXY_UNAUTHENTICATED':
 			return 401;
-		case 'PROXY_TOKEN_OVERRIDE_UNSUPPORTED':
+		case 'PROXY_AUTHENTICATION_UNAVAILABLE':
+			return 503;
+		case 'PROXY_BAD_REQUEST':
 			return 400;
+		case 'PROXY_NOT_FOUND':
+			return 404;
+		case 'PROXY_REQUEST_ID_CONFLICT':
+			return 409;
 		case 'PROXY_PAYLOAD_TOO_LARGE':
 			return 413;
 		case 'PROXY_QUEUE_TIMEOUT':
 			return 504;
 		case 'PROXY_OVERLOADED':
 		case 'PROXY_DRAINING':
-		case 'PROXY_QUARANTINED':
+		case 'PROXY_TOKEN_CONTEXT_UNAVAILABLE':
+		case 'PROXY_TOKEN_REJECTED':
+		case 'PROXY_INVALID_REQUEST_BUDGET_EXHAUSTED':
 			return 503;
+		case 'PROXY_UNSUPPORTED_SEYFERT':
 		case 'PROXY_INTERNAL':
 			return 500;
 	}
+}
+
+function optionalPositiveInteger(value: number | undefined, name: string): number | undefined {
+	return value === undefined ? undefined : positiveInteger(value, name);
+}
+
+function gateOptions(value: Partial<GateOptions> | undefined, defaults: GateOptions, name: string): GateOptions {
+	return {
+		max: positiveInteger(value?.max ?? defaults.max, `${name}.max`),
+		perMs: positiveInteger(value?.perMs ?? defaults.perMs, `${name}.perMs`),
+	};
+}
+
+function validateOptions(options: ProxyServerOptions): ValidatedOptions {
+	if (!isCompatibleApiHandler(options.rest)) {
+		throw new ProxyError(
+			proxyError(
+				'PROXY_UNSUPPORTED_SEYFERT',
+				'not_dispatched',
+				randomUUID(),
+				'rest must be a compatible direct Discord ApiHandler with workerProxy disabled.',
+				'startup',
+			),
+		);
+	}
+	if (!options.host && options.host !== undefined) throw new TypeError('host must not be empty.');
+	if (Boolean(options.authenticate) === Boolean(options.credentials)) {
+		throw new TypeError('Configure exactly one of authenticate or credentials.');
+	}
+	let authenticate: ProxyAuthenticator;
+	if (options.authenticate) authenticate = options.authenticate;
+	else {
+		const authenticateCredential = createCredentialAuthenticator(options.credentials);
+		authenticate = credential => {
+			const serviceId = authenticateCredential(credential);
+			return serviceId ? { serviceId } : null;
+		};
+	}
+	return {
+		rest: options.rest,
+		...(options.createRestForToken ? { createRestForToken: options.createRestForToken } : {}),
+		authenticate,
+		port: nonNegativeInteger(options.port, 'port'),
+		host: options.host ?? defaultOptions.host,
+		maxTokenContexts: positiveInteger(options.maxTokenContexts ?? defaultOptions.maxTokenContexts, 'maxTokenContexts'),
+		maxAdmittedRequests: positiveInteger(
+			options.maxAdmittedRequests ?? defaultOptions.maxAdmittedRequests,
+			'maxAdmittedRequests',
+		),
+		queueTimeout: positiveInteger(options.queueTimeout ?? defaultOptions.queueTimeout, 'queueTimeout'),
+		maxRequestBytes: optionalPositiveInteger(options.maxRequestBytes, 'maxRequestBytes'),
+		maxBufferedBytes: optionalPositiveInteger(options.maxBufferedBytes, 'maxBufferedBytes'),
+		maxFiles: optionalPositiveInteger(options.maxFiles, 'maxFiles'),
+		maxMetadataBytes: optionalPositiveInteger(options.maxMetadataBytes, 'maxMetadataBytes'),
+		deduplication: {
+			ttl: positiveInteger(options.deduplication?.ttl ?? defaultOptions.deduplication.ttl, 'deduplication.ttl'),
+			maxEntries: positiveInteger(
+				options.deduplication?.maxEntries ?? defaultOptions.deduplication.maxEntries,
+				'deduplication.maxEntries',
+			),
+		},
+		globalLimit: gateOptions(options.globalLimit, defaultOptions.globalLimit, 'globalLimit'),
+		unauthenticatedLimit: gateOptions(
+			options.unauthenticatedLimit,
+			defaultOptions.unauthenticatedLimit,
+			'unauthenticatedLimit',
+		),
+		invalidWindow: {
+			max: positiveInteger(options.invalidWindow?.max ?? defaultOptions.invalidWindow.max, 'invalidWindow.max'),
+			perMs: positiveInteger(options.invalidWindow?.perMs ?? defaultOptions.invalidWindow.perMs, 'invalidWindow.perMs'),
+		},
+	};
 }
 
 function bearerCredential(req: IncomingMessage): string | undefined {
@@ -133,24 +314,8 @@ function closeAfterResponse(req: IncomingMessage, res: ServerResponse): void {
 	res.once('finish', () => req.socket.end());
 }
 
-function validateOptions(options: ProxyServerOptions): Required<Omit<ProxyServerOptions, 'invalidWindow'>> & {
-	invalidWindow: { max: number; perMs: number };
-} {
-	if (!options.token) throw new TypeError('token must not be empty.');
-	return {
-		...options,
-		port: nonNegativeInteger(options.port, 'port'),
-		maxPendingRequests: positiveInteger(
-			options.maxPendingRequests ?? DEFAULT_MAX_PENDING_REQUESTS,
-			'maxPendingRequests',
-		),
-		queueTimeout: positiveInteger(options.queueTimeout ?? DEFAULT_QUEUE_TIMEOUT, 'queueTimeout'),
-		maxRequestBytes: positiveInteger(options.maxRequestBytes ?? DEFAULT_MAX_REQUEST_BYTES, 'maxRequestBytes'),
-		invalidWindow: {
-			max: positiveInteger(options.invalidWindow?.max ?? DEFAULT_INVALID_MAX, 'invalidWindow.max'),
-			perMs: positiveInteger(options.invalidWindow?.perMs ?? DEFAULT_INVALID_WINDOW, 'invalidWindow.perMs'),
-		},
-	};
+function formatHost(host: string): string {
+	return host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
 }
 
 class ProxyServerImpl implements ProxyServer {
@@ -162,33 +327,43 @@ class ProxyServerImpl implements ProxyServer {
 	private readonly ambiguous = new Set<symbol>();
 	private closed = false;
 	private closePromise?: Promise<void>;
-	private stateSignature = '';
-	private invalidTimer?: NodeJS.Timeout;
+	private emittedState?: ProxyStats['state'];
 
 	constructor(
 		private readonly server: Server,
 		private readonly scheduler: RequestScheduler,
+		private readonly contexts: RestContextManager,
+		private readonly deduplicator: RequestDeduplicator<RpcResponse>,
+		private readonly bufferedBytes: BufferedBytesBudget,
+		host: string,
 		port: number,
 	) {
 		this.port = port;
-		this.url = `http://127.0.0.1:${port}`;
+		this.url = `http://${formatHost(host)}:${port}`;
+	}
+
+	get currentState(): ProxyStats['state'] {
+		if (this.closed) return 'closed';
+		if (this.scheduler.draining) return 'draining';
+		if (this.scheduler.invalidBudgetExhausted) return 'quarantined';
+		if (this.contexts.defaultContextIssue) return 'unavailable';
+		return 'ready';
 	}
 
 	getStats(): ProxyStats {
 		const now = Date.now();
 		return {
 			instanceId: this.instanceId,
-			state: this.closed
-				? 'closed'
-				: this.scheduler.draining
-					? 'draining'
-					: this.scheduler.quarantined
-						? 'quarantined'
-						: 'ready',
+			state: this.currentState,
 			pendingRequests: this.scheduler.pendingCount,
 			inFlightRequests: this.scheduler.inFlightCount,
+			admittedRequests: this.scheduler.admittedCount,
+			bufferedBytes: this.bufferedBytes.size,
+			tokenContexts: this.contexts.tokenContextCount,
+			deduplicationEntries: this.deduplicator.size,
 			invalidBudgetRemaining: this.scheduler.invalidBudget.remaining(now),
-			globalGateOccupancy: this.scheduler.globalGate.occupancy(now),
+			authenticatedGateOccupancy: this.contexts.authenticatedGateOccupancy(now),
+			unauthenticatedGateOccupancy: this.contexts.unauthenticatedGateOccupancy(now),
 			outcomes: { ...this.outcomes },
 		};
 	}
@@ -198,7 +373,8 @@ class ProxyServerImpl implements ProxyServer {
 		return () => this.observers.delete(observer);
 	}
 
-	emit(observation: ProxyObservationInput): void {
+	private emit(observation: ProxyObservationInput): void {
+		if (this.observers.size === 0) return;
 		const payload = Object.freeze({ ...observation, at: Date.now(), instanceId: this.instanceId });
 		for (const observer of this.observers) {
 			try {
@@ -210,23 +386,20 @@ class ProxyServerImpl implements ProxyServer {
 	}
 
 	notifyStateChange(): void {
-		const stats = this.getStats();
-		const signature = `${stats.state}:${stats.pendingRequests}:${stats.inFlightRequests}:${stats.invalidBudgetRemaining}:${stats.globalGateOccupancy}`;
-		if (signature === this.stateSignature) return;
-		this.stateSignature = signature;
-		this.emit({ type: 'state' });
-		if (stats.state === 'quarantined' && !this.scheduler.draining) this.scheduleInvalidRecovery();
+		const state = this.currentState;
+		if (state === this.emittedState) return;
+		this.emittedState = state;
+		this.emit({ type: 'state', state });
 	}
 
-	private scheduleInvalidRecovery(): void {
-		if (this.invalidTimer || this.scheduler.invalidBudget.remaining(Date.now()) > 0) return;
-		const delay = this.scheduler.invalidBudget.blockedFor(Date.now());
-		if (!delay) return;
-		this.invalidTimer = setTimeout(() => {
-			this.invalidTimer = undefined;
-			this.notifyStateChange();
-		}, delay);
-		this.invalidTimer.unref();
+	error(
+		code: ProxyErrorCode,
+		outcome: ProxyOutcome,
+		requestId: string,
+		message: string,
+		phase: ProxyPhase,
+	): ProxyErrorEnvelope {
+		return proxyError(code, outcome, requestId, message, phase, this.instanceId);
 	}
 
 	record(
@@ -261,9 +434,10 @@ class ProxyServerImpl implements ProxyServer {
 		this.scheduler.startDraining();
 		const deadline = Date.now() + drainTimeout;
 		const serverClosed = new Promise<void>(resolve => this.server.close(() => resolve()));
-		while (this.scheduler.inFlightCount > 0 && Date.now() < deadline) {
+		while (this.scheduler.admittedCount > 0 && Date.now() < deadline) {
 			await new Promise(resolve => setTimeout(resolve, Math.min(25, Math.max(1, deadline - Date.now()))));
 		}
+		if (this.scheduler.pendingCount > 0) this.scheduler.rejectPendingForDrain();
 		if (this.scheduler.inFlightCount > 0) {
 			const ambiguous = this.scheduler.inFlight;
 			this.markAmbiguous(ambiguous);
@@ -272,50 +446,100 @@ class ProxyServerImpl implements ProxyServer {
 			);
 		}
 		this.closed = true;
-		if (this.invalidTimer) clearTimeout(this.invalidTimer);
-		const remaining = Math.max(0, deadline - Date.now());
-		let forceTimer: NodeJS.Timeout | undefined;
-		if (remaining === 0) this.server.closeAllConnections();
-		else {
-			forceTimer = setTimeout(() => this.server.closeAllConnections(), remaining);
-			forceTimer.unref();
-		}
+		this.server.closeAllConnections();
 		await serverClosed;
-		if (forceTimer) clearTimeout(forceTimer);
 		this.notifyStateChange();
 	}
 }
 
+function proxyRpc(
+	proxy: ProxyServerImpl,
+	code: ProxyErrorCode,
+	outcome: ProxyOutcome,
+	requestId: string,
+	message: string,
+	phase: ProxyPhase,
+): RpcResponse {
+	return {
+		status: proxyStatus(code),
+		envelope: proxy.error(code, outcome, requestId, message, phase),
+		outcome,
+		code,
+	};
+}
+
+function proxyErrorRpc(proxy: ProxyServerImpl, error: ProxyError): RpcResponse {
+	return proxyRpc(proxy, error.code, error.outcome, error.requestId, error.message, error.phase);
+}
+
+function writeRpc(res: ServerResponse, rpc: RpcResponse): void {
+	writeJson(res, rpc.status, rpc.envelope);
+}
+
 function createRequestHandler(
-	options: ReturnType<typeof validateOptions>,
-	authenticate: ReturnType<typeof createCredentialAuthenticator>,
-	rest: ApiHandler,
+	options: ValidatedOptions,
 	scheduler: RequestScheduler,
+	contexts: RestContextManager,
+	deduplicator: RequestDeduplicator<RpcResponse>,
+	bufferedBytes: BufferedBytesBudget,
 	getProxy: () => ProxyServerImpl,
 ): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
 	return async (req, res) => {
 		const proxy = getProxy();
 		const path = new URL(req.url ?? '/', 'http://proxy.local').pathname;
+		const credential = bearerCredential(req);
+		let serviceId: string | undefined;
+		if (credential) {
+			try {
+				const result = await options.authenticate(credential, {
+					method: req.method ?? 'UNKNOWN',
+					path,
+					...(req.socket.remoteAddress ? { remoteAddress: req.socket.remoteAddress } : {}),
+				});
+				if (result && isServiceId(result.serviceId)) serviceId = result.serviceId;
+			} catch {
+				const rpc = proxyRpc(
+					proxy,
+					'PROXY_AUTHENTICATION_UNAVAILABLE',
+					'not_dispatched',
+					randomUUID(),
+					'Authentication service is unavailable.',
+					'authentication',
+				);
+				writeRpc(res, rpc);
+				return;
+			}
+		}
+		if (!serviceId) {
+			const rpc = proxyRpc(
+				proxy,
+				'PROXY_UNAUTHENTICATED',
+				'not_dispatched',
+				randomUUID(),
+				'Authentication failed.',
+				'authentication',
+			);
+			writeRpc(res, rpc);
+			return;
+		}
+		const authenticatedServiceId = serviceId;
+
 		if (req.method === 'GET' && path === '/health/live') {
 			writeEmpty(res, 200);
 			return;
 		}
-
-		const credential = bearerCredential(req);
-		const serviceId = credential ? authenticate(credential) : undefined;
-		if (!serviceId) {
-			const requestId = randomUUID();
-			const envelope = proxyError('PROXY_UNAUTHENTICATED', 'not_dispatched', requestId, 'Authentication failed.');
-			writeJson(res, 401, envelope);
-			return;
-		}
-
 		if (req.method === 'GET' && path === '/health/ready') {
-			const stats = proxy.getStats();
-			if (stats.state === 'ready') writeEmpty(res, 200);
+			proxy.notifyStateChange();
+			const state = proxy.currentState;
+			if (state === 'ready') writeEmpty(res, 200);
 			else {
-				const code = stats.state === 'quarantined' ? 'PROXY_QUARANTINED' : 'PROXY_DRAINING';
-				writeJson(res, proxyStatus(code), proxyError(code, 'not_dispatched', randomUUID(), `Proxy is ${stats.state}.`));
+				const code =
+					state === 'quarantined'
+						? 'PROXY_INVALID_REQUEST_BUDGET_EXHAUSTED'
+						: state === 'unavailable'
+							? (contexts.defaultContextIssue ?? 'PROXY_TOKEN_CONTEXT_UNAVAILABLE')
+							: 'PROXY_DRAINING';
+				writeRpc(res, proxyRpc(proxy, code, 'not_dispatched', randomUUID(), `Proxy is ${state}.`, 'admission'));
 			}
 			return;
 		}
@@ -323,87 +547,193 @@ function createRequestHandler(
 			writeJson(res, 200, proxy.getStats());
 			return;
 		}
-		if (req.method !== 'POST' || path !== '/api') {
-			writeEmpty(res, 404);
+		if (req.method !== 'POST' || path !== '/v1/requests') {
+			writeRpc(
+				res,
+				proxyRpc(proxy, 'PROXY_NOT_FOUND', 'not_dispatched', randomUUID(), 'Proxy route was not found.', 'routing'),
+			);
 			return;
 		}
-		const admissionRequestId = randomUUID();
+
+		const headerRequestId = req.headers['x-proxy-request-id'];
+		const admissionRequestId = isRequestId(headerRequestId) ? headerRequestId : randomUUID();
 		let reservation: AdmissionReservation;
 		try {
 			reservation = scheduler.reserve(admissionRequestId);
 		} catch (error) {
 			if (!(error instanceof ProxyError)) throw error;
-			const envelope = proxyError(error.code, error.outcome, error.requestId, error.message);
-			proxy.record(error.outcome, error.requestId, serviceId, error.code);
+			const rpc = proxyErrorRpc(proxy, error);
+			// Admission failed before reserve() could assign an operationId.
+			proxy.record(rpc.outcome, error.requestId, authenticatedServiceId, rpc.code);
 			closeAfterResponse(req, res);
-			writeJson(res, proxyStatus(error.code), envelope);
+			writeRpc(res, rpc);
 			return;
 		}
+		const recordAndWriteRpc = (
+			rpc: RpcResponse,
+			requestId: string,
+			{ closeConnection = false }: { closeConnection?: boolean } = {},
+		): void => {
+			proxy.record(rpc.outcome, requestId, authenticatedServiceId, rpc.code, reservation.operationId);
+			if (closeConnection) closeAfterResponse(req, res);
+			writeRpc(res, rpc);
+		};
 
+		let admittedBytes = 0;
 		try {
 			let body: Buffer;
 			try {
-				body = await readRequestBody(req, options.maxRequestBytes);
+				body = await readRequestBody(req, options.maxRequestBytes, bytes => {
+					bufferedBytes.reserve(bytes);
+					admittedBytes += bytes;
+				});
 			} catch (error) {
-				const code = error instanceof PayloadTooLargeError ? 'PROXY_PAYLOAD_TOO_LARGE' : 'PROXY_INTERNAL';
-				const envelope = proxyError(
-					code,
+				const payload = error instanceof PayloadTooLargeError;
+				const rpc = proxyRpc(
+					proxy,
+					payload ? 'PROXY_PAYLOAD_TOO_LARGE' : 'PROXY_INTERNAL',
 					'not_dispatched',
 					admissionRequestId,
-					toError(error).message || 'Request body failed.',
+					payload ? error.message : 'Request body failed.',
+					'decoding',
 				);
-				proxy.record('not_dispatched', admissionRequestId, serviceId, code, reservation.operationId);
-				if (error instanceof PayloadTooLargeError) closeAfterResponse(req, res);
-				writeJson(res, proxyStatus(code), envelope);
+				recordAndWriteRpc(rpc, admissionRequestId, { closeConnection: payload });
 				return;
 			}
 
-			let decoded: DecodedProxyRequest | undefined;
+			let request;
 			try {
-				decoded = await decodeProxyRequest(body, req.headers);
-			} catch {
-				decoded = undefined;
+				request = await decodeProxyRequest(body, req.headers, {
+					maxFiles: options.maxFiles,
+					maxMetadataBytes: options.maxMetadataBytes,
+				});
+			} catch (error) {
+				const payload = error instanceof PayloadTooLargeError;
+				const rpc = proxyRpc(
+					proxy,
+					payload ? 'PROXY_PAYLOAD_TOO_LARGE' : 'PROXY_BAD_REQUEST',
+					'not_dispatched',
+					admissionRequestId,
+					toError(error).message || 'Invalid proxy request payload.',
+					'decoding',
+				);
+				recordAndWriteRpc(rpc, admissionRequestId);
+				return;
 			}
-			const requestId = decoded?.requestId ?? admissionRequestId;
-			if (decoded && 'tokenOverride' in decoded) {
-				const envelope = proxyError(
-					'PROXY_TOKEN_OVERRIDE_UNSUPPORTED',
+			if (!request) {
+				const rpc = proxyRpc(
+					proxy,
+					'PROXY_BAD_REQUEST',
+					'not_dispatched',
+					admissionRequestId,
+					'Invalid proxy request payload.',
+					'decoding',
+				);
+				recordAndWriteRpc(rpc, admissionRequestId);
+				return;
+			}
+
+			const requestId = request.requestId;
+			if (isRequestId(headerRequestId) && headerRequestId !== requestId) {
+				const rpc = proxyRpc(
+					proxy,
+					'PROXY_BAD_REQUEST',
+					'not_dispatched',
+					admissionRequestId,
+					'Request ID header does not match the payload.',
+					'decoding',
+				);
+				recordAndWriteRpc(rpc, admissionRequestId);
+				return;
+			}
+			let fingerprint;
+			try {
+				const identity = contexts.identity(request.auth, request.token);
+				fingerprint = requestFingerprint(request, request.files, identity);
+			} catch {
+				const rpc = proxyRpc(
+					proxy,
+					'PROXY_OVERLOADED',
 					'not_dispatched',
 					requestId,
-					'ApiRequestOptions.token is not supported by the proxy.',
+					'Deduplication failed.',
+					'deduplication',
 				);
-				proxy.record('not_dispatched', requestId, serviceId, envelope.code, reservation.operationId);
-				writeJson(res, 400, envelope);
+				recordAndWriteRpc(rpc, requestId);
 				return;
 			}
-			if (!decoded) {
-				const envelope = proxyError('PROXY_INTERNAL', 'not_dispatched', requestId, 'Invalid proxy request payload.');
-				proxy.record('not_dispatched', requestId, serviceId, envelope.code, reservation.operationId);
-				writeJson(res, 400, envelope);
+			const claim = deduplicator.claim(authenticatedServiceId, requestId, fingerprint);
+			if (claim.kind === 'conflict' || claim.kind === 'capacity') {
+				const rpc = proxyRpc(
+					proxy,
+					claim.kind === 'conflict' ? 'PROXY_REQUEST_ID_CONFLICT' : 'PROXY_OVERLOADED',
+					'not_dispatched',
+					requestId,
+					claim.message,
+					'deduplication',
+				);
+				recordAndWriteRpc(rpc, requestId);
 				return;
 			}
-			const request = decoded;
+			if (claim.kind === 'duplicate') {
+				bufferedBytes.release(admittedBytes);
+				admittedBytes = 0;
+				const rpc = await claim.result;
+				recordAndWriteRpc(rpc, requestId);
+				return;
+			}
+
+			let context;
+			try {
+				context = await contexts.resolve(request.auth, request.token);
+			} catch (error) {
+				const unavailable = error instanceof TokenContextUnavailableError;
+				proxy.notifyStateChange();
+				const rpc = proxyRpc(
+					proxy,
+					unavailable ? 'PROXY_TOKEN_CONTEXT_UNAVAILABLE' : 'PROXY_INTERNAL',
+					'not_dispatched',
+					requestId,
+					unavailable ? error.message : 'Token context creation failed.',
+					'admission',
+				);
+				claim.abort(rpc);
+				recordAndWriteRpc(rpc, requestId);
+				return;
+			}
+			if (contexts.isQuarantined(context.key)) {
+				proxy.notifyStateChange();
+				const rpc = proxyRpc(
+					proxy,
+					'PROXY_TOKEN_REJECTED',
+					'not_dispatched',
+					requestId,
+					'The selected token version is quarantined.',
+					'admission',
+				);
+				claim.abort(rpc);
+				recordAndWriteRpc(rpc, requestId);
+				return;
+			}
 
 			const disconnected = new AbortController();
 			let dispatched = false;
 			res.once('close', () => {
-				// Once ApiHandler owns the request, its retry and bucket state must finish without downstream cancellation.
 				if (!res.writableEnded && !dispatched) disconnected.abort();
 			});
-
+			contexts.retain(context);
+			let rpc: RpcResponse;
 			try {
 				const envelope = await scheduler.submitReserved<SuccessEnvelope | DiscordErrorEnvelope>(reservation, {
 					requestId,
-					exempt: isInteractionCallback(request.url),
+					context,
 					signal: disconnected.signal,
 					run: async () => {
 						dispatched = true;
 						try {
-							const result = await rest.request(
-								request.method,
-								request.url,
-								toApiRequestOptions(request, request.files),
-							);
+							const apiRequest = toApiRequestOptions(request, request.files);
+							if (request.auth !== false) apiRequest.token = context.token;
+							const result = await context.rest.request(request.method, request.url, apiRequest);
 							return { kind: 'success', status: 200, body: result };
 						} catch (error) {
 							if (SeyfertError.is(error)) return discordEnvelope(error);
@@ -411,72 +741,106 @@ function createRequestHandler(
 						}
 					},
 				});
-				if (res.destroyed || (!res.writableEnded && res.closed)) {
-					proxy.record('unknown', requestId, serviceId, undefined, reservation.operationId);
-					return;
-				}
-				proxy.record('completed', requestId, serviceId, undefined, reservation.operationId);
-				writeJson(res, 200, envelope);
+				rpc = { status: 200, envelope, outcome: 'completed' };
 			} catch (error) {
 				if (error instanceof ClientDisconnectedError) {
-					proxy.record('not_dispatched', requestId, serviceId, undefined, reservation.operationId);
-					return;
+					rpc = proxyRpc(
+						proxy,
+						'PROXY_INTERNAL',
+						'not_dispatched',
+						requestId,
+						'Client disconnected before proxy dispatch.',
+						'admission',
+					);
+				} else if (error instanceof ProxyError) {
+					rpc = proxyErrorRpc(proxy, error);
+				} else {
+					rpc = proxyRpc(
+						proxy,
+						'PROXY_INTERNAL',
+						dispatched ? 'unknown' : 'not_dispatched',
+						requestId,
+						'Proxy request failed.',
+						dispatched ? 'dispatch' : 'internal',
+					);
 				}
-				if (error instanceof ProxyError) {
-					const envelope = proxyError(error.code, error.outcome, error.requestId, error.message);
-					proxy.record(error.outcome, requestId, serviceId, error.code, reservation.operationId);
-					writeJson(res, proxyStatus(error.code), envelope);
-					return;
-				}
-				const envelope = proxyError(
-					'PROXY_INTERNAL',
-					dispatched ? 'unknown' : 'not_dispatched',
-					requestId,
-					'Proxy request failed.',
-				);
-				proxy.record(envelope.outcome, requestId, serviceId, envelope.code, reservation.operationId);
-				writeJson(res, 500, envelope);
+			} finally {
+				contexts.release(context);
 			}
+			if (rpc.outcome === 'not_dispatched' && rpc.code !== 'PROXY_QUEUE_TIMEOUT') claim.abort(rpc);
+			else claim.complete(rpc);
+			recordAndWriteRpc(rpc, requestId);
 		} finally {
 			scheduler.releaseReservation(reservation);
+			bufferedBytes.release(admittedBytes);
 		}
 	};
 }
 
 export async function createProxy(rawOptions: ProxyServerOptions): Promise<ProxyServer> {
 	const options = validateOptions(rawOptions);
-	const authenticate = createCredentialAuthenticator(options.credentials);
-	const rest = new ApiHandler({ token: options.token, workerProxy: false });
-	let proxy!: ProxyServerImpl;
+	const bufferedBytes = new BufferedBytesBudget(options.maxBufferedBytes);
+	const deduplicator = new RequestDeduplicator<RpcResponse>(
+		options.deduplication.ttl,
+		options.deduplication.maxEntries,
+	);
+	let proxy: ProxyServerImpl | undefined;
 	const scheduler = new RequestScheduler(
-		options.maxPendingRequests,
+		options.maxAdmittedRequests,
 		options.queueTimeout,
-		new SlidingWindow(GLOBAL_GATE_LIMIT, GLOBAL_GATE_WINDOW),
 		new SlidingWindow(options.invalidWindow.max, options.invalidWindow.perMs),
 		() => proxy?.notifyStateChange(),
 	);
-
-	rest.observe({
-		onFail({ request, statusCode }) {
-			if (statusCode !== 401 && statusCode !== 403) return;
-			scheduler.recordInvalid();
-			if (statusCode === 401 && request.auth !== false) scheduler.quarantineToken();
+	let contexts!: RestContextManager;
+	contexts = new RestContextManager(
+		options.rest,
+		options.createRestForToken,
+		options.maxTokenContexts,
+		options.globalLimit,
+		options.unauthenticatedLimit,
+		rest => {
+			rest.observe({
+				onFail({ request, statusCode }) {
+					if (statusCode !== 401 && statusCode !== 403) return;
+					scheduler.recordInvalid();
+					if (statusCode !== 401 || request.auth === false) return;
+					const contextKey = contexts.requestIdentity(rest, request);
+					contexts.quarantine(contextKey);
+					scheduler.quarantineContext(contextKey);
+				},
+				async onRatelimit({ request, response }) {
+					if (response.headers.get('x-ratelimit-scope') !== 'shared') scheduler.recordInvalid();
+					if (
+						response.headers.get('x-ratelimit-global') !== 'true' &&
+						response.headers.get('x-ratelimit-scope') !== 'global'
+					) {
+						return;
+					}
+					let retryAfter =
+						Number(response.headers.get('retry-after') ?? response.headers.get('x-ratelimit-reset-after')) * 1_000;
+					try {
+						const body = (await response.clone().json()) as { retry_after?: unknown };
+						if (typeof body.retry_after === 'number') retryAfter = body.retry_after * 1_000;
+					} catch {}
+					contexts.blockGlobal(contexts.requestIdentity(rest, request), retryAfter);
+				},
+			});
 		},
-		onRatelimit({ response }) {
-			if (response.headers.get('x-ratelimit-scope') !== 'shared') scheduler.recordInvalid();
-		},
-	});
+	);
 
-	const handleRequest = createRequestHandler(options, authenticate, rest, scheduler, () => proxy);
+	const handleRequest = createRequestHandler(options, scheduler, contexts, deduplicator, bufferedBytes, () => proxy!);
 	const server = createServer((req, res) => {
 		void handleRequest(req, res).catch(() => {
 			const requestId = randomUUID();
-			writeJson(res, 500, proxyError('PROXY_INTERNAL', 'not_dispatched', requestId, 'Proxy request failed.'));
+			const envelope = proxy
+				? proxy.error('PROXY_INTERNAL', 'not_dispatched', requestId, 'Proxy request failed.', 'internal')
+				: proxyError('PROXY_INTERNAL', 'not_dispatched', requestId, 'Proxy request failed.', 'internal');
+			writeJson(res, 500, envelope);
 		});
 	});
 	await new Promise<void>((resolve, reject) => {
 		server.once('error', reject);
-		server.listen(options.port, () => {
+		server.listen(options.port, options.host, () => {
 			server.off('error', reject);
 			resolve();
 		});
@@ -486,7 +850,7 @@ export async function createProxy(rawOptions: ProxyServerOptions): Promise<Proxy
 		server.close();
 		throw new Error('Proxy failed to resolve its listening port.');
 	}
-	proxy = new ProxyServerImpl(server, scheduler, address.port);
+	proxy = new ProxyServerImpl(server, scheduler, contexts, deduplicator, bufferedBytes, options.host, address.port);
 	proxy.notifyStateChange();
 	return proxy;
 }

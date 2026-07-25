@@ -1,6 +1,7 @@
 export class SlidingWindow {
 	private readonly entries: number[] = [];
 	private start = 0;
+	private blockedUntil = 0;
 
 	constructor(
 		readonly limit: number,
@@ -29,19 +30,21 @@ export class SlidingWindow {
 		this.entries.push(now);
 	}
 
+	blockFor(delay: number, now = Date.now()): void {
+		if (!Number.isFinite(delay) || delay <= 0) return;
+		this.blockedUntil = Math.max(this.blockedUntil, now + delay);
+	}
+
 	remaining(now: number): number {
 		return Math.max(0, this.limit - this.occupancy(now));
 	}
 
 	blockedFor(now: number): number {
 		this.prune(now);
+		const manualBlock = Math.max(0, this.blockedUntil - now);
 		const size = this.entries.length - this.start;
-		if (size < this.limit) return 0;
+		if (size < this.limit) return manualBlock;
 		const releaseIndex = this.start + size - this.limit;
-		return Math.max(1, this.entries[releaseIndex] + this.perMs - now);
+		return Math.max(manualBlock, 1, this.entries[releaseIndex] + this.perMs - now);
 	}
-}
-
-export function isInteractionCallback(url: string): boolean {
-	return /^\/interactions\/[^/]+\/[^/]+\/callback$/.test(url);
 }

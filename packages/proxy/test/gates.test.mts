@@ -1,7 +1,31 @@
+import { ApiHandler } from 'seyfert';
 import { assert, describe, test, vi } from 'vitest';
-import { ProxyError } from '../src';
-import { isInteractionCallback, SlidingWindow } from '../src/gates';
+import type { RestContext } from '../src/contexts';
+import { SlidingWindow } from '../src/gates';
+import { ProxyError } from '../src/protocol';
 import { RequestScheduler } from '../src/scheduler';
+import { deferred } from './helpers.mts';
+
+function context(key: string, gate = new SlidingWindow(50, 1_000)): RestContext {
+	return {
+		key,
+		gate,
+		rest: new ApiHandler({ token: key, workerProxy: false }),
+		override: false,
+		token: key,
+		activeRequests: 0,
+		lastUsedAt: Date.now(),
+	};
+}
+
+function thrown(callback: () => unknown): unknown {
+	try {
+		callback();
+	} catch (error) {
+		return error;
+	}
+	throw new Error('Expected callback to throw.');
+}
 
 describe('proactive gates', () => {
 	test('uses a deterministic sliding window without boundary bursts', () => {
@@ -15,6 +39,13 @@ describe('proactive gates', () => {
 		assert.equal(gate.occupancy(1_000), 1);
 	});
 
+	test('honors an explicit Discord global retry delay', () => {
+		const gate = new SlidingWindow(50, 1_000);
+		gate.blockFor(250, 1_000);
+		assert.equal(gate.blockedFor(1_100), 150);
+		assert.equal(gate.blockedFor(1_250), 0);
+	});
+
 	test('releases invalid request capacity as entries expire', () => {
 		const budget = new SlidingWindow(2, 10_000);
 		budget.record(100);
@@ -26,116 +57,92 @@ describe('proactive gates', () => {
 		assert.equal(budget.remaining(10_100), 0);
 		assert.equal(budget.blockedFor(10_100), 100);
 		assert.equal(budget.remaining(10_200), 1);
-		assert.equal(budget.blockedFor(10_200), 0);
 	});
 
-	test('exempts only the identifiable interaction callback route', () => {
-		assert.equal(isInteractionCallback('/interactions/1/token/callback'), true);
-		assert.equal(isInteractionCallback('/webhooks/1/token'), false);
-		assert.equal(isInteractionCallback('/channels/1/messages'), false);
-	});
-
-	test('times out the admission queue and rejects excess pending work', async () => {
+	test('times out admission and rejects work beyond total admitted capacity', async () => {
 		vi.useFakeTimers();
 		try {
 			vi.setSystemTime(1_000);
-			const gate = new SlidingWindow(1, 1_000);
-			gate.record(Date.now());
-			const scheduler = new RequestScheduler(1, 10, gate, new SlidingWindow(10, 1_000), () => {});
-			let dispatched = false;
+			const blocked = new SlidingWindow(1, 1_000);
+			blocked.record(Date.now());
+			const scheduler = new RequestScheduler(1, 10, new SlidingWindow(10, 1_000), () => {});
 			const queued = scheduler
 				.submitReserved(scheduler.reserve('queued'), {
 					requestId: 'queued',
-					exempt: false,
-					run: async () => {
-						dispatched = true;
-					},
+					context: context('blocked', blocked),
+					run: async () => undefined,
 				})
 				.catch(error => error);
-			let overloadError: unknown;
-			try {
-				scheduler.reserve('overloaded');
-			} catch (error) {
-				overloadError = error;
-			}
-			assert.instanceOf(overloadError, ProxyError);
-			assert.equal(overloadError.code, 'PROXY_OVERLOADED');
+
+			const overload = thrown(() => scheduler.reserve('overloaded'));
+			assert.instanceOf(overload, ProxyError);
+			assert.equal(overload.code, 'PROXY_OVERLOADED');
 			await vi.advanceTimersByTimeAsync(10);
-			const timeoutError = await queued;
-			assert.instanceOf(timeoutError, ProxyError);
-			assert.equal(timeoutError.code, 'PROXY_QUEUE_TIMEOUT');
-			assert.equal(dispatched, false);
+			const timeout = await queued;
+			assert.instanceOf(timeout, ProxyError);
+			assert.equal(timeout.code, 'PROXY_QUEUE_TIMEOUT');
 		} finally {
 			vi.useRealTimers();
 		}
 	});
 
-	test('dispatches exempt interaction callbacks past a gate-limited queue head', async () => {
+	test('allows another token context to pass a gate-blocked FIFO head', async () => {
 		vi.useFakeTimers();
 		try {
 			vi.setSystemTime(1_000);
-			const gate = new SlidingWindow(1, 1_000);
-			gate.record(Date.now());
-			const scheduler = new RequestScheduler(2, 2_000, gate, new SlidingWindow(10, 1_000), () => {});
+			const blockedGate = new SlidingWindow(1, 1_000);
+			blockedGate.record(Date.now());
+			const scheduler = new RequestScheduler(2, 2_000, new SlidingWindow(10, 1_000), () => {});
 			const dispatched: string[] = [];
-			const limited = scheduler.submitReserved(scheduler.reserve('limited'), {
-				requestId: 'limited',
-				exempt: false,
-				run: async () => dispatched.push('limited'),
+			const blocked = scheduler.submitReserved(scheduler.reserve('blocked'), {
+				requestId: 'blocked',
+				context: context('first', blockedGate),
+				run: async () => dispatched.push('blocked'),
 			});
-			const exempt = scheduler.submitReserved(scheduler.reserve('exempt'), {
-				requestId: 'exempt',
-				exempt: true,
-				run: async () => dispatched.push('exempt'),
+			const independent = scheduler.submitReserved(scheduler.reserve('independent'), {
+				requestId: 'independent',
+				context: context('second'),
+				run: async () => dispatched.push('independent'),
 			});
 
-			await exempt;
-			assert.deepEqual(dispatched, ['exempt']);
+			await independent;
+			assert.deepEqual(dispatched, ['independent']);
 			await vi.advanceTimersByTimeAsync(1_000);
-			await limited;
-			assert.deepEqual(dispatched, ['exempt', 'limited']);
+			await blocked;
+			assert.deepEqual(dispatched, ['independent', 'blocked']);
 		} finally {
 			vi.useRealTimers();
 		}
 	});
 
-	test('tracks concurrent operations independently when request IDs repeat', async () => {
-		let releaseFirst!: () => void;
-		let releaseSecond!: () => void;
-		const firstGate = new Promise<void>(resolve => {
-			releaseFirst = resolve;
+	test('counts requests already handed to ApiHandler against admission capacity', async () => {
+		const held = deferred<void>();
+		const scheduler = new RequestScheduler(1, 1_000, new SlidingWindow(10, 1_000), () => {});
+		const first = scheduler.submitReserved(scheduler.reserve('first'), {
+			requestId: 'first',
+			context: context('token'),
+			run: () => held.promise,
 		});
-		const secondGate = new Promise<void>(resolve => {
-			releaseSecond = resolve;
-		});
-		const scheduler = new RequestScheduler(
-			2,
-			1_000,
-			new SlidingWindow(1, 1_000),
-			new SlidingWindow(10, 1_000),
-			() => {},
-		);
-		const first = scheduler.submitReserved(scheduler.reserve('duplicate'), {
-			requestId: 'duplicate',
-			exempt: true,
-			run: () => firstGate,
-		});
-		const second = scheduler.submitReserved(scheduler.reserve('duplicate'), {
-			requestId: 'duplicate',
-			exempt: true,
-			run: () => secondGate,
-		});
-
-		assert.equal(scheduler.inFlightCount, 2);
-		assert.deepEqual(
-			scheduler.inFlight.map(request => request.requestId),
-			['duplicate', 'duplicate'],
-		);
-		releaseFirst();
-		await first;
-		await Promise.resolve();
 		assert.equal(scheduler.inFlightCount, 1);
-		releaseSecond();
-		await second;
+		assert.equal(scheduler.admittedCount, 1);
+		const overload = thrown(() => scheduler.reserve('second'));
+		assert.instanceOf(overload, ProxyError);
+		assert.equal(overload.code, 'PROXY_OVERLOADED');
+		held.resolve();
+		await first;
+	});
+
+	test('drains admitted queue entries instead of rejecting them immediately', async () => {
+		const scheduler = new RequestScheduler(1, 1_000, new SlidingWindow(10, 1_000), () => {});
+		const result = scheduler.submitReserved(scheduler.reserve('queued'), {
+			requestId: 'queued',
+			context: context('token'),
+			run: async () => 'done',
+		});
+		scheduler.startDraining();
+		assert.equal(await result, 'done');
+		const draining = thrown(() => scheduler.reserve('new'));
+		assert.instanceOf(draining, ProxyError);
+		assert.equal(draining.code, 'PROXY_DRAINING');
 	});
 });
