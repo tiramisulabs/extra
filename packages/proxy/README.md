@@ -187,4 +187,8 @@ it never cancels work already handed to the server.
 ```sh
 pnpm --filter @slipher/proxy build
 pnpm --filter @slipher/proxy test
+pnpm --filter @slipher/proxy test:stress
 ```
+
+The stress suite always runs deterministic local concurrency, deduplication, and admission-backpressure scenarios.
+When `DISCORD_TOKEN` is present, it also sends a bounded, read-only load through the proxy to `GET /users/@me`.
