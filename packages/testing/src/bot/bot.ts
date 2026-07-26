@@ -18,7 +18,7 @@ import { type ApiRole } from './payloads';
 import { MockApiHandler } from './rest';
 import { asClientGateway, asUsingClient, cacheStore, clientLifecycle, eventsInternals } from './seyfert-internals';
 import { WorldState, type WorldStateReader } from './state';
-import { seedCachedRole, seedWorld } from './world';
+import { type MockWorld, seedCachedRole, seedWorld } from './world';
 
 export * from './contracts';
 export { Dispatch, type DispatchOptions } from './dispatch';
@@ -31,13 +31,37 @@ export class MockBot extends MockBotCore {
 	}
 }
 
+/**
+ * Clone the seeded world into the shape the client cache gets, translating the one failure that is easy to
+ * cause and impossible to read.
+ *
+ * The `mock*` fixtures and the `api*` payload factories describe the same entities, and `MockUser` happens to
+ * satisfy `ApiUser` structurally — so `registerMember({ user: mockUser(...) })` compiles. It then dies here,
+ * because the fixtures carry methods (`toString`, `avatarURL`) and `structuredClone` refuses functions. Raw,
+ * that reads as `DataCloneError: () => Formatter.userMention(id) could not be cloned`, which names neither
+ * factory nor the call that seeded it.
+ */
+function cloneWorld(built: MockWorld): MockWorld {
+	try {
+		return structuredClone(built);
+	} catch (error) {
+		throw new TypeError(
+			'createMockBot: the seeded world holds a value that cannot be cloned into the client cache — usually a ' +
+				'lightweight fixture (mockUser, mockGuild, mockChannel, mockMember) or a builder passed where a payload ' +
+				'belongs. World seeding takes the payload factories: apiUser, apiGuild, apiChannel, apiMember, apiRole. ' +
+				`The mock* fixtures are for mockCommandContext. Original error: ${String(error)}`,
+			{ cause: error },
+		);
+	}
+}
+
 export async function createMockBot(options: MockBotOptions = {}): Promise<MockBot> {
 	const rest = new MockApiHandler({ onUnhandledRest: options.onUnhandledRest });
 	// Reconcile before the clone: adoptBotId rewrites the seeded bot member on the live world, so the
 	// ApiMember registerBotMember already returned points at the same id the client will run as.
 	const statedBotId = options.world ? options.world.adoptBotId(options.botId) : options.botId;
 	const built = options.world?.build();
-	const world = built ? structuredClone(built) : undefined;
+	const world = built ? cloneWorld(built) : undefined;
 	const botId = statedBotId ?? TEST_BOT_ID;
 	const prefixList = [...(options.prefixes ?? []), ...(options.mentionAsPrefix ? [`<@${botId}>`, `<@!${botId}>`] : [])];
 	const clientOptionsBase: ClientOptions | undefined = options.clientOptions
