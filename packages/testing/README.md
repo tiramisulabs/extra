@@ -57,6 +57,8 @@ test('replies after banning', async () => {
 
 `ctx.client.logger === ctx.logger`, `ctx.client.queues === ctx.queues`, and `ctx.client.scheduler === ctx.scheduler`. Use `mockClient({ extra })` when a command touches client surfaces that this package does not model.
 
+What it deliberately does not simulate says so when you reach for it, rather than failing as a missing property: `ctx.interaction.modal()`, `reply.createComponentCollector()`, and `ctx.client.guilds/channels/users.fetch()` each throw an error naming the `createMockBot` flow to use instead. If a test is asserting on `"Cannot read properties of undefined"`, that is this boundary — the assertion is pinning a V8 phrasing, not a behaviour.
+
 ## Mock Component and Modal Contexts
 
 Use `mockComponentContext()` and `mockModalContext()` for small unit tests of a

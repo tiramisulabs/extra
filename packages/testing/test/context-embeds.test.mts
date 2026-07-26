@@ -257,6 +257,22 @@ describe('light harness directs collector/fetch flows to createMockBot (no silen
 		expect(ctx.responses).toEqual([{ content: 'x' }]);
 	});
 
+	test('ctx.interaction.modal() throws a directed error instead of a bare property access', () => {
+		const ctx = mockCommandContext();
+
+		expect(() => ctx.interaction.modal()).toThrow(/createMockBot/);
+		expect(() => ctx.interaction.modal()).toThrow(/submitModal/);
+		// the point: not V8's phrasing of a missing property, which tests were pinning as if it were an assertion
+		expect(() => ctx.interaction.modal()).not.toThrow(/Cannot read properties of undefined/);
+	});
+
+	test('ctx.interaction stays invisible to deepEqual/spread of the context', () => {
+		const ctx = mockCommandContext();
+
+		expect(Object.keys(ctx)).not.toContain('interaction');
+		expect({ ...ctx }).not.toHaveProperty('interaction');
+	});
+
 	test('ctx.client.guilds/channels/users.fetch throw a directed error', () => {
 		const ctx = mockCommandContext();
 		expect(() => ctx.client.guilds.fetch('1')).toThrow(/createMockBot/);

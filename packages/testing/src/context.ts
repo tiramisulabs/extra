@@ -119,6 +119,16 @@ export interface MockCommandContextOptions<TOptions extends Record<string, unkno
 export interface MockCommandContext<TOptions extends Record<string, unknown> = Record<string, unknown>> {
 	command: { name: string };
 	fullCommandName: string;
+	/**
+	 * Present only so the layer boundary can state itself. The light fixture has no interaction runtime, so
+	 * `modal()` throws a directed error instead of the bare "Cannot read properties of undefined (reading
+	 * 'modal')" that a missing property produces — a V8 phrasing tests were pinning as if it were an assertion.
+	 * Non-enumerable, like the other directed stubs, so it stays invisible to deepEqual/spread of the context.
+	 *
+	 * Thinner than seyfert's on purpose: seyfert types `interaction` as `ChatInputCommandInteraction |
+	 * undefined` whenever the bot has prefix commands, so production code should guard it regardless.
+	 */
+	interaction: { modal(): never };
 	client: MockClient;
 	author: MockUser;
 	user: MockUser;
@@ -460,12 +470,26 @@ export function mockCommandContext(
 	const name = options.commandName ?? instance?.name ?? 'test';
 	// A command context is an interaction context plus command identity + typed options. Build on the shared base
 	// (as the component/modal contexts do) so the response surface lives in exactly one place.
-	return {
+	const context = {
 		...mockInteractionBase(options, instance),
 		command: { name },
 		fullCommandName: options.fullCommandName ?? name,
 		options: options.options ?? {},
-	};
+	} as MockCommandContext;
+	// Light unit harness has no interaction runtime: a command that opens a modal would otherwise die on a bare
+	// property access, so say what to use instead. Non-enumerable, so deepEqual/spread of the context is unchanged.
+	Object.defineProperty(context, 'interaction', {
+		value: {
+			modal(): never {
+				throw new TypeError(
+					'ctx.interaction.modal() is not available on mockCommandContext (the light unit harness has no ' +
+						'interaction runtime). For modal flows use createMockBot({ commands: [...] }) and drive them ' +
+						'step-by-step with await bot.slash(...) + await bot.submitModal(customId, fields).',
+				);
+			},
+		},
+	});
+	return context;
 }
 
 function isMockInteractionContext(value: unknown): value is MockInteractionContextBase {
