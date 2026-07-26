@@ -60,6 +60,20 @@ export interface AttachmentView {
 	url?: string;
 }
 
+/**
+ * A file on its way out, as the command handed it to `write`/`editOrReply`. Distinct from
+ * {@link AttachmentView}, which describes an attachment Discord already stored — that one has an id and a url.
+ */
+export interface FileView {
+	filename: string;
+	description?: string;
+	contentType?: string;
+	/** Byte length for a binary payload; absent for a url or path, whose string length is not a file size. */
+	size?: number;
+	/** The payload exactly as given: a Buffer, a url, or a path. */
+	data: unknown;
+}
+
 export interface MessageReferenceView {
 	messageId?: string;
 	channelId?: string;

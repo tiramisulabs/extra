@@ -31,7 +31,14 @@ import type {
 import type { ApiChannel, ApiMember, ApiMessage, ApiUser, MemberInput } from './payloads';
 import type { RecordedAction, RestCalls } from './rest';
 import { Routes } from './routes';
-import { type EmbedView, harvestComponents, type InteractiveComponentView, normalizeEmbed } from './state';
+import {
+	type EmbedView,
+	type FileView,
+	harvestComponents,
+	type InteractiveComponentView,
+	normalizeEmbed,
+	normalizeFile,
+} from './state';
 import type { WorldBuilder } from './world';
 
 type ClientConstructorOptions = ConstructorParameters<typeof Client>[0];
@@ -132,6 +139,8 @@ export interface DispatchResult {
 	textDisplays: string[];
 	/** Files flattened from `messages`, in dispatch order. */
 	files: unknown[];
+	/** Parsed, typed views over `files` — assert on these instead of casting the raw entries. */
+	fileViews: FileView[];
 	/** REST actions scoped to this dispatch. */
 	actions: RecordedAction[];
 	/** Best-effort latest user-visible content across replies, edits, and followups. */
@@ -191,6 +200,8 @@ export interface MessageResultBase {
 	embeds: unknown[];
 	embed?: unknown;
 	files: unknown[];
+	/** Parsed, typed views over `files` — assert on these instead of casting the raw entries. */
+	fileViews: FileView[];
 	content?: string;
 	/** Parsed, typed camelCase embed views over `messages` — assert on these instead of casting raw `embed`. */
 	embedViews: EmbedView[];
@@ -289,6 +300,7 @@ export function buildMessageResult(actions: RecordedAction[], parts: MessagePart
 	const embeds = messages.flatMap(message => message.embeds ?? []);
 	const files = messages.flatMap(message => message.files ?? []);
 	const embedViews = embeds.map(normalizeEmbed);
+	const fileViews = files.map(normalizeFile);
 	const components: InteractiveComponentView[] = [];
 	const textDisplays: string[] = [];
 	for (const part of parts) {
@@ -301,6 +313,7 @@ export function buildMessageResult(actions: RecordedAction[], parts: MessagePart
 		messages,
 		embeds,
 		files,
+		fileViews,
 		content: messages.at(-1)?.content,
 		embedViews,
 		components,

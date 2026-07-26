@@ -231,6 +231,7 @@ export {
 	type EmbedView,
 	type EmojiSnapshot,
 	type EntityDiff,
+	type FileView,
 	type GuildMemberView,
 	type GuildView,
 	type InteractiveComponentView,

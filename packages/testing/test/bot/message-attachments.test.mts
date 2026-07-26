@@ -2,6 +2,7 @@ import { AttachmentBuilder, Command, type CommandContext, Declare } from 'seyfer
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { apiUser } from '../../src/bot/payloads';
+import { normalizeFile } from '../../src/bot/state';
 import { mockWorld } from '../../src/bot/world';
 
 describe('message attachments', () => {
@@ -219,5 +220,42 @@ describe('message references (replies and forwards)', () => {
 			}),
 		).resolves.toBeDefined();
 		await bot.close();
+	});
+});
+
+describe('outgoing files are readable without a cast', () => {
+	test('fileViews parses what the command handed to write()', async () => {
+		@Declare({ name: 'export-csv', description: 'replies with a generated file' })
+		class ExportCsv extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.write({
+					content: 'here you go',
+					files: [new AttachmentBuilder().setName('report.csv').setFile('buffer', Buffer.from('id,name\n1,ada'))],
+				});
+			}
+		}
+
+		await using bot = await createMockBot({ commands: [ExportCsv] });
+		const result = await bot.slash({ name: 'export-csv' });
+
+		expect(result.fileViews).toHaveLength(1);
+		const [file] = result.fileViews;
+		expect(file?.filename).toBe('report.csv');
+		expect(file?.size).toBe(Buffer.byteLength('id,name\n1,ada'));
+		expect(String(file?.data)).toBe('id,name\n1,ada');
+		// the raw entry is still there, unchanged, for anything the view does not model
+		expect(result.files).toHaveLength(1);
+	});
+
+	test('a url-backed file reports no size, since a url length is not a file size', () => {
+		// Unit-level on purpose: seyfert resolves a url-backed AttachmentBuilder by actually fetching it when the
+		// message is sent, so driving this end-to-end would make a real network call.
+		const view = normalizeFile(
+			new AttachmentBuilder().setName('remote.png').setFile('url', 'https://cdn.example.com/a.png'),
+		);
+
+		expect(view.filename).toBe('remote.png');
+		expect(view.size).toBeUndefined();
+		expect(view.data).toBe('https://cdn.example.com/a.png');
 	});
 });
