@@ -727,6 +727,34 @@ const failedCalls = bot.restCalls().filter(call => call.error !== undefined);
 expect(failedCalls).toHaveLength(0);
 ```
 
+#### Routes the package does not own
+
+A bot that calls its own backend gets none of this — the mock replaces Seyfert's
+REST client, not `globalThis.fetch`, and taking over `fetch` is a process-global
+side effect the package deliberately leaves to you. What it does export is the
+matcher, so your own interception gets the same ergonomics instead of
+`String(url).includes(...)`:
+
+```ts
+import { defineRoute, matchRoute } from '@slipher/testing';
+
+const verdict = defineRoute<VerdictBody, VerdictResponse>()({
+	method: 'POST',
+	route: '/organizations/:orgId/verdict',
+});
+
+// against whatever your fetch stub recorded
+const params = matchRoute(verdict, { method: 'POST', route: '/organizations/42/verdict' });
+expect(params).toEqual({ orgId: '42' }); // undefined when it does not match
+```
+
+Route templates are **paths only**. Keep the origin and the query string outside,
+the way `RecordedAction` keeps `route` and `query` apart — `RouteParams` reads `:`
+as a param marker, so an origin in the template makes `https://` yield an empty
+param name and a `:8080` port yield one called `8080`, neither of which the
+runtime matcher agrees with. Typing your recorder's reader as `RestCalls` gives it
+the exact `restCalls()` contract, params, body and response included.
+
 For endpoints whose successful Discord response has no content, `response` is
 typed and recorded as `undefined`; use `settled` and `error` rather than
 response presence when asserting completion.

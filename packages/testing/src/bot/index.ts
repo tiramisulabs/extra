@@ -211,6 +211,7 @@ export {
 	type DiscordErrorInit,
 	DiscordErrors,
 	MockApiError,
+	matchRoute,
 	type PendingAction,
 	type RecordedAction,
 	type RestCall,
@@ -220,7 +221,7 @@ export {
 	type RouteResponder,
 	routeUrl,
 } from './rest';
-export { Routes } from './routes';
+export { defineRoute, Routes } from './routes';
 export {
 	type AutoModRuleSnapshot,
 	type BanSnapshot,

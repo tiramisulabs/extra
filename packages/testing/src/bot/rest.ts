@@ -244,6 +244,48 @@ function compileRoute(route: string): { pattern: RegExp; names: string[] } {
 	return { pattern: new RegExp(`^/${source}$`), names };
 }
 
+/**
+ * Compiled patterns keyed by route template. Module-scoped rather than per-handler: templates are static
+ * strings from route descriptors, so the set is finite and shared safely across bots and standalone matching.
+ */
+const routeCache = new Map<string, { pattern: RegExp; names: string[] }>();
+
+function compiledRoute(route: string): { pattern: RegExp; names: string[] } {
+	let compiled = routeCache.get(route);
+	if (!compiled) {
+		compiled = compileRoute(route);
+		routeCache.set(route, compiled);
+	}
+	return compiled;
+}
+
+/**
+ * Extract a route descriptor's params from a recorded call, or `undefined` when the call does not match it.
+ *
+ * The matcher is domain-neutral — an HTTP method plus a `:param` path template — so this is the piece needed
+ * to reuse `defineRoute`/`RestCall`/`RestCalls` for an API the package does not own, without constructing a
+ * bot just to borrow `MockApiHandler`'s copy.
+ *
+ * Templates are **path-only and query-free**, mirroring {@link RecordedAction}, which keeps `route` and
+ * `query` apart. An origin inside `route` breaks in three inconsistent ways: `RouteParamNames` reads `:` as a
+ * param marker (`https://…` yields an empty name, a `:8080` port yields `8080`), `compileRoute` collapses the
+ * `//` and finds no params, and `routeUrl` demands the port as one. Keep the origin on the caller's side.
+ */
+export function matchRoute<TRoute extends string>(
+	matcher: RouteMatcher<TRoute>,
+	call: Pick<RecordedAction, 'method' | 'route'>,
+): RouteParams<TRoute> | undefined {
+	if (matcher.method !== call.method) return undefined;
+	const { pattern, names } = compiledRoute(matcher.route);
+	const match = pattern.exec(call.route);
+	if (!match) return undefined;
+	const params: Record<string, string> = {};
+	names.forEach((name, index) => {
+		params[name] = match[index + 1];
+	});
+	return params as RouteParams<TRoute>;
+}
+
 export function routeUrl<TRoute extends string>(
 	matcher: RouteMatcher<TRoute>,
 	params: RouteParams<TRoute>,
@@ -311,7 +353,6 @@ export class MockApiHandler extends ApiHandler {
 	/** Exact in-flight actions; dispatchId 0 denotes a request made outside an active dispatch. */
 	private readonly inFlight = new Set<RecordedAction>();
 	private readonly unhandled: 'warn' | 'error' | 'silent';
-	private readonly routeCache = new Map<string, { pattern: RegExp; names: string[] }>();
 	private readonly warnedRoutes = new Set<string>();
 	/** Response objects a responder fabricated; used to stamp RecordedAction.synthetic. */
 	private readonly syntheticResponses = new WeakSet<object>();
@@ -440,20 +481,7 @@ export class MockApiHandler extends ApiHandler {
 		matcher: RouteMatcher<TRoute>,
 		action: Pick<RecordedAction, 'method' | 'route'>,
 	): RouteParams<TRoute> | undefined {
-		if (matcher.method !== action.method) return undefined;
-		let compiled = this.routeCache.get(matcher.route);
-		if (!compiled) {
-			compiled = compileRoute(matcher.route);
-			this.routeCache.set(matcher.route, compiled);
-		}
-		const { pattern, names } = compiled;
-		const match = pattern.exec(action.route);
-		if (!match) return undefined;
-		const params: Record<string, string> = {};
-		names.forEach((name, index) => {
-			params[name] = match[index + 1];
-		});
-		return params as RouteParams<TRoute>;
+		return matchRoute(matcher, action);
 	}
 
 	matches(matcher: RouteMatcher, action: Pick<RecordedAction, 'method' | 'route'>): boolean {

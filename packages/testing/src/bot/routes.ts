@@ -1,7 +1,13 @@
 import type * as API from 'seyfert';
 import type { RouteMatcher } from './rest';
 
-function defineRoute<TBody, TResponse>() {
+/**
+ * Build a route descriptor, inferring `TRoute` as a literal so `RouteParams` can read its `:params`, with the
+ * request/response contract supplied explicitly. Public so a consumer can describe an API the package does
+ * not own and query it through {@link matchRoute} with this same vocabulary. Paths only — no origin, no
+ * query string; both live outside the template, as they do on `RecordedAction`.
+ */
+export function defineRoute<TBody, TResponse>() {
 	return <const TRoute extends string>(
 		matcher: Pick<RouteMatcher<TRoute>, 'method' | 'route'>,
 	): RouteMatcher<TRoute, TBody, TResponse> => matcher;
