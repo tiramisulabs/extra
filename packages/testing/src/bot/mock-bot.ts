@@ -66,7 +66,16 @@ import {
 import { isEphemeral } from './message-flags';
 import { MockBotDispatchCore } from './mock-bot-dispatch';
 import { prepareAutocompleteOptions, prepareChatInputOptions } from './option-validation';
-import { type ApiMessage, apiChannel, apiMember, apiMessage, apiUser, memberOptionsFrom } from './payloads';
+import {
+	type ApiMember,
+	type ApiMessage,
+	type ApiUser,
+	apiChannel,
+	apiMember,
+	apiMessage,
+	apiUser,
+	memberOptionsFrom,
+} from './payloads';
 import { isOutgoingMessagePost, type RecordedAction, type RestCalls, type RouteMatcher } from './rest';
 import { FOLLOWUP_ROUTE, Routes, WEBHOOK_MESSAGE_ROUTE } from './routes';
 import { resolveSelectResolved } from './select-resolved';
@@ -920,12 +929,45 @@ export class MockBot extends MockBotDispatchCore {
 		);
 	}
 
+	/**
+	 * Resolve the actor's seeded membership, and refuse a guild the world contradicts.
+	 *
+	 * `MockWorld.members` already records which guild a member belongs to, so a caller-supplied `guildId` is a
+	 * restatement — and nothing used to check it, so an actor pinned to a guild its member is not in still
+	 * dispatched and resolved against the wrong guild. Derives from `user` as well as `member`, since both name
+	 * the same person.
+	 */
+	private actorMembership(
+		options: ActorOptions,
+		user: ApiUser | undefined,
+	): { guildId: string; member: ApiMember } | undefined {
+		if (!user) return undefined;
+		const memberships = this._world?.members.filter(candidate => candidate.member.user.id === user.id) ?? [];
+		if (typeof options.guildId !== 'string') {
+			if (memberships.length <= 1) return memberships[0];
+			throw new TypeError(
+				`actor: user "${user.id}" is a member of ${memberships.length} guilds ` +
+					`(${memberships.map(candidate => candidate.guildId).join(', ')}). Pass guildId to choose one.`,
+			);
+		}
+		const match = memberships.find(candidate => candidate.guildId === options.guildId);
+		if (match || !memberships.length) return match;
+		throw new TypeError(
+			`actor: user "${user.id}" is not a member of guild "${options.guildId}". ` +
+				`Seeded in: ${memberships.map(candidate => candidate.guildId).join(', ')}. ` +
+				'Drop guildId to use the seeded guild, or register the member in the guild you meant.',
+		);
+	}
+
 	actor(options: ActorOptions): Actor {
-		const entry = options.member
-			? this._world?.members.find(candidate => candidate.member.user.id === options.member?.user.id)
-			: undefined;
 		const user = options.user ?? options.member?.user;
+		const entry = this.actorMembership(options, user);
 		const guildId = options.guildId ?? entry?.guildId ?? options.channel?.guild_id ?? TEST_GUILD_ID;
+		if (typeof guildId === 'string' && options.channel?.guild_id && options.channel.guild_id !== guildId) {
+			throw new TypeError(
+				`actor: channel "${options.channel.id}" belongs to guild "${options.channel.guild_id}", not "${guildId}".`,
+			);
+		}
 		const channel =
 			options.channel ??
 			(entry ? this._world?.channels.find(candidate => candidate.guild_id === entry.guildId) : undefined);

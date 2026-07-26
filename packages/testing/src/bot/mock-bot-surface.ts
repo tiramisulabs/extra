@@ -55,6 +55,25 @@ import {
 } from './state';
 import { type MockWorld } from './world';
 
+/**
+ * Resolve the user a dispatch runs as when the caller names none.
+ *
+ * `apiUser()` mints a fresh random id so repeated `registerMember()` calls stay distinct people, while the
+ * dispatcher needs one stable identity — which is why the two layers disagreed. A world seeding exactly one
+ * human member describes a single-actor scenario, so that member *is* the default; anything else keeps the
+ * canonical TEST_USER_ID, and `applyWorldPermissions` warns when it turns out not to be in the guild.
+ */
+function resolveDefaultUser(world: MockWorld | undefined): ApiUser {
+	const humanIds = new Set<string>();
+	let sole: ApiUser | undefined;
+	for (const entry of world?.members ?? []) {
+		if (entry.member.user.bot || humanIds.has(entry.member.user.id)) continue;
+		humanIds.add(entry.member.user.id);
+		sole = entry.member.user;
+	}
+	return humanIds.size === 1 && sole ? sole : apiUser({ id: TEST_USER_ID, username: 'slipher-tester' });
+}
+
 export abstract class MockBotSurface {
 	abstract clickButton(
 		customId: string,
@@ -65,7 +84,8 @@ export abstract class MockBotSurface {
 		values: string[],
 		options?: Omit<SelectMenuInteractionOptions, 'customId' | 'values' | 'message'> & ComponentSourceOptions,
 	): Promise<DispatchResult>;
-	readonly defaultUser: ApiUser = apiUser({ id: TEST_USER_ID, username: 'slipher-tester' });
+	/** Identity a dispatch runs as when the caller names none; the world's sole human member if it has one. */
+	readonly defaultUser: ApiUser;
 	protected readonly unregisteredMemberWarnings = new Set<string>();
 	protected readonly dispatches: Dispatch<unknown>[] = [];
 	protected subcommandRoutes: SubcommandClassRoute[] = [];
@@ -110,6 +130,7 @@ export abstract class MockBotSurface {
 		protected readonly lazyCommands?: { commandsDir?: string },
 		protected readonly commandCatalog?: CommandPathCatalog,
 	) {
+		this.defaultUser = resolveDefaultUser(_world);
 		this.refreshSubcommandRoutes();
 		this.sessions = new InteractionSessions({
 			actions: () => this.rest.actions,

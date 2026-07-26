@@ -411,7 +411,7 @@ call:
 
 ```ts
 await using bot = await createMockBot({ commands: [PurgeCommand], world });
-const alice = bot.actor({ member: aliceMember, guildId: guild.id, channel });
+const alice = bot.actor({ member: aliceMember });
 
 await alice.slash({ name: 'poll' });
 await alice.clickButton('poll/yes');
@@ -420,6 +420,11 @@ const result = await alice.slash({ name: 'results' });
 
 expect(result.content).toContain('1 vote');
 ```
+
+The world already records which guild a member belongs to, so `guildId` and
+`channel` are derived from it — pass them only to pick between several guilds, and
+if you do pass a `guildId` (or a `channel`) the member is not in, the actor fails
+loudly instead of resolving against the wrong guild.
 
 The stateful interaction actions are the default testing path. For low-level
 timing tests, `bot.dispatch.*` exposes the raw lazy `Dispatch` and its REST
@@ -461,9 +466,12 @@ seed world state (no handler expected), opt out explicitly:
 await bot.emit('CHANNEL_CREATE', rawChannelPayload, { allowNoHandler: true });
 ```
 
-Every dispatch defaults to the bot's single test user (`bot.defaultUser`), so
-cross-dispatch state such as cooldowns, waiting modals, and per-user collectors
-correlates automatically. Pin `guildId` for state that must persist per guild.
+Every dispatch defaults to one identity (`bot.defaultUser`), so cross-dispatch
+state such as cooldowns, waiting modals, and per-user collectors correlates
+automatically. When the seeded world has exactly one human member, that member
+*is* the default — a single-actor scenario needs no `user:` at all. Otherwise the
+default is `TEST_USER_ID` and you name the actor explicitly. Pin `guildId` for
+state that must persist per guild.
 
 Primitive option values are encoded automatically. For entity options use the
 explicit helpers, which also populate `resolved` data:
@@ -754,12 +762,18 @@ import { createMockBot, mockWorld } from '@slipher/testing';
 
 const world = mockWorld();
 const guild = world.registerGuild({ name: 'Slipher Lab' });
-world.registerChannel(guild.id);
-world.registerMember(guild.id, { nick: 'soc' });
+guild.registerChannel();
+guild.registerMember({ nick: 'soc' });
 
 await using bot = await createMockBot({ commands: [WhereCommand], world });
 await bot.slash({ name: 'where', guildId: guild.id });
 ```
+
+A registered guild carries the guild-scoped registrars, so the guild id is stated
+once instead of on every call. The threaded form (`world.registerChannel(guild.id,
+…)`) is unchanged and stays the clearer choice when one statement seeds two guilds.
+The value is still the plain `ApiGuild` payload — the registrars are
+non-enumerable, so it clones, serializes, and deep-equals exactly as before.
 
 Entities are written into the real client cache (`CacheFrom.Test`), so
 `ctx.guild()`, `ctx.channel()`, and related cache reads resolve like production
@@ -838,6 +852,13 @@ computed guild permissions and role hierarchy, returning Discord's `403 50013`
 just like production. Without a seeded bot member the routes stay permissive,
 which is useful for unit-style tests that are not asserting bot authorization.
 Seed the bot member whenever the permission contract matters.
+
+The bot's id is one fact stated once. `createMockBot({ botId })` and
+`world.registerBotMember(guildId, { botId })` are the same statement: set it on
+either and the other adopts it. Setting both to different values fails loudly at
+`createMockBot`, rather than leaving the client and the seeded bot member as two
+different users — which silently breaks `author.id === client.botId` checks and
+turns off the bot-permission enforcement above.
 
 Use `apiError()` to drive REST error branches:
 

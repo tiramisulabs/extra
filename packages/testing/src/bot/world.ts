@@ -143,6 +143,31 @@ export type WorldEmojiOptions = Omit<ApiEmojiOptions, 'guildId'>;
 
 export type WorldInviteOptions = Omit<ApiInviteOptions, 'channelId' | 'guildId'>;
 
+export type WorldBotMemberOptions = { roles?: string[]; botId?: string };
+
+/** Username given to the member seeded by {@link WorldBuilder.registerBotMember}. */
+const BOT_USERNAME = 'slipher-test-bot';
+
+/**
+ * A registered guild: the `ApiGuild` payload plus the guild-scoped registrars, so the guild id is stated
+ * once at `registerGuild` instead of at every call. The methods are non-enumerable, so the value still
+ * clones, serializes and deep-equals as the plain payload it also is.
+ */
+export interface WorldGuild extends ApiGuild {
+	registerRole(options?: WorldRoleOptions): ApiRole;
+	registerChannel(options?: WorldChannelOptions): ApiChannel;
+	registerMember(options?: ApiMemberOptions): ApiMember;
+	registerBotMember(options?: WorldBotMemberOptions): ApiMember;
+	registerVoiceState(options?: ApiVoiceStateOptions): ApiVoiceState;
+	registerEmoji(options?: WorldEmojiOptions): ApiEmoji;
+	registerSticker(options?: Omit<ApiStickerOptions, 'guildId'>): ApiSticker;
+	registerAutoModRule(options?: Omit<ApiAutoModRuleOptions, 'guildId'>): ApiAutoModRule;
+	registerScheduledEvent(options?: Omit<ApiScheduledEventOptions, 'guildId'>): ApiScheduledEvent;
+	registerGuildTemplate(options?: Omit<ApiGuildTemplateOptions, 'sourceGuildId'>): ApiGuildTemplate;
+	registerSoundboardSound(options?: Omit<ApiSoundboardSoundOptions, 'guildId'>): ApiSoundboardSound;
+	registerAuditLogEntry(options?: ApiAuditLogEntryOptions): ApiAuditLogEntry;
+}
+
 export class WorldBuilder {
 	private readonly world: MockWorld = {
 		guilds: [],
@@ -158,6 +183,11 @@ export class WorldBuilder {
 		webhooks: [],
 	};
 
+	/** Members seeded by registerBotMember, kept so adoptBotId can restate their user id. */
+	private readonly botMembers: ApiMember[] = [];
+	/** Bot id explicitly given to registerBotMember, if any. */
+	private pinnedBotId?: string;
+
 	private requireGuild(guildId: string): void {
 		if (this.world.guilds.some(guild => guild.id === guildId)) return;
 		const seeded = this.world.guilds.map(guild => guild.id).join(', ') || '(none)';
@@ -171,7 +201,7 @@ export class WorldBuilder {
 		throw new TypeError(`mockWorld: channel "${channelId}" is not registered. Seeded channels: ${seeded}.`);
 	}
 
-	registerGuild(options: WorldGuildOptions = {}): ApiGuild {
+	registerGuild(options: WorldGuildOptions = {}): WorldGuild {
 		const guild = apiGuild(options);
 		this.world.guilds.push(guild);
 		this.world.roles.push({
@@ -183,7 +213,33 @@ export class WorldBuilder {
 				position: 0,
 			}),
 		});
-		return guild;
+		return this.scopeToGuild(guild);
+	}
+
+	/**
+	 * Bind the guild-scoped registrars onto the payload itself.
+	 *
+	 * Non-enumerable is load-bearing, not cosmetic: `createMockBot` runs `structuredClone(world.build())`,
+	 * which throws `DataCloneError` on an enumerable function, and a seeded guild has to keep deep-equalling
+	 * the plain payload that assertions and `JSON.stringify` expect.
+	 */
+	private scopeToGuild(guild: ApiGuild): WorldGuild {
+		const scope: Omit<WorldGuild, keyof ApiGuild> = {
+			registerRole: options => this.registerRole(guild.id, options),
+			registerChannel: options => this.registerChannel(guild.id, options),
+			registerMember: options => this.registerMember(guild.id, options),
+			registerBotMember: options => this.registerBotMember(guild.id, options),
+			registerVoiceState: options => this.registerVoiceState(guild.id, options),
+			registerEmoji: options => this.registerEmoji(guild.id, options),
+			registerSticker: options => this.registerSticker(guild.id, options),
+			registerAutoModRule: options => this.registerAutoModRule(guild.id, options),
+			registerScheduledEvent: options => this.registerScheduledEvent(guild.id, options),
+			registerGuildTemplate: options => this.registerGuildTemplate(guild.id, options),
+			registerSoundboardSound: options => this.registerSoundboardSound(guild.id, options),
+			registerAuditLogEntry: options => this.registerAuditLogEntry(guild.id, options),
+		};
+		for (const [name, bound] of Object.entries(scope)) Object.defineProperty(guild, name, { value: bound });
+		return guild as WorldGuild;
 	}
 
 	registerRole(guildId: string, options: WorldRoleOptions = {}): ApiRole {
@@ -329,11 +385,44 @@ export class WorldBuilder {
 		return voiceState;
 	}
 
-	registerBotMember(guildId: string, options: { roles?: string[]; botId?: string } = {}): ApiMember {
-		return this.registerMember(guildId, {
-			user: apiUser({ id: options.botId ?? TEST_BOT_ID, bot: true, username: TEST_BOT_ID }),
+	registerBotMember(guildId: string, options: WorldBotMemberOptions = {}): ApiMember {
+		if (options.botId !== undefined && this.pinnedBotId !== undefined && options.botId !== this.pinnedBotId) {
+			throw new TypeError(
+				`mockWorld: registerBotMember is already pinned to botId "${this.pinnedBotId}" but got "${options.botId}". ` +
+					'A world has one bot; seed the other guild without botId.',
+			);
+		}
+		if (options.botId !== undefined) this.pinnedBotId = options.botId;
+		const member = this.registerMember(guildId, {
+			user: apiUser({ id: this.pinnedBotId ?? TEST_BOT_ID, bot: true, username: BOT_USERNAME }),
 			roles: options.roles,
 		});
+		this.botMembers.push(member);
+		return member;
+	}
+
+	/**
+	 * @internal Reconcile the seeded bot member with the client's bot id. Called by `createMockBot`.
+	 *
+	 * The world is seeded before the client is built, so without this the bot's user id is stated twice —
+	 * here and as `createMockBot({ botId })` — with nothing keeping the two equal, and a message authored by
+	 * the bot member fails `author.id === client.botId`. Runs against the live world *before* `createMockBot`
+	 * clones it, so the `ApiMember` that `registerBotMember` already handed back is corrected in place too.
+	 *
+	 * Returns the stated bot id, or `undefined` when neither side stated one (leaving the default in place).
+	 */
+	adoptBotId(explicit?: string): string | undefined {
+		if (explicit !== undefined && this.pinnedBotId !== undefined && explicit !== this.pinnedBotId) {
+			throw new TypeError(
+				`createMockBot: botId "${explicit}" conflicts with registerBotMember({ botId: "${this.pinnedBotId}" }). ` +
+					'State the bot id once: keep it on createMockBot and drop it from registerBotMember, or the reverse.',
+			);
+		}
+		const stated = explicit ?? this.pinnedBotId;
+		if (stated !== undefined) {
+			for (const member of this.botMembers) member.user.id = stated;
+		}
+		return stated;
 	}
 
 	/**

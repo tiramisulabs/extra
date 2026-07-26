@@ -33,9 +33,12 @@ export class MockBot extends MockBotCore {
 
 export async function createMockBot(options: MockBotOptions = {}): Promise<MockBot> {
 	const rest = new MockApiHandler({ onUnhandledRest: options.onUnhandledRest });
+	// Reconcile before the clone: adoptBotId rewrites the seeded bot member on the live world, so the
+	// ApiMember registerBotMember already returned points at the same id the client will run as.
+	const statedBotId = options.world ? options.world.adoptBotId(options.botId) : options.botId;
 	const built = options.world?.build();
 	const world = built ? structuredClone(built) : undefined;
-	const botId = options.botId ?? TEST_BOT_ID;
+	const botId = statedBotId ?? TEST_BOT_ID;
 	const prefixList = [...(options.prefixes ?? []), ...(options.mentionAsPrefix ? [`<@${botId}>`, `<@!${botId}>`] : [])];
 	const clientOptionsBase: ClientOptions | undefined = options.clientOptions
 		? { ...(options.clientOptions as ClientOptions) }
@@ -105,7 +108,7 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	if (options.defaultLang) {
 		client.langs.defaultLang = options.defaultLang;
 	}
-	client.botId = options.botId ?? ((options.client && client.botId) || botId);
+	client.botId = statedBotId ?? ((options.client && client.botId) || botId);
 	client.applicationId = options.applicationId ?? ((options.client && client.applicationId) || TEST_APPLICATION_ID);
 
 	let requestedSubcommands: MockSubCommandClass[] = [];
