@@ -11,6 +11,13 @@ class WhoAmI extends Command {
 	}
 }
 
+@Declare({ name: 'where-here', description: 'Reports the channel it ran in' })
+class WhereHere extends Command {
+	async run(ctx: CommandContext) {
+		await ctx.write({ content: `${ctx.channelId}` });
+	}
+}
+
 @Declare({ name: 'ban-target', description: 'Bans the seeded target' })
 class BanTarget extends Command {
 	async run(ctx: CommandContext) {
@@ -219,6 +226,43 @@ describe('actor binding is checked against the world', () => {
 		await using bot = await createMockBot({ commands: [WhoAmI], world });
 
 		expect(() => bot.actor({ member, channel: elsewhere })).toThrow(/belongs to guild "elsewhere-guild"/);
+	});
+
+	test('the sole channel in the guild is derived', async () => {
+		const { world, channel, member } = seedActorWorld();
+		await using bot = await createMockBot({ commands: [WhereHere], world });
+
+		await expect(bot.actor({ member }).slash({ name: 'where-here' })).resolves.toMatchObject({
+			content: channel.id,
+		});
+	});
+
+	test('several channels must be disambiguated instead of picked by seeding order', async () => {
+		const { world, guild, member } = seedActorWorld();
+		guild.registerChannel({ id: 'second-channel' });
+		await using bot = await createMockBot({ commands: [WhereHere], world });
+
+		expect(() => bot.actor({ member })).toThrow(/has 2 channels/);
+	});
+
+	test('an explicit channel resolves the ambiguity', async () => {
+		const { world, guild, member } = seedActorWorld();
+		const second = guild.registerChannel({ id: 'second-channel' });
+		await using bot = await createMockBot({ commands: [WhereHere], world });
+
+		await expect(bot.actor({ member, channel: second }).slash({ name: 'where-here' })).resolves.toMatchObject({
+			content: 'second-channel',
+		});
+	});
+
+	test('a thread does not count as a second channel', async () => {
+		const { world, channel, member } = seedActorWorld();
+		world.registerThread(channel.id, { id: 'actor-thread' });
+		await using bot = await createMockBot({ commands: [WhereHere], world });
+
+		await expect(bot.actor({ member }).slash({ name: 'where-here' })).resolves.toMatchObject({
+			content: channel.id,
+		});
 	});
 
 	test('a member of several guilds must say which one', async () => {

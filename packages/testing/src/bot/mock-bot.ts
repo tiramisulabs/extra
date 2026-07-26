@@ -67,6 +67,7 @@ import { isEphemeral } from './message-flags';
 import { MockBotDispatchCore } from './mock-bot-dispatch';
 import { prepareAutocompleteOptions, prepareChatInputOptions } from './option-validation';
 import {
+	type ApiChannel,
 	type ApiMember,
 	type ApiMessage,
 	type ApiUser,
@@ -959,6 +960,26 @@ export class MockBot extends MockBotDispatchCore {
 		);
 	}
 
+	/**
+	 * Resolve the channel an actor dispatches in when the caller names none.
+	 *
+	 * Same rule as the guild: derive it when the world leaves no choice, refuse to guess when it does. A guild
+	 * routinely holds several channels, so picking the first match would bind the actor by seeding order —
+	 * silently, and differently the moment a channel is added above it. Threads are not candidates; they have
+	 * their own registrar and are never "the guild's channel".
+	 */
+	private actorChannel(options: ActorOptions, guildId: string | undefined): ApiChannel | undefined {
+		if (options.channel) return options.channel;
+		if (guildId === undefined) return undefined;
+		const candidates =
+			this._world?.channels.filter(candidate => candidate.guild_id === guildId && !candidate.thread_metadata) ?? [];
+		if (candidates.length <= 1) return candidates[0];
+		throw new TypeError(
+			`actor: guild "${guildId}" has ${candidates.length} channels ` +
+				`(${candidates.map(candidate => candidate.id).join(', ')}). Pass channel to choose the one this actor uses.`,
+		);
+	}
+
 	actor(options: ActorOptions): Actor {
 		const user = options.user ?? options.member?.user;
 		const entry = this.actorMembership(options, user);
@@ -968,9 +989,7 @@ export class MockBot extends MockBotDispatchCore {
 				`actor: channel "${options.channel.id}" belongs to guild "${options.channel.guild_id}", not "${guildId}".`,
 			);
 		}
-		const channel =
-			options.channel ??
-			(entry ? this._world?.channels.find(candidate => candidate.guild_id === entry.guildId) : undefined);
+		const channel = this.actorChannel(options, entry?.guildId);
 		const base = { user, guildId, channel };
 		const actorUserId = user?.id ?? this.defaultUser.id;
 		const sessionKey = `actor:${++this.actorSessionSequence}:user:${actorUserId}`;

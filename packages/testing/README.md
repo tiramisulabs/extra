@@ -422,9 +422,13 @@ expect(result.content).toContain('1 vote');
 ```
 
 The world already records which guild a member belongs to, so `guildId` and
-`channel` are derived from it — pass them only to pick between several guilds, and
-if you do pass a `guildId` (or a `channel`) the member is not in, the actor fails
-loudly instead of resolving against the wrong guild.
+`channel` are derived from it. The rule is the same on both: derive when the world
+leaves no choice, refuse to guess when it does. A member in one guild needs no
+`guildId`; a guild with one non-thread channel needs no `channel`. Anything
+ambiguous — a member in two guilds, a guild with two channels — throws and names
+the candidates, rather than binding the actor by seeding order. Passing a `guildId`
+or `channel` the member is not in throws too, instead of silently resolving against
+the wrong guild.
 
 The stateful interaction actions are the default testing path. For low-level
 timing tests, `bot.dispatch.*` exposes the raw lazy `Dispatch` and its REST
