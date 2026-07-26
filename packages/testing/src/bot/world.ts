@@ -169,19 +169,27 @@ export interface WorldGuild extends ApiGuild {
 }
 
 export class WorldBuilder {
-	private readonly world: MockWorld = {
-		guilds: [],
-		channels: [],
-		users: [],
-		members: [],
-		roles: [],
-		messages: [],
-		voiceStates: [],
-		guildEmojis: [],
-		invites: [],
-		autoModRules: [],
-		webhooks: [],
-	};
+	private readonly world: MockWorld;
+
+	/**
+	 * @internal Passing a world continues seeding one that is already live. `MockBot.seed` uses it so the
+	 * registrars stay usable against a running bot instead of being frozen at `createMockBot`.
+	 */
+	constructor(seed?: MockWorld) {
+		this.world = seed ?? {
+			guilds: [],
+			channels: [],
+			users: [],
+			members: [],
+			roles: [],
+			messages: [],
+			voiceStates: [],
+			guildEmojis: [],
+			invites: [],
+			autoModRules: [],
+			webhooks: [],
+		};
+	}
 
 	/** Members seeded by registerBotMember, kept so adoptBotId can restate their user id. */
 	private readonly botMembers: ApiMember[] = [];

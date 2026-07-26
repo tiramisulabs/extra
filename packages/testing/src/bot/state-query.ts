@@ -192,6 +192,17 @@ export abstract class WorldStateQueryCore {
 		this.world.messages ??= [];
 		this.world.guildEmojis ??= [];
 		this.world.autoModRules ??= [];
+		this.indexWorld();
+	}
+
+	/**
+	 * Rebuild the lookups derived from the world arrays. The arrays themselves are shared by reference, so a
+	 * later push is visible immediately, but these indexes are not — `MockBot.seed` calls this after seeding
+	 * so an invite or DM added against a live bot is findable.
+	 *
+	 * @internal
+	 */
+	indexWorld(): void {
 		for (const invite of this.world.invites ?? []) this.invitesByCode.set(invite.code, invite);
 		for (const webhook of this.world.webhooks ?? []) this.webhooksById.set(webhook.id, webhook);
 		for (const channel of this.world.channels) {

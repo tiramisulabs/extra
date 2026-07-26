@@ -80,8 +80,15 @@ import {
 import { isOutgoingMessagePost, type RecordedAction, type RestCalls, type RouteMatcher } from './rest';
 import { FOLLOWUP_ROUTE, Routes, WEBHOOK_MESSAGE_ROUTE } from './routes';
 import { resolveSelectResolved } from './select-resolved';
-import { eventsInternals, modalRegistry, normalizeGatewayEventName, pluginEventNames } from './seyfert-internals';
+import {
+	asUsingClient,
+	eventsInternals,
+	modalRegistry,
+	normalizeGatewayEventName,
+	pluginEventNames,
+} from './seyfert-internals';
 import { numberValue } from './state';
+import { type MockWorld, seedWorld, WorldBuilder } from './world';
 import { applyWorldEvent, WORLD_EVENT_NAMES } from './world-events';
 
 const INPUT_SHUTDOWN_GRACE_MS = 250;
@@ -978,6 +985,38 @@ export class MockBot extends MockBotDispatchCore {
 			`actor: guild "${guildId}" has ${candidates.length} channels ` +
 				`(${candidates.map(candidate => candidate.id).join(', ')}). Pass channel to choose the one this actor uses.`,
 		);
+	}
+
+	/**
+	 * Seed more of the world against a running bot.
+	 *
+	 * `createMockBot` clones the built world once, so every registrar was effectively frozen at that point and a
+	 * scenario that grows — a member joins, a channel appears — had no way to say so. This hands the same
+	 * `WorldBuilder` back, writes only what the callback added into the client cache, and reindexes the derived
+	 * lookups. One method rather than a mirror of all eighteen registrars.
+	 *
+	 * Only the additions are written: re-seeding the whole world would resurrect anything the mock has since
+	 * removed through REST.
+	 */
+	async seed(register: (world: WorldBuilder) => void): Promise<void> {
+		this.assertOpen('seed');
+		if (!this._world) {
+			throw new TypeError(
+				'seed: this bot was built without a world. Pass world: mockWorld() to createMockBot to seed one.',
+			);
+		}
+		const before = new Map(
+			Object.entries(this._world).map(([key, value]) => [key, Array.isArray(value) ? value.length : 0]),
+		);
+		register(new WorldBuilder(this._world));
+		const added = Object.fromEntries(
+			Object.entries(this._world).map(([key, value]) => [
+				key,
+				Array.isArray(value) ? value.slice(before.get(key) ?? 0) : value,
+			]),
+		) as MockWorld;
+		await seedWorld(asUsingClient(this.client), added);
+		this._state.indexWorld();
 	}
 
 	actor(options: ActorOptions): Actor {
