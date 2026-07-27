@@ -18,8 +18,9 @@ import {
 import { ButtonStyle, TextInputStyle } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
-import { apiUser } from '../../src/bot/payloads';
+import { apiActionRow, apiButton, apiSelect, apiTextInput, apiUser } from '../../src/bot/payloads';
 import { mockWorld } from '../../src/bot/world';
+import { rendered } from '../../src/rendered-output';
 import { ConfirmButton } from './_setup';
 
 const englishLang = { greeting: 'Hello!' };
@@ -236,6 +237,47 @@ describe('component flows', () => {
 			bot.clickButton('confirm', { source: 'source-message', guildId: guild.id, channel, user: actor.user }),
 		).rejects.toThrow(/source message "source-message" does not contain a component with customId "confirm"/);
 		await bot.close();
+	});
+
+	test('a seeded panel can be built from the component factories instead of a wire literal', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'panel-guild' });
+		const clicker = world.registerMember(guild.id, { user: apiUser({ id: 'panel-clicker' }) });
+		const channel = world.registerChannel(guild.id, { id: 'panel-channel' });
+		world.registerMessage(channel.id, {
+			id: 'panel-message',
+			components: [apiActionRow(apiButton({ customId: 'confirm', label: 'Confirm', style: 'danger' }))],
+		});
+
+		const bot = await createMockBot({ components: [ConfirmButton], world });
+		const result = await bot.clickButton('confirm', {
+			source: 'panel-message',
+			guildId: guild.id,
+			channel,
+			user: clicker.user,
+		});
+
+		// the source-validation guard is what makes the seeded component mandatory: it passed, so the
+		// factory produced the same shape the hand-written literal did
+		expect(rendered(result).get.message().content).toBe('Confirmed!');
+		await bot.close();
+	});
+
+	test('apiSelect and apiTextInput carry the fields their component kinds need', () => {
+		const select = apiSelect({
+			customId: 'pick',
+			placeholder: 'Choose',
+			options: [{ label: 'One', value: '1' }],
+		});
+		const userSelect = apiSelect({ customId: 'who', type: 'user' });
+		const input = apiTextInput({ customId: 'title', label: 'Title', style: 2 });
+
+		expect(select).toMatchObject({ type: 3, custom_id: 'pick', placeholder: 'Choose' });
+		expect(select.options).toEqual([{ label: 'One', value: '1' }]);
+		// non-string selects resolve their values from the guild, so they carry no options array
+		expect(userSelect).toMatchObject({ type: 5, custom_id: 'who' });
+		expect(userSelect).not.toHaveProperty('options');
+		expect(input).toMatchObject({ type: 4, custom_id: 'title', label: 'Title', style: 2 });
 	});
 
 	test('component dispatch names the registered handler and reports its customId rejected the dispatch', async () => {
