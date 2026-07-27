@@ -162,6 +162,12 @@ export const Routes = {
 		method: 'DELETE',
 		route: '/webhooks/:applicationId/:interactionToken/messages/:messageId',
 	}),
+	/**
+	 * Also the route for *executing a webhook*: Discord puts the application id and interaction token in the
+	 * same slots a webhook id and token occupy, so `POST /webhooks/{id}/{token}` is both calls. There is no
+	 * separate `executeWebhook` descriptor because there is nothing on the wire to key one on —
+	 * `restCalls(Routes.followup)` therefore returns interaction followups *and* webhook posts.
+	 */
 	followup: defineRoute<API.RESTPostAPIInteractionFollowupJSONBody, API.RESTPostAPIInteractionFollowupResult>()({
 		method: 'POST',
 		route: '/webhooks/:applicationId/:interactionToken',
@@ -539,4 +545,10 @@ export const ROUTE_COVERAGE = {
 export const WEBHOOK_MESSAGE_ROUTE = /\/webhooks\/[^/]+\/[^/]+\/messages\/[^/]+$/;
 export const FOLLOWUP_ROUTE = /\/webhooks\/[^/]+\/[^/]+$/;
 export const CHANNEL_MESSAGE_POST = /\/channels\/[^/]+\/messages$/;
-export const WEBHOOK_EXECUTE_POST = /\/webhooks\/wh-[^/]+\/[^/]+$/;
+/**
+ * A message posted through a webhook. Structurally `FOLLOWUP_ROUTE` — the two are the same route on the
+ * wire — and deliberately id-agnostic: it used to require the `wh-` prefix the mock gives *synthesized*
+ * webhooks, so a webhook registered through `world.registerWebhook()` (which gets a snowflake) had its
+ * messages dropped from `result.messages` while the world recorded them. Two code paths, one call.
+ */
+export const WEBHOOK_EXECUTE_POST = /\/webhooks\/[^/]+\/[^/]+$/;
