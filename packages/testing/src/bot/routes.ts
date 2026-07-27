@@ -360,6 +360,10 @@ export const Routes = {
 		method: 'GET',
 		route: '/guilds/:guildId/scheduled-events/:eventId',
 	}),
+	editScheduledEvent: defineRoute<
+		API.RESTPatchAPIGuildScheduledEventJSONBody,
+		API.RESTPatchAPIGuildScheduledEventResult
+	>()({ method: 'PATCH', route: '/guilds/:guildId/scheduled-events/:eventId' }),
 	deleteScheduledEvent: defineRoute<never, API.RESTDeleteAPIGuildScheduledEventResult>()({
 		method: 'DELETE',
 		route: '/guilds/:guildId/scheduled-events/:eventId',
@@ -390,6 +394,10 @@ export const Routes = {
 	}),
 	fetchStageInstance: defineRoute<never, API.RESTGetAPIStageInstanceResult>()({
 		method: 'GET',
+		route: '/stage-instances/:channelId',
+	}),
+	editStageInstance: defineRoute<API.RESTPatchAPIStageInstanceJSONBody, API.RESTPatchAPIStageInstanceResult>()({
+		method: 'PATCH',
 		route: '/stage-instances/:channelId',
 	}),
 	deleteStageInstance: defineRoute<never, API.RESTDeleteAPIStageInstanceResult>()({
@@ -523,6 +531,7 @@ export const ROUTE_COVERAGE = {
 	fetchScheduledEvents: 'handled',
 	createScheduledEvent: 'handled',
 	fetchScheduledEvent: 'handled',
+	editScheduledEvent: 'handled',
 	deleteScheduledEvent: 'handled',
 	fetchGuildTemplate: 'handled',
 	listGuildTemplates: 'handled',
@@ -530,6 +539,7 @@ export const ROUTE_COVERAGE = {
 	listGuildSoundboardSounds: 'handled',
 	listDefaultSoundboardSounds: 'handled',
 	createStageInstance: 'handled',
+	editStageInstance: 'handled',
 	fetchStageInstance: 'handled',
 	deleteStageInstance: 'handled',
 	fetchAuditLogs: 'handled',

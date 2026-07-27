@@ -142,6 +142,10 @@ export function removeByGuild<W extends { guildId: string }, E extends { id: str
 ): W[] {
 	return (list ?? []).filter(entry => entry.guildId !== guildId || pick(entry).id !== id);
 }
+/** The fields a PATCH body actually sets. An absent key means "leave it", so `undefined` must not overwrite. */
+export function patchFields(raw: Record<string, unknown>): Record<string, unknown> {
+	return Object.fromEntries(Object.entries(raw).filter(([, value]) => value !== undefined));
+}
 
 export function normalizeOverwrites(value: unknown): ChannelOverwriteLike[] {
 	return arrayValue(value).map(overwrite => {

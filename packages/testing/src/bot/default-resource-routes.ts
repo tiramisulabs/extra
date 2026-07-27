@@ -271,6 +271,13 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 		unknownCode: world ? ErrorCode.UnknownScheduledEvent : undefined,
 		unknownMessage: 'Unknown Guild Scheduled Event',
 	});
+	rest.intercept(Routes.editScheduledEvent, (pending, params) => {
+		requireGuild(params.guildId);
+		requirePerm(params.guildId, PermissionFlagsBits.ManageEvents);
+		const updated = hooks.state.editScheduledEvent(params.guildId, params.eventId, bodyRecord(pending.body));
+		if (!updated && world) apiError(404, ErrorCode.UnknownScheduledEvent, 'Unknown Guild Scheduled Event');
+		return updated ?? apiScheduledEvent({ id: params.eventId, guildId: params.guildId });
+	});
 	rest.intercept(Routes.listGuildTemplates, (_pending, params) => {
 		requireGuild(params.guildId);
 		return hooks.state.guildTemplates(params.guildId);
@@ -308,6 +315,17 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 		params => apiStageInstance({ channelId: params.channelId }),
 		world ? { code: ErrorCode.UnknownStageInstance, message: 'Unknown Stage Instance' } : undefined,
 	);
+	rest.intercept(Routes.editStageInstance, async (pending, params) => {
+		requireChannel(params.channelId);
+		requireChannelPerm(params.channelId, PermissionFlagsBits.ManageChannels);
+		const updated = hooks.state.editStageInstance(params.channelId, bodyRecord(pending.body));
+		if (!updated) {
+			if (world) apiError(404, ErrorCode.UnknownStageInstance, 'Unknown Stage Instance');
+			return apiStageInstance({ channelId: params.channelId });
+		}
+		await cacheStage(updated);
+		return updated;
+	});
 	rest.intercept(Routes.deleteStageInstance, async (_pending, params) => {
 		requireChannel(params.channelId);
 		const stage = hooks.state.stageInstance(params.channelId);

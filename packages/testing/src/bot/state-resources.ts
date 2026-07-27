@@ -40,6 +40,7 @@ import {
 	normalizeEmbed,
 	numberValue,
 	oneByGuild,
+	patchFields,
 	removeByGuild,
 	stringValue,
 } from './state-support';
@@ -308,6 +309,16 @@ export class WorldState extends WorldStateMutationCore {
 		return oneByGuild(this.world.scheduledEvents, guildId, eventId, e => e.event);
 	}
 
+	/** @internal When Discord edits a scheduled event. Merges, so patching one field leaves the rest standing. */
+	editScheduledEvent(guildId: string, eventId: string, raw: Record<string, unknown>): ApiScheduledEvent | undefined {
+		const entry = (this.world.scheduledEvents ?? []).find(
+			candidate => candidate.guildId === guildId && candidate.event.id === eventId,
+		);
+		if (!entry) return undefined;
+		entry.event = { ...entry.event, ...patchFields(raw) };
+		return entry.event;
+	}
+
 	/** @internal When Discord creates a guild template. */
 	addGuildTemplate(guildId: string, raw: Record<string, unknown>): ApiGuildTemplate {
 		const template = apiGuildTemplate({
@@ -360,6 +371,16 @@ export class WorldState extends WorldStateMutationCore {
 	/** The live stage instance of a stage channel, if any. */
 	stageInstance(channelId: string): ApiStageInstance | undefined {
 		return (this.world.stageInstances ?? []).find(entry => entry.channel_id === channelId);
+	}
+
+	/** @internal When Discord edits a stage instance. Merges, so patching the topic keeps the privacy level. */
+	editStageInstance(channelId: string, raw: Record<string, unknown>): ApiStageInstance | undefined {
+		const entries = this.world.stageInstances ?? [];
+		const index = entries.findIndex(entry => entry.channel_id === channelId);
+		if (index === -1) return undefined;
+		const updated = { ...entries[index], ...patchFields(raw) };
+		this.world.stageInstances = entries.map((entry, at) => (at === index ? updated : entry));
+		return updated;
 	}
 
 	/** The audit log entries of a guild. */
