@@ -182,6 +182,9 @@ export const DiscordErrors = {
 	AlreadyAcknowledged: { status: 400, code: 40060, message: 'Interaction has already been acknowledged.' },
 } as const satisfies Record<string, DiscordErrorInit>;
 
+/** Returned by an interceptor that declines this call, so `resolveResponse` keeps looking. Never observable. */
+const PASS_TO_NEXT = Symbol('slipher.testing.passToNext');
+
 export function gate(): { open: Promise<void>; release: () => void } {
 	let release!: () => void;
 	const open = new Promise<void>(resolve => {
@@ -455,9 +458,24 @@ export class MockApiHandler extends ApiHandler {
 	 * calls then fall through to normal handling. For sequential or request-conditional failures,
 	 * use intercept() with a closure counter.
 	 */
-	fail(matcher: RouteMatcher, error: DiscordErrorInit, opts?: { times?: number }): () => void {
+	fail(
+		matcher: RouteMatcher,
+		error: DiscordErrorInit,
+		opts?: {
+			/** Fail the first N matching calls, then fall through to normal handling. */
+			times?: number;
+			/**
+			 * Fail only the calls this answers true for — the Nth, the ones whose body matches, the ones for
+			 * one guild. `times` alone could only express "the first N", so anything else meant reaching for
+			 * `intercept()` with a closure counter, which cannot throw this error at all: the builder is
+			 * private and the exported thrower produces the package's own class, not the faithful one.
+			 */
+			when?: (action: PendingAction, params: Record<string, string>) => boolean;
+		},
+	): () => void {
 		let n = 0;
-		const off = this.intercept(matcher, () => {
+		const off = this.intercept(matcher, (action, params) => {
+			if (opts?.when && !opts.when(action, params)) return PASS_TO_NEXT;
 			if (opts?.times !== undefined && ++n >= opts.times) off();
 			throw this.discordError(matcher.method, matcher.route, error);
 		});
@@ -798,7 +816,11 @@ export class MockApiHandler extends ApiHandler {
 			interceptor.names.forEach((name, index) => {
 				params[name] = match[index + 1];
 			});
-			return interceptor.responder(pending, params);
+			const answer = interceptor.responder(pending, params);
+			// A `fail({ when })` whose predicate said no steps aside, so the route's real handler still answers.
+			// Anything else would make a conditional failure silently suppress the behaviour it conditions on.
+			if (answer === PASS_TO_NEXT) continue;
+			return answer;
 		}
 
 		// No interceptor handled this request. Surface the gap (respecting onUnhandledRest) before answering with

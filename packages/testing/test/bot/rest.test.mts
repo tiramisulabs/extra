@@ -385,3 +385,61 @@ describe('one error catalog, one predicate', () => {
 		await bot.close();
 	});
 });
+
+describe('conditional failure injection', () => {
+	test('when() decides per call, and a declined call still reaches the real handler', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'when-guild' });
+		const keep = world.registerChannel(guild.id, { id: 'keep-chan' });
+		const drop = world.registerChannel(guild.id, { id: 'drop-chan' });
+		const bot = await createMockBot({ world });
+
+		bot.rest.fail(Routes.createMessage, DiscordErrors.MissingPermissions, {
+			when: (_action, params) => params.channelId === 'drop-chan',
+		});
+
+		const denied = await bot.client.messages.write(drop.id, { content: 'nope' }).then(
+			() => undefined,
+			(reason: unknown) => reason,
+		);
+		expect(isDiscordError(denied, { code: DiscordErrors.MissingPermissions.code })).toBe(true);
+		// the declined call is not swallowed: the world default answered it, so the message really landed
+		await bot.client.messages.write(keep.id, { content: 'yes' });
+		expect(bot.world.query.channel({ id: keep.id })?.lastMessage?.content).toBe('yes');
+		await bot.close();
+	});
+
+	test('when() and times() compose: fail the matching calls, but only the first of them', async () => {
+		const bot = await createMockBot({});
+		const attempts: string[] = [];
+		bot.rest.fail(Routes.createMessage, DiscordErrors.RateLimited, {
+			times: 1,
+			when: action => (action.body as { content?: string })?.content === 'retry-me',
+		});
+
+		for (const content of ['other', 'retry-me', 'retry-me']) {
+			await bot.client.messages
+				.write('chan-1', { content })
+				.then(() => attempts.push(`${content}:ok`))
+				.catch(() => attempts.push(`${content}:failed`));
+		}
+
+		expect(attempts).toEqual(['other:ok', 'retry-me:failed', 'retry-me:ok']);
+		await bot.close();
+	});
+
+	test('retryAfter reaches the handler, so an app-level backoff is assertable', async () => {
+		const bot = await createMockBot({});
+		bot.rest.fail(Routes.createMessage, { ...DiscordErrors.RateLimited, retryAfter: 3 });
+
+		const seen = await bot.client.messages.write('chan-1', { content: 'x' }).then(
+			() => undefined,
+			(error: { metadata?: { response?: { retry_after?: number } } }) => error?.metadata?.response?.retry_after,
+		);
+
+		// the mock does not run seyfert's own retry pipeline; what it guarantees is that the value the app
+		// backs off on is the value the test set
+		expect(seen).toBe(3);
+		await bot.close();
+	});
+});
