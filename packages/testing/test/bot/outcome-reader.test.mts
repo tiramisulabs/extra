@@ -123,7 +123,7 @@ describe('outcome reader', () => {
 		expect(state.query.response()).toBeUndefined();
 		expect(state.all.response()).toEqual([]);
 		expect(() => state.get.response()).toThrow(OutcomeError);
-		expect(() => state.get.response()).toThrow(/found 0 responses/);
+		expect(() => state.get.response()).toThrow(/matched none of 0 responses/);
 		await bot.close();
 	});
 

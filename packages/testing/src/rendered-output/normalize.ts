@@ -24,17 +24,17 @@ export function normalizeOutput(subject: RenderedSubject, options: RenderedOptio
 	if (dispatchActions) return fromActions(dispatchActions.actions, options, dispatchActions.dispatchId);
 	const record = asRecord(source);
 	if (Array.isArray(record.actions)) return fromActions(record.actions as RecordedAction[], options);
-	const callback = fromInteractionCallback(record, options);
+	const callback = fromInteractionCallback(record);
 	if (callback) return callback;
 	const capturedBody = asRecord(record.body);
-	const capturedCallback = fromInteractionCallback(capturedBody, options);
+	const capturedCallback = fromInteractionCallback(capturedBody);
 	if (capturedCallback) return capturedCallback;
-	if (Array.isArray(record.responses)) return fromResponses(record.responses as MockContextResponse[]);
-	if (Array.isArray(record.messages)) return fromMessages(record.messages, options);
-	if (isMessageViewLike(record)) return fromMessages([record], options);
+	if (Array.isArray(record.responses)) return fromResponses(record.responses as MockContextResponse[], record.modals);
+	if (Array.isArray(record.messages)) return fromMessages(record.messages);
+	if (isMessageViewLike(record)) return fromMessages([record]);
 	if (isModalPayload(record)) return fromModals([record]);
-	if (Array.isArray(source)) return fromMessages(source, options);
-	return fromMessages([source], options);
+	if (Array.isArray(source)) return fromMessages(source);
+	return fromMessages([source]);
 }
 
 function dispatchActionsOf(subject: unknown): { actions: readonly RecordedAction[]; dispatchId?: number } | undefined {
@@ -48,9 +48,9 @@ function dispatchActionsOf(subject: unknown): { actions: readonly RecordedAction
 	};
 }
 
-function fromResponses(responses: readonly MockContextResponse[]): CanonicalOutput {
+function fromResponses(responses: readonly MockContextResponse[], modals: unknown): CanonicalOutput {
 	return {
-		modals: [],
+		modals: arrayValue(modals).map((modal, index) => normalizeModal(modal, index, `modal[${index}]`)),
 		messages: responses.map((response, index) =>
 			normalizeMessage(response, {
 				key: `response:${index}`,
@@ -61,15 +61,19 @@ function fromResponses(responses: readonly MockContextResponse[]): CanonicalOutp
 	};
 }
 
-function fromMessages(messages: readonly unknown[], options: RenderedOptions): CanonicalOutput {
-	const canonical = messages.map((message, index) =>
-		normalizeMessage(message, {
-			key: `message:${index}`,
-			path: `message[${index}]`,
-			transport: 'raw',
-		}),
-	);
-	return { modals: [], messages: options.view === 'timeline' ? canonical : canonical };
+// `view` is not consulted here: a literal message list is already one entry per rendering event, so
+// `timeline` and `current` describe the same thing. Only action-derived output has edits to fold.
+function fromMessages(messages: readonly unknown[]): CanonicalOutput {
+	return {
+		modals: [],
+		messages: messages.map((message, index) =>
+			normalizeMessage(message, {
+				key: `message:${index}`,
+				path: `message[${index}]`,
+				transport: 'raw',
+			}),
+		),
+	};
 }
 
 function fromModals(modals: readonly unknown[]): CanonicalOutput {
@@ -122,7 +126,8 @@ function fromActions(
 	return { messages, modals };
 }
 
-function fromInteractionCallback(body: Record<string, unknown>, options: RenderedOptions): CanonicalOutput | undefined {
+// Same as fromMessages: a single callback body is one rendering event, so `view` has nothing to fold.
+function fromInteractionCallback(body: Record<string, unknown>): CanonicalOutput | undefined {
 	const type = numberValue(body.type);
 	if (type === undefined) return undefined;
 	if (type === 9) return fromModals([asRecord(body.data)]);
@@ -132,7 +137,7 @@ function fromInteractionCallback(body: Record<string, unknown>, options: Rendere
 		path: 'message[0]',
 		transport: type === 7 ? 'update' : 'reply',
 	});
-	return { modals: [], messages: options.view === 'timeline' ? [message] : [message] };
+	return { modals: [], messages: [message] };
 }
 
 function renderedFromAction(action: RecordedAction):

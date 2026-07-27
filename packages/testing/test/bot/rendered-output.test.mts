@@ -23,6 +23,55 @@ function catchRenderedOutputError(run: () => unknown): RenderedOutputError {
 	throw new Error('Expected RenderedOutputError.');
 }
 
+describe('rendered subject guards', () => {
+	test('a primitive subject is named instead of normalizing into an empty scope', () => {
+		expect(() => rendered(42 as never)).toThrow(/expected a MockBot, Actor, DispatchResult.*got the number 42/s);
+		expect(() => rendered(null as never)).toThrow(/got null/);
+		expect(() => rendered('Ready' as never)).toThrow(/got the string "Ready"/);
+	});
+
+	test('an un-awaited dispatch says so rather than reporting zero output', async () => {
+		const pending = Promise.resolve({ content: 'Ready' });
+
+		expect(() => rendered(pending)).toThrow(/got a promise, not rendered output.*await the dispatch first/s);
+		await pending;
+	});
+});
+
+describe('rendered miss diagnostics', () => {
+	test('a miss distinguishes "nothing rendered" from "nothing matched"', () => {
+		const ui = rendered([{ content: 'Hi', embeds: [{ title: 'Actual Title' }, { title: 'Second Embed' }] }]);
+		const error = catchRenderedOutputError(() => ui.get.embed({ title: /Nonexistent/ }));
+
+		expect(error.message).toContain('matched none of 2 embeds');
+		expect(error.message).toContain('title="Actual Title"');
+		expect(error.message).toContain('title="Second Embed"');
+	});
+
+	test('asking for the wrong kind falls back to the whole scope', () => {
+		const ui = rendered([{ content: 'Banned spammer' }]);
+		const error = catchRenderedOutputError(() => ui.get.embed({ contains: /Banned/ }));
+
+		expect(error.message).toContain('matched none of 0 embeds');
+		expect(error.message).toContain('Nothing of kind "embed" was rendered.');
+		expect(error.message).toContain('content="Banned spammer"');
+	});
+
+	test('a subject that rendered nothing at all says that instead of dumping an empty list', () => {
+		const error = catchRenderedOutputError(() => rendered({ responses: [] }).get.message());
+
+		expect(error.message).toContain('The subject rendered no output at all.');
+	});
+
+	test('the candidate list is printed once, not reprinted as unscored "near misses"', () => {
+		const ui = rendered([{ content: 'Hi', embeds: [{ title: 'Actual Title' }] }]);
+		const error = catchRenderedOutputError(() => ui.get.embed({ title: /Nonexistent/ }));
+
+		expect(error.message).not.toContain('Near misses');
+		expect(error.message.match(/Actual Title/g)).toHaveLength(1);
+	});
+});
+
 describe('rendered reader', () => {
 	test('get/query/all apply cardinality and message scopes resolve duplicate controls', () => {
 		const ui = rendered([
@@ -52,7 +101,7 @@ describe('rendered reader', () => {
 		const ui = rendered({ content: 'Ready' });
 		const error = catchRenderedOutputError(() => ui.get.message({ content: /invalid-number/ }));
 
-		expect(error.message).toContain('found 0 messages');
+		expect(error.message).toContain('matched none of 1 messages');
 		expect(error.message).not.toContain('For Components V2 panels');
 		expect(error.message).not.toContain('get.container({ content: /.../ })');
 	});
@@ -64,7 +113,7 @@ describe('rendered reader', () => {
 		});
 		const error = catchRenderedOutputError(() => ui.get.embed({ title: /Missing/ }));
 
-		expect(error.message).toContain('found 0 embeds');
+		expect(error.message).toContain('matched none of 0 embeds');
 		expect(error.message).not.toContain('For Components V2 panels');
 		expect(error.message).not.toContain('get.container({ content: /.../ })');
 	});

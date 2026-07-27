@@ -81,10 +81,10 @@ describe('rendered embed reader', () => {
 	test('throws (not vacuous) when no embed was sent or none matches', async () => {
 		const ctx = mockCommandContext();
 		await ctx.write({ content: 'no embed' });
-		expect(() => rendered(ctx).get.embed()).toThrow(/found 0 embeds/);
+		expect(() => rendered(ctx).get.embed()).toThrow(/matched none of \d+ embeds/);
 
 		await ctx.write({ embeds: [{ title: 'real' }] });
-		expect(() => rendered(ctx).get.embed({ title: 'imaginary' })).toThrow(/found 0 embeds/);
+		expect(() => rendered(ctx).get.embed({ title: 'imaginary' })).toThrow(/matched none of \d+ embeds/);
 	});
 
 	test('same matcher works on a bot-path DispatchResult', async () => {
@@ -133,7 +133,7 @@ describe('context path: component accessors + rendered component reader', () => 
 		});
 		const button = rendered(ctx).get.button({ customId: 'delete_item_menu', disabled: true });
 		expect(button.customId).toBe('delete_item_menu');
-		expect(() => rendered(ctx).get.button('nope')).toThrow(/found 0 buttons/);
+		expect(() => rendered(ctx).get.button('nope')).toThrow(/matched none of \d+ buttons/);
 
 		const select = mockCommandContext();
 		await select.write({
@@ -157,7 +157,7 @@ describe('context path: component accessors + rendered component reader', () => 
 	test('rendered throws (not vacuous) when no component was sent', async () => {
 		const ctx = mockCommandContext();
 		await ctx.write({ content: 'no components here' });
-		expect(() => rendered(ctx).get.button()).toThrow(/found 0 buttons/);
+		expect(() => rendered(ctx).get.button()).toThrow(/matched none of \d+ buttons/);
 	});
 
 	test('same matcher works on a bot-path DispatchResult', async () => {
@@ -186,7 +186,7 @@ describe('rendered message content reader', () => {
 		const ctx = mockCommandContext();
 		await ctx.write({ content: 'reopened record' });
 		expect(rendered(ctx).get.message({ content: /reopened/ }).content).toBe('reopened record');
-		expect(() => rendered(ctx).get.message({ content: 'closed' })).toThrow(/found 0 messages/);
+		expect(() => rendered(ctx).get.message({ content: 'closed' })).toThrow(/matched none of \d+ messages/);
 
 		const bare = mockCommandContext();
 		await bare.write('bare string reply');
@@ -194,7 +194,7 @@ describe('rendered message content reader', () => {
 
 		const noContent = mockCommandContext();
 		await noContent.write({ embeds: [{ title: 'x' }] });
-		expect(() => rendered(noContent).get.message({ content: /x/ })).toThrow(/found 0 messages/);
+		expect(() => rendered(noContent).get.message({ content: /x/ })).toThrow(/matched none of \d+ messages/);
 	});
 });
 
@@ -257,13 +257,33 @@ describe('light harness directs collector/fetch flows to createMockBot (no silen
 		expect(ctx.responses).toEqual([{ content: 'x' }]);
 	});
 
-	test('ctx.interaction.modal() throws a directed error instead of a bare property access', () => {
+	test('ctx.interaction.modal() records the modal instead of throwing, and rendered(ctx) reads it', async () => {
 		const ctx = mockCommandContext();
 
-		expect(() => ctx.interaction.modal()).toThrow(/createMockBot/);
-		expect(() => ctx.interaction.modal()).toThrow(/submitModal/);
-		// the point: not V8's phrasing of a missing property, which tests were pinning as if it were an assertion
-		expect(() => ctx.interaction.modal()).not.toThrow(/Cannot read properties of undefined/);
+		await ctx.interaction.modal({
+			custom_id: 'embed-create',
+			title: 'New embed',
+			components: [{ type: 1, components: [{ type: 4, custom_id: 'title', label: 'Title' }] }],
+		});
+
+		expect(ctx.modals).toHaveLength(1);
+		expect(rendered(ctx).get.modal('embed-create').title).toBe('New embed');
+		expect(rendered(ctx).get.input('title').label).toBe('Title');
+	});
+
+	test('ctx.interaction can be replaced, as the README recipe says', async () => {
+		const ctx = mockCommandContext();
+		const shown: unknown[] = [];
+
+		ctx.interaction = {
+			async modal(payload: unknown) {
+				shown.push(payload);
+			},
+		};
+		await ctx.interaction.modal({ custom_id: 'mine' });
+
+		expect(shown).toEqual([{ custom_id: 'mine' }]);
+		expect(ctx.modals).toEqual([]);
 	});
 
 	test('ctx.interaction stays invisible to deepEqual/spread of the context', () => {

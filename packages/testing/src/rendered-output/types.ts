@@ -1,7 +1,5 @@
-import type { OutgoingMessage } from '../bot/bot';
 import type { RecordedAction } from '../bot/rest';
 import type { EmbedView } from '../bot/state';
-import type { MockContextResponse } from '../context';
 
 export const COMPONENT = {
 	actionRow: 1,
@@ -61,13 +59,17 @@ export interface RenderedOptions {
 	view?: 'current' | 'timeline';
 }
 
-export type RenderedSubject =
-	| { readonly actions?: readonly RecordedAction[]; readonly messages?: readonly OutgoingMessage[] }
-	| { readonly responses?: readonly MockContextResponse[] }
-	| { readonly toJSON?: () => unknown }
-	| readonly unknown[]
-	| Record<string, unknown>
-	| unknown;
+/**
+ * Anything {@link rendered} can read: a `MockBot`, an `Actor`, a `DispatchResult`, a parked flow, any mock
+ * context, an interaction-callback body, a raw message payload (or an array of them), or a Seyfert builder.
+ *
+ * Deliberately `object` and not a union of those shapes. Several are classes and the rest overlap
+ * structurally, so a union that admits all of them has to end in `| unknown` — and `X | unknown` *is*
+ * `unknown`, which accepts `42`, `null` and an un-awaited promise while looking like it documents
+ * something. `object` buys the one guarantee a union can here (no primitives, no `null`); `rendered()`
+ * names the remaining mistakes at runtime, where it can say which one you made.
+ */
+export type RenderedSubject = object;
 
 export interface RawView<T = unknown> {
 	readonly body: T;

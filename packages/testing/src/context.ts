@@ -120,15 +120,17 @@ export interface MockCommandContext<TOptions extends Record<string, unknown> = R
 	command: { name: string };
 	fullCommandName: string;
 	/**
-	 * Present only so the layer boundary can state itself. The light fixture has no interaction runtime, so
-	 * `modal()` throws a directed error instead of the bare "Cannot read properties of undefined (reading
-	 * 'modal')" that a missing property produces — a V8 phrasing tests were pinning as if it were an assertion.
-	 * Non-enumerable, like the other directed stubs, so it stays invisible to deepEqual/spread of the context.
+	 * `modal()` records what the command asked to show into {@link MockCommandContext.modals} — a command whose
+	 * whole job is to open a modal is assertable at this layer. Read it with `rendered(ctx).get.modal(...)`.
+	 * Driving the *submission* still belongs to the stateful harness: `createMockBot` + `bot.submitModal(...)`.
+	 *
+	 * Non-enumerable, like the other directed stubs, so it stays invisible to deepEqual/spread of the context —
+	 * but writable, so the README's "replace the method or nested surface you need" recipe holds here too.
 	 *
 	 * Thinner than seyfert's on purpose: seyfert types `interaction` as `ChatInputCommandInteraction |
 	 * undefined` whenever the bot has prefix commands, so production code should guard it regardless.
 	 */
-	interaction: { modal(): never };
+	interaction: { modal(payload: unknown): Promise<void> };
 	client: MockClient;
 	author: MockUser;
 	user: MockUser;
@@ -146,6 +148,8 @@ export interface MockCommandContext<TOptions extends Record<string, unknown> = R
 	queues: MockQueues;
 	scheduler: MockScheduler;
 	responses: MockContextResponse[];
+	/** Modal payloads the handler asked to show, in order — raw, as passed. `rendered(ctx).get.modal()` reads them. */
+	modals: unknown[];
 	write(response: MockContextResponse): Promise<MockContextResponse>;
 	editOrReply(response: MockContextResponse): Promise<MockContextResponse>;
 	followup(response: MockContextResponse): Promise<MockContextResponse>;
@@ -248,6 +252,8 @@ export interface MockInteractionContextBase {
 	queues: MockQueues;
 	scheduler: MockScheduler;
 	responses: MockContextResponse[];
+	/** Modal payloads the handler asked to show, in order — raw, as passed. `rendered(ctx).get.modal()` reads them. */
+	modals: unknown[];
 	write(response: MockContextResponse): Promise<MockContextResponse>;
 	editOrReply(response: MockContextResponse): Promise<MockContextResponse>;
 	followup(response: MockContextResponse): Promise<MockContextResponse>;
@@ -294,6 +300,8 @@ export interface MockComponentContext<T extends MockComponentType = 'Button'> ex
 		custom_id: string;
 		componentType: T;
 		values: string[];
+		/** Records into {@link MockInteractionContextBase.modals}; read it with `rendered(ctx).get.modal(...)`. */
+		modal(payload: unknown): Promise<void>;
 	};
 	deferredUpdate: boolean;
 	update(response: MockContextResponse): Promise<MockContextResponse>;
@@ -360,6 +368,7 @@ function mockInteractionBase(
 			applicationId: options.applicationId,
 		});
 	const responses: MockContextResponse[] = [];
+	const modals: unknown[] = [];
 	const recordResponse = async (response: MockContextResponse) => {
 		responses.push(response); // verbatim — the `responses` log is the contract; the wrapper below is non-enumerable
 		if (typeof response === 'string') return response;
@@ -402,6 +411,7 @@ function mockInteractionBase(
 		queues,
 		scheduler,
 		responses,
+		modals,
 		write: recordResponse,
 		editOrReply: recordResponse,
 		followup: recordResponse,
@@ -476,18 +486,16 @@ export function mockCommandContext(
 		fullCommandName: options.fullCommandName ?? name,
 		options: options.options ?? {},
 	} as MockCommandContext;
-	// Light unit harness has no interaction runtime: a command that opens a modal would otherwise die on a bare
-	// property access, so say what to use instead. Non-enumerable, so deepEqual/spread of the context is unchanged.
+	// Non-enumerable so deepEqual/spread of the context is unchanged; writable + configurable so the documented
+	// "replace the method or nested surface you need" recipe is true of `interaction` as it is of `guild`.
 	Object.defineProperty(context, 'interaction', {
 		value: {
-			modal(): never {
-				throw new TypeError(
-					'ctx.interaction.modal() is not available on mockCommandContext (the light unit harness has no ' +
-						'interaction runtime). For modal flows use createMockBot({ commands: [...] }) and drive them ' +
-						'step-by-step with await bot.slash(...) + await bot.submitModal(customId, fields).',
-				);
+			async modal(payload: unknown): Promise<void> {
+				context.modals.push(payload);
 			},
 		},
+		writable: true,
+		configurable: true,
 	});
 	return context;
 }
@@ -547,6 +555,9 @@ function createMockComponentContext<T extends MockComponentType>(
 			custom_id: customId,
 			componentType,
 			values,
+			async modal(payload: unknown): Promise<void> {
+				base.modals.push(payload);
+			},
 		},
 		get deferredUpdate() {
 			return deferredUpdate;

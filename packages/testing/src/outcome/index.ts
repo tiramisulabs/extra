@@ -459,7 +459,7 @@ function missingOutcomeError(
 	const queryText = describeCallArg(query);
 	const base =
 		matches.length === 0
-			? `outcome(result).get.${kind}(${queryText}) found 0 ${plural(kind)}.`
+			? `outcome(result).get.${kind}(${queryText}) matched none of ${candidates.length} ${plural(kind)}.`
 			: `outcome(result).get.${kind}(${queryText}) found ${matches.length} ${plural(kind)}.`;
 	const sections = [
 		base,

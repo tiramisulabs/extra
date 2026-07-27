@@ -9,7 +9,6 @@ import {
 	type CanonicalEmbed,
 	type CanonicalMessage,
 	type CanonicalModal,
-	type CanonicalOutput,
 	COMPONENT,
 	type ComponentKind,
 	type ComponentQuery,
@@ -61,6 +60,7 @@ export type * from './types';
 export { RenderedOutputError } from './types';
 
 export function rendered(subject: RenderedSubject, options: RenderedOptions = {}): RenderedOutput {
+	assertSubject(subject);
 	const canonical = normalizeOutput(subject, options);
 	const scope: Scope = {
 		label: 'rendered',
@@ -81,6 +81,34 @@ export function rendered(subject: RenderedSubject, options: RenderedOptions = {}
 		all: makeFinder('all', scope),
 		debug: () => debugOutput(canonical),
 	};
+}
+
+/**
+ * Reject the subjects that would otherwise normalize into an empty scope, where the resulting "found 0"
+ * reads like a product bug. A forgotten `await` is the common one — every stateful verb is async — so it
+ * gets its own sentence rather than being folded into "not an object".
+ */
+function assertSubject(subject: RenderedSubject): void {
+	if (subject == null || (typeof subject !== 'object' && typeof subject !== 'function')) {
+		throw new TypeError(
+			`rendered(): expected a MockBot, Actor, DispatchResult, mock context, or message payload, got ${describeSubject(subject)}.`,
+		);
+	}
+	// `instanceof Promise`, not "is thenable": a parked `Dispatch` is a documented subject and is itself
+	// PromiseLike. Only the native promise an un-awaited `await`-less call returns is the mistake.
+	if (subject instanceof Promise) {
+		throw new TypeError(
+			'rendered(): got a promise, not rendered output. Every stateful verb is async — await the dispatch ' +
+				'first, e.g. rendered(await bot.slash(...)). A parked bot.dispatch.* flow needs no await.',
+		);
+	}
+}
+
+function describeSubject(subject: unknown): string {
+	if (subject === null) return 'null';
+	if (subject === undefined) return 'undefined';
+	if (typeof subject === 'string') return `the string ${JSON.stringify(subject)}`;
+	return `the ${typeof subject} ${String(subject)}`;
 }
 
 function makeFinder<Mode extends ReaderMode>(mode: Mode, scope: Scope): Finder<Mode> {
@@ -138,14 +166,12 @@ function renderedOutputError(
 	const allCandidates = candidatesForKind(scope, kind);
 	const renderedMatches = matches.map(candidate => `  ${candidate.summary}`);
 	const renderedCandidates = allCandidates.map(candidate => `  ${candidate.summary}`);
-	const nearMisses =
-		matches.length === 0 && renderedCandidates.length > 0
-			? renderedCandidates.slice(0, 5).map(candidate => candidate.replace(/^  /, '  '))
-			: [];
 	const queryText = describeQuery(query);
+	// "found 0 embeds" reads as "there were no embeds" and sends the author looking for a rendering failure
+	// when the matcher is what's wrong. Say how many were there, so zero-rendered and zero-matched differ.
 	const base =
 		matches.length === 0
-			? `${scope.label}.get.${kind}(${queryText}) found 0 ${plural(kind)}.`
+			? `${scope.label}.get.${kind}(${queryText}) matched none of ${allCandidates.length} ${plural(kind)}.`
 			: `${scope.label}.get.${kind}(${queryText}) found ${matches.length} ${plural(kind)}; get.${kind} requires exactly one.`;
 	const sections = [
 		base,
@@ -153,7 +179,9 @@ function renderedOutputError(
 		matches.length === 0 && renderedCandidates.length
 			? `\n${capitalize(plural(kind))} rendered:\n${renderedCandidates.join('\n')}`
 			: undefined,
-		nearMisses.length > 0 ? `\nNear misses:\n${nearMisses.join('\n')}` : undefined,
+		// Nothing of the queried kind exists, so the per-kind list above is empty and would leave a bare
+		// headline. Fall back to the whole scope: "you asked for an embed, here is the content that was sent".
+		matches.length === 0 && renderedCandidates.length === 0 ? scopeFallback(kind, scope) : undefined,
 		containerContentDiagnostics(kind, query, scope),
 		modalFieldDiagnostics(kind, scope),
 		kind !== 'message' && scope.messages.length > 1
@@ -169,6 +197,14 @@ function renderedOutputError(
 		matches: renderedMatches,
 		candidates: renderedCandidates,
 	});
+}
+
+function scopeFallback(kind: string, scope: Scope): string {
+	const dump = debugOutput({ messages: scope.messages, modals: scope.modals });
+	const nothing = `\nNothing of kind "${kind}" was rendered.`;
+	return scope.messages.length === 0 && scope.modals.length === 0
+		? `${nothing} The subject rendered no output at all.`
+		: `${nothing} ${dump}`;
 }
 
 function containerContentDiagnostics(kind: string, query: unknown, scope: Scope): string | undefined {
@@ -815,7 +851,10 @@ function capitalize(value: string): string {
 	return value.length === 0 ? value : `${value[0].toUpperCase()}${value.slice(1)}`;
 }
 
-function debugOutput(canonical: CanonicalOutput): string {
+function debugOutput(canonical: {
+	readonly messages: readonly CanonicalMessage[];
+	readonly modals: readonly CanonicalModal[];
+}): string {
 	const lines = ['Rendered output:'];
 	for (const message of canonical.messages) {
 		lines.push(`  ${summarizeMessage(message)}`);
