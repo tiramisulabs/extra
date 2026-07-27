@@ -11,6 +11,23 @@ from the same import and can coexist in one suite.
 
 Requires Seyfert v5 (peer dependency).
 
+## I want to…
+
+| …test this | …start here |
+|---|---|
+| a `run()` body, no pipeline | [`mockCommandContext(MyCommand)`](#mock-command-contexts) |
+| a component/modal filter or handler | [`mockComponentContext` / `mockModalContext`](#mock-component-and-modal-contexts) |
+| a command context sharing one guild/channel/user | [`mockScene`](#mock-command-contexts) - builds the linked fixtures once instead of threading ids |
+| the real command pipeline: options, middlewares, permissions | [`createMockBot({ commands })`](#mock-bot) |
+| what the bot rendered - embeds, buttons, modals, Components V2 | [`rendered(subject)`](#reading-rendered-output) |
+| a multi-step flow: click, then submit a modal | [stateful actions](#step-by-step-flows) on `bot`/`actor` |
+| that the handler *changed* state | [`world.snapshot()` + `world.diff()`](#asserting-what-changed) |
+| what state looks like now | [`bot.world.get/query/all`](#querying-world-state) |
+| which REST calls happened | [`bot.restCalls(Routes.x)`](#rest-calls) |
+| that a dispatch responded / was denied / errored | [`outcome(result)`](#outcome-reader) |
+| timeouts, collectors, scheduled work | [`bot.advanceTime`, `bot.settle`](#testing-timed-behavior) |
+| seeding guilds, channels, members, messages | [`mockWorld()`](#seeding-a-world) |
+
 ## How it works
 
 The fixture layer is plain mock objects - no assertions, spies, or fake timers bundled - so they work with any test runner. The core is `mockCommandContext()`: a stand-in for a Seyfert command context with the fields most commands touch, plus working Slipher stubs (`logger`, `queues`, `scheduler`) that **record what your command does** so you can assert on it afterward. Factories (`mockUser`, `mockGuild`, ...) build the entities, with deterministic ids you can override. The mock-bot layer below keeps the same runner-agnostic model while driving a real Seyfert client pipeline.
@@ -54,10 +71,30 @@ test('replies after banning', async () => {
 - `write`, `editOrReply`, `followup`, and `deferReply`
 - `logger`, `queues`, and `scheduler` stubs, plus `client` with the same stub instances
 - `responses`, `lastResponse()`, and `clearResponses()`
+- `modals` — payloads the handler passed to `ctx.interaction.modal()`, in order
 
 `ctx.client.logger === ctx.logger`, `ctx.client.queues === ctx.queues`, and `ctx.client.scheduler === ctx.scheduler`. Use `mockClient({ extra })` when a command touches client surfaces that this package does not model.
 
-What it deliberately does not simulate says so when you reach for it, rather than failing as a missing property: `ctx.interaction.modal()`, `reply.createComponentCollector()`, and `ctx.client.guilds/channels/users.fetch()` each throw an error naming the `createMockBot` flow to use instead. If a test is asserting on `"Cannot read properties of undefined"`, that is this boundary — the assertion is pinning a V8 phrasing, not a behaviour.
+When the assertion needs the entities as well as the context — the user who ran it, the
+guild it ran in, the channel it replied to — `mockScene()` builds them wired to each
+other in one call, instead of threading ids between four factories:
+
+```ts
+const { ctx, user, guild, channel } = mockScene(BanCommand, { options: { user: target } });
+
+await ctx.run();
+expect(ctx.lastResponse()).toMatchObject({ content: expect.stringContaining(user.username) });
+```
+
+A command that opens a modal is testable here: `ctx.interaction.modal(payload)` records
+into `ctx.modals`, and `rendered(ctx).get.modal('embed-create')` reads it with the same
+vocabulary as any other output. Driving the *submission* needs the interaction runtime, so
+that stays with `createMockBot` + [`bot.submitModal(...)`](#component-collectors-and-modals).
+
+What the fixture layer deliberately does not simulate says so when you reach for it, rather than failing as a missing property: `reply.createComponentCollector()` and `ctx.client.guilds/channels/users.fetch()` each throw an error naming the `createMockBot` flow to use instead. If a test is asserting on `"Cannot read properties of undefined"`, that is this boundary — the assertion is pinning a V8 phrasing, not a behaviour.
+
+Every directed stub is writable, so you can substitute the surface a specific test needs:
+`ctx.interaction = { modal: vi.fn() }` and `ctx.guild = async () => myGuild` both work.
 
 ## Mock Component and Modal Contexts
 
@@ -89,6 +126,71 @@ const submit = await profile.run({
 });
 expect(submit.lastResponse()).toBeDefined();
 ```
+
+## Reading rendered output
+
+`rendered(subject)` normalizes anything the bot rendered - replies, edits, followups,
+channel messages, Components V2 trees, modals - into one queryable model, then hands
+you three readers over it. It works the same on a light fixture context and on a full
+mock bot, so an assertion survives a test moving between layers.
+
+```ts
+const ctx = mockCommandContext(ProfileCommand, { options: { user: 'u1' } });
+await ctx.run();
+
+expect(rendered(ctx).get.embed({ title: 'Profile' }).description).toContain('socram');
+expect(rendered(ctx).get.button('profile:edit').disabled).toBe(false);
+```
+
+Every subject below is read the same way:
+
+| Subject | What it holds |
+|---|---|
+| `rendered(ctx)` | any mock context's responses - `mockCommandContext`, `mockComponentContext`, `mockModalContext` - plus modals the handler opened |
+| `rendered(result)` | output belonging to that exact dispatch, even after later steps |
+| `rendered(bot)` | output from the latest step of the most recently active actor |
+| `rendered(actor)` | output from that actor's latest step |
+| `rendered(flow)` | what a parked `bot.dispatch.*` flow has rendered so far, before it settles |
+| `rendered(payload)` | a raw message payload, an array of them, or a Seyfert builder |
+
+The three readers differ only in cardinality:
+
+- `get.*` requires exactly one match and throws with the candidates otherwise.
+- `query.*` returns the first match, or `undefined`.
+- `all.*` returns every match.
+
+A miss reports what *was* rendered, so a wrong matcher does not read like a rendering
+failure:
+
+```
+RenderedOutputError: rendered.get.embed({"title":"/Nonexistent/"}) matched none of 2 embeds.
+
+Embeds rendered:
+  message[0] > embed[0] title="Actual Title"
+  message[0] > embed[1] title="Second Embed"
+```
+
+`rendered(subject).debug()` prints that tree on demand, and
+`rendered(subject).raw.messages()` exposes the untouched payloads for wire-shape
+assertions.
+
+### Edits: `current` vs `timeline`
+
+When a message and a later edit of it can be tied together - the edit names a
+message id, or both go through the same interaction token - they fold into one
+entry, so you assert the final state a user sees. Pass `view: 'timeline'` to keep
+every rendering event separate instead, for asserting that a handler edited a
+loading message into a result rather than only what it ended up saying:
+
+```ts
+// handler posts "Loading…", then edits that message to "Done"
+expect(rendered(result).all.message().map(m => m.content)).toEqual(['Done']);
+expect(rendered(result, { view: 'timeline' }).all.message().map(m => m.content))
+	.toEqual(['Loading…', 'Done']);
+```
+
+The option only applies to subjects with a REST trail (`bot`, `actor`, `result`,
+`flow`). A literal payload or a context's responses are already one entry per event.
 
 ## Factories
 
@@ -232,10 +334,14 @@ for the rare assertion where the Discord wire shape itself is the contract. Pref
 `result.content`, `result.deferred`, and `result.edits` for normal behavior checks.
 
 Embeds and components come back parsed and typed, so you assert without casting:
-`result.embedView?.title`, `result.embedViews`, `result.buttons`,
-`result.button('Approve')?.customId`, and `result.textDisplays` (components-v2). The
-raw `result.embeds`/`result.embed` expose the flattened Discord payloads for
-wire-shape assertions.
+`result.embedView?.title`, `result.embedViews`, `result.components`, and
+`result.textDisplays` (components-v2). The raw `result.embeds`/`result.embed` expose
+the flattened Discord payloads for wire-shape assertions.
+
+Those flat fields answer "the first embed" and "all the buttons". For anything with
+structure - a specific button, an embed matched by title, a modal field - use
+[`rendered(result)`](#reading-rendered-output), which queries the same output by shape
+and, when a query matches nothing, prints what *was* rendered.
 
 `createMockBot()` accepts:
 
@@ -963,6 +1069,38 @@ expect(await bot.client.channels.fetchMessages(channel.id)).toMatchObject([
 Use `ChannelView.overwrites` for permission-matrix assertions. Direct replies
 also remain available as `result.reply?.body.data` when the channel view is not
 the clearest assertion surface.
+
+### Asserting what changed
+
+Point queries answer "what is it now". When the contract is *the mutation* - the
+handler granted a role, removed a ban, renamed a channel - snapshot before and diff
+after, instead of restating every field you expect to be untouched:
+
+```ts
+const before = bot.world.snapshot();
+await bot.clickButton('join:campaign-1');
+
+const { members } = bot.world.diff(before);
+expect(members.changed).toContainEqual(
+	expect.objectContaining({ fields: ['roles'] }),
+);
+```
+
+`snapshot()` is deeply frozen plain data, so later writes never mutate a capture.
+`diff(before)` returns `added` / `removed` / `changed` buckets per entity type
+(`members`, `channels`, `messages`, `roles`, `bans`, `emojis`, `invites`,
+`autoModRules`, `stickers`, `scheduledEvents`, `webhooks`, `pins`, `reactions`,
+`voiceStates`, `threadMembers`), and each `changed` entry carries `before`, `after`,
+and `fields` - the names of the fields that actually differ:
+
+```json
+{ "before": { "guildId": "g1", "userId": "u1", "roles": [], "nick": null },
+  "after":  { "guildId": "g1", "userId": "u1", "roles": ["r-new"], "nick": null },
+  "fields": ["roles"] }
+```
+
+This is usually the shortest way to prove a handler mutated exactly one thing:
+assert the diff you expect, and that the buckets you did not expect are empty.
 
 ### Outcome reader
 
