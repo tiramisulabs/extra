@@ -1,3 +1,4 @@
+import type { DispatchDenial } from '../bot/dispatch-context';
 import type { RecordedAction } from '../bot/rest';
 import type { EmbedView } from '../bot/state';
 
@@ -100,8 +101,11 @@ export interface RenderedScope {
 	readonly all: Finder<'all'>;
 }
 
-export interface RenderedOutput extends RenderedScope {
+export interface RenderedOutput {
 	readonly raw: RawOutput;
+	readonly get: OutputFinder<'get'>;
+	readonly query: OutputFinder<'query'>;
+	readonly all: OutputFinder<'all'>;
 	debug(): string;
 }
 
@@ -275,6 +279,20 @@ export interface ContainerFinder<Mode extends ReaderMode> extends Finder<Mode> {
 	media(query?: MediaQuery): Result<Mode, MediaView>;
 }
 
+/**
+ * What the top-level {@link rendered} reader can find, on top of every {@link Finder} kind.
+ *
+ * A denial and a captured error belong to the dispatch, not to a message or a container, so they are not on
+ * the scoped finders that `get.message(...)` and `get.container(...)` hand back.
+ */
+export interface OutputFinder<Mode extends ReaderMode> extends Finder<Mode> {
+	denial(query?: DenialQuery): Result<Mode, DenialView>;
+	// Two signatures, not one union parameter: a union would put `String.prototype.match` in the contextual type
+	// of `{ match: error => ... }` and leave the callback's parameter implicitly `any`.
+	error(query?: ErrorQuery): Result<Mode, CapturedErrorView>;
+	error(matcher: ErrorMatcher): Result<Mode, CapturedErrorView>;
+}
+
 export interface RenderedMessageQuery {
 	id?: TextMatcher;
 	channelId?: TextMatcher;
@@ -373,6 +391,45 @@ export interface FileUploadQuery {
 	required?: boolean;
 }
 
+export interface DenialQuery {
+	kind?: DispatchDenial['kind'];
+	middleware?: string;
+	missing?: string | readonly string[];
+}
+
+/** Matched against the captured error's `String(error)` when a string or a RegExp; called with it when a function. */
+export type ErrorMatcher = string | RegExp | ((error: unknown) => boolean);
+
+export interface ErrorQuery {
+	match?: ErrorMatcher;
+}
+
+/** A dispatch that never reached the command body, in the same shape as every other reader view. */
+export interface DenialView {
+	readonly kind: 'denial';
+	/** `stop` / `no-next` / `permissions` / `bot-permissions`; named `denialKind` so `kind` stays the view tag. */
+	readonly denialKind: DispatchDenial['kind'];
+	readonly reason?: unknown;
+	readonly middleware?: string;
+	readonly missing: readonly string[];
+	readonly raw: DispatchDenial;
+}
+
+/** An unhandled error the dispatch captured under `createMockBot({ onCommandError: 'capture' })`. */
+export interface CapturedErrorView {
+	readonly kind: 'error';
+	readonly error: unknown;
+}
+
+/**
+ * The dispatch-level facts of a subject. Absent - not empty - for a subject that is not a `DispatchResult`, so
+ * `get.denial()` on a bot or a raw payload can say the subject cannot be denied instead of finding nothing.
+ */
+export interface DispatchFacts {
+	readonly denial?: DenialView;
+	readonly error?: CapturedErrorView;
+}
+
 export type ComponentRef =
 	| { kind: 'button'; query?: ButtonQuery | string }
 	| { kind: 'select'; query?: SelectQuery | string }
@@ -465,6 +522,7 @@ export interface Scope {
 	messages: readonly CanonicalMessage[];
 	modals: readonly CanonicalModal[];
 	components: readonly CanonicalComponent[];
+	dispatch?: DispatchFacts;
 }
 
 export interface Candidate<T> {

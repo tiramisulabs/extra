@@ -25,7 +25,7 @@ Requires Seyfert v5 (peer dependency).
 | that the handler *changed* state | [`world.snapshot()` + `world.diff()`](#asserting-what-changed) |
 | what state looks like now | [`bot.world.get/query/all`](#querying-world-state) |
 | which REST calls happened | [`bot.restCalls(Routes.x)`](#rest-calls) |
-| that a dispatch responded / was denied / errored | [`outcome(result)`](#outcome-reader) |
+| that a dispatch was denied, or captured an error | [`rendered(result).get.denial/error`](#denials-and-captured-errors) |
 | timeouts, collectors, scheduled work | [`bot.advanceTime`, `bot.settle`](#testing-timed-behavior) |
 | seeding guilds, channels, members, messages | [`mockWorld()`](#seeding-a-world) |
 
@@ -179,6 +179,33 @@ Embeds rendered:
 `rendered(subject).debug()` prints that tree on demand, and
 `rendered(subject).raw.messages()` exposes the untouched payloads for wire-shape
 assertions.
+
+### Denials and captured errors
+
+A dispatch can end without rendering anything: a permission guard or a middleware denied it before the
+handler ran, or the handler threw. Both are read from the same reader, under the same cardinality
+contract - `get.*` throws when there is nothing to read, where the flat `result.denial?` /
+`result.error` fields leave the "was there one at all" guard to you:
+
+```ts
+const result = await bot.slash({ name: 'ban', memberPermissions: [] });
+
+rendered(result).get.denial({ kind: 'permissions', missing: 'BanMembers' });
+rendered(result).query.denial({ kind: 'stop' }); // undefined - it was not a middleware stop
+
+const { error } = rendered(result).get.error(/timeout/); // needs onCommandError: 'capture'
+```
+
+`denial` takes `{ kind, middleware, missing }`. `error` takes a string, a `RegExp` or a predicate
+matched against the captured error, or `{ match }`. Both are facts about the dispatch, so they live on
+`rendered(result)` and not on the scoped readers a message or a container hands back - and asking for
+one on a subject that cannot carry it (a bot, an actor, a context, a raw payload) is a `TypeError`
+rather than a miss against nothing.
+
+Whether the dispatch *responded* is not a third kind. A reply, an update, an edit and a followup are
+already messages, and a modal is already `get.modal()`. A defer renders nothing at all - read it from
+`result.deferred` / `result.deferredReply` / `result.deferredUpdate`, which are always present, so a
+comparison on them cannot pass by being `undefined`. An autocomplete answers with `result.choices`.
 
 ### Edits: `current` vs `timeline`
 
@@ -1150,20 +1177,6 @@ and `fields` - the names of the fields that actually differ:
 
 This is usually the shortest way to prove a handler mutated exactly one thing:
 assert the diff you expect, and that the buckets you did not expect are empty.
-
-### Outcome reader
-
-Naive checks pass green when nothing happened — `expect(result.content).toContain('ok')`
-is satisfied by `content` being `undefined`. Use the runner-agnostic outcome reader for
-dispatch-level facts, and keep ordinary comparisons in your test runner:
-
-```ts
-import { outcome } from '@slipher/testing';
-
-outcome(result).get.response(); // throws if the dispatch never responded
-outcome(result).get.denial({ kind: 'permissions', missing: 'BanMembers' });
-const { error } = outcome(result).get.error(/timeout/); // needs onCommandError: 'capture'
-```
 
 ### Real-world recipes
 
