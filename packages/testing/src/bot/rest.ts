@@ -701,6 +701,7 @@ export class MockApiHandler extends ApiHandler {
 
 			try {
 				const response = await this.resolveResponse(pending);
+				this.assertUsableResponse(response, pending);
 				action.response = response;
 				action.settled = true;
 				if (response !== null && typeof response === 'object' && this.syntheticResponses.has(response)) {
@@ -769,6 +770,26 @@ export class MockApiHandler extends ApiHandler {
 		// newly introduced non-GET endpoints.
 		this.reportUnhandled(pending);
 		return this.markSynthetic(this.syntheticResponse(pending));
+	}
+
+	/**
+	 * Catch a responder that answered with something seyfert cannot treat as a Discord payload, at the seam
+	 * where the route and the request are still known.
+	 *
+	 * Unguarded, a returned string dies several frames away inside seyfert's cache — `TypeError: Cannot read
+	 * properties of undefined (reading 'startsWith')` — which names neither the route, nor the responder, nor
+	 * this package. `undefined` and `null` stay legal: an empty body is what a 204 looks like. Checked on the
+	 * value the caller already awaited, not by wrapping the responder: an extra `.then` would delay `settled`
+	 * by a microtask, and the drain guarantees are measured in those.
+	 */
+	private assertUsableResponse(value: unknown, pending: PendingAction): void {
+		if (value === undefined || value === null || typeof value === 'object') return;
+		throw new TypeError(
+			`intercept(${pending.method} ${pending.route}): the responder returned the ${typeof value} ` +
+				`${JSON.stringify(value)}, which is not a Discord payload. Return the object the route answers with ` +
+				'(or undefined for an empty body); to make the call fail, throw — rest.fail(matcher, { status, code }) ' +
+				'builds the error Discord would send.',
+		);
 	}
 
 	private syntheticResponse(pending: PendingAction): unknown {

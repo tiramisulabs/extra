@@ -318,3 +318,26 @@ describe('MockApiHandler.fail', () => {
 		await expect(rest.request('GET', '/guilds/9')).resolves.toBeDefined();
 	});
 });
+
+describe('responder return values', () => {
+	test('a responder that answers with a non-payload is named at the route, not inside seyfert', async () => {
+		const bot = await createMockBot({});
+		bot.rest.intercept(Routes.createMessage, () => 'not an object' as never);
+
+		// unguarded this died as `TypeError: Cannot read properties of undefined (reading 'startsWith')`
+		// several frames away in seyfert's cache, naming neither the route nor the responder
+		await expect(bot.client.messages.write('chan-1', { content: 'x' })).rejects.toThrow(
+			/intercept\(POST \/channels\/chan-1\/messages\).*returned the string "not an object"/s,
+		);
+		await expect(bot.client.messages.write('chan-1', { content: 'x' })).rejects.toThrow(/rest\.fail/);
+		await bot.close();
+	});
+
+	test('an empty body stays legal — a 204 has no payload', async () => {
+		const bot = await createMockBot({});
+		bot.rest.intercept(Routes.deleteMessage, () => undefined);
+
+		await expect(bot.client.messages.delete('m-1', 'chan-1')).resolves.toBeUndefined();
+		await bot.close();
+	});
+});
