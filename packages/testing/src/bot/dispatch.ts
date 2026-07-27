@@ -39,7 +39,7 @@ export interface DispatchOptions<T> {
 	snapshotter?: () => T;
 }
 
-/** Lazy, step-able handle exposed by the advanced `bot.dispatch.*` surface. */
+/** Lazy, step-able handle returned by every verb of an un-sessioned dispatcher (`bot.actor({ session: false })`). */
 export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 	private execution?: Promise<T>;
 	private releasePending?: () => void;
@@ -141,9 +141,10 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 	 * pass the returned action as the raw click's source, then `await dispatch` to settle the rest.
 	 *
 	 * ```ts
-	 * const flow = bot.dispatch.slash({ name: 'setup' });
+	 * const raw = bot.actor({ session: false });
+	 * const flow = raw.slash({ name: 'setup' });
 	 * const source = await flow.untilComponent('continue'); // handler parked
-	 * await bot.dispatch.clickButton('continue', { source }); // drives the collector
+	 * await raw.clickButton('continue', { source }); // drives the collector
 	 * await flow; // handler resumes and returns
 	 * ```
 	 *

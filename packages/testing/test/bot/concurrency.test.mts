@@ -76,10 +76,8 @@ describe('concurrent dispatch isolation', () => {
 		const source = bot.rest.actions.at(-1);
 		if (!source) throw new Error('expected source message action');
 
-		const [a, b] = await Promise.all([
-			bot.dispatch.slash({ name: 'claim' }),
-			bot.dispatch.clickButton('claim:123', { source }),
-		]);
+		const raw = bot.actor({ session: false });
+		const [a, b] = await Promise.all([raw.slash({ name: 'claim' }), raw.clickButton('claim:123', { source })]);
 
 		// (i) neither dispatch reported a spurious missing handler
 		const aContent = a.messages.map(message => message.content);
@@ -141,7 +139,8 @@ describe('concurrent dispatch isolation', () => {
 
 		const bot = await createMockBot({ commands: [Alpha, Bravo, Charlie, Delta, Echo] });
 
-		const results = await Promise.all(commandNames.map(name => bot.dispatch.slash({ name })));
+		const raw = bot.actor({ session: false });
+		const results = await Promise.all(commandNames.map(name => raw.slash({ name })));
 
 		results.forEach((result, index) => {
 			const name = commandNames[index];
@@ -185,7 +184,7 @@ describe('concurrent dispatch isolation', () => {
 
 		const bot = await createMockBot({ commands: [BanA, BanB], onUnhandledRest: 'silent' });
 
-		const dispatchA = bot.dispatch.slash({ name: 'ban-a' });
+		const dispatchA = bot.actor({ session: false }).slash({ name: 'ban-a' });
 		// Arm A's gate BEFORE B runs: startSeq is captured now, while A is parked on the barrier.
 		const aGate = dispatchA.until(Routes.ban);
 
@@ -229,13 +228,14 @@ describe('concurrent dispatch isolation', () => {
 		}
 
 		const bot = await createMockBot({ commands: [HoldSourceCommand] });
-		const active = bot.dispatch.slash({ name: 'hold-source' });
+		const raw = bot.actor({ session: false });
+		const active = raw.slash({ name: 'hold-source' });
 		await active.until(Routes.interactionCallback);
 
 		// One in-flight dispatch is no longer "ambiguous" (a source-less click resolves the most recent message);
 		// but here the owner's reply is still HELD at the gate, and no ComponentCommand matches to auto-synthesize,
 		// so nothing resolves — it must still fail loud.
-		expect(() => bot.dispatch.clickButton('claim:123')).toThrow(/no source message resolved/);
+		expect(() => raw.clickButton('claim:123')).toThrow(/no source message resolved/);
 		release();
 		await active;
 		await bot.close();
@@ -338,11 +338,12 @@ describe('concurrent dispatch isolation', () => {
 		}
 
 		const bot = await createMockBot({ commands: [Park], components: [ClaimButton] });
-		const parked = bot.dispatch.slash({ name: 'park' });
+		const raw = bot.actor({ session: false });
+		const parked = raw.slash({ name: 'park' });
 		void parked.until(action => action.route.includes('/never-release')).catch(() => {});
 
-		// Raw synthetic dispatch is explicit and independent of the parked flow.
-		const result = await bot.dispatch.clickButton('claim:fresh', { allowSyntheticSource: true });
+		// The un-sessioned synthetic dispatch is explicit and independent of the parked flow.
+		const result = await raw.clickButton('claim:fresh', { allowSyntheticSource: true });
 		expect(result.reply?.body).toMatchObject({ data: { content: 'clicked' } });
 		release();
 		await parked;
@@ -387,10 +388,11 @@ describe('concurrent dispatch isolation', () => {
 			avatar: null,
 			bot: false,
 		};
-		const first = bot.dispatch.clickButton('modal:first', { user });
+		const raw = bot.actor({ session: false });
+		const first = raw.clickButton('modal:first', { user });
 		await first.untilModal();
 
-		const second = bot.dispatch.clickButton('modal:second', { user, source });
+		const second = raw.clickButton('modal:second', { user, source });
 		await expect(second.untilModal()).rejects.toThrow(/already has a pending modal owned by dispatch/);
 		await first.timeoutModal();
 		await bot.close();
@@ -425,7 +427,8 @@ describe('concurrent dispatch isolation', () => {
 			avatar: null,
 			bot: false,
 		};
-		const failed = bot.dispatch.slash({ name: 'no-modal', user });
+		const raw = bot.actor({ session: false });
+		const failed = raw.slash({ name: 'no-modal', user });
 		await expect(failed.untilModal()).rejects.toThrow(/completed without opening a modal/);
 
 		await bot.rest.request('POST', '/channels/stale-modal-channel/messages', {
@@ -436,7 +439,7 @@ describe('concurrent dispatch isolation', () => {
 		});
 		const source = bot.rest.actions.at(-1);
 		if (!source) throw new Error('expected source message action');
-		const later = bot.dispatch.clickButton('modal:later', { user, source });
+		const later = raw.clickButton('modal:later', { user, source });
 		await expect(later.untilModal()).resolves.toBeUndefined();
 		await later.timeoutModal();
 		await bot.close();

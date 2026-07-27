@@ -108,7 +108,8 @@ describe('virtual clock', () => {
 			const bot = await createMockBot({ components: [FeedbackButton] });
 			const user = apiUser({ id: '888' });
 
-			const modal = await bot.dispatch
+			const modal = await bot
+				.actor({ session: false })
 				.clickButton('open-feedback', { user, allowSyntheticSource: true })
 				.submitModal('feedback-modal', { rating: '5' });
 
@@ -144,7 +145,8 @@ describe('virtual clock', () => {
 			const bot = await createMockBot({ components: [AsyncAfterWaitButton] });
 			const user = apiUser({ id: 'async-modal-user' });
 
-			const modal = await bot.dispatch
+			const modal = await bot
+				.actor({ session: false })
 				.clickButton('open-async-feedback', { user, allowSyntheticSource: true })
 				.submitModal('async-feedback-modal', { rating: '5' });
 
@@ -177,7 +179,7 @@ describe('virtual clock', () => {
 				return { id: 'owned-delay', type: 0 };
 			});
 			const user = apiUser({ id: 'owned-rest-modal-user' });
-			const opener = bot.dispatch.clickButton('open-owned-rest', { user, allowSyntheticSource: true });
+			const opener = bot.actor({ session: false }).clickButton('open-owned-rest', { user, allowSyntheticSource: true });
 
 			const modal = await opener.submitModal('owned-rest-modal');
 
@@ -214,7 +216,7 @@ describe('virtual clock', () => {
 				return { id: 'raw-payload-owned-delay', type: 0 };
 			});
 			const user = apiUser({ id: 'raw-payload-modal-user' });
-			const opener = bot.dispatch.clickButton('open-raw-payload-owned-rest', {
+			const opener = bot.actor({ session: false }).clickButton('open-raw-payload-owned-rest', {
 				user,
 				allowSyntheticSource: true,
 			});
@@ -272,7 +274,7 @@ describe('virtual clock', () => {
 						release = resolve;
 					}),
 			);
-			const aliceOpener = bot.dispatch.clickButton('open-alice-modal', {
+			const aliceOpener = bot.actor({ session: false }).clickButton('open-alice-modal', {
 				user: alice,
 				allowSyntheticSource: true,
 			});
@@ -374,7 +376,10 @@ describe('virtual clock', () => {
 			const bot = await createMockBot({ components: [FeedbackButton] });
 			const user = apiUser({ id: 'timeout-user' });
 
-			await bot.dispatch.clickButton('open-feedback', { user, allowSyntheticSource: true }).timeoutModal();
+			await bot
+				.actor({ session: false })
+				.clickButton('open-feedback', { user, allowSyntheticSource: true })
+				.timeoutModal();
 
 			expect(outcomes).toEqual(['timed-out']);
 			await bot.close();
@@ -396,9 +401,10 @@ describe('virtual clock', () => {
 
 			const bot = await createMockBot({ components: [FeedbackButton] });
 			const user = apiUser({ id: '999' });
-			bot.dispatch.clickButton('open-feedback', { user, allowSyntheticSource: true }); // never stepped/awaited
+			const raw = bot.actor({ session: false });
+			raw.clickButton('open-feedback', { user, allowSyntheticSource: true }); // never stepped/awaited
 
-			expect(() => bot.dispatch.submitModal('feedback-modal', { rating: '5' }, { user })).toThrow(/opener has not run/);
+			expect(() => raw.submitModal('feedback-modal', { rating: '5' }, { user })).toThrow(/opener has not run/);
 			await bot.close();
 		});
 
@@ -449,9 +455,9 @@ describe('virtual clock', () => {
 			}
 
 			const bot = await createMockBot({ components: [RawStallButton] });
-			await expect(bot.dispatch.clickButton('open-raw-stall', { allowSyntheticSource: true })).rejects.toThrow(
-				/opened.+from a raw dispatch.+raw\.submitModal/s,
-			);
+			await expect(
+				bot.actor({ session: false }).clickButton('open-raw-stall', { allowSyntheticSource: true }),
+			).rejects.toThrow(/opened.+from a raw dispatch.+raw\.submitModal/s);
 			await bot.close();
 		});
 
@@ -518,7 +524,7 @@ describe('virtual clock', () => {
 			}
 
 			const bot = await createMockBot({ commands: [NoopCommand] });
-			const dispatch = bot.dispatch.slash({ name: 'noop' });
+			const dispatch = bot.actor({ session: false }).slash({ name: 'noop' });
 
 			await expect(dispatch.untilModal()).rejects.toThrow(/dispatch completed without opening a modal for user/);
 			await bot.close();
@@ -798,7 +804,7 @@ describe('virtual clock', () => {
 			timers: { advance: ms => void vi.advanceTimersByTime(ms) },
 		});
 
-		const flow = bot.dispatch.slash({ name: 'confirmflow' });
+		const flow = bot.actor({ session: false }).slash({ name: 'confirmflow' });
 		await flow.untilComponent('confirm');
 		expect(events).toEqual([]);
 
@@ -842,7 +848,7 @@ describe('virtual clock', () => {
 		});
 		const user = apiUser({ id: '888' });
 
-		const dispatch = bot.dispatch.clickButton('open-waitfor', { user, allowSyntheticSource: true });
+		const dispatch = bot.actor({ session: false }).clickButton('open-waitfor', { user, allowSyntheticSource: true });
 		await dispatch.untilModal();
 		expect(outcomes).toEqual([]);
 		await bot.advanceTime(30_000);

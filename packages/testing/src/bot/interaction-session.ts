@@ -171,7 +171,8 @@ export class InteractionSessions {
 			const ids = unrelated.map(candidate => candidate.dispatchId ?? '(unknown)').join(', ');
 			throw new TypeError(
 				`stateful step: user session "${key}" already has a pending flow (dispatch ${ids}). ` +
-					'Finish that flow first, bind independent flows to different actors, or use bot.dispatch.* for raw concurrency.',
+					'Finish that flow first, bind independent flows to different actors, or take this one through\n' +
+					'bot.actor({ session: false }) for concurrency.',
 			);
 		}
 

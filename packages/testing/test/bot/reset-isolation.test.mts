@@ -30,7 +30,8 @@ describe('reset() isolation (F26)', () => {
 		});
 		const user = apiUser({ id: 'reset-user' });
 
-		const dispatch = bot.dispatch.clickButton('open', { user, allowSyntheticSource: true });
+		const raw = bot.actor({ session: false });
+		const dispatch = raw.clickButton('open', { user, allowSyntheticSource: true });
 		await dispatch.untilModal(); // a modal is now registered for reset-user
 
 		await bot.reset();
@@ -38,7 +39,7 @@ describe('reset() isolation (F26)', () => {
 
 		// Registry cleared: no modal waits for the user and no ModalCommand is registered, so filling throws
 		// instead of silently running the stale 'feedback' callback for an unrelated custom_id.
-		expect(() => bot.dispatch.submitModal('totally-unrelated', {}, { user })).toThrow(/not rendered/i);
+		expect(() => raw.submitModal('totally-unrelated', {}, { user })).toThrow(/not rendered/i);
 
 		// reset resolves the suspended opener through the same null branch and cancels its timer.
 		await dispatch;
@@ -65,7 +66,7 @@ describe('reset() isolation (F26)', () => {
 		}
 
 		const bot = await createMockBot({ commands: [HeldReset] });
-		const execution = Promise.resolve(bot.dispatch.slash({ name: 'held-reset' }));
+		const execution = Promise.resolve(bot.actor({ session: false }).slash({ name: 'held-reset' }));
 		await started;
 
 		await expect(bot.reset()).rejects.toThrow(/non-input dispatches are still running/);

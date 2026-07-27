@@ -7,7 +7,7 @@ import {
 	type BotDiagnostics,
 	type DispatchResult,
 	INTERACTION_WEBHOOK_ROUTES,
-	type RawModalSubmitOptions,
+	type ModalSubmitOptions,
 } from './contracts';
 import { Dispatch, type ModalWaiter, type ModalWaitRegistration } from './dispatch';
 import { nextDispatchId } from './dispatch-context';
@@ -70,7 +70,7 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 	protected abstract dispatchSubmitModal(
 		customId: string,
 		fields: ModalFields,
-		options?: RawModalSubmitOptions,
+		options?: ModalSubmitOptions,
 	): Dispatch<DispatchResult>;
 	protected abstract runInteraction(
 		payload: ApiInteractionPayload,

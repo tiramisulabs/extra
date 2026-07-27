@@ -122,14 +122,14 @@ describe('restCalls', () => {
 		await bot.close();
 	});
 
-	test('includes stateful actors, raw dispatches, and direct REST in one ordered bot journal', async () => {
+	test('includes stateful actors, un-sessioned dispatches, and direct REST in one ordered bot journal', async () => {
 		const bot = await createMockBot({ commands: [ActorWriteCommand, WriteOnceCommand] });
 		const alice = bot.actor({ user: apiUser({ id: 'alice' }) });
 		const bob = bot.actor({ user: apiUser({ id: 'bob' }) });
 
 		await alice.slash({ name: 'actor-write' });
 		await bob.slash({ name: 'actor-write' });
-		await bot.dispatch.slash({ name: 'write-once' });
+		await bot.actor({ session: false }).slash({ name: 'write-once' });
 		await bot.rest.call(Routes.createMessage, { channelId: 'direct-rest' }, { body: { content: 'direct' } });
 
 		const messages = bot.restCalls(Routes.createMessage);

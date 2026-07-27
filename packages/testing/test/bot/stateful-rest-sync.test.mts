@@ -1000,7 +1000,7 @@ describe('stateful action REST synchronization', () => {
 	test('raw Dispatch completion keeps its existing timing contract', async () => {
 		const bot = await createMockBot({ commands: [DetachedCompleteCommand] });
 
-		await bot.dispatch.slash({ name: 'detached-complete' });
+		await bot.actor({ session: false }).slash({ name: 'detached-complete' });
 		expect(bot.restCalls(Routes.createMessage).map(call => call.params.channelId)).toEqual(['microtask-channel']);
 
 		await bot.settle();

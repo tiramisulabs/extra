@@ -74,7 +74,7 @@ describe('collector patterns', () => {
 		}
 
 		const bot = await createMockBot({ components: [ConfirmModal] });
-		const modal = await bot.dispatch.submitModal('confirm-modal', { name: 'x' }, { allowSyntheticSource: true });
+		const modal = await bot.submitModal('confirm-modal', { name: 'x' }, { allowSyntheticSource: true });
 		const sourceId = (
 			modal.actions.find(action => action.route.includes('/callback'))?.response as
 				| { resource?: { message?: { id?: string } } }
@@ -110,9 +110,9 @@ describe('collector patterns', () => {
 		const retained = bot.rest.request('GET', '/retained-out-of-band');
 
 		try {
-			await expect(
-				bot.dispatch.submitModal('isolated-modal', {}, { allowSyntheticSource: true }),
-			).resolves.toMatchObject({ content: 'modal completed' });
+			await expect(bot.submitModal('isolated-modal', {}, { allowSyntheticSource: true })).resolves.toMatchObject({
+				content: 'modal completed',
+			});
 			expect(bot.rest.pendingRequests(action => action.route === '/retained-out-of-band')).toHaveLength(1);
 		} finally {
 			release({ ok: true });

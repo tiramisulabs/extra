@@ -21,6 +21,7 @@ Requires Seyfert v5 (peer dependency).
 | the real command pipeline: options, middlewares, permissions | [`createMockBot({ commands })`](#mock-bot) |
 | what the bot rendered - embeds, buttons, modals, Components V2 | [`rendered(subject)`](#reading-rendered-output) |
 | a multi-step flow: click, then submit a modal | [stateful actions](#step-by-step-flows) on `bot`/`actor` |
+| REST gates, timing, or two flows for one user | [`bot.actor({ session: false })`](#steps-or-dispatches) |
 | that the handler *changed* state | [`world.snapshot()` + `world.diff()`](#asserting-what-changed) |
 | what state looks like now | [`bot.world.get/query/all`](#querying-world-state) |
 | which REST calls happened | [`bot.restCalls(Routes.x)`](#rest-calls) |
@@ -150,7 +151,7 @@ Every subject below is read the same way:
 | `rendered(result)` | output belonging to that exact dispatch, even after later steps |
 | `rendered(bot)` | output from the latest step of the most recently active actor |
 | `rendered(actor)` | output from that actor's latest step |
-| `rendered(flow)` | what a parked `bot.dispatch.*` flow has rendered so far, before it settles |
+| `rendered(flow)` | what a parked `Dispatch` has rendered so far, before it settles |
 | `rendered(payload)` | a raw message payload, an array of them, or a Seyfert builder |
 
 `MockBot` and a parked `Dispatch` have no `lastEmbed()` / `lastComponents()` / `lastContent()` of
@@ -497,8 +498,9 @@ expect(screen.all.button()).toHaveLength(1);
 Continuation actions inherit the user, guild, channel, and message context from
 the previous step. Explicit options or an explicit historical source take
 precedence. Use different actors for independent flows; overlapping stateful
-actions for the same actor session fail immediately. Raw concurrent and
-timeout-driven scenarios remain available through `bot.dispatch.*`.
+actions for the same actor session fail immediately. Concurrent and
+timeout-driven scenarios are the same identity with `session: false` — see
+[Steps or dispatches](#steps-or-dispatches).
 
 - Immediate replies, deferrals, and modal opens are captured in the returned
   `DispatchResult`.
@@ -506,7 +508,7 @@ timeout-driven scenarios remain available through `bot.dispatch.*`.
   `result.followups`, and `result.actions`.
 - Completed stateful actions automatically drain their observable causal REST
   into the live journal. `settle()` is reserved for deliberately detached work
-  outside that boundary, such as a raw dispatch, direct REST, or work released
+  outside that boundary, such as an un-sessioned dispatch, direct REST, or work released
   through an external promise after the action/checkpoint returned.
 - Unhandled command/component/modal errors reject the action by default. Set
   `onCommandError: 'capture'` to inspect them on `result.error` instead.
@@ -518,11 +520,11 @@ timeout-driven scenarios remain available through `bot.dispatch.*`.
 | `rendered(bot)` | output from the latest step of the most recently active actor |
 | `rendered(actor)` | output from that actor's latest step |
 | `rendered(result)` | output belonging to that exact result, even after later steps |
-| `bot.restCalls()` | complete REST journal across actors, raw dispatches, and direct REST, in global order |
+| `bot.restCalls()` | complete REST journal across actors, un-sessioned dispatches, and direct REST, in global order |
 | `actor.restCalls()` | complete causal REST history for that actor across all of its stateful steps |
 | `result.actions` | the exact raw REST trail attributed to that result |
 | `bot.world` | persistent Discord-side entities and messages, including writes from earlier steps |
-| `await bot.dispatch.<action>(...)` | raw handler completion |
+| `await raw.<action>(...)` (from `actor({ session: false })`) | handler completion |
 | `raw.until(...)` resolved | the matched REST call started; `response` is still `undefined` while gated |
 | `await bot.settle()` | currently observable, unscoped detached REST/timer work reached quiescence |
 
@@ -554,15 +556,29 @@ the candidates, rather than binding the actor by seeding order. Passing a `guild
 or `channel` the member is not in throws too, instead of silently resolving against
 the wrong guild.
 
-The stateful interaction actions are the default testing path. For low-level
-timing tests, `bot.dispatch.*` exposes the raw lazy `Dispatch` and its REST
-gates:
+### Steps or dispatches
+
+There is one dispatcher. `bot.actor(...)` binds an identity; `bot.*` is that same
+verb set on the default identity. What the second argument to `actor()` chooses is
+the **session**, not a different API:
+
+| | `bot.actor({ member })` | `bot.actor({ member, session: false })` |
+|---|---|---|
+| returns | `Actor` | `Dispatcher` |
+| a verb returns | `Promise<DispatchResult>` | `Dispatch<DispatchResult>` |
+| `await` resolves | at the first real user-input checkpoint, or completion | at handler completion |
+| two actions at once | refused, the flow is chronological | allowed |
+| implicit component source | the current step only | the whole recorded history |
+| `restCalls()` | that identity's causal history | use `bot.restCalls()` |
+
+Steps are the default testing path. Reach for `session: false` when the test is
+about timing or concurrency and needs the un-started `Dispatch` — REST gates,
+several flows in flight, or driving a modal from its opener. The identity still
+binds either way:
 
 ```ts
-const dispatch = bot.dispatch.slash({
-	name: 'ban',
-	options: { user: userOption(target) },
-});
+const raw = bot.actor({ member: aliceMember, session: false });
+const dispatch = raw.slash({ name: 'ban', options: { user: userOption(target) } });
 
 const ban = await dispatch.until(Routes.ban);
 expect(ban.body).toMatchObject({ delete_message_seconds: 0 });
@@ -743,16 +759,29 @@ await bot.selectMenu('settings/mod', [role.id], { source: sent.id, componentType
 ```
 
 Entity selects auto-resolve seeded world users, members, roles, and channels.
-Use explicit `resolved` when testing a raw Discord payload. For a
-`ComponentCommand` select-menu path without a rendered source, use the explicit
-raw seam and opt into a synthetic source:
+Use explicit `resolved` when testing a raw Discord payload.
+
+For a bot whose panels are posted once and clicked forever after, there is no
+rendered source in *this* run. `allowSyntheticSource` says so. It describes the
+click, not the surface it was made from, so it is accepted per call, bound once on
+the actor, and honoured on components and modals alike:
 
 ```ts
-const raw = bot.dispatch.selectMenu('settings/theme', ['dark'], {
-	allowSyntheticSource: true,
-});
-const result = await raw;
+const panelist = bot.actor({ member, allowSyntheticSource: true });
+
+await panelist.clickButton('panel:confirm');
+await panelist.selectMenu('settings/theme', ['dark']);
+await panelist.submitModal('panel:feedback', { rating: '5' });
+
+// or, per call, on the default identity
+await bot.selectMenu('settings/theme', ['dark'], { allowSyntheticSource: true });
 ```
+
+The claim is honoured against implicit resolution: a message the step happens to
+have rendered that does not carry the component is a coincidence, not a source. An
+explicit `source` is a statement about which message was clicked, so it always
+stands — and without the claim, an implicitly resolved message that lacks the
+component still fails loud.
 
 A modal opened with `interaction.modal(..., { waitFor })` becomes the next
 stateful checkpoint. Submit it as the next chronological action:
@@ -768,14 +797,13 @@ it resumed. If that continuation renders a button, the following source-less
 `clickButton()` uses that exact message whether or not you inspect it with
 `rendered(bot)` first.
 
-For the "user never submitted" branch, use the explicit raw timing seam. It
-resolves Seyfert's modal wait immediately, without fake timers:
+For the "user never submitted" branch, take the opener un-sessioned so you hold its
+`Dispatch`. `timeoutModal()` resolves Seyfert's modal wait immediately, without fake
+timers:
 
 ```ts
-const opener = bot.dispatch.clickButton('open-feedback', {
-	user,
-	allowSyntheticSource: true,
-});
+const raw = bot.actor({ user, session: false });
+const opener = raw.clickButton('open-feedback', { allowSyntheticSource: true });
 const timedOut = await opener.timeoutModal();
 expect(timedOut.content).toBe('timed out');
 ```
@@ -822,7 +850,7 @@ advancing a runner's global fake implicitly.
 
 Everything else the bot does goes through REST and is recorded. `restCalls()`
 reads that journal without changing it: use `bot.restCalls()` for the complete
-bot history, including stateful actors, raw dispatches, and direct REST, or
+bot history, including stateful actors, un-sessioned dispatches, and direct REST, or
 `actor.restCalls()` for only the calls causally owned by that actor across all
 of its stateful steps. Pass a `Routes` descriptor to narrow by endpoint and
 infer its route params, request body, and response from Discord's REST types.
@@ -885,7 +913,7 @@ response presence when asserting completion.
 
 `restCalls()` only reads; it does not wait or alter the flow. Await the stateful
 action first; ordinary completed actions already settle their causal REST.
-Calls made through `bot.dispatch.*` keep raw handler-completion timing, and
+Calls made through an un-sessioned dispatcher keep handler-completion timing, and
 direct `bot.rest.*` calls are not adopted by an unrelated actor action. Work
 hidden behind an external promise that has not produced a REST call is likewise
 not observable to the causal drain. Await that promise directly, advance the
@@ -1263,7 +1291,7 @@ Current defaults: the single default user (`TEST_USER_ID`), strict
 `onUnhandledRest: 'error'`, opt-in REST fallback shapes under
 `onUnhandledRest: 'warn' | 'silent'`, and newest-first message lists. An
 unhandled error inside a command/component/modal/event handler **rejects the
-stateful action or raw `Dispatch` by default** (`onCommandError: 'throw'`);
+stateful action or un-sessioned `Dispatch` by default** (`onCommandError: 'throw'`);
 pass `onCommandError: 'capture'` to surface it on `result.error` instead. The
 read-only `bot.world` (`WorldStateReader`) is the supported way to assert on the
 ~20 entity types the views don't surface (pins, reactions, bans, webhooks,

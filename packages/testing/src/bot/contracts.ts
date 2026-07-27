@@ -20,13 +20,11 @@ import type { DispatchDenial } from './dispatch-context';
 import type {
 	ApiRoleInput,
 	AutocompleteInteractionOptions,
-	ButtonInteractionOptions,
 	ChatInputInteractionOptions,
 	EntryPointInteractionOptions,
 	MessageCommandInteractionOptions,
 	ModalFields,
 	ModalSubmitInteractionOptions,
-	SelectMenuInteractionOptions,
 	UserCommandInteractionOptions,
 } from './interactions';
 import type { ApiChannel, ApiMember, ApiMessage, ApiUser, MemberInput } from './payloads';
@@ -83,20 +81,22 @@ export type ComponentSourceOptions = {
 	/**
 	 * Dispatch to a registered ComponentCommand with no rendered message behind it.
 	 *
-	 * For a bot whose panels are posted once and clicked forever after, synthetic IS the normal path — so
-	 * keeping this on `bot.dispatch.*` alone meant abandoning the actor binding and restating the identity
-	 * by hand to reach it. It describes the click, not the surface the click was made from.
+	 * For a bot whose panels are posted once and clicked forever after, synthetic IS the normal path. It
+	 * describes the click, not the surface the click was made from, so every dispatcher accepts it and an
+	 * actor can bind it once for the whole flow.
 	 */
 	allowSyntheticSource?: boolean;
 };
 
-/** The same shape as {@link ComponentSourceOptions}; kept as a name the raw dispatchers already use. */
-export type RawComponentSourceOptions = ComponentSourceOptions;
-
-/** Modal controls reserved for the low-level `bot.dispatch.*` surface. */
-export type RawModalSubmitOptions = Omit<ModalSubmitInteractionOptions, 'customId' | 'fields'> & {
-	allowSyntheticSource?: boolean;
-};
+/**
+ * Options accepted by every `submitModal` verb, on an {@link Actor} and on a {@link Dispatcher} alike.
+ *
+ * `allowSyntheticSource` is the modal half of {@link ComponentSourceOptions.allowSyntheticSource}: it says the
+ * ModalCommand is submitted with no opener in this run. It used to exist only on the un-sessioned surface, which
+ * meant a bot whose modals are opened from a long-lived panel had to abandon its identity binding to submit one.
+ */
+export type ModalSubmitOptions = Omit<ModalSubmitInteractionOptions, 'customId' | 'fields'> &
+	Pick<ComponentSourceOptions, 'allowSyntheticSource'>;
 
 export const INTERACTION_WEBHOOK_ROUTES = [
 	Routes.followup,
@@ -359,11 +359,29 @@ export interface ActorOptions {
 	memberRoles?: ApiRoleInput[];
 	/** Discord's interaction context (guild / bot DM / private channel). */
 	context?: number;
-	/** Default for this actor's component steps; see {@link ComponentSourceOptions.allowSyntheticSource}. */
+	/** Default for this actor's component and modal steps; see {@link ComponentSourceOptions.allowSyntheticSource}. */
 	allowSyntheticSource?: boolean;
+	/**
+	 * Whether this identity takes *steps* (default) or hands back the lazy {@link Dispatch} (`false`).
+	 *
+	 * A session is what makes a step a step: actions for one identity are serialized, an action resolves at the
+	 * first real user-input checkpoint instead of at handler completion, implicit component/modal sources are
+	 * resolved from the current step only, and `restCalls` is scoped to the identity's causal history.
+	 *
+	 * `session: false` opts out of all of that and returns a {@link Dispatcher}, whose verbs return the
+	 * un-started `Dispatch` — which is what you need for REST gates ({@link Dispatch.until}), for driving a
+	 * modal from its opener, and for running several actions for the same user at once. The identity still
+	 * binds: going un-sessioned no longer means restating `user`/`guildId`/`channel` at every call.
+	 */
+	session?: boolean;
 }
 
-/** Bound dispatcher facade that reuses one identity across a flow. */
+/**
+ * One identity, taking one action at a time.
+ *
+ * Every verb resolves the step: causal handlers and their observable REST reached quiescence, or the flow parked
+ * on a real user input. Pair with {@link MockBot.actor}; pass `session: false` there for a {@link Dispatcher}.
+ */
 export interface Actor {
 	/** Complete causal REST history for this actor across all of its stateful steps. */
 	readonly restCalls: RestCalls;
@@ -374,11 +392,7 @@ export interface Actor {
 	messageMenu(options: MessageCommandInteractionOptions): Promise<MessageMenuResult>;
 	menu<C extends MenuCommandClass>(command: C, options?: MenuOptions<C>): Promise<MenuResultFor<C>>;
 	entryPoint(options?: EntryPointInteractionOptions): Promise<DispatchResult>;
-	submitModal(
-		customId: string,
-		fields?: ModalFields,
-		options?: Omit<ModalSubmitInteractionOptions, 'customId' | 'fields'>,
-	): Promise<DispatchResult>;
+	submitModal(customId: string, fields?: ModalFields, options?: ModalSubmitOptions): Promise<DispatchResult>;
 	clickButton(customId: string, options?: Parameters<MockBot['clickButton']>[1]): Promise<DispatchResult>;
 	selectMenu(
 		customId: string,
@@ -394,24 +408,37 @@ export interface Actor {
 	emit(name: string, payload?: object | readonly unknown[], options?: EmitEventOptions): Dispatch<EventDispatchResult>;
 }
 
-/** Explicit low-level dispatcher surface. Raw Dispatch awaits handler completion and exposes until/timeout controls. */
-export interface RawInteractionDispatchers {
+/**
+ * The same identity and the same verbs as an {@link Actor}, un-sessioned: each verb hands back the lazy
+ * {@link Dispatch} instead of taking a step.
+ *
+ * Built by `bot.actor({ ..., session: false })`. Awaiting one resolves at handler completion rather than at a
+ * user-input checkpoint, nothing serializes actions for the identity, and implicit component sources resolve
+ * against the whole recorded history rather than the current step — which is what makes REST gates, opener-driven
+ * modals, and concurrent actions for one user expressible.
+ */
+export interface Dispatcher {
 	slash<C extends SlashCommandClass>(command: C, options?: SlashClassOptions<C>): Dispatch<DispatchResult>;
 	slash(options: ChatInputInteractionOptions): Dispatch<DispatchResult>;
-	submitModal(customId: string, fields?: ModalFields, options?: RawModalSubmitOptions): Dispatch<DispatchResult>;
-	clickButton(
-		customId: string,
-		options?: Omit<ButtonInteractionOptions, 'customId' | 'message'> & RawComponentSourceOptions,
-	): Dispatch<DispatchResult>;
-	selectMenu(
-		customId: string,
-		values: string[],
-		options?: Omit<SelectMenuInteractionOptions, 'customId' | 'values' | 'message'> & RawComponentSourceOptions,
-	): Dispatch<DispatchResult>;
+	autocomplete(options: AutocompleteInteractionOptions): Dispatch<AutocompleteResult>;
 	userMenu(options: UserCommandInteractionOptions): Dispatch<UserMenuResult>;
 	messageMenu(options: MessageCommandInteractionOptions): Dispatch<MessageMenuResult>;
 	menu<C extends MenuCommandClass>(command: C, options?: MenuOptions<C>): Dispatch<MenuResultFor<C>>;
 	entryPoint(options?: EntryPointInteractionOptions): Dispatch<DispatchResult>;
+	submitModal(customId: string, fields?: ModalFields, options?: ModalSubmitOptions): Dispatch<DispatchResult>;
+	clickButton(customId: string, options?: Parameters<MockBot['clickButton']>[1]): Dispatch<DispatchResult>;
+	selectMenu(
+		customId: string,
+		values: string[],
+		options?: Parameters<MockBot['selectMenu']>[2],
+	): Dispatch<DispatchResult>;
+	say(content: string, options?: DispatchMessageOptions): Dispatch<SayResult>;
+	emit<TName extends GatewayDispatchPayload['t']>(
+		name: TName,
+		payload?: Partial<Extract<GatewayDispatchPayload, { t: TName }>['d']>,
+		options?: EmitEventOptions,
+	): Dispatch<EventDispatchResult>;
+	emit(name: string, payload?: object | readonly unknown[], options?: EmitEventOptions): Dispatch<EventDispatchResult>;
 }
 
 /** Autocomplete dispatch result with the responded choices lifted out semantically. */

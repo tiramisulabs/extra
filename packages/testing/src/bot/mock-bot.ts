@@ -19,6 +19,7 @@ import {
 	type AutocompleteResult,
 	type CapturedReply,
 	type ComponentSourceOptions,
+	type Dispatcher,
 	type DispatchMessageOptions,
 	type DispatchResult,
 	type EmitEventOptions,
@@ -30,10 +31,8 @@ import {
 	type MessageMenuResult,
 	type MessagePart,
 	type MockSubCommandClass,
+	type ModalSubmitOptions,
 	type OutgoingMessage,
-	type RawComponentSourceOptions,
-	type RawInteractionDispatchers,
-	type RawModalSubmitOptions,
 	type SayResult,
 	type SlashClassOptions,
 	type SlashCommandClass,
@@ -99,21 +98,6 @@ export class MockBot extends MockBotDispatchCore {
 	private actorSessionSequence = 0;
 	/** Event names already warned about in {@link emitGatewayEvent}, so a loop reports once, not per iteration. */
 	private readonly warnedUnbridged = new Set<string>();
-
-	readonly dispatch: RawInteractionDispatchers = {
-		slash: ((
-			commandOrOptions: SlashCommandClass | ChatInputInteractionOptions,
-			classOptions?: SlashClassOptions<SlashCommandClass>,
-		) => this.createSlashDispatch(commandOrOptions, classOptions)) as RawInteractionDispatchers['slash'],
-		submitModal: (customId, fields = {}, options = {}) => this.dispatchSubmitModal(customId, fields, options),
-		clickButton: (customId, options = {}) => this.dispatchClickButton(customId, options),
-		selectMenu: (customId, values, options = {}) => this.dispatchSelectMenu(customId, values, options),
-		userMenu: options => this.createUserMenuDispatch(options),
-		messageMenu: options => this.createMessageMenuDispatch(options),
-		menu: ((command: MenuCommandClass, options?: MenuOptions<MenuCommandClass>) =>
-			this.createMenuDispatch(command, options)) as RawInteractionDispatchers['menu'],
-		entryPoint: options => this.createEntryPointDispatch(options),
-	};
 
 	protected async runInteraction(
 		payload: ApiInteractionPayload,
@@ -700,25 +684,33 @@ export class MockBot extends MockBotDispatchCore {
 		sessionKeyOverride?: string,
 	): Promise<DispatchResult> {
 		this.assertNoResetInProgress('stateful step');
-		return this.performComponentStep('clickButton', customId, options, sessionKeyOverride, prepared =>
-			this.dispatchClickButton(customId, prepared),
+		return this.performComponentStep(
+			'clickButton',
+			customId,
+			options,
+			sessionKeyOverride,
+			prepared => this.dispatchClickButton(customId, prepared),
+			prepared => this.dispatchClickButton(customId, { ...prepared, allowSyntheticSource: true }),
 		);
 	}
 
 	protected dispatchClickButton(
 		customId: string,
-		options: Omit<ButtonInteractionOptions, 'customId' | 'message'> & RawComponentSourceOptions = {},
+		options: Omit<ButtonInteractionOptions, 'customId' | 'message'> & ComponentSourceOptions = {},
 	): Dispatch<DispatchResult> {
 		const { source, allowSyntheticSource, ...rest } = options;
 		const opts: ButtonInteractionOptions = { ...rest, customId };
 		return this.dispatchVia('clickButton', opts, prepared => {
-			const message = this.resolveMessageSource(source);
+			const message = this.sourceForSyntheticClaim(this.resolveMessageSource(source), customId, {
+				implicit: source === undefined,
+				allowSynthetic: allowSyntheticSource === true,
+			});
 			this.assertNoConcurrentImplicitComponentSource('clickButton', customId, source !== undefined);
 			const synthetic = allowSyntheticSource === true && !message;
 			if (!message && !synthetic) {
 				throw new TypeError(
 					`clickButton: no source message resolved for "${customId}". Send the message first, pass source, ` +
-						`or use bot.dispatch.clickButton(..., { allowSyntheticSource: true }) for a raw ComponentCommand-only dispatch.`,
+						`or pass allowSyntheticSource: true for a ComponentCommand-only dispatch.`,
 				);
 			}
 			if (synthetic && !message) this.assertSyntheticComponentAllowed('clickButton', customId);
@@ -762,6 +754,9 @@ export class MockBot extends MockBotDispatchCore {
 				this.assertSelectValuesMatchSource(customId, values, sourceComponent);
 				return this.dispatchSelectMenu(customId, values, prepared);
 			},
+			// `values` is a positional parameter, not part of the options bag, so a synthetic select has to be
+			// handed them explicitly — reading them off `options` silently dispatched an empty selection.
+			prepared => this.dispatchSelectMenu(customId, values, { ...prepared, allowSyntheticSource: true }),
 		);
 	}
 
@@ -771,6 +766,7 @@ export class MockBot extends MockBotDispatchCore {
 		options: O,
 		sessionKeyOverride: string | undefined,
 		build: (prepared: O & { source: string }, sourceComponent: Record<string, unknown>) => Dispatch<DispatchResult>,
+		buildSynthetic: (prepared: O) => Dispatch<DispatchResult>,
 	): Promise<DispatchResult> {
 		const continuation = this.continuationOptions(options, sessionKeyOverride);
 		const preparedOptions = continuation.options;
@@ -781,19 +777,16 @@ export class MockBot extends MockBotDispatchCore {
 		const currentMessageSource =
 			implicitSource && currentSource === undefined ? this.resolveCurrentMessageSource(sessionKey) : undefined;
 		const explicitSource = implicitSource ? undefined : this.resolveMessageSource(options.source);
-		const resolvedSource = currentSource ?? currentMessageSource ?? explicitSource;
+		const resolvedSource = this.sourceForSyntheticClaim(
+			currentSource ?? currentMessageSource ?? explicitSource,
+			customId,
+			{ implicit: implicitSource, allowSynthetic: options.allowSyntheticSource === true },
+		);
 		if (!resolvedSource) {
 			// A panel posted once and clicked forever after has no message in *this* run to resolve against.
-			// The caller said so, so dispatch it the way the raw surface does — but carrying the identity the
-			// actor already bound, which is exactly what dropping to bot.dispatch.* used to throw away.
-			if (options.allowSyntheticSource === true) {
-				return verb === 'clickButton'
-					? this.dispatchClickButton(customId, { ...preparedOptions, allowSyntheticSource: true })
-					: this.dispatchSelectMenu(customId, (options as { values?: string[] }).values ?? [], {
-							...preparedOptions,
-							allowSyntheticSource: true,
-						});
-			}
+			// The caller said so, so dispatch it the way an un-sessioned dispatcher does — but carrying the
+			// identity the actor already bound, which is what dropping to that surface used to throw away.
+			if (options.allowSyntheticSource === true) return buildSynthetic(preparedOptions);
 			throw new TypeError(
 				`${verb}: component "${customId}" is not available in the current state for user "${userId}". ` +
 					'Await the action that renders it, inspect it with rendered(bot), pass an explicit source, or pass ' +
@@ -841,18 +834,21 @@ export class MockBot extends MockBotDispatchCore {
 	protected dispatchSelectMenu(
 		customId: string,
 		values: string[],
-		options: Omit<SelectMenuInteractionOptions, 'customId' | 'values' | 'message'> & RawComponentSourceOptions = {},
+		options: Omit<SelectMenuInteractionOptions, 'customId' | 'values' | 'message'> & ComponentSourceOptions = {},
 	): Dispatch<DispatchResult> {
 		const { source, allowSyntheticSource, ...rest } = options;
 		const opts: SelectMenuInteractionOptions = { ...rest, customId, values };
 		return this.dispatchVia('selectMenu', opts, prepared => {
-			const message = this.resolveMessageSource(source);
+			const message = this.sourceForSyntheticClaim(this.resolveMessageSource(source), customId, {
+				implicit: source === undefined,
+				allowSynthetic: allowSyntheticSource === true,
+			});
 			this.assertNoConcurrentImplicitComponentSource('selectMenu', customId, source !== undefined);
 			const synthetic = allowSyntheticSource === true && !message;
 			if (!message && !synthetic) {
 				throw new TypeError(
 					`selectMenu: no source message resolved for "${customId}". Send the message first, pass source, ` +
-						`or use bot.dispatch.selectMenu(..., { allowSyntheticSource: true }) for a raw ComponentCommand-only dispatch.`,
+						`or pass allowSyntheticSource: true for a ComponentCommand-only dispatch.`,
 				);
 			}
 			if (synthetic && !message) this.assertSyntheticComponentAllowed('selectMenu', customId);
@@ -877,7 +873,7 @@ export class MockBot extends MockBotDispatchCore {
 	async submitModal(
 		customId: string,
 		fields: ModalFields = {},
-		extra: Omit<ModalSubmitInteractionOptions, 'customId' | 'fields'> = {},
+		extra: ModalSubmitOptions = {},
 	): Promise<DispatchResult> {
 		return this.submitModalInSession(customId, fields, extra);
 	}
@@ -885,13 +881,19 @@ export class MockBot extends MockBotDispatchCore {
 	private async submitModalInSession(
 		customId: string,
 		fields: ModalFields = {},
-		extra: Omit<ModalSubmitInteractionOptions, 'customId' | 'fields'> = {},
+		extra: ModalSubmitOptions = {},
 		sessionKeyOverride?: string,
 	): Promise<DispatchResult> {
 		this.assertNoResetInProgress('stateful step');
 		const continuation = this.continuationOptions(extra, sessionKeyOverride);
 		const sessionKey = continuation.sessionKey;
 		const userId = continuation.options.user?.id ?? this.defaultUser.id;
+		// A ModalCommand whose opener lives outside this run has no checkpoint to consume — the same case
+		// allowSyntheticSource names for components. Dispatch it un-sessioned, carrying the identity the actor
+		// already bound, instead of making the caller abandon that binding to reach it.
+		if (extra.allowSyntheticSource === true && !this.hasStatefulModal(customId, userId, sessionKey)) {
+			return this.dispatchSubmitModal(customId, fields, { ...continuation.options, allowSyntheticSource: true });
+		}
 		this.assertStatefulModalAvailable(customId, fields, userId, sessionKey);
 		const dispatch = this.dispatchSubmitModal(customId, fields, continuation.options);
 		const resumedOwnerDispatchId = this.sessions.consumeModal(sessionKey, customId);
@@ -901,7 +903,7 @@ export class MockBot extends MockBotDispatchCore {
 	protected dispatchSubmitModal(
 		customId: string,
 		fields: ModalFields = {},
-		extra: RawModalSubmitOptions = {},
+		extra: ModalSubmitOptions = {},
 	): Dispatch<DispatchResult> {
 		const { allowSyntheticSource, ...interactionOptions } = extra;
 		const opts: ModalSubmitInteractionOptions = { ...interactionOptions, customId, fields };
@@ -1037,7 +1039,20 @@ export class MockBot extends MockBotDispatchCore {
 		this._state.indexWorld();
 	}
 
-	actor(options: ActorOptions): Actor {
+	/**
+	 * Bind one identity — user, guild, channel, locale, permissions, roles, context — to every action it takes.
+	 *
+	 * By default the identity gets a *session*: its actions are serialized, each one resolves at the first real
+	 * user-input checkpoint rather than at handler completion, implicit component/modal sources are resolved from
+	 * the current step, and `restCalls` is that identity's causal history.
+	 *
+	 * `session: false` returns a {@link Dispatcher} instead: the same identity and the same verbs, but each verb
+	 * hands back the un-started {@link Dispatch} so the test drives it — `until()` for a REST gate, `submitModal()`
+	 * / `timeoutModal()` to drive a modal from its opener, or several actions for one user in flight at once.
+	 */
+	actor(options: ActorOptions & { session: false }): Dispatcher;
+	actor(options: ActorOptions): Actor;
+	actor(options: ActorOptions): Actor | Dispatcher {
 		const user = options.user ?? options.member?.user;
 		const entry = this.actorMembership(options, user);
 		const guildId = options.guildId ?? entry?.guildId ?? options.channel?.guild_id ?? TEST_GUILD_ID;
@@ -1059,17 +1074,12 @@ export class MockBot extends MockBotDispatchCore {
 			...(options.memberRoles === undefined ? {} : { memberRoles: options.memberRoles }),
 			...(options.context === undefined ? {} : { context: options.context }),
 		};
-		const componentBase =
+		// Component and modal verbs additionally inherit the synthetic opt-in; the rest must not, because
+		// spreading it into a slash options bag would put an unknown key on the interaction payload.
+		const inputBase =
 			options.allowSyntheticSource === undefined
 				? base
 				: { ...base, allowSyntheticSource: options.allowSyntheticSource };
-		const actorUserId = user?.id ?? this.defaultUser.id;
-		const sessionKey = `actor:${++this.actorSessionSequence}:user:${actorUserId}`;
-		const sessions = this.sessions;
-		const restCalls = ((matcher?: RouteMatcher) =>
-			matcher
-				? this.snapshotRestCalls(sessions.ownedActions(sessionKey), matcher)
-				: this.snapshotRestCalls(sessions.ownedActions(sessionKey))) as RestCalls;
 		const mergeEventPayload = (payload: object | readonly unknown[] = {}): object | readonly unknown[] => {
 			if (Array.isArray(payload)) return payload;
 			return {
@@ -1078,6 +1088,42 @@ export class MockBot extends MockBotDispatchCore {
 				...(payload as Record<string, unknown>),
 			};
 		};
+		if (options.session === false) {
+			const dispatcher: Dispatcher = {
+				slash: ((
+					commandOrOptions: SlashCommandClass | ChatInputInteractionOptions,
+					classOptions?: SlashClassOptions<SlashCommandClass>,
+				) =>
+					typeof commandOrOptions === 'function'
+						? this.createSlashDispatch(commandOrOptions, { ...base, ...classOptions })
+						: this.createSlashDispatch({ ...base, ...commandOrOptions })) as Dispatcher['slash'],
+				autocomplete: options => this.autocomplete({ ...base, ...options }),
+				userMenu: options => this.createUserMenuDispatch({ ...base, ...options }),
+				messageMenu: options => this.createMessageMenuDispatch({ ...base, ...options }),
+				menu: ((command: MenuCommandClass, options?: MenuOptions<MenuCommandClass>) =>
+					this.createMenuDispatch(command, {
+						...base,
+						...options,
+					} as MenuOptions<MenuCommandClass>)) as Dispatcher['menu'],
+				entryPoint: options => this.createEntryPointDispatch({ ...base, ...options }),
+				submitModal: (customId, fields = {}, options = {}) =>
+					this.dispatchSubmitModal(customId, fields, { ...inputBase, ...options }),
+				clickButton: (customId, options = {}) => this.dispatchClickButton(customId, { ...inputBase, ...options }),
+				selectMenu: (customId, values, options = {}) =>
+					this.dispatchSelectMenu(customId, values, { ...inputBase, ...options }),
+				say: (content, options = {}) => this.say(content, { ...base, ...options }),
+				emit: (name: string, payload: object | readonly unknown[] = {}, options?: EmitEventOptions) =>
+					this.emit(name, mergeEventPayload(payload), options),
+			};
+			return dispatcher;
+		}
+		const actorUserId = user?.id ?? this.defaultUser.id;
+		const sessionKey = `actor:${++this.actorSessionSequence}:user:${actorUserId}`;
+		const sessions = this.sessions;
+		const restCalls = ((matcher?: RouteMatcher) =>
+			matcher
+				? this.snapshotRestCalls(sessions.ownedActions(sessionKey), matcher)
+				: this.snapshotRestCalls(sessions.ownedActions(sessionKey))) as RestCalls;
 
 		const actor: Actor = {
 			restCalls,
@@ -1095,11 +1141,11 @@ export class MockBot extends MockBotDispatchCore {
 				this.menuInSession(command, { ...base, ...options } as MenuOptions<typeof command>, sessionKey),
 			entryPoint: options => this.entryPointInSession({ ...base, ...options }, sessionKey),
 			submitModal: (customId, fields, options = {}) =>
-				this.submitModalInSession(customId, fields, { ...base, ...options }, sessionKey),
+				this.submitModalInSession(customId, fields, { ...inputBase, ...options }, sessionKey),
 			clickButton: (customId, options = {}) =>
-				this.clickButtonInSession(customId, { ...componentBase, ...options }, sessionKey),
+				this.clickButtonInSession(customId, { ...inputBase, ...options }, sessionKey),
 			selectMenu: (customId, values, options = {}) =>
-				this.selectMenuInSession(customId, values, { ...base, ...options }, sessionKey),
+				this.selectMenuInSession(customId, values, { ...inputBase, ...options }, sessionKey),
 			say: (content, options = {}) => this.say(content, { ...base, ...options }),
 			emit: (name: string, payload: object | readonly unknown[] = {}, options?: EmitEventOptions) =>
 				this.emit(name, mergeEventPayload(payload), options),

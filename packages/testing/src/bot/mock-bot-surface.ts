@@ -515,7 +515,7 @@ export abstract class MockBotSurface {
 					: 'Dispatch and await the button/command that opens the modal before calling submitModal.';
 		throw new TypeError(
 			`submitModal: modal "${customId}" was not rendered for user "${userId}". ${hint} ` +
-				'Raw ModalCommand-only dispatches require bot.dispatch.submitModal(..., { allowSyntheticSource: true }).',
+				'A ModalCommand with no opener in this run needs submitModal(..., { allowSyntheticSource: true }).',
 		);
 	}
 
@@ -606,21 +606,28 @@ export abstract class MockBotSurface {
 		this.displayedModals.delete(userId);
 	}
 
+	/** Whether this session opened `customId` for `userId` and is still parked on it, or rendered it this step. */
+	protected hasStatefulModal(customId: string, userId: string, sessionKey: string): boolean {
+		const displayed = this.displayedModals.get(userId);
+		if (!displayed) return false;
+		if (this.sessions.hasModalCheckpoint(sessionKey, customId, userId)) return true;
+		return (
+			displayed.dispatchId !== undefined &&
+			this.sessions.latestActions(sessionKey).some(action => action.dispatchId === displayed.dispatchId)
+		);
+	}
+
 	protected assertStatefulModalAvailable(
 		customId: string,
 		fields: ModalFields,
 		userId: string,
 		sessionKey: string,
 	): void {
-		const displayed = this.displayedModals.get(userId);
-		const checkpoint = this.sessions.hasModalCheckpoint(sessionKey, customId, userId);
-		const renderedInCurrentStep =
-			displayed?.dispatchId !== undefined &&
-			this.sessions.latestActions(sessionKey).some(action => action.dispatchId === displayed.dispatchId);
-		if (!displayed || (!checkpoint && !renderedInCurrentStep)) {
+		if (!this.hasStatefulModal(customId, userId, sessionKey)) {
 			throw new TypeError(
 				`submitModal: modal "${customId}" is not available in the current state for user "${userId}". ` +
-					'Await the action that renders it and inspect it with rendered(bot) or rendered(actor).',
+					'Await the action that renders it and inspect it with rendered(bot) or rendered(actor), or pass ' +
+					'allowSyntheticSource: true when the modal was opened outside this test.',
 			);
 		}
 		this.assertModalMatchesDisplayed(customId, fields, userId);
@@ -674,7 +681,7 @@ export abstract class MockBotSurface {
 
 	/**
 	 * Resolve an implicit component target from the CURRENT stateful step, never from historical bot traffic.
-	 * The raw dispatcher still accepts explicit historical sources through `bot.dispatch.*`.
+	 * An explicit `source` still addresses a historical message, on this surface and on an un-sessioned one alike.
 	 */
 	protected resolveCurrentComponentSource(
 		sessionKey: string,
@@ -734,6 +741,28 @@ export abstract class MockBotSurface {
 		const callback = /^\/interactions\/[^/]+\/([^/]+)\/callback$/.exec(action.route);
 		if (callback) return this.messageSourceFrom(this._state.messageForToken(callback[1]));
 		return undefined;
+	}
+
+	/**
+	 * Honour `allowSyntheticSource` against an *implicitly* resolved candidate message.
+	 *
+	 * Implicit resolution answers "the latest message in scope", which for a bot whose panels are posted once and
+	 * clicked forever after is some unrelated reply. Taking that as the source made the flag inert in exactly the
+	 * case it exists for — set it, a foreign message resolved anyway, and the click failed as "not rendered" — so
+	 * a candidate that does not actually carry `customId` is a coincidence, not a source. An explicit `source` is
+	 * a statement about which message was clicked, so it always stands. A typo is still loud: it now fails on
+	 * "no handler matched customId", which names the registered handlers.
+	 */
+	protected sourceForSyntheticClaim(
+		candidate: { id: string; channel_id?: string } | undefined,
+		customId: string,
+		claim: { implicit: boolean; allowSynthetic: boolean },
+	): { id: string; channel_id?: string } | undefined {
+		if (!candidate || !claim.implicit || !claim.allowSynthetic) return candidate;
+		const stored = candidate.channel_id
+			? this._state.rawMessage(candidate.channel_id, candidate.id)
+			: this._state.rawMessageById(candidate.id);
+		return stored && findComponentNode(stored.components, customId) !== undefined ? candidate : undefined;
 	}
 
 	protected hydrateSourceMessage(

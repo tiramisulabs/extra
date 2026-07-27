@@ -545,11 +545,12 @@ describe('stateful interaction steps', () => {
 
 		rendered(bot).get.message({ content: 'accepted:first' });
 		expect(fallbackRuns).toBe(0);
-		expect(() => bot.dispatch.submitModal('single-use-modal', { value: 'second' })).toThrow(/not rendered/);
+		const raw = bot.actor({ session: false });
+		expect(() => raw.submitModal('single-use-modal', { value: 'second' })).toThrow(/not rendered/);
 		expect(fallbackRuns).toBe(0);
 
 		await expect(
-			bot.dispatch.submitModal('single-use-modal', { value: 'synthetic' }, { allowSyntheticSource: true }),
+			raw.submitModal('single-use-modal', { value: 'synthetic' }, { allowSyntheticSource: true }),
 		).resolves.toMatchObject({ content: 'synthetic fallback' });
 		expect(fallbackRuns).toBe(1);
 		await bot.close();
@@ -668,13 +669,14 @@ describe('stateful interaction steps', () => {
 		}
 
 		const bot = await createMockBot({ components: [SyntheticButton, SyntheticModal, SyntheticSelect] });
-		expect(() => bot.dispatch.clickButton('synthetic-button')).toThrow(/allowSyntheticSource: true/);
-		expect(() => bot.dispatch.selectMenu('synthetic-select', ['dark'])).toThrow(/allowSyntheticSource: true/);
-		expect(() => bot.dispatch.submitModal('synthetic-modal')).toThrow(/allowSyntheticSource: true/);
+		const raw = bot.actor({ session: false });
+		expect(() => raw.clickButton('synthetic-button')).toThrow(/allowSyntheticSource: true/);
+		expect(() => raw.selectMenu('synthetic-select', ['dark'])).toThrow(/allowSyntheticSource: true/);
+		expect(() => raw.submitModal('synthetic-modal')).toThrow(/allowSyntheticSource: true/);
 
-		const button = bot.dispatch.clickButton('synthetic-button', { allowSyntheticSource: true });
-		const select = bot.dispatch.selectMenu('synthetic-select', ['dark'], { allowSyntheticSource: true });
-		const modal = bot.dispatch.submitModal('synthetic-modal', {}, { allowSyntheticSource: true });
+		const button = raw.clickButton('synthetic-button', { allowSyntheticSource: true });
+		const select = raw.selectMenu('synthetic-select', ['dark'], { allowSyntheticSource: true });
+		const modal = raw.submitModal('synthetic-modal', {}, { allowSyntheticSource: true });
 		await expect(button).resolves.toMatchObject({ content: 'raw button' });
 		await expect(select).resolves.toMatchObject({ content: 'raw select:dark' });
 		await expect(modal).resolves.toMatchObject({ content: 'raw modal' });

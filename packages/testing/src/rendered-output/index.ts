@@ -99,7 +99,7 @@ function assertSubject(subject: RenderedSubject): void {
 	if (subject instanceof Promise) {
 		throw new TypeError(
 			'rendered(): got a promise, not rendered output. Every stateful verb is async — await the dispatch ' +
-				'first, e.g. rendered(await bot.slash(...)). A parked bot.dispatch.* flow needs no await.',
+				'first, e.g. rendered(await bot.slash(...)). A parked Dispatch needs no await.',
 		);
 	}
 }

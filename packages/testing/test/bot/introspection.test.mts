@@ -71,7 +71,7 @@ describe('introspection helpers (DX-2)', () => {
 
 	test('diagnostics surfaces an un-settled (stepped but not awaited) dispatch as pending', async () => {
 		const bot = await createMockBot({ commands: [PingCommand] });
-		const dispatch = bot.dispatch.slash({ name: 'ping' });
+		const dispatch = bot.actor({ session: false }).slash({ name: 'ping' });
 		await dispatch.until(action => action.method === 'POST');
 
 		const diag = bot.diagnostics();
@@ -83,8 +83,9 @@ describe('introspection helpers (DX-2)', () => {
 
 	test('diagnostics distinguishes concurrent dispatches from the same user', async () => {
 		const bot = await createMockBot({ commands: [PingCommand] });
-		const first = bot.dispatch.slash({ name: 'ping' });
-		const second = bot.dispatch.slash({ name: 'ping' });
+		const raw = bot.actor({ session: false });
+		const first = raw.slash({ name: 'ping' });
+		const second = raw.slash({ name: 'ping' });
 		await Promise.all([
 			first.until(action => action.method === 'POST'),
 			second.until(action => action.method === 'POST'),

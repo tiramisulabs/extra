@@ -16,11 +16,15 @@ import { ApplicationCommandType } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
 import { Dispatch, type DispatchOptions, type RestCall, type RestCalls, type RouteMatcher, Routes } from '../../src';
 import {
+	type AutocompleteResult,
 	createMockBot,
+	type Dispatcher,
 	type DispatchResult,
+	type EventDispatchResult,
 	type MenuResultFor,
 	type MessageMenuResult,
 	type MockBot,
+	type SayResult,
 	type TargetFor,
 	type UserMenuResult,
 } from '../../src/bot/bot';
@@ -66,11 +70,22 @@ function assertStatefulInteractionTypes(bot: MockBot): void {
 	expectAssignable<Promise<UserMenuResult>>(bot.menu(ReportUser, { target: apiUser({ username: 'spammer' }) }));
 	expectAssignable<Promise<DispatchResult>>(bot.entryPoint({ name: 'type-only' }));
 	expectAssignable<Promise<void>>(bot.reset());
-	expectAssignable<Dispatch<DispatchResult>>(bot.dispatch.slash({ name: 'type-only' }));
-	expectAssignable<Dispatch<DispatchResult>>(bot.dispatch.submitModal('type-only'));
-	expectAssignable<Dispatch<UserMenuResult>>(bot.dispatch.userMenu({ name: 'type-only' }));
-	expectAssignable<Dispatch<MessageMenuResult>>(bot.dispatch.messageMenu({ name: 'type-only' }));
-	expectAssignable<Dispatch<DispatchResult>>(bot.dispatch.entryPoint({ name: 'type-only' }));
+	// One factory, two modes: session: false keeps the identity and hands back the Dispatch instead of the step.
+	const raw: Dispatcher = bot.actor({ session: false });
+	expectAssignable<Dispatch<DispatchResult>>(raw.slash({ name: 'type-only' }));
+	expectAssignable<Dispatch<DispatchResult>>(raw.slash(GreetCommand, { options: { name: 'type-only' } }));
+	expectAssignable<Dispatch<DispatchResult>>(raw.submitModal('type-only'));
+	expectAssignable<Dispatch<DispatchResult>>(raw.clickButton('type-only'));
+	expectAssignable<Dispatch<DispatchResult>>(raw.selectMenu('type-only', ['value']));
+	expectAssignable<Dispatch<UserMenuResult>>(raw.userMenu({ name: 'type-only' }));
+	expectAssignable<Dispatch<MessageMenuResult>>(raw.messageMenu({ name: 'type-only' }));
+	expectAssignable<Dispatch<UserMenuResult>>(raw.menu(ReportUser, { target: apiUser({ username: 'spammer' }) }));
+	expectAssignable<Dispatch<DispatchResult>>(raw.entryPoint({ name: 'type-only' }));
+	expectAssignable<Dispatch<AutocompleteResult>>(raw.autocomplete({ name: 'type-only', focused: 'q', value: 'x' }));
+	expectAssignable<Dispatch<SayResult>>(raw.say('!type-only'));
+	expectAssignable<Dispatch<EventDispatchResult>>(raw.emit('GUILD_MEMBER_ADD'));
+	// @ts-expect-error an un-sessioned dispatcher has no session to scope a causal REST history to.
+	void raw.restCalls;
 	const memberEdits = bot.restCalls(Routes.editMember);
 	expectAssignable<
 		readonly RestCall<
@@ -136,7 +151,7 @@ function assertStatefulInteractionTypes(bot: MockBot): void {
 	expectAssignable<Promise<DispatchResult>>(actor.entryPoint({ name: 'type-only' }));
 	expectAssignable<Promise<UserMenuResult>>(actor.menu(ReportUser, { target: apiUser({ username: 'spammer' }) }));
 	// Synthetic source describes the click, not the surface it was made from: it binds on the stateful verbs
-	// and on the actor, so a panel-clicking flow keeps its identity instead of dropping to bot.dispatch.*.
+	// and on the actor, so a panel-clicking flow keeps its identity instead of dropping to a raw dispatcher.
 	expectAssignable<Promise<DispatchResult>>(bot.clickButton('type-only', { allowSyntheticSource: true }));
 	expectAssignable<Promise<DispatchResult>>(
 		bot.actor({ user: apiUser(), allowSyntheticSource: true }).clickButton('type-only'),
@@ -145,8 +160,11 @@ function assertStatefulInteractionTypes(bot: MockBot): void {
 	expectAssignable<Promise<DispatchResult>>(
 		bot.actor({ user: apiUser(), locale: 'es-ES', memberPermissions: 'all' }).slash({ name: 'type-only' }),
 	);
-	// @ts-expect-error synthetic modal opt-in exists only on bot.dispatch.*.
-	bot.submitModal('type-only', {}, { allowSyntheticSource: true });
+	// The modal half of the same option: it names the submission, not the surface, so it binds here too.
+	expectAssignable<Promise<DispatchResult>>(bot.submitModal('type-only', {}, { allowSyntheticSource: true }));
+	expectAssignable<Promise<DispatchResult>>(
+		bot.actor({ user: apiUser(), allowSyntheticSource: true }).submitModal('type-only'),
+	);
 	// @ts-expect-error fillModal was intentionally removed; submitModal is the only modal submission verb.
 	void bot.fillModal;
 	// @ts-expect-error restCalls accepts only an optional route descriptor, never a filter object.
@@ -294,7 +312,7 @@ describe('type DX: S20 menu<C> as-const target discrimination', () => {
 	test('raw menu keeps the class-narrowed result type', () => {
 		const probe = (bot: MockBot) => {
 			expectAssignable<Dispatch<UserMenuResult>>(
-				bot.dispatch.menu(ReportUser, { target: apiUser({ username: 'spammer' }) }),
+				bot.actor({ session: false }).menu(ReportUser, { target: apiUser({ username: 'spammer' }) }),
 			);
 		};
 		void probe;

@@ -153,17 +153,18 @@ describe('#3 + #4 await a parked collector top-to-bottom', () => {
 		const LaunchB = parkingCommand('launch-b', 'btn-b', events);
 		const bot = await createMockBot({ commands: [LaunchA, LaunchB] });
 
-		const a = bot.dispatch.slash({ name: 'launch-a' });
-		const b = bot.dispatch.slash({ name: 'launch-b' });
+		const raw = bot.actor({ session: false });
+		const a = raw.slash({ name: 'launch-a' });
+		const b = raw.slash({ name: 'launch-b' });
 		const aReply = await a.untilComponent('btn-a');
 		const bReply = await b.untilComponent('btn-b');
 
 		// two parked dispatches -> "the most recent message" is a genuine race -> fail loud (thrown synchronously)
-		expect(() => bot.dispatch.clickButton('btn-a')).toThrow(/2 dispatches are still running/);
+		expect(() => raw.clickButton('btn-a')).toThrow(/2 dispatches are still running/);
 
 		// an explicit source disambiguates and settles each opener
-		await bot.dispatch.clickButton('btn-a', { source: aReply });
-		await bot.dispatch.clickButton('btn-b', { source: bReply });
+		await raw.clickButton('btn-a', { source: aReply });
+		await raw.clickButton('btn-b', { source: bReply });
 		await a;
 		await b;
 
@@ -364,7 +365,7 @@ describe('#4 regression: defer -> non-REST gap -> render collector button', () =
 		events.length = 0;
 		const bot = await createMockBot({ commands: [ReopenCommand] });
 
-		const flow = bot.dispatch.slash({ name: 'reopen' });
+		const flow = bot.actor({ session: false }).slash({ name: 'reopen' });
 		const reply = await flow.untilComponent('confirm');
 		await bot.clickButton('confirm', { source: reply });
 		await flow;
@@ -390,7 +391,7 @@ describe('more click/flow DX', () => {
 
 		const bot = await createMockBot({ components: [SubmitButton] });
 		await expect(bot.clickButton('submit:auto:c1')).rejects.toThrow(/not available in the current state/);
-		const res = await bot.dispatch.clickButton('submit:auto:c1', { allowSyntheticSource: true });
+		const res = await bot.clickButton('submit:auto:c1', { allowSyntheticSource: true });
 		expect(clicked).toEqual(['submit:auto:c1']);
 		expect(res.content).toBe('ok');
 		await bot.close();
@@ -431,7 +432,7 @@ describe('more click/flow DX', () => {
 		}
 
 		const bot = await createMockBot({ commands: [LaunchCommand] });
-		const flow = bot.dispatch.slash({ name: 'launch' });
+		const flow = bot.actor({ session: false }).slash({ name: 'launch' });
 		const source = await flow.untilComponent('go'); // parked on waitFor
 
 		// assert what the parked (not-yet-settled) flow already rendered:
@@ -444,7 +445,7 @@ describe('more click/flow DX', () => {
 		rendered(flow).get.button('go');
 		rendered(flow).get.embed({ title: 'Launch' });
 
-		await bot.dispatch.clickButton('go', { source });
+		await bot.clickButton('go', { source });
 		await flow;
 		expect(events).toEqual(['clicked']);
 		await bot.close();
@@ -459,7 +460,7 @@ describe('more click/flow DX', () => {
 		}
 
 		const bot = await createMockBot({ commands: [RejectCommand] });
-		const flow = bot.dispatch.slash({ name: 'reject' });
+		const flow = bot.actor({ session: false }).slash({ name: 'reject' });
 		await expect(flow.untilComponent('confirm-menu')).rejects.toThrow(/Not allowed/);
 		await bot.close();
 	});
