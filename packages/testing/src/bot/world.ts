@@ -462,6 +462,30 @@ export function mockWorld(): WorldBuilder {
 	return new WorldBuilder();
 }
 
+/**
+ * Clone a world into the shape the client cache gets, translating the one failure that is easy to
+ * cause and impossible to read.
+ *
+ * The `mock*` fixtures and the `api*` payload factories describe the same entities, and `MockUser` happens to
+ * satisfy `ApiUser` structurally — so `registerMember({ user: mockUser(...) })` compiles. It then dies here,
+ * because the fixtures carry methods (`toString`, `avatarURL`) and `structuredClone` refuses functions. Raw,
+ * that reads as `DataCloneError: () => Formatter.userMention(id) could not be cloned`, which names neither
+ * factory nor the call that seeded it. `api` names the entry point the author actually called.
+ */
+export function cloneWorld(built: MockWorld, api: string): MockWorld {
+	try {
+		return structuredClone(built);
+	} catch (error) {
+		throw new TypeError(
+			`${api}: the seeded world holds a value that cannot be cloned into the client cache — usually a ` +
+				'lightweight fixture (mockUser, mockGuild, mockChannel, mockMember) or a builder passed where a payload ' +
+				'belongs. World seeding takes the payload factories: apiUser, apiGuild, apiChannel, apiMember, apiRole. ' +
+				`The mock* fixtures are for mockCommandContext. Original error: ${String(error)}`,
+			{ cause: error },
+		);
+	}
+}
+
 /** Writes a MockWorld into a Seyfert client's cache using CacheFrom.Test. */
 export async function seedWorld(client: UsingClient, world: MockWorld): Promise<void> {
 	for (const guild of world.guilds) {

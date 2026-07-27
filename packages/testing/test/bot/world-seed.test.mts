@@ -1,6 +1,6 @@
 import { Command, type CommandContext, Declare } from 'seyfert';
 import { describe, expect, test } from 'vitest';
-import { apiUser, createMockBot, mockWorld } from '../../src';
+import { type ApiUser, apiUser, createMockBot, mockUser, mockWorld } from '../../src';
 
 @Declare({ name: 'roster', description: 'Counts members it can see in the guild' })
 class Roster extends Command {
@@ -82,5 +82,20 @@ describe('the world keeps growing after the bot is built', () => {
 		await using bot = await createMockBot({});
 
 		await expect(bot.seed(() => {})).rejects.toThrow(/without a world/);
+	});
+
+	test('a mock* fixture is refused here exactly as createMockBot refuses it', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'guard-guild' });
+
+		await using bot = await createMockBot({ world });
+		await expect(
+			bot.seed(w => {
+				// mockUser satisfies ApiUser structurally, so this compiles; it carries methods, so it cannot
+				// be cloned into the cache. Without the guard it lands there and nothing ever complains.
+				w.registerMember(guild.id, { user: mockUser({ id: 'guard-user' }) as unknown as ApiUser });
+			}),
+		).rejects.toThrow(/^seed: the seeded world holds a value that cannot be cloned/);
+		expect(await bot.client.cache.members?.get('guard-user', guild.id)).toBeUndefined();
 	});
 });

@@ -88,7 +88,7 @@ import {
 	pluginEventNames,
 } from './seyfert-internals';
 import { numberValue } from './state';
-import { type MockWorld, seedWorld, WorldBuilder } from './world';
+import { cloneWorld, type MockWorld, seedWorld, WorldBuilder } from './world';
 import { applyWorldEvent, WORLD_EVENT_NAMES } from './world-events';
 
 const INPUT_SHUTDOWN_GRACE_MS = 250;
@@ -1015,6 +1015,10 @@ export class MockBot extends MockBotDispatchCore {
 				Array.isArray(value) ? value.slice(before.get(key) ?? 0) : value,
 			]),
 		) as MockWorld;
+		// Same guard createMockBot runs on the initial world: seeding a method-carrying mock* fixture would
+		// otherwise write it straight into the cache, where nothing ever complains. Validate only — the delta
+		// itself stays live so the registrars' return values keep pointing at what the bot reads.
+		cloneWorld(added, 'seed');
 		await seedWorld(asUsingClient(this.client), added);
 		this._state.indexWorld();
 	}
