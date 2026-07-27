@@ -14,6 +14,7 @@ import {
 	apiThread,
 	apiUser,
 	apiVoiceState,
+	type PlainPayload,
 } from './payload-entities';
 
 function opt<K extends string, V>(key: K, value: V | undefined): { [P in K]?: V } {
@@ -252,7 +253,7 @@ export interface ApiMessageOptions {
 	flags?: number;
 }
 
-export interface ApiMessage {
+export interface ApiMessage extends PlainPayload {
 	id: string;
 	channel_id: string;
 	guild_id?: string;

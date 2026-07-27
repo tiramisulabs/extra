@@ -286,8 +286,9 @@ describe('a lightweight fixture seeded into a world fails legibly', () => {
 	test('richUser in registerMember names both factories instead of DataCloneError', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'fixture-guild' });
-		// Typechecks: RichUser satisfies ApiUser structurally, so nothing stops this at compile time.
-		world.registerMember(guild.id, { user: richUser({ id: 'fixture-user' }) as ApiUser });
+		// The types refuse this now (pinned in type-dx.test.mts), so reaching it takes a deliberate cast — and the
+		// runtime guard still has to explain it, because a cast is not the only way past the types.
+		world.registerMember(guild.id, { user: richUser({ id: 'fixture-user' }) as unknown as ApiUser });
 
 		await expect(createMockBot({ world })).rejects.toThrow(/apiUser/);
 		await expect(createMockBot({ world })).rejects.toThrow(/mockCommandContext/);

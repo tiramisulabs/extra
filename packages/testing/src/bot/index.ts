@@ -198,11 +198,13 @@ export {
 	messageReactionRemoveAllEvent,
 	messageReactionRemoveEmojiEvent,
 	messageReactionRemoveEvent,
+	type PlainPayload,
 	type RawMessage,
 	type ThreadMetadata,
 	threadCreateEvent,
 	threadDeleteEvent,
 	voiceStateUpdateEvent,
+	type WireFields,
 } from './payloads';
 export {
 	ALL_PERMISSIONS,

@@ -91,8 +91,9 @@ describe('the world keeps growing after the bot is built', () => {
 		await using bot = await createMockBot({ world });
 		await expect(
 			bot.seed(w => {
-				// richUser satisfies ApiUser structurally, so this compiles; it carries methods, so it cannot
-				// be cloned into the cache. Without the guard it lands there and nothing ever complains.
+				// The cast is the point: `seed` takes a callback, so the types are bypassable here by design.
+				// richUser carries methods, so it cannot be cloned into the cache — without the runtime guard it
+				// lands there and nothing ever complains.
 				w.registerMember(guild.id, { user: richUser({ id: 'guard-user' }) as unknown as ApiUser });
 			}),
 		).rejects.toThrow(/^seed: the seeded world holds a value that cannot be cloned/);

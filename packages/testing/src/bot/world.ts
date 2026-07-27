@@ -555,11 +555,13 @@ export function mockWorld(): WorldBuilder {
  * Clone a world into the shape the client cache gets, translating the one failure that is easy to
  * cause and impossible to read.
  *
- * The `rich*` fixtures and the `api*` payload factories describe the same entities, and `RichUser` happens to
- * satisfy `ApiUser` structurally — so `registerMember({ user: richUser(...) })` compiles. It then dies here,
- * because the fixtures carry methods (`toString`, `avatarURL`) and `structuredClone` refuses functions. Raw,
- * that reads as `DataCloneError: () => Formatter.userMention(id) could not be cloned`, which names neither
- * factory nor the call that seeded it. `api` names the entry point the author actually called.
+ * This is now the backstop, not the primary defence: the `api*` payload types declare themselves plain data
+ * (see `PlainPayload`), so `registerMember({ user: richUser(...) })` is a compile error rather than the
+ * `DataCloneError` it used to be. The check stays because the types are reachable around — `MockBot.seed`
+ * takes a `WorldBuilder` callback, a cast or an `any` bypasses them, and a builder or any other uncloneable
+ * value can still reach a world field the types never named. Raw, that failure reads as
+ * `DataCloneError: () => Formatter.userMention(id) could not be cloned`, which names neither factory nor the
+ * call that seeded it. `api` names the entry point the author actually called.
  */
 export function cloneWorld(built: WorldData, api: string): WorldData {
 	try {

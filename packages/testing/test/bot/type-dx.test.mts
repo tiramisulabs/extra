@@ -28,8 +28,20 @@ import {
 	type TargetFor,
 	type UserMenuResult,
 } from '../../src/bot/bot';
-import { type ApiMessage, type ApiUser, apiMember, apiMessage, apiUser } from '../../src/bot/payloads';
-import { richMember, richUser } from '../../src/factories';
+import { channelOption, mentionableOption, userOption } from '../../src/bot/interactions';
+import {
+	type ApiChannel,
+	type ApiGuild,
+	type ApiMember,
+	type ApiMessage,
+	type ApiRole,
+	type ApiUser,
+	apiMember,
+	apiMessage,
+	apiUser,
+} from '../../src/bot/payloads';
+import { mockWorld, type WorldBuilder } from '../../src/bot/world';
+import { richChannel, richGuild, richMember, richRole, richUser } from '../../src/factories';
 import { GreetCommand, ReportUser } from './_setup';
 
 /** Compile-time assertion that the argument is assignable to `Expected`; the typed parameter does the checking. */
@@ -277,6 +289,58 @@ describe('type DX: S24 declared factory interfaces', () => {
 		void user.nick;
 		// @ts-expect-error `preferred_locale` is a guild field, never part of RichUser.
 		void user.preferred_locale;
+	});
+});
+
+// A seeded world is structuredCloned into the client cache, so a payload slot may not hold a rich* fixture —
+// the fixtures carry methods and structuredClone refuses functions. The api* payload types say so themselves
+// now (PlainPayload), which is what turns the seeding guard from the primary defence into a backstop.
+// Compile-time only: the rejected calls would still MUTATE the world if they ran, so this is never invoked.
+function assertPayloadBranding(world: WorldBuilder, guildId: string): void {
+	// @ts-expect-error richUser carries methods; a seeded world is structuredCloned, so it takes apiUser.
+	world.registerMember(guildId, { user: richUser({ id: 'plain-payload-user' }) });
+	// @ts-expect-error same rule one level down, at the payload factory itself.
+	apiMember({ user: richUser() });
+	// @ts-expect-error and on a message author.
+	apiMessage({ author: richUser() });
+	// @ts-expect-error richChannel is not an ApiChannel.
+	expectAssignable<ApiChannel>(richChannel());
+	// @ts-expect-error richGuild is not an ApiGuild.
+	expectAssignable<ApiGuild>(richGuild());
+	// @ts-expect-error richRole is not an ApiRole.
+	expectAssignable<ApiRole>(richRole());
+	// @ts-expect-error richMember is not an ApiMember.
+	expectAssignable<ApiMember>(richMember());
+}
+void assertPayloadBranding;
+
+describe('type DX: a rich* fixture cannot stand in for an api* payload', () => {
+	test('a raw wire literal and the payload factory both still satisfy a seeding slot', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'plain-payload-guild' });
+		// Branding rejects behaviour, not provenance: an object literal typed ApiUser needs no factory and no cast.
+		const raw: ApiUser = {
+			id: 'plain-payload-raw',
+			username: 'raw',
+			global_name: null,
+			discriminator: '0',
+			avatar: null,
+			bot: false,
+		};
+		world.registerMember(guild.id, { user: raw });
+		world.registerMember(guild.id, { user: apiUser({ id: 'plain-payload-api' }) });
+
+		await using seeded = await createMockBot({ world });
+		expect(seeded.world.query.member({ guildId: guild.id, userId: 'plain-payload-raw' })).toBeDefined();
+		expect(seeded.world.query.member({ guildId: guild.id, userId: 'plain-payload-api' })).toBeDefined();
+	});
+
+	test('encoding an entity into resolved option data still takes a fixture', () => {
+		// Resolved option data is encoded, never cloned, and the rich* fixtures carry the wire fields for exactly
+		// this. Branding the payloads must not cost that: these are the calls S24's snake_case contract is for.
+		expect(userOption(richUser({ id: 'encoded-user' })).value).toBe('encoded-user');
+		expect(channelOption(richChannel({ id: 'encoded-channel' })).value).toBe('encoded-channel');
+		expect(mentionableOption(richUser({ id: 'encoded-mentionable' })).value).toBe('encoded-mentionable');
 	});
 });
 

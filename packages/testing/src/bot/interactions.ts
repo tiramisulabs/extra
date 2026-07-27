@@ -20,6 +20,7 @@ import {
 	apiUser,
 	type MemberInput,
 	memberOptionsFrom,
+	type WireFields,
 } from './payloads';
 import {
 	ALL_PERMISSIONS,
@@ -56,8 +57,16 @@ export interface EncodedOption {
  * is applied automatically from the command's declared option type, so `{ options: { user: { id, username } } }`
  * needs no `userOption(...)` wrapper. A loose `{ id }` is completed with api* defaults; a full api object passes
  * through unchanged.
+ *
+ * Stated as {@link WireFields} rather than the payload types: resolved option data is encoded, never cloned,
+ * so a `rich*` fixture is a legitimate value here even though seeding a world with one is not.
  */
-export type EntityOptionInput = ApiUser | ApiChannel | ApiRole | ApiAttachment | { id: string; [key: string]: unknown };
+export type EntityOptionInput =
+	| WireFields<ApiUser>
+	| WireFields<ApiChannel>
+	| ApiRole
+	| ApiAttachment
+	| { id: string; [key: string]: unknown };
 export type OptionInput = string | number | boolean | EncodedOption | EntityOptionInput;
 export interface NamedOptionInput {
 	name: string;
@@ -74,7 +83,7 @@ export function rawOption(type: number, value: string | number | boolean): Encod
 	return option(type, value);
 }
 
-export function userOption(user: ApiUser = apiUser(), member?: MemberInput): EncodedOption {
+export function userOption(user: WireFields<ApiUser> = apiUser(), member?: MemberInput): EncodedOption {
 	const memberPayload = member ? resolvedMember(member) : undefined;
 	return option(OptionType.User, user.id, {
 		users: { [user.id]: user },
@@ -82,7 +91,7 @@ export function userOption(user: ApiUser = apiUser(), member?: MemberInput): Enc
 	});
 }
 
-export function channelOption(channel: ApiChannel = apiChannel()): EncodedOption {
+export function channelOption(channel: WireFields<ApiChannel> = apiChannel()): EncodedOption {
 	return option(OptionType.Channel, channel.id, {
 		channels: { [channel.id]: { ...channel, permissions: ALL_PERMISSIONS.toString() } },
 	});
@@ -116,7 +125,7 @@ export function roleOption(role: ApiRoleInput): EncodedOption {
 }
 
 /** A user or a role. Pass the entity object. */
-export function mentionableOption(entity: ApiUser | { id: string; name: string }): EncodedOption {
+export function mentionableOption(entity: WireFields<ApiUser> | { id: string; name: string }): EncodedOption {
 	if ('username' in entity) {
 		return option(OptionType.Mentionable, entity.id, { users: { [entity.id]: entity } });
 	}
