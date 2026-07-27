@@ -83,7 +83,10 @@ export type ComponentSourceOptions = {
 	 *
 	 * For a bot whose panels are posted once and clicked forever after, synthetic IS the normal path. It
 	 * describes the click, not the surface the click was made from, so every dispatcher accepts it and an
-	 * actor can bind it once for the whole flow.
+	 * actor can bind it once for the whole flow. On a stateful surface the resulting step is an ordinary
+	 * step of that identity — serialized with its other actions, committed as its latest rendered output,
+	 * and part of its `restCalls()`. Only the source message is missing, so there is no checkpoint to
+	 * consume and no parked flow to resume.
 	 */
 	allowSyntheticSource?: boolean;
 };
@@ -94,6 +97,8 @@ export type ComponentSourceOptions = {
  * `allowSyntheticSource` is the modal half of {@link ComponentSourceOptions.allowSyntheticSource}: it says the
  * ModalCommand is submitted with no opener in this run. It used to exist only on the un-sessioned surface, which
  * meant a bot whose modals are opened from a long-lived panel had to abandon its identity binding to submit one.
+ * The submission is a step of the acting identity like any other; it simply resumes no opener, because none of
+ * this run's dispatches opened it.
  */
 export type ModalSubmitOptions = Omit<ModalSubmitInteractionOptions, 'customId' | 'fields'> &
 	Pick<ComponentSourceOptions, 'allowSyntheticSource'>;

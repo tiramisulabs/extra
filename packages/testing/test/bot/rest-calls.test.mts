@@ -1,4 +1,14 @@
-import { ActionRow, Button, Command, type CommandContext, Declare } from 'seyfert';
+import {
+	ActionRow,
+	Button,
+	Command,
+	type CommandContext,
+	ComponentCommand,
+	type ComponentContext,
+	Declare,
+	ModalCommand,
+	type ModalContext,
+} from 'seyfert';
 import { ButtonStyle, InteractionResponseType, InteractionType } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
 import { apiUser, createMockBot, DiscordErrors, mockWorld, Routes, rendered } from '../../src';
@@ -392,6 +402,50 @@ describe('restCalls', () => {
 				type: InteractionType.ApplicationCommandAutocomplete,
 			},
 		});
+		await bot.close();
+	});
+
+	test('keeps a synthetic component and modal step in the acting identity history', async () => {
+		class PanelButton extends ComponentCommand {
+			componentType = 'Button' as const;
+			filter(ctx: ComponentContext<'Button'>) {
+				return ctx.customId === 'synthetic-panel:confirm';
+			}
+			async run(ctx: ComponentContext<'Button'>) {
+				await ctx.client.messages.write('synthetic-history', { content: `clicked:${ctx.author.id}` });
+				await ctx.write({ content: `panel:${ctx.author.id}` });
+			}
+		}
+
+		class PanelModal extends ModalCommand {
+			filter(ctx: ModalContext) {
+				return ctx.customId === 'synthetic-panel:feedback';
+			}
+			async run(ctx: ModalContext) {
+				await ctx.write({ content: `feedback:${ctx.interaction.user.id}` });
+			}
+		}
+
+		const bot = await createMockBot({ components: [PanelButton, PanelModal] });
+		const panelist = bot.actor({ user: apiUser({ id: 'panelist' }), allowSyntheticSource: true });
+		const bystander = bot.actor({ user: apiUser({ id: 'bystander' }) });
+
+		await panelist.clickButton('synthetic-panel:confirm');
+		// "No rendered source in this run" is a statement about the panel, not about who clicked it: a synthetic
+		// step is still one of this identity's steps, so its causal REST belongs to that identity's history.
+		expect(panelist.restCalls(Routes.createMessage).map(call => call.body?.content)).toEqual(['clicked:panelist']);
+		// And it commits a step like any other, so the actor's rendered reader sees its own latest output.
+		rendered(panelist).get.message({ content: 'panel:panelist' });
+
+		await panelist.submitModal('synthetic-panel:feedback', { rating: '5' });
+		expect(
+			panelist.restCalls(Routes.interactionCallback).map(call => {
+				const data = call.body && 'data' in call.body ? call.body.data : undefined;
+				return data && 'content' in data ? data.content : undefined;
+			}),
+		).toEqual(['panel:panelist', 'feedback:panelist']);
+		expect(panelist.restCalls()).toHaveLength(bot.restCalls().length);
+		expect(bystander.restCalls()).toEqual([]);
 		await bot.close();
 	});
 });

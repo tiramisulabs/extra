@@ -784,9 +784,14 @@ export class MockBot extends MockBotDispatchCore {
 		);
 		if (!resolvedSource) {
 			// A panel posted once and clicked forever after has no message in *this* run to resolve against.
-			// The caller said so, so dispatch it the way an un-sessioned dispatcher does — but carrying the
-			// identity the actor already bound, which is what dropping to that surface used to throw away.
-			if (options.allowSyntheticSource === true) return buildSynthetic(preparedOptions);
+			// The caller said so, so the click has no source message — and therefore no component checkpoint to
+			// consume and no parked owner to resume. It is still one of this identity's steps: it goes through
+			// the session with no resumed owner, so it serializes with the others, commits a step of its own, and
+			// joins the actor's causal `restCalls()`. Handing it to the un-sessioned dispatcher instead kept the
+			// bound identity but left the click outside that history.
+			if (options.allowSyntheticSource === true) {
+				return this.performStep(buildSynthetic(preparedOptions), sessionKey);
+			}
 			throw new TypeError(
 				`${verb}: component "${customId}" is not available in the current state for user "${userId}". ` +
 					'Await the action that renders it, inspect it with rendered(bot), pass an explicit source, or pass ' +
@@ -889,10 +894,15 @@ export class MockBot extends MockBotDispatchCore {
 		const sessionKey = continuation.sessionKey;
 		const userId = continuation.options.user?.id ?? this.defaultUser.id;
 		// A ModalCommand whose opener lives outside this run has no checkpoint to consume — the same case
-		// allowSyntheticSource names for components. Dispatch it un-sessioned, carrying the identity the actor
-		// already bound, instead of making the caller abandon that binding to reach it.
+		// allowSyntheticSource names for components. It is still one of this identity's steps, so it goes through
+		// the session with no resumed owner (there is no parked opener to resume), which keeps it in the actor's
+		// causal `restCalls()` and in its step ordering.
 		if (extra.allowSyntheticSource === true && !this.hasStatefulModal(customId, userId, sessionKey)) {
-			return this.dispatchSubmitModal(customId, fields, { ...continuation.options, allowSyntheticSource: true });
+			const synthetic = this.dispatchSubmitModal(customId, fields, {
+				...continuation.options,
+				allowSyntheticSource: true,
+			});
+			return this.performStep(synthetic, sessionKey);
 		}
 		this.assertStatefulModalAvailable(customId, fields, userId, sessionKey);
 		const dispatch = this.dispatchSubmitModal(customId, fields, continuation.options);

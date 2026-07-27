@@ -682,4 +682,41 @@ describe('stateful interaction steps', () => {
 		await expect(modal).resolves.toMatchObject({ content: 'raw modal' });
 		await bot.close();
 	});
+
+	test('a synthetic step serializes behind the same identity like every other step', async () => {
+		let release!: () => void;
+		const parkedUntil = new Promise<void>(resolve => {
+			release = resolve;
+		});
+
+		@Declare({ name: 'park-synthetic', description: 'Parks until released' })
+		class ParkCommand extends Command {
+			async run(ctx: CommandContext) {
+				await parkedUntil;
+				await ctx.write({ content: 'released' });
+			}
+		}
+
+		class PanelButton extends ComponentCommand {
+			componentType = 'Button' as const;
+			customId = 'serialize-panel';
+			async run(ctx: ComponentContext<'Button'>) {
+				await ctx.write({ content: 'panel clicked' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [ParkCommand], components: [PanelButton] });
+		const panelist = bot.actor({ user: apiUser({ id: 'serialize-user' }), allowSyntheticSource: true });
+		const parked = panelist.slash({ name: 'park-synthetic' });
+
+		// Being sourceless is not being concurrent: the synthetic click is this identity's next step, so it waits
+		// its turn behind the parked flow instead of slipping past it. bot.actor({ session: false }) is the hatch.
+		await expect(panelist.clickButton('serialize-panel')).rejects.toThrow(TypeError);
+		expect(panelist.restCalls()).toEqual([]);
+
+		release();
+		await parked;
+		await expect(panelist.clickButton('serialize-panel')).resolves.toMatchObject({ content: 'panel clicked' });
+		await bot.close();
+	});
 });

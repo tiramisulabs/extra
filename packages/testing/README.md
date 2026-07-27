@@ -810,6 +810,11 @@ explicit `source` is a statement about which message was clicked, so it always
 stands — and without the claim, an implicitly resolved message that lacks the
 component still fails loud.
 
+A synthetic step is an ordinary step of the identity that took it: it serializes
+with that identity's other actions, becomes its latest rendered output, and appears
+in `actor.restCalls()`. Only the source message is absent, so it consumes no
+checkpoint and resumes no parked flow.
+
 A modal opened with `interaction.modal(..., { waitFor })` becomes the next
 stateful checkpoint. Submit it as the next chronological action:
 
