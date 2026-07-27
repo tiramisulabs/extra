@@ -4,8 +4,6 @@ exports[`public API surface > exported names match the committed snapshot 1`] = 
 [
   "ALL_PERMISSIONS",
   "DEFAULT_MEMBER_PERMISSIONS",
-  "DEFAULT_MEMBER_PERMISSIONS_STRING",
-  "DEFAULT_PERMISSIONS",
   "DISPATCHER_VERBS",
   "DiscordErrors",
   "Dispatch",

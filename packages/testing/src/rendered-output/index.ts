@@ -151,7 +151,12 @@ function resolve<Mode extends ReaderMode, Canonical, View>(
 	scope: Scope,
 	toView: (value: Canonical) => View,
 ): Result<Mode, View> {
-	if (mode === 'query') return (candidates[0] ? toView(candidates[0].value) : undefined) as Result<Mode, View>;
+	// Same contract as world.query: zero is fine, more than one is a question the query did not answer.
+	// Returning the first was the only reader variant that could make an ambiguous match pass green.
+	if (mode === 'query') {
+		if (candidates.length > 1) throw renderedOutputError(kind, query, candidates, scope);
+		return (candidates[0] ? toView(candidates[0].value) : undefined) as Result<Mode, View>;
+	}
 	if (mode === 'all') return candidates.map(candidate => toView(candidate.value)) as Result<Mode, View>;
 	if (candidates.length === 1) return toView(candidates[0].value) as Result<Mode, View>;
 	throw renderedOutputError(kind, query, candidates, scope);

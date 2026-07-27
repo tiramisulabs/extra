@@ -291,6 +291,7 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 	 * Iteration-bounded so it terminates even when the user's fake timers froze Date.now()/setImmediate; the
 	 * drain tick yields through the REAL setImmediate captured at module load, so faking globals cannot hang it.
 	 */
+	/** @internal Scoped drain used by the stateful steps; `settle()` is the verb tests reach for. */
 	async flushPending(scope?: Dispatch<unknown> | number): Promise<void> {
 		const operation = 'MockBot.flushPending()';
 		assertRealSetImmediate(operation);
@@ -300,7 +301,7 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 	/**
 	 * Drain ALL pending async across every dispatch until the REST surface quiesces — for the
 	 * "handler responded, then kept doing background REST work (DB writes, follow-up Discord calls)" case where
-	 * awaiting the dispatch resolves at the first response and the rest runs detached. Unlike {@link flushPending}
+	 * awaiting the dispatch resolves at the first response and the rest runs detached. Unlike the scoped internal drain
 	 * it never throws on multiple in-flight dispatches; it is the unscoped "wait for everything to settle" drain.
 	 *
 	 * It can only observe work that eventually touches REST (or a tracked timer); a purely in-memory continuation
@@ -322,7 +323,7 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 	 * stops changing AND nothing is in flight, bounded by an iteration cap (not wall-clock, so it terminates under
 	 * frozen fake timers). Exhausting the cap throws with the operation and pending REST requests in its
 	 * diagnostics. `count`/`hasPending` scope what "quiet" means; `aborted` stops early; `tickFirst` yields before
-	 * the first measurement (the flushPending shape) vs after (the until-quiescent shape).
+	 * the first measurement (the scoped-drain shape) vs after (the until-quiescent shape).
 	 */
 	protected async drainWhile(count: () => number, hasPending: () => boolean, opts: DrainWhileOptions): Promise<void> {
 		const { aborted, maxIterations = DRAIN_MAX_ITERATIONS, operation, pending, tickFirst = false } = opts;

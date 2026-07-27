@@ -37,10 +37,6 @@ const OptionType = ApplicationCommandOptionType;
  * permission bit the installed seyfert knows, ORed together. Note: the invoking
  * member's permissions default to DEFAULT_MEMBER_PERMISSIONS, not this.
  */
-export const DEFAULT_PERMISSIONS = ALL_PERMISSIONS.toString();
-
-/** String payload default for the invoking member's permissions: a non-admin set. */
-export const DEFAULT_MEMBER_PERMISSIONS_STRING = DEFAULT_MEMBER_PERMISSIONS.toString();
 
 export interface EncodedOption {
 	__slipherOption: true;
@@ -88,7 +84,7 @@ export function userOption(user: ApiUser = apiUser(), member?: MemberInput): Enc
 
 export function channelOption(channel: ApiChannel = apiChannel()): EncodedOption {
 	return option(OptionType.Channel, channel.id, {
-		channels: { [channel.id]: { ...channel, permissions: DEFAULT_PERMISSIONS } },
+		channels: { [channel.id]: { ...channel, permissions: ALL_PERMISSIONS.toString() } },
 	});
 }
 
@@ -96,7 +92,7 @@ function resolvedMember(member: MemberInput): Omit<ApiMember, 'user'> {
 	const { user: _user, ...wire } = apiMember(memberOptionsFrom(member));
 	return {
 		...wire,
-		permissions: wire.permissions ?? DEFAULT_PERMISSIONS,
+		permissions: wire.permissions ?? ALL_PERMISSIONS.toString(),
 	};
 }
 
@@ -333,7 +329,7 @@ function baseInteraction(options: BaseInteractionOptions, type: number): ApiInte
 	const dm = options.guildId === null;
 	const guildId = dm ? undefined : (options.guildId ?? options.channel?.guild_id ?? TEST_GUILD_ID);
 	const channel = options.channel ?? apiChannel({ id: TEST_CHANNEL_ID, guildId: guildId ?? null });
-	const permissions = permissionBits(options.permissions ?? DEFAULT_PERMISSIONS);
+	const permissions = permissionBits(options.permissions ?? ALL_PERMISSIONS.toString());
 	const memberOptions = options.member ? memberOptionsFrom(options.member) : undefined;
 	const memberRolePayloads = options.memberRoles?.map(resolvedRole);
 	const memberPermissions =
@@ -345,7 +341,7 @@ function baseInteraction(options: BaseInteractionOptions, type: number): ApiInte
 				? permissionBits(memberOptions.permissions)
 				: memberRolePayloads !== undefined
 					? combineRolePermissions(memberRolePayloads)
-					: DEFAULT_MEMBER_PERMISSIONS_STRING;
+					: DEFAULT_MEMBER_PERMISSIONS.toString();
 	const memberRoleIds = memberRolePayloads?.map(role => role.id) ?? [];
 	const memberRoles = [...new Set([...(memberOptions?.roles ?? []), ...memberRoleIds])];
 	const member = dm

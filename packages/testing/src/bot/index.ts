@@ -81,8 +81,6 @@ export {
 	type ChatInputInteractionOptions,
 	channelOption,
 	chatInputInteraction,
-	DEFAULT_MEMBER_PERMISSIONS_STRING,
-	DEFAULT_PERMISSIONS,
 	type EncodedOption,
 	type EntryPointInteractionOptions,
 	entryPointInteraction,

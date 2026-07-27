@@ -86,7 +86,9 @@ describe('rendered reader', () => {
 		]);
 
 		expect(ui.query.button('missing')).toBeUndefined();
-		expect(ui.query.button('edit')?.label).toBe('Edit');
+		// query is "at most one": zero is fine, two is a question this query did not answer. Returning the
+		// first would let an assertion about "the edit button" pass while there were two of them.
+		expect(() => ui.query.button('edit')).toThrow(/found 2 buttons/);
 		expect(ui.all.button('edit')).toHaveLength(2);
 		expect(() => ui.get.button('edit')).toThrow(RenderedOutputError);
 		expect(() => ui.get.button('edit')).toThrow(/found 2 buttons/);
@@ -314,5 +316,16 @@ describe('rendered reader', () => {
 		expect(() => modal.get.input('missing')).toThrow(/input#notes label="Notes"/);
 
 		await bot.close();
+	});
+});
+
+describe('the three readers share one cardinality contract', () => {
+	test('query allows zero and refuses ambiguity, on every reader', () => {
+		const ui = rendered([{ content: 'Hi', embeds: [{ title: 'One' }, { title: 'Two' }] }]);
+
+		expect(ui.query.embed({ title: 'Nope' })).toBeUndefined();
+		expect(ui.query.embed({ title: 'One' })?.title).toBe('One');
+		expect(() => ui.query.embed()).toThrow(RenderedOutputError);
+		expect(ui.all.embed()).toHaveLength(2);
 	});
 });

@@ -271,7 +271,11 @@ function resolve<Mode extends OutcomeReaderMode, View>(
 	candidates: readonly Candidate<View>[],
 	scope: OutcomeScope,
 ): OutcomeResult<Mode, View> {
-	if (mode === 'query') return (candidates[0]?.value ?? undefined) as OutcomeResult<Mode, View>;
+	// Same contract as world.query and rendered().query: zero is fine, more than one is ambiguous.
+	if (mode === 'query') {
+		if (candidates.length > 1) throw missingOutcomeError(kind, query, candidates, scope);
+		return (candidates[0]?.value ?? undefined) as OutcomeResult<Mode, View>;
+	}
 	if (mode === 'all') return candidates.map(candidate => candidate.value) as OutcomeResult<Mode, View>;
 	if (candidates.length === 1) return candidates[0].value as OutcomeResult<Mode, View>;
 	throw missingOutcomeError(kind, query, candidates, scope);

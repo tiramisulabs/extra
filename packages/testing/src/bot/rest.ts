@@ -510,6 +510,7 @@ export class MockApiHandler extends ApiHandler {
 		this.gates = [];
 	}
 
+	/** @internal One-line delegation kept for the dispatcher's own route reads; tests use `matchRoute`. */
 	matchRouteParams<TRoute extends string>(
 		matcher: RouteMatcher<TRoute>,
 		action: Pick<RecordedAction, 'method' | 'route'>,
@@ -517,8 +518,9 @@ export class MockApiHandler extends ApiHandler {
 		return matchRoute(matcher, action);
 	}
 
+	/** @internal One-line delegation kept for the journal filters below; tests use `matchRoute`. */
 	matches(matcher: RouteMatcher, action: Pick<RecordedAction, 'method' | 'route'>): boolean {
-		return this.matchRouteParams(matcher, action) !== undefined;
+		return matchRoute(matcher, action) !== undefined;
 	}
 
 	/** @internal Temporal coordination for dispatch machinery; user assertions belong to bot.restCalls(). */
@@ -526,6 +528,7 @@ export class MockApiHandler extends ApiHandler {
 		return this.listenForAction(matcherOrPredicate, timeoutMs, 'settled');
 	}
 
+	/** @internal One-line delegation kept for `request(matcher, params)`; tests use the free `routeUrl`. */
 	routeUrl<TRoute extends string>(matcher: RouteMatcher<TRoute>, params: RouteParams<TRoute>): `/${string}` {
 		return routeUrl(matcher, params);
 	}

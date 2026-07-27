@@ -1,4 +1,5 @@
-import { DEFAULT_PERMISSIONS, type SelectMenuInteractionOptions } from './interactions';
+import type { SelectMenuInteractionOptions } from './interactions';
+import { ALL_PERMISSIONS } from './permissions';
 import type { MockWorld } from './world';
 
 export function normalizedSelectType(componentType: SelectMenuInteractionOptions['componentType']): 3 | 5 | 6 | 7 | 8 {
@@ -61,7 +62,7 @@ export function resolveSelectResolved(
 							value,
 							channels.map(entry => entry.id),
 						);
-					return [value, { ...channel, permissions: DEFAULT_PERMISSIONS }];
+					return [value, { ...channel, permissions: ALL_PERMISSIONS.toString() }];
 				}),
 			),
 		};
@@ -88,7 +89,7 @@ export function resolveSelectResolved(
 					world.users.map(entry => entry.id),
 				);
 			users[value] = resolvedUser;
-			if (member) members[value] = { permissions: DEFAULT_PERMISSIONS, ...member.member };
+			if (member) members[value] = { permissions: ALL_PERMISSIONS.toString(), ...member.member };
 			continue;
 		}
 		if (role) {
@@ -98,7 +99,7 @@ export function resolveSelectResolved(
 		const resolvedUser = user ?? member?.member.user;
 		if (resolvedUser) {
 			users[value] = resolvedUser;
-			if (member) members[value] = { permissions: DEFAULT_PERMISSIONS, ...member.member };
+			if (member) members[value] = { permissions: ALL_PERMISSIONS.toString(), ...member.member };
 			continue;
 		}
 		unknownSelectId('mentionable', customId, value, [
