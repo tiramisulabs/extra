@@ -18,6 +18,7 @@ import type { MockBot } from './bot';
 import type { Dispatch } from './dispatch';
 import type { DispatchDenial } from './dispatch-context';
 import type {
+	ApiRoleInput,
 	AutocompleteInteractionOptions,
 	ButtonInteractionOptions,
 	ChatInputInteractionOptions,
@@ -29,6 +30,7 @@ import type {
 	UserCommandInteractionOptions,
 } from './interactions';
 import type { ApiChannel, ApiMember, ApiMessage, ApiUser, MemberInput } from './payloads';
+import type { PermissionInput } from './permissions';
 import type { RecordedAction, RestCalls } from './rest';
 import { Routes } from './routes';
 import {
@@ -78,12 +80,18 @@ export interface OutgoingMessage {
 
 export type ComponentSourceOptions = {
 	source?: string | RecordedAction;
-};
-
-/** Source controls reserved for the low-level `bot.dispatch.*` surface. */
-export type RawComponentSourceOptions = ComponentSourceOptions & {
+	/**
+	 * Dispatch to a registered ComponentCommand with no rendered message behind it.
+	 *
+	 * For a bot whose panels are posted once and clicked forever after, synthetic IS the normal path — so
+	 * keeping this on `bot.dispatch.*` alone meant abandoning the actor binding and restating the identity
+	 * by hand to reach it. It describes the click, not the surface the click was made from.
+	 */
 	allowSyntheticSource?: boolean;
 };
+
+/** The same shape as {@link ComponentSourceOptions}; kept as a name the raw dispatchers already use. */
+export type RawComponentSourceOptions = ComponentSourceOptions;
 
 /** Modal controls reserved for the low-level `bot.dispatch.*` surface. */
 export type RawModalSubmitOptions = Omit<ModalSubmitInteractionOptions, 'customId' | 'fields'> & {
@@ -337,6 +345,22 @@ export interface ActorOptions {
 	member?: ApiMember;
 	guildId?: string | null;
 	channel?: ApiChannel;
+	/**
+	 * The rest of the identity every step inherits.
+	 *
+	 * The bag used to bind four of the dispatchers' identity fields and drop the others, so a
+	 * Spanish-locale or non-admin actor restated them at every call — and a forgotten one does not fail,
+	 * it silently falls back to the default member permissions and `'en-US'`, which is a test passing for
+	 * the wrong reason.
+	 */
+	locale?: string;
+	guildLocale?: string;
+	memberPermissions?: PermissionInput | 'all';
+	memberRoles?: ApiRoleInput[];
+	/** Discord's interaction context (guild / bot DM / private channel). */
+	context?: number;
+	/** Default for this actor's component steps; see {@link ComponentSourceOptions.allowSyntheticSource}. */
+	allowSyntheticSource?: boolean;
 }
 
 /** Bound dispatcher facade that reuses one identity across a flow. */

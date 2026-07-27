@@ -1,6 +1,6 @@
 import type { SelectMenuInteractionOptions } from './interactions';
 import { ALL_PERMISSIONS } from './permissions';
-import type { MockWorld } from './world';
+import type { WorldData } from './world';
 
 export function normalizedSelectType(componentType: SelectMenuInteractionOptions['componentType']): 3 | 5 | 6 | 7 | 8 {
 	if (componentType === undefined || componentType === 'string') return 3;
@@ -18,7 +18,7 @@ function unknownSelectId(kind: string, customId: string, value: string, seeded: 
 }
 
 export function resolveSelectResolved(
-	world: MockWorld | undefined,
+	world: WorldData | undefined,
 	customId: string,
 	values: string[],
 	options: Omit<SelectMenuInteractionOptions, 'customId' | 'values' | 'message'>,

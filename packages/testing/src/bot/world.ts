@@ -58,7 +58,15 @@ import {
 import type { PermissionInput } from './permissions';
 import { permissionBits } from './permissions';
 
-export interface MockWorld {
+/**
+ * The built world: plain, cloneable data, which is what `createMockBot({ world })` seeds into the cache.
+ *
+ * Named for what it is, not `MockWorld` — that name belongs to whatever `mockWorld()` returns by the
+ * package's own `mockX(): MockX` rule, and `mockWorld()` returns the builder. Typing a helper parameter
+ * `MockWorld` and passing it `mockWorld()` used not to compile, which is the wrong thing to learn from a
+ * name. Use {@link WorldBuilder} for the thing with the `register*` methods.
+ */
+export interface WorldData {
 	guilds: ApiGuild[];
 	channels: ApiChannel[];
 	users: ApiUser[];
@@ -179,13 +187,13 @@ export interface WorldGuild extends ApiGuild {
 }
 
 export class WorldBuilder {
-	private readonly world: MockWorld;
+	private readonly world: WorldData;
 
 	/**
 	 * @internal Passing a world continues seeding one that is already live. `MockBot.seed` uses it so the
 	 * registrars stay usable against a running bot instead of being frozen at `createMockBot`.
 	 */
-	constructor(seed?: MockWorld) {
+	constructor(seed?: WorldData) {
 		this.world = seed ?? {
 			guilds: [],
 			channels: [],
@@ -534,7 +542,7 @@ export class WorldBuilder {
 		return message;
 	}
 
-	build(): MockWorld {
+	build(): WorldData {
 		return this.world;
 	}
 }
@@ -553,7 +561,7 @@ export function mockWorld(): WorldBuilder {
  * that reads as `DataCloneError: () => Formatter.userMention(id) could not be cloned`, which names neither
  * factory nor the call that seeded it. `api` names the entry point the author actually called.
  */
-export function cloneWorld(built: MockWorld, api: string): MockWorld {
+export function cloneWorld(built: WorldData, api: string): WorldData {
 	try {
 		return structuredClone(built);
 	} catch (error) {
@@ -567,8 +575,8 @@ export function cloneWorld(built: MockWorld, api: string): MockWorld {
 	}
 }
 
-/** Writes a MockWorld into a Seyfert client's cache using CacheFrom.Test. */
-export async function seedWorld(client: UsingClient, world: MockWorld): Promise<void> {
+/** Writes a WorldData into a Seyfert client's cache using CacheFrom.Test. */
+export async function seedWorld(client: UsingClient, world: WorldData): Promise<void> {
 	for (const guild of world.guilds) {
 		await client.cache.guilds?.set(CacheFrom.Test, guild.id, guild);
 	}

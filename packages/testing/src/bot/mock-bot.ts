@@ -88,7 +88,7 @@ import {
 	pluginEventNames,
 } from './seyfert-internals';
 import { numberValue } from './state';
-import { cloneWorld, type MockWorld, seedWorld, WorldBuilder } from './world';
+import { cloneWorld, seedWorld, WorldBuilder, type WorldData } from './world';
 import { applyWorldEvent, WORLD_EVENT_NAMES } from './world-events';
 
 const INPUT_SHUTDOWN_GRACE_MS = 250;
@@ -783,9 +783,21 @@ export class MockBot extends MockBotDispatchCore {
 		const explicitSource = implicitSource ? undefined : this.resolveMessageSource(options.source);
 		const resolvedSource = currentSource ?? currentMessageSource ?? explicitSource;
 		if (!resolvedSource) {
+			// A panel posted once and clicked forever after has no message in *this* run to resolve against.
+			// The caller said so, so dispatch it the way the raw surface does — but carrying the identity the
+			// actor already bound, which is exactly what dropping to bot.dispatch.* used to throw away.
+			if (options.allowSyntheticSource === true) {
+				return verb === 'clickButton'
+					? this.dispatchClickButton(customId, { ...preparedOptions, allowSyntheticSource: true })
+					: this.dispatchSelectMenu(customId, (options as { values?: string[] }).values ?? [], {
+							...preparedOptions,
+							allowSyntheticSource: true,
+						});
+			}
 			throw new TypeError(
 				`${verb}: component "${customId}" is not available in the current state for user "${userId}". ` +
-					'Await the action that renders it, inspect it with rendered(bot), or pass an explicit source.',
+					'Await the action that renders it, inspect it with rendered(bot), pass an explicit source, or pass ' +
+					'allowSyntheticSource: true when the panel was posted outside this test.',
 			);
 		}
 
@@ -942,7 +954,7 @@ export class MockBot extends MockBotDispatchCore {
 	/**
 	 * Resolve the actor's seeded membership, and refuse a guild the world contradicts.
 	 *
-	 * `MockWorld.members` already records which guild a member belongs to, so a caller-supplied `guildId` is a
+	 * `WorldData.members` already records which guild a member belongs to, so a caller-supplied `guildId` is a
 	 * restatement — and nothing used to check it, so an actor pinned to a guild its member is not in still
 	 * dispatched and resolved against the wrong guild. Derives from `user` as well as `member`, since both name
 	 * the same person.
@@ -1016,7 +1028,7 @@ export class MockBot extends MockBotDispatchCore {
 				key,
 				Array.isArray(value) ? value.slice(before.get(key) ?? 0) : value,
 			]),
-		) as MockWorld;
+		) as WorldData;
 		// Same guard createMockBot runs on the initial world: seeding a method-carrying mock* fixture would
 		// otherwise write it straight into the cache, where nothing ever complains. Validate only — the delta
 		// itself stays live so the registrars' return values keep pointing at what the bot reads.
@@ -1035,7 +1047,22 @@ export class MockBot extends MockBotDispatchCore {
 			);
 		}
 		const channel = this.actorChannel(options, entry?.guildId);
-		const base = { user, guildId, channel };
+		// Identity every verb inherits. allowSyntheticSource is deliberately NOT here: it is a component
+		// concern, and spreading it into a slash options bag would put an unknown key on the payload.
+		const base = {
+			user,
+			guildId,
+			channel,
+			...(options.locale === undefined ? {} : { locale: options.locale }),
+			...(options.guildLocale === undefined ? {} : { guildLocale: options.guildLocale }),
+			...(options.memberPermissions === undefined ? {} : { memberPermissions: options.memberPermissions }),
+			...(options.memberRoles === undefined ? {} : { memberRoles: options.memberRoles }),
+			...(options.context === undefined ? {} : { context: options.context }),
+		};
+		const componentBase =
+			options.allowSyntheticSource === undefined
+				? base
+				: { ...base, allowSyntheticSource: options.allowSyntheticSource };
 		const actorUserId = user?.id ?? this.defaultUser.id;
 		const sessionKey = `actor:${++this.actorSessionSequence}:user:${actorUserId}`;
 		const sessions = this.sessions;
@@ -1069,7 +1096,8 @@ export class MockBot extends MockBotDispatchCore {
 			entryPoint: options => this.entryPointInSession({ ...base, ...options }, sessionKey),
 			submitModal: (customId, fields, options = {}) =>
 				this.submitModalInSession(customId, fields, { ...base, ...options }, sessionKey),
-			clickButton: (customId, options = {}) => this.clickButtonInSession(customId, { ...base, ...options }, sessionKey),
+			clickButton: (customId, options = {}) =>
+				this.clickButtonInSession(customId, { ...componentBase, ...options }, sessionKey),
 			selectMenu: (customId, values, options = {}) =>
 				this.selectMenuInSession(customId, values, { ...base, ...options }, sessionKey),
 			say: (content, options = {}) => this.say(content, { ...base, ...options }),

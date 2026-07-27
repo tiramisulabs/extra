@@ -57,19 +57,19 @@ import type {
 	WorldWebhookFilter,
 } from './state-support';
 import { EMPTY_WORLD, queryMatches, roleView, WorldStateError } from './state-support';
-import type { MockWorld } from './world';
+import type { WorldData } from './world';
 
 export abstract class WorldStateQueryCore {
 	protected abstract guild(guildId: string): GuildView | undefined;
 	protected abstract channelView(channel: ApiChannel): ChannelView;
-	protected abstract memberView(entry: MockWorld['members'][number]): GuildMemberView;
-	protected abstract memberView(guildId: string, member: MockWorld['members'][number]['member']): GuildMemberView;
+	protected abstract memberView(entry: WorldData['members'][number]): GuildMemberView;
+	protected abstract memberView(guildId: string, member: WorldData['members'][number]['member']): GuildMemberView;
 	protected abstract messageView(channelId: string, messageId: string): MessageView | undefined;
-	protected abstract withReactions(channelId: string, message: MockWorld['messages'][number]['message']): RawMessage;
+	protected abstract withReactions(channelId: string, message: WorldData['messages'][number]['message']): RawMessage;
 	protected abstract reactionViews(channelId: string, messageId: string): ReactionView[];
 	protected abstract reactionKey(channelId: string, messageId: string): string;
-	protected abstract buildMessageView(message: MockWorld['messages'][number]['message']): MessageView;
-	protected readonly world: MockWorld;
+	protected abstract buildMessageView(message: WorldData['messages'][number]['message']): MessageView;
+	protected readonly world: WorldData;
 	protected readonly botId: string;
 	/** guildId -> userId -> the X-Audit-Log-Reason the ban carried, if any. */
 	protected readonly bansByGuild = new Map<string, Map<string, string | undefined>>();
@@ -187,7 +187,7 @@ export abstract class WorldStateQueryCore {
 		auditLogEntry: query => this.auditLogEntryCandidates(query).map(candidate => candidate.value),
 	};
 
-	constructor(seed?: MockWorld, options: WorldStateOptions = {}) {
+	constructor(seed?: WorldData, options: WorldStateOptions = {}) {
 		this.world = seed ?? EMPTY_WORLD();
 		this.botId = options.botId ?? TEST_BOT_ID;
 		this.world.roles ??= [];

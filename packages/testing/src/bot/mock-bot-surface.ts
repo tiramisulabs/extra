@@ -53,7 +53,7 @@ import {
 	WorldState,
 	type WorldStateReader,
 } from './state';
-import { type MockWorld } from './world';
+import { type WorldData } from './world';
 
 /**
  * Resolve the user a dispatch runs as when the caller names none.
@@ -63,7 +63,7 @@ import { type MockWorld } from './world';
  * human member describes a single-actor scenario, so that member *is* the default; anything else keeps the
  * canonical TEST_USER_ID, and `applyWorldPermissions` warns when it turns out not to be in the guild.
  */
-function resolveDefaultUser(world: MockWorld | undefined): ApiUser {
+function resolveDefaultUser(world: WorldData | undefined): ApiUser {
 	const humanIds = new Set<string>();
 	let sole: ApiUser | undefined;
 	for (const entry of world?.members ?? []) {
@@ -118,7 +118,7 @@ export abstract class MockBotSurface {
 		readonly client: Client<true>,
 		readonly rest: MockApiHandler,
 		readonly gateway: MockGateway,
-		protected readonly _world: MockWorld | undefined,
+		protected readonly _world: WorldData | undefined,
 		// Required (no default): createMockBot passes the SAME WorldState it gives registerWorldDefaults. A default
 		// `new WorldState(world)` here would silently create a second instance that shares the world arrays by
 		// reference but has its own bans/reactions/token Maps — a split-brain. Keep them the one instance.

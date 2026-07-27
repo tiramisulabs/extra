@@ -21,7 +21,7 @@ import { createMockBot } from '../../src/bot/bot';
 import { apiActionRow, apiButton, apiSelect, apiTextInput, apiUser } from '../../src/bot/payloads';
 import { mockWorld } from '../../src/bot/world';
 import { rendered } from '../../src/rendered-output';
-import { ConfirmButton } from './_setup';
+import { ConfirmButton, seedGuildFixture } from './_setup';
 
 const englishLang = { greeting: 'Hello!' };
 
@@ -595,6 +595,51 @@ describe('component flows', () => {
 		);
 		await bot.dispatch.submitModal('feedback-modal', { rating: '5' }, { user });
 		await opener;
+		await bot.close();
+	});
+});
+
+describe('the actor carries the whole identity', () => {
+	test('a panel-clicking actor keeps its session instead of dropping to bot.dispatch.*', async () => {
+		const { world, guild, actor: seeded, channel } = seedGuildFixture('actor-synth');
+
+		const bot = await createMockBot({ components: [ConfirmButton], world });
+		const actor = bot.actor({
+			user: seeded.user,
+			guildId: guild.id,
+			channel,
+			allowSyntheticSource: true,
+			locale: 'es-ES',
+		});
+
+		const result = await actor.clickButton('confirm');
+
+		expect(rendered(result).get.message().content).toBe('Confirmed!');
+		// the identity came from the actor binding — the whole point, since reaching this path used to mean
+		// dropping to bot.dispatch.* and restating user/guild/channel by hand
+		expect(bot.restCalls()).not.toHaveLength(0);
+		await bot.close();
+	});
+
+	test('locale binds once instead of at every call', async () => {
+		const { world, guild, actor: seeded, channel } = seedGuildFixture('actor-locale');
+		const seen: string[] = [];
+
+		@Declare({ name: 'lang', description: 'reports its locale' })
+		class Lang extends Command {
+			async run(ctx: CommandContext) {
+				seen.push(ctx.interaction?.locale ?? 'none');
+				await ctx.write({ content: 'ok' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [Lang], world });
+		const actor = bot.actor({ user: seeded.user, guildId: guild.id, channel, locale: 'es-ES' });
+
+		await actor.slash({ name: 'lang' });
+		await actor.slash({ name: 'lang' });
+
+		expect(seen).toEqual(['es-ES', 'es-ES']);
 		await bot.close();
 	});
 });

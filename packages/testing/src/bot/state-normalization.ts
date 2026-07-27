@@ -10,7 +10,7 @@ import type {
 	RoleView,
 	WorldStateCandidate,
 } from './state-contracts';
-import type { MockWorld } from './world';
+import type { WorldData } from './world';
 
 export class WorldStateError extends Error {
 	readonly name = 'WorldStateError';
@@ -46,7 +46,7 @@ export function formatCandidate(candidate: WorldStateCandidate): string {
 	return candidate.summary ? `${candidate.path} (${candidate.summary})` : candidate.path;
 }
 
-export const EMPTY_WORLD = (): MockWorld => ({
+export const EMPTY_WORLD = (): WorldData => ({
 	guilds: [],
 	channels: [],
 	users: [],

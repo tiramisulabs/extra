@@ -4,7 +4,7 @@ import { computeChannelPermissions } from './permissions';
 import { apiError, type DiscordErrorInit, DiscordErrors, type MockApiHandler, type RouteMatcher } from './rest';
 import { Routes } from './routes';
 import type { MessageQuery, WorldState } from './state';
-import type { MockWorld } from './world';
+import type { WorldData } from './world';
 import type { WorldEmitEvent } from './world-events';
 
 export type CacheResourceName = 'channels' | 'roles' | 'stageInstances' | 'emojis' | 'stickers' | 'overwrites' | 'bans';
@@ -144,7 +144,7 @@ export function webhookChannelOf(webhookId: string): string | undefined {
 }
 export function createWorldDefaultContext(
 	rest: MockApiHandler,
-	world: MockWorld | undefined,
+	world: WorldData | undefined,
 	hooks: WorldDefaultHooks,
 ) {
 	const removed = new Set<string>();

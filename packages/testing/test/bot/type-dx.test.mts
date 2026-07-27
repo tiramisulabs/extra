@@ -135,8 +135,16 @@ function assertStatefulInteractionTypes(bot: MockBot): void {
 	expectAssignable<Promise<MessageMenuResult>>(actor.messageMenu({ name: 'type-only' }));
 	expectAssignable<Promise<DispatchResult>>(actor.entryPoint({ name: 'type-only' }));
 	expectAssignable<Promise<UserMenuResult>>(actor.menu(ReportUser, { target: apiUser({ username: 'spammer' }) }));
-	// @ts-expect-error synthetic source opt-in exists only on bot.dispatch.*.
-	bot.clickButton('type-only', { allowSyntheticSource: true });
+	// Synthetic source describes the click, not the surface it was made from: it binds on the stateful verbs
+	// and on the actor, so a panel-clicking flow keeps its identity instead of dropping to bot.dispatch.*.
+	expectAssignable<Promise<DispatchResult>>(bot.clickButton('type-only', { allowSyntheticSource: true }));
+	expectAssignable<Promise<DispatchResult>>(
+		bot.actor({ user: apiUser(), allowSyntheticSource: true }).clickButton('type-only'),
+	);
+	// The actor binds the whole identity, not four fields of it.
+	expectAssignable<Promise<DispatchResult>>(
+		bot.actor({ user: apiUser(), locale: 'es-ES', memberPermissions: 'all' }).slash({ name: 'type-only' }),
+	);
 	// @ts-expect-error synthetic modal opt-in exists only on bot.dispatch.*.
 	bot.submitModal('type-only', {}, { allowSyntheticSource: true });
 	// @ts-expect-error fillModal was intentionally removed; submitModal is the only modal submission verb.
