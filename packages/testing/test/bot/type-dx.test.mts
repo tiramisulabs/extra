@@ -25,7 +25,7 @@ import {
 	type UserMenuResult,
 } from '../../src/bot/bot';
 import { type ApiMessage, type ApiUser, apiMember, apiMessage, apiUser } from '../../src/bot/payloads';
-import { mockMember, mockUser } from '../../src/factories';
+import { richMember, richUser } from '../../src/factories';
 import { GreetCommand, ReportUser } from './_setup';
 
 /** Compile-time assertion that the argument is assignable to `Expected`; the typed parameter does the checking. */
@@ -238,8 +238,8 @@ describe('type DX: S23 unified MemberInput', () => {
 });
 
 describe('type DX: S24 declared factory interfaces', () => {
-	test('mockUser exposes both camelCase and snake_case intentionally', () => {
-		const user = mockUser({ username: 'socram', globalName: 'Socram' });
+	test('richUser exposes both camelCase and snake_case intentionally', () => {
+		const user = richUser({ username: 'socram', globalName: 'Socram' });
 		expect(user.globalName).toBe('Socram');
 		expect(user.global_name).toBe('Socram');
 		// Both fields are part of the declared interface; neither read is a type error.
@@ -247,17 +247,17 @@ describe('type DX: S24 declared factory interfaces', () => {
 		expectAssignable<string | null>(user.global_name);
 	});
 
-	test('mockMember exposes joinedAt and joined_at from the declared shape', () => {
-		const member = mockMember({ joinedAt: '2026-06-14T00:00:00.000Z' });
+	test('richMember exposes joinedAt and joined_at from the declared shape', () => {
+		const member = richMember({ joinedAt: '2026-06-14T00:00:00.000Z' });
 		expect(member.joinedAt).toBe('2026-06-14T00:00:00.000Z');
 		expect(member.joined_at).toBe('2026-06-14T00:00:00.000Z');
 	});
 
-	test('mockUser type does not leak fields outside the declared contract', () => {
-		const user = mockUser();
-		// @ts-expect-error `nick` is a member field, never part of the declared MockUser contract.
+	test('richUser type does not leak fields outside the declared contract', () => {
+		const user = richUser();
+		// @ts-expect-error `nick` is a member field, never part of the declared RichUser contract.
 		void user.nick;
-		// @ts-expect-error `preferred_locale` is a guild field, never part of MockUser.
+		// @ts-expect-error `preferred_locale` is a guild field, never part of RichUser.
 		void user.preferred_locale;
 	});
 });

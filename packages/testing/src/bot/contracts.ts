@@ -45,7 +45,7 @@ import type { WorldBuilder } from './world';
 
 type ClientConstructorOptions = ConstructorParameters<typeof Client>[0];
 type ClientOptions = NonNullable<ClientConstructorOptions>;
-type MockClientOptions = Omit<ClientOptions, 'plugins'>;
+type SeyfertClientOptions = Omit<ClientOptions, 'plugins'>;
 type ServicesOptions = Parameters<Client['setServices']>[0];
 
 export interface CapturedReply {
@@ -584,7 +584,7 @@ export interface MockBotOptions {
 	 */
 	plugins?: readonly AnySeyfertPlugin[];
 	/** Raw Seyfert client constructor options, excluding plugin loading. Use `plugins` for plugins. */
-	clientOptions?: MockClientOptions;
+	clientOptions?: SeyfertClientOptions;
 	/** Global middlewares forwarded to the real Seyfert client. */
 	globalMiddlewares?: ClientOptions['globalMiddlewares'];
 	/** Prefixes enabled for message command dispatch through say(). */

@@ -1,6 +1,6 @@
 import { Command, type CommandContext, Declare } from 'seyfert';
 import { describe, expect, test } from 'vitest';
-import { type ApiUser, createMockBot, mockUser, mockWorld, TEST_BOT_ID, TEST_USER_ID } from '../../src';
+import { type ApiUser, createMockBot, mockWorld, richUser, TEST_BOT_ID, TEST_USER_ID } from '../../src';
 import { apiUser } from '../../src/bot/payloads';
 import { mockWorld as internalMockWorld } from '../../src/bot/world';
 
@@ -280,11 +280,11 @@ describe('actor binding is checked against the world', () => {
 });
 
 describe('a lightweight fixture seeded into a world fails legibly', () => {
-	test('mockUser in registerMember names both factories instead of DataCloneError', async () => {
+	test('richUser in registerMember names both factories instead of DataCloneError', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'fixture-guild' });
-		// Typechecks: MockUser satisfies ApiUser structurally, so nothing stops this at compile time.
-		world.registerMember(guild.id, { user: mockUser({ id: 'fixture-user' }) as ApiUser });
+		// Typechecks: RichUser satisfies ApiUser structurally, so nothing stops this at compile time.
+		world.registerMember(guild.id, { user: richUser({ id: 'fixture-user' }) as ApiUser });
 
 		await expect(createMockBot({ world })).rejects.toThrow(/apiUser/);
 		await expect(createMockBot({ world })).rejects.toThrow(/mockCommandContext/);

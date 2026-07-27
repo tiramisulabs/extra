@@ -112,16 +112,16 @@ interface SchedulerLike<TTask = unknown> {
 	remove?(id: string): Awaitable<void>;
 }
 
-export type MockLogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
+export type StubLogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal';
 
-export interface MockLogEntry {
-	level: MockLogLevel | 'add';
+export interface StubLogEntry {
+	level: StubLogLevel | 'add';
 	args: unknown[];
 }
 
-export interface MockLogger extends LoggerLike {
+export interface StubLogger extends LoggerLike {
 	readonly currentContext: Readonly<Record<string, unknown>>;
-	entries: MockLogEntry[];
+	entries: StubLogEntry[];
 	add(data: Record<string, unknown>): void;
 	trace(...args: unknown[]): void;
 	debug(...args: unknown[]): void;
@@ -129,11 +129,11 @@ export interface MockLogger extends LoggerLike {
 	warn(...args: unknown[]): void;
 	error(...args: unknown[]): void;
 	fatal(...args: unknown[]): void;
-	child(): MockLogger;
+	child(): StubLogger;
 	flush(): Promise<void>;
 }
 
-export interface MockQueueJob<TPayload = unknown, TResult = unknown, TName extends string = string>
+export interface StubQueueJob<TPayload = unknown, TResult = unknown, TName extends string = string>
 	extends QueueJobLike<TPayload, TResult, TName> {
 	id: string;
 	name: TName;
@@ -142,83 +142,83 @@ export interface MockQueueJob<TPayload = unknown, TResult = unknown, TName exten
 	options?: Record<string, unknown>;
 }
 
-export interface MockQueueEventMap<TPayload = unknown, TResult = unknown> {
-	added: QueueEventMapLike<TPayload, TResult, MockQueueJob<TPayload, TResult>>['added'];
-	active: QueueEventMapLike<TPayload, TResult, MockQueueJob<TPayload, TResult>>['active'];
-	completed: QueueEventMapLike<TPayload, TResult, MockQueueJob<TPayload, TResult>>['completed'];
-	failed: QueueEventMapLike<TPayload, TResult, MockQueueJob<TPayload, TResult>>['failed'];
-	retrying: QueueEventMapLike<TPayload, TResult, MockQueueJob<TPayload, TResult>>['retrying'];
-	idle: QueueEventMapLike<TPayload, TResult, MockQueueJob<TPayload, TResult>>['idle'];
+export interface StubQueueEventMap<TPayload = unknown, TResult = unknown> {
+	added: QueueEventMapLike<TPayload, TResult, StubQueueJob<TPayload, TResult>>['added'];
+	active: QueueEventMapLike<TPayload, TResult, StubQueueJob<TPayload, TResult>>['active'];
+	completed: QueueEventMapLike<TPayload, TResult, StubQueueJob<TPayload, TResult>>['completed'];
+	failed: QueueEventMapLike<TPayload, TResult, StubQueueJob<TPayload, TResult>>['failed'];
+	retrying: QueueEventMapLike<TPayload, TResult, StubQueueJob<TPayload, TResult>>['retrying'];
+	idle: QueueEventMapLike<TPayload, TResult, StubQueueJob<TPayload, TResult>>['idle'];
 }
 
-export interface MockQueue<TPayload = unknown, TResult = unknown>
-	extends QueueLike<TPayload, TResult, MockQueueJob<TPayload, TResult>> {
+export interface StubQueue<TPayload = unknown, TResult = unknown>
+	extends QueueLike<TPayload, TResult, StubQueueJob<TPayload, TResult>> {
 	name: string;
-	jobs: MockQueueJob<TPayload, TResult>[];
+	jobs: StubQueueJob<TPayload, TResult>[];
 	add<TJobPayload = unknown>(
 		name: string,
 		payload: TJobPayload,
 		options?: Record<string, unknown>,
-	): Promise<MockQueueJob<TJobPayload, TResult>>;
-	add(payload: TPayload, options?: Record<string, unknown>): Promise<MockQueueJob<TPayload, TResult>>;
-	on<TEvent extends keyof MockQueueEventMap<TPayload, TResult>>(
+	): Promise<StubQueueJob<TJobPayload, TResult>>;
+	add(payload: TPayload, options?: Record<string, unknown>): Promise<StubQueueJob<TPayload, TResult>>;
+	on<TEvent extends keyof StubQueueEventMap<TPayload, TResult>>(
 		event: TEvent,
-		listener: (payload: MockQueueEventMap<TPayload, TResult>[TEvent]) => unknown,
+		listener: (payload: StubQueueEventMap<TPayload, TResult>[TEvent]) => unknown,
 	): () => void;
-	once<TEvent extends keyof MockQueueEventMap<TPayload, TResult>>(
+	once<TEvent extends keyof StubQueueEventMap<TPayload, TResult>>(
 		event: TEvent,
-		listener: (payload: MockQueueEventMap<TPayload, TResult>[TEvent]) => unknown,
+		listener: (payload: StubQueueEventMap<TPayload, TResult>[TEvent]) => unknown,
 	): () => void;
-	off<TEvent extends keyof MockQueueEventMap<TPayload, TResult>>(
+	off<TEvent extends keyof StubQueueEventMap<TPayload, TResult>>(
 		event: TEvent,
-		listener: (payload: MockQueueEventMap<TPayload, TResult>[TEvent]) => unknown,
+		listener: (payload: StubQueueEventMap<TPayload, TResult>[TEvent]) => unknown,
 	): void;
 }
 
-export interface MockQueues extends QueuesLike {
-	queues: Map<string, MockQueue>;
-	get<TPayload = unknown, TResult = unknown>(name: string, options?: unknown): MockQueue<TPayload, TResult>;
+export interface StubQueues extends QueuesLike {
+	queues: Map<string, StubQueue>;
+	get<TPayload = unknown, TResult = unknown>(name: string, options?: unknown): StubQueue<TPayload, TResult>;
 }
 
-export interface MockScheduledTask {
+export interface StubScheduledTask {
 	id: string;
 	name: string;
 	schedule: number | string;
-	run: (task: MockScheduledTask) => unknown;
+	run: (task: StubScheduledTask) => unknown;
 }
 
-export interface MockScheduler extends SchedulerLike<MockScheduledTask> {
-	tasks: MockScheduledTask[];
-	add(name: string, schedule: number | string, run: (task: MockScheduledTask) => unknown): MockScheduledTask;
-	interval(name: string, schedule: number | string, run: (task: MockScheduledTask) => unknown): MockScheduledTask;
-	cron(name: string, schedule: string, run: (task: MockScheduledTask) => unknown): MockScheduledTask;
-	on<TEvent extends keyof SchedulerEventMapLike<MockScheduledTask>>(
+export interface StubScheduler extends SchedulerLike<StubScheduledTask> {
+	tasks: StubScheduledTask[];
+	add(name: string, schedule: number | string, run: (task: StubScheduledTask) => unknown): StubScheduledTask;
+	interval(name: string, schedule: number | string, run: (task: StubScheduledTask) => unknown): StubScheduledTask;
+	cron(name: string, schedule: string, run: (task: StubScheduledTask) => unknown): StubScheduledTask;
+	on<TEvent extends keyof SchedulerEventMapLike<StubScheduledTask>>(
 		event: TEvent,
-		listener: (payload: SchedulerEventMapLike<MockScheduledTask>[TEvent]) => unknown,
+		listener: (payload: SchedulerEventMapLike<StubScheduledTask>[TEvent]) => unknown,
 	): () => void;
-	once<TEvent extends keyof SchedulerEventMapLike<MockScheduledTask>>(
+	once<TEvent extends keyof SchedulerEventMapLike<StubScheduledTask>>(
 		event: TEvent,
-		listener: (payload: SchedulerEventMapLike<MockScheduledTask>[TEvent]) => unknown,
+		listener: (payload: SchedulerEventMapLike<StubScheduledTask>[TEvent]) => unknown,
 	): () => void;
-	off<TEvent extends keyof SchedulerEventMapLike<MockScheduledTask>>(
+	off<TEvent extends keyof SchedulerEventMapLike<StubScheduledTask>>(
 		event: TEvent,
-		listener: (payload: SchedulerEventMapLike<MockScheduledTask>[TEvent]) => unknown,
+		listener: (payload: SchedulerEventMapLike<StubScheduledTask>[TEvent]) => unknown,
 	): void;
 }
 
-export interface MockClientOptions {
-	logger?: MockLogger;
-	queues?: MockQueues;
-	scheduler?: MockScheduler;
+export interface StubClientOptions {
+	logger?: StubLogger;
+	queues?: StubQueues;
+	scheduler?: StubScheduler;
 	botId?: string;
 	applicationId?: string;
 	extra?: Record<string, unknown>;
 }
 
-export interface MockClient extends Record<string, unknown> {
-	logger: MockLogger;
-	queues: MockQueues;
-	scheduler: MockScheduler;
+export interface StubClient extends Record<string, unknown> {
+	logger: StubLogger;
+	queues: StubQueues;
+	scheduler: StubScheduler;
 	botId: string;
 	applicationId: string;
 	/** Entity managers that direct fetch flows to the bot harness (the light client resolves no entities). */
@@ -238,11 +238,11 @@ function unavailableManager(path: string): { fetch(...args: unknown[]): never } 
 	return { fetch: fail };
 }
 
-export function mockLogger(): MockLogger {
-	const entries: MockLogEntry[] = [];
+export function stubLogger(): StubLogger {
+	const entries: StubLogEntry[] = [];
 	const context: Record<string, unknown> = {};
 	const write =
-		(level: MockLogLevel) =>
+		(level: StubLogLevel) =>
 		(...args: unknown[]) => {
 			entries.push({ level, args });
 		};
@@ -273,13 +273,13 @@ export function mockLogger(): MockLogger {
 	};
 }
 
-export function mockQueues(): MockQueues {
-	const queues = new Map<string, MockQueue>();
+export function stubQueues(): StubQueues {
+	const queues = new Map<string, StubQueue>();
 
 	return {
 		queues,
-		get<TPayload = unknown, TResult = unknown>(name: string): MockQueue<TPayload, TResult> {
-			let queue = queues.get(name) as MockQueue<TPayload, TResult> | undefined;
+		get<TPayload = unknown, TResult = unknown>(name: string): StubQueue<TPayload, TResult> {
+			let queue = queues.get(name) as StubQueue<TPayload, TResult> | undefined;
 			if (!queue) {
 				queue = {
 					name,
@@ -316,16 +316,16 @@ export function mockQueues(): MockQueues {
 					},
 					off() {},
 				};
-				queues.set(name, queue as MockQueue);
+				queues.set(name, queue as StubQueue);
 			}
 			return queue;
 		},
 	};
 }
 
-export function mockScheduler(): MockScheduler {
-	const tasks: MockScheduledTask[] = [];
-	const add = (name: string, schedule: number | string, run: (task: MockScheduledTask) => unknown) => {
+export function stubScheduler(): StubScheduler {
+	const tasks: StubScheduledTask[] = [];
+	const add = (name: string, schedule: number | string, run: (task: StubScheduledTask) => unknown) => {
 		const task = { id: mockId(), name, schedule, run };
 		tasks.push(task);
 		return task;
@@ -346,11 +346,11 @@ export function mockScheduler(): MockScheduler {
 	};
 }
 
-export function mockClient(options: MockClientOptions = {}): MockClient {
+export function stubClient(options: StubClientOptions = {}): StubClient {
 	return {
-		logger: options.logger ?? mockLogger(),
-		queues: options.queues ?? mockQueues(),
-		scheduler: options.scheduler ?? mockScheduler(),
+		logger: options.logger ?? stubLogger(),
+		queues: options.queues ?? stubQueues(),
+		scheduler: options.scheduler ?? stubScheduler(),
 		botId: options.botId ?? 'slipher-test-bot',
 		applicationId: options.applicationId ?? 'slipher-test-application',
 		guilds: unavailableManager('guilds'),

@@ -22,7 +22,6 @@ import {
 	type MockModalContext,
 	mockCommandContext,
 	mockComponentContext,
-	mockGuild,
 	mockModalContext,
 	type OutcomeCapturedError,
 	type OutcomeDenial,
@@ -32,6 +31,7 @@ import {
 	type RegisteredCommandFound,
 	type RoleView,
 	rendered,
+	richGuild,
 } from '../src';
 
 declare function expectType<T>(value: T): void;
@@ -42,12 +42,12 @@ const typedContext = mockCommandContext<{ reason: string; count: number }>({
 expectType<string>(typedContext.options.reason);
 expectType<number>(typedContext.options.count);
 
-const typedGuild = mockGuild({ icon: 'guild-icon' });
+const typedGuild = richGuild({ icon: 'guild-icon' });
 expectType<string | null>(typedGuild.icon);
 expectType<string | undefined>(typedGuild.iconURL({ extension: 'webp', size: 128 }));
 expectType<Pick<Guild, 'icon' | 'iconURL'>>(typedGuild);
 // @ts-expect-error — guild icon hashes are strings or null, matching seyfert's guild shape.
-mockGuild({ icon: 123 });
+richGuild({ icon: 123 });
 
 // Class-first form: options are INFERRED from the command's `run(ctx: CommandContext<typeof options>)` annotation.
 const banOptions = { reason: createStringOption({ description: 'why', required: true }) };

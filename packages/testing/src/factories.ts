@@ -20,7 +20,7 @@ function snowflakeDerived(id: string): SnowflakeDerived {
 	return { createdTimestamp, createdAt: new Date(createdTimestamp) };
 }
 
-export interface MockUserOptions {
+export interface RichUserOptions {
 	id?: string;
 	username?: string;
 	globalName?: string | null;
@@ -31,7 +31,7 @@ export interface MockUserOptions {
 	avatarDecorationData?: { asset: string } | null;
 }
 
-export interface MockGuildOptions {
+export interface RichGuildOptions {
 	id?: string;
 	name?: string;
 	preferredLocale?: string;
@@ -39,20 +39,20 @@ export interface MockGuildOptions {
 	icon?: string | null;
 }
 
-export interface MockChannelOptions {
+export interface RichChannelOptions {
 	id?: string;
 	guildId?: string | null;
 	name?: string;
 	type?: number;
 	/**
 	 * Extra fields merged onto the channel — stub the seyfert channel type-guards/methods a command calls
-	 * (`isGuildTextable`, `isThread`, `isVoice`, …) without a cast. Mirrors {@link MockClientOptions.extra}.
+	 * (`isGuildTextable`, `isThread`, `isVoice`, …) without a cast. Mirrors {@link StubClientOptions.extra}.
 	 */
 	extra?: Record<string, unknown>;
 }
 
-export interface MockMemberOptions {
-	user?: MockUser;
+export interface RichMemberOptions {
+	user?: RichUser;
 	roles?: string[];
 	nick?: string | null;
 	joinedAt?: string;
@@ -74,10 +74,10 @@ export interface ApiRoleLike {
 
 /**
  * seyfert's `GuildMember.roles` manager. `keys` is pure (`[...roleIds, guildId]`). `list`/`permissions`/`sorted`/
- * `highest` resolve from {@link MockMemberOptions.roleData} and throw a directed error when it's absent (the light
+ * `highest` resolve from {@link RichMemberOptions.roleData} and throw a directed error when it's absent (the light
  * harness has no role source). `add`/`remove` mutate the member's local role set.
  */
-export interface MockMemberRoles {
+export interface RichMemberRoles {
 	readonly keys: readonly string[];
 	list(force?: boolean): Promise<ApiRoleLike[]>;
 	permissions(force?: boolean): Promise<PermissionsBitField>;
@@ -94,7 +94,7 @@ export interface MockMemberRoles {
  * the ergonomic accessor for assertions, while the snake_case field lets the factory output be dropped
  * straight into wire-shaped payloads (resolved option data, gateway `d`). Both are part of the contract.
  */
-export interface MockUser extends SnowflakeDerived {
+export interface RichUser extends SnowflakeDerived {
 	id: string;
 	username: string;
 	/** Ergonomic accessor; mirrors {@link global_name}. */
@@ -122,7 +122,7 @@ export interface MockUser extends SnowflakeDerived {
 	avatarDecorationURL(options?: CDNUrlOptions): string | undefined;
 }
 
-export interface MockGuild extends SnowflakeDerived {
+export interface RichGuild extends SnowflakeDerived {
 	id: string;
 	name: string;
 	/** Ergonomic accessor; mirrors {@link preferred_locale}. */
@@ -167,7 +167,7 @@ export interface ChannelGuards {
 	is(channelTypes: readonly (keyof typeof ChannelType)[]): boolean;
 }
 
-export interface MockChannel extends Record<string, unknown>, ChannelGuards, SnowflakeDerived {
+export interface RichChannel extends Record<string, unknown>, ChannelGuards, SnowflakeDerived {
 	id: string;
 	/** Ergonomic accessor; mirrors {@link guild_id}. `null` for a DM channel. */
 	guildId: string | null;
@@ -184,12 +184,12 @@ export interface MockChannel extends Record<string, unknown>, ChannelGuards, Sno
 	readonly url: string;
 }
 
-export interface MockMember extends SnowflakeDerived {
+export interface RichMember extends SnowflakeDerived {
 	/** The member's id — the same snowflake as its user, mirroring seyfert's `GuildMember.id`. */
 	id: string;
-	user: MockUser;
-	/** seyfert's role manager — `roles.keys` are the ids; see {@link MockMemberRoles}. */
-	roles: MockMemberRoles;
+	user: RichUser;
+	/** seyfert's role manager — `roles.keys` are the ids; see {@link RichMemberRoles}. */
+	roles: RichMemberRoles;
 	nick: string | null;
 	/** Ergonomic accessor; mirrors {@link joined_at}. */
 	joinedAt: string;
@@ -226,7 +226,7 @@ export interface MockMember extends SnowflakeDerived {
 	readonly hasTimeout: false | number;
 }
 
-export function mockUser(options: MockUserOptions = {}): MockUser {
+export function richUser(options: RichUserOptions = {}): RichUser {
 	const id = options.id ?? mockId();
 	const username = options.username ?? 'slipher-test-user';
 	const globalName = options.globalName === undefined ? (options.username ?? 'Slipher Test User') : options.globalName;
@@ -267,7 +267,7 @@ export function mockUser(options: MockUserOptions = {}): MockUser {
 	};
 }
 
-export function mockGuild(options: MockGuildOptions = {}): MockGuild {
+export function richGuild(options: RichGuildOptions = {}): RichGuild {
 	const id = options.id ?? mockId();
 	const ownerId = options.ownerId ?? mockId();
 	const preferredLocale = options.preferredLocale ?? 'en-US';
@@ -328,7 +328,7 @@ function channelGuards(type: number): ChannelGuards {
 	};
 }
 
-export function mockChannel(options: MockChannelOptions = {}): MockChannel {
+export function richChannel(options: RichChannelOptions = {}): RichChannel {
 	const id = options.id ?? mockId();
 	const guildId = options.guildId === undefined ? mockId() : options.guildId;
 	const type = options.type ?? 0;
@@ -356,12 +356,12 @@ function memberRolesManager(
 	roleIds: string[],
 	guildId: string | undefined,
 	roleData: ApiRoleLike[] | undefined,
-): MockMemberRoles {
+): RichMemberRoles {
 	const resolve = (method: string): ApiRoleLike[] => {
 		if (!roleData) {
 			throw new TypeError(
 				`member.roles.${method}() can't resolve role objects on mockCommandContext (the light unit harness has ` +
-					'no role source). Pass mockMember({ roleData: [{ id, permissions, position }] }), or use createMockBot.',
+					'no role source). Pass richMember({ roleData: [{ id, permissions, position }] }), or use createMockBot.',
 			);
 		}
 		return roleData.filter(role => roleIds.includes(role.id));
@@ -386,8 +386,8 @@ function memberRolesManager(
 	};
 }
 
-export function mockMember(options: MockMemberOptions = {}): MockMember {
-	const user = options.user ?? mockUser();
+export function richMember(options: RichMemberOptions = {}): RichMember {
+	const user = options.user ?? richUser();
 	const joinedAt = options.joinedAt ?? new Date(0).toISOString();
 	const communicationDisabledUntil = options.communicationDisabledUntil ?? null;
 	const roles = memberRolesManager([...(options.roles ?? [])], options.guildId, options.roleData);
@@ -436,17 +436,17 @@ export function mockMember(options: MockMemberOptions = {}): MockMember {
 	};
 }
 
-export interface MockMessageOptions {
+export interface RichMessageOptions {
 	id?: string;
 	channelId?: string;
 	guildId?: string | null;
-	author?: MockUser;
+	author?: RichUser;
 	content?: string;
 	embeds?: unknown[];
 	components?: unknown[];
 }
 
-export interface MockMessage extends SnowflakeDerived {
+export interface RichMessage extends SnowflakeDerived {
 	id: string;
 	/** Ergonomic accessor; mirrors {@link channel_id}. */
 	channelId: string;
@@ -456,9 +456,9 @@ export interface MockMessage extends SnowflakeDerived {
 	guildId?: string;
 	/** Wire field; mirrors {@link guildId}. */
 	guild_id?: string;
-	author: MockUser;
+	author: RichUser;
 	/** Alias of {@link author}, mirroring seyfert's `Message.user`. */
-	readonly user: MockUser;
+	readonly user: RichUser;
 	content: string;
 	embeds: unknown[];
 	components: unknown[];
@@ -474,11 +474,11 @@ export interface MockMessage extends SnowflakeDerived {
  * A message entity — for context-menu targets, collector/source messages, and event payloads. Mirrors the
  * camelCase + snake_case contract of the other factories.
  */
-export function mockMessage(options: MockMessageOptions = {}): MockMessage {
+export function richMessage(options: RichMessageOptions = {}): RichMessage {
 	const id = options.id ?? mockId();
 	const channelId = options.channelId ?? mockId();
 	const guildId = options.guildId == null ? undefined : options.guildId;
-	const author = options.author ?? mockUser();
+	const author = options.author ?? richUser();
 	return {
 		id,
 		channelId,
@@ -500,7 +500,7 @@ export function mockMessage(options: MockMessageOptions = {}): MockMessage {
 	};
 }
 
-export interface MockRoleOptions {
+export interface RichRoleOptions {
 	id?: string;
 	name?: string;
 	color?: number;
@@ -512,7 +512,7 @@ export interface MockRoleOptions {
 	permissions?: string | bigint;
 }
 
-export interface MockRole extends SnowflakeDerived {
+export interface RichRole extends SnowflakeDerived {
 	id: string;
 	name: string;
 	color: number;
@@ -526,7 +526,7 @@ export interface MockRole extends SnowflakeDerived {
 }
 
 /** A role entity, mirroring seyfert's `GuildRole` (permissions as a {@link PermissionsBitField}, `toString` mention). */
-export function mockRole(options: MockRoleOptions = {}): MockRole {
+export function richRole(options: RichRoleOptions = {}): RichRole {
 	const id = options.id ?? mockId();
 	return {
 		id,
@@ -542,13 +542,13 @@ export function mockRole(options: MockRoleOptions = {}): MockRole {
 	};
 }
 
-export interface MockEmojiOptions {
+export interface RichEmojiOptions {
 	id?: string;
 	name?: string;
 	animated?: boolean;
 }
 
-export interface MockEmoji extends SnowflakeDerived {
+export interface RichEmoji extends SnowflakeDerived {
 	id: string;
 	name: string;
 	animated: boolean;
@@ -559,7 +559,7 @@ export interface MockEmoji extends SnowflakeDerived {
 }
 
 /** A custom-emoji entity, mirroring seyfert's `Emoji` (`toString` mention + `url`). */
-export function mockEmoji(options: MockEmojiOptions = {}): MockEmoji {
+export function richEmoji(options: RichEmojiOptions = {}): RichEmoji {
 	const id = options.id ?? mockId();
 	const name = options.name ?? 'slipher_test_emoji';
 	const animated = options.animated ?? false;
@@ -573,7 +573,7 @@ export function mockEmoji(options: MockEmojiOptions = {}): MockEmoji {
 	};
 }
 
-export interface MockVoiceStateOptions {
+export interface RichVoiceStateOptions {
 	userId?: string;
 	channelId?: string | null;
 	guildId?: string;
@@ -586,7 +586,7 @@ export interface MockVoiceStateOptions {
 	suppress?: boolean;
 }
 
-export interface MockVoiceState {
+export interface RichVoiceState {
 	userId: string;
 	channelId: string | null;
 	guildId?: string;
@@ -610,7 +610,7 @@ export interface MockVoiceState {
 }
 
 /** A voice-state entity, with seyfert's derived `is*` getters computed from the mute/deaf/video/stream flags. */
-export function mockVoiceState(options: MockVoiceStateOptions = {}): MockVoiceState {
+export function richVoiceState(options: RichVoiceStateOptions = {}): RichVoiceState {
 	const mute = options.mute ?? false;
 	const deaf = options.deaf ?? false;
 	const selfMute = options.selfMute ?? false;

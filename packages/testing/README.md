@@ -30,7 +30,7 @@ Requires Seyfert v5 (peer dependency).
 
 ## How it works
 
-The fixture layer is plain mock objects - no assertions, spies, or fake timers bundled - so they work with any test runner. The core is `mockCommandContext()`: a stand-in for a Seyfert command context with the fields most commands touch, plus working Slipher stubs (`logger`, `queues`, `scheduler`) that **record what your command does** so you can assert on it afterward. Factories (`mockUser`, `mockGuild`, ...) build the entities, with deterministic ids you can override. The mock-bot layer below keeps the same runner-agnostic model while driving a real Seyfert client pipeline.
+The fixture layer is plain mock objects - no assertions, spies, or fake timers bundled - so they work with any test runner. The core is `mockCommandContext()`: a stand-in for a Seyfert command context with the fields most commands touch, plus working Slipher stubs (`logger`, `queues`, `scheduler`) that **record what your command does** so you can assert on it afterward. Factories (`richUser`, `richGuild`, ...) build the entities, with deterministic ids you can override. The mock-bot layer below keeps the same runner-agnostic model while driving a real Seyfert client pipeline.
 
 ## Install
 
@@ -41,7 +41,7 @@ pnpm add -D @slipher/testing
 ## Mock Command Contexts
 
 ```ts
-import { mockCommandContext, mockUser } from '@slipher/testing';
+import { mockCommandContext, richUser } from '@slipher/testing';
 import { expect, test } from 'vitest';
 import BanCommand from './commands/ban';
 
@@ -49,7 +49,7 @@ test('replies after banning', async () => {
 	// A stand-in context carrying just the fields the command touches.
 	// The command class binds ctx.run() and lets options infer from the command.
 	const ctx = mockCommandContext(BanCommand, {
-		options: { user: mockUser({ id: '123' }) },
+		options: { user: richUser({ id: '123' }) },
 	});
 
 	// Run the real command body against the mock — no cast at the call site.
@@ -73,7 +73,7 @@ test('replies after banning', async () => {
 - `responses`, `lastResponse()`, and `clearResponses()`
 - `modals` — payloads the handler passed to `ctx.interaction.modal()`, in order
 
-`ctx.client.logger === ctx.logger`, `ctx.client.queues === ctx.queues`, and `ctx.client.scheduler === ctx.scheduler`. Use `mockClient({ extra })` when a command touches client surfaces that this package does not model.
+`ctx.client.logger === ctx.logger`, `ctx.client.queues === ctx.queues`, and `ctx.client.scheduler === ctx.scheduler`. Use `stubClient({ extra })` when a command touches client surfaces that this package does not model.
 
 When the assertion needs the entities as well as the context — the user who ran it, the
 guild it ran in, the channel it replied to — `mockScene()` builds them wired to each
@@ -199,14 +199,25 @@ The option only applies to subjects with a REST trail (`bot`, `actor`, `result`,
 
 ## Factories
 
-```ts
-import { mockChannel, mockGuild, mockMember, mockUser } from '@slipher/testing';
+Two families, named for what they produce rather than for being test doubles — everything here is a
+test double:
 
-const user = mockUser({ username: 'socram' });
-const guild = mockGuild({ id: 'guild-1', name: 'Slipher Lab', icon: 'guild-icon-hash' });
+- **`rich*`** (`richUser`, `richGuild`, `richChannel`, `richMember`, `richMessage`, `richRole`,
+  `richEmoji`, `richVoiceState`) — behavioural fixtures carrying `toString()`, `avatarURL()` and the
+  rest. For `mockCommandContext` and friends.
+- **`api*`** (`apiUser`, `apiGuild`, …) — plain wire payloads. World seeding `structuredClone`s, so
+  it takes these; a `rich*` fixture carries methods and cannot be cloned.
+- **`stub*`** (`stubClient`, `stubLogger`, `stubQueues`, `stubScheduler`) — Slipher service doubles,
+  not Discord entities.
+
+```ts
+import { richChannel, richGuild, richMember, richUser } from '@slipher/testing';
+
+const user = richUser({ username: 'socram' });
+const guild = richGuild({ id: 'guild-1', name: 'Slipher Lab', icon: 'guild-icon-hash' });
 guild.iconURL(); // https://cdn.discordapp.com/icons/guild-1/guild-icon-hash.png
-const channel = mockChannel({ guildId: guild.id });
-const member = mockMember({ user });
+const channel = richChannel({ guildId: guild.id });
+const member = richMember({ user });
 ```
 
 ## Slipher Stubs
@@ -236,22 +247,22 @@ Attach runner-specific behavior by replacing the method or nested surface you ne
 
 ```ts
 import { vi } from 'vitest';
-import { mockCommandContext, mockGuild, mockMember } from '@slipher/testing';
+import { mockCommandContext, richGuild, richMember } from '@slipher/testing';
 
 const ctx = mockCommandContext();
 ctx.guild = vi.fn(async () => ({
-	...mockGuild(),
-	members: { fetch: vi.fn(async () => mockMember()) },
+	...richGuild(),
+	members: { fetch: vi.fn(async () => richMember()) },
 }));
 ```
 
 ```ts
-import { mockCommandContext, mockGuild, mockMember } from '@slipher/testing';
+import { mockCommandContext, richGuild, richMember } from '@slipher/testing';
 
 const ctx = mockCommandContext();
 ctx.guild = jest.fn(async () => ({
-	...mockGuild(),
-	members: { fetch: jest.fn(async () => mockMember()) },
+	...richGuild(),
+	members: { fetch: jest.fn(async () => richMember()) },
 }));
 ```
 
