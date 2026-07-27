@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
+	apiAttachment,
 	apiAuditLogEntry,
 	apiAutoModRule,
 	apiEmoji,
@@ -33,5 +34,13 @@ describe('payload factories', () => {
 		expect(result).toBeTypeOf('object');
 		expect(result).not.toBeNull();
 		expect(Object.keys(result).length).toBeGreaterThan(0);
+	});
+
+	test('apiAttachment can express "no content type" without a cast', () => {
+		expect(apiAttachment().content_type).toBe('image/png');
+		expect(apiAttachment({ contentType: 'application/pdf' }).content_type).toBe('application/pdf');
+		// optional on the wire, so an explicit undefined drops the key instead of being defaulted back —
+		// "attachment with no content type" is exactly what content-type validation exists to reject
+		expect(apiAttachment({ contentType: undefined })).not.toHaveProperty('content_type');
 	});
 });
