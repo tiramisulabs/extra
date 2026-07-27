@@ -2,7 +2,7 @@ import { createPlugin } from 'seyfert';
 import { SeyfertError } from 'seyfert/lib/common';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
-import { DiscordErrors, MockApiHandler, redactRouteTokens } from '../../src/bot/rest';
+import { DiscordErrors, isDiscordError, MockApiHandler, redactRouteTokens } from '../../src/bot/rest';
 import { Routes } from '../../src/bot/routes';
 import { mockWorld } from '../../src/bot/world';
 
@@ -338,6 +338,50 @@ describe('responder return values', () => {
 		bot.rest.intercept(Routes.deleteMessage, () => undefined);
 
 		await expect(bot.client.messages.delete('m-1', 'chan-1')).resolves.toBeUndefined();
+		await bot.close();
+	});
+});
+
+describe('one error catalog, one predicate', () => {
+	test('isDiscordError narrows both shapes the package can throw', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'narrow-guild' });
+		const channel = world.registerChannel(guild.id);
+		const bot = await createMockBot({ world });
+
+		// a world guard: MockApiError
+		const guardError = await bot.client.messages.fetch('ghost', channel.id).then(
+			() => undefined,
+			(reason: unknown) => reason,
+		);
+		// rest.fail(): seyfert's own error, via the real parseError
+		bot.rest.fail(Routes.fetchChannel, DiscordErrors.UnknownChannel);
+		const failError = await bot.client.channels.fetch('ghost').then(
+			() => undefined,
+			(reason: unknown) => reason,
+		);
+
+		expect(guardError?.constructor.name).toBe('MockApiError');
+		expect(failError?.constructor.name).toBe('SeyfertError');
+		// one predicate answers for both, which is the point
+		expect(isDiscordError(guardError, { code: DiscordErrors.UnknownMessage.code })).toBe(true);
+		expect(isDiscordError(failError, { code: DiscordErrors.UnknownChannel.code })).toBe(true);
+		expect(isDiscordError(guardError, { code: DiscordErrors.UnknownChannel.code })).toBe(false);
+		expect(isDiscordError(new Error('not a discord error'))).toBe(false);
+		await bot.close();
+	});
+
+	test('the catalog carries the copy, so a call site only names the error', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'copy-guild' });
+		const channel = world.registerChannel(guild.id, { id: 'copy-chan' });
+		const bot = await createMockBot({ world });
+
+		await expect(bot.client.channels.fetch('ghost')).rejects.toThrow('Unknown Channel');
+		// per-call detail still overrides it, which is why the second argument exists
+		await expect(
+			bot.rest.request('POST', `/channels/${channel.id}/messages`, { body: { embeds: new Array(11).fill({}) } }),
+		).rejects.toThrow(/Invalid Form Body: /);
 		await bot.close();
 	});
 });

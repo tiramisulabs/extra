@@ -222,7 +222,7 @@ export {
 	apiError,
 	type DiscordErrorInit,
 	DiscordErrors,
-	ErrorCode,
+	isDiscordError,
 	MockApiError,
 	type MockApiHandler,
 	matchRoute,

@@ -2,7 +2,7 @@ import { Command, type CommandContext, createEvent, Declare } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { apiMember, apiUser } from '../../src/bot/payloads';
-import { apiError, MockApiError } from '../../src/bot/rest';
+import { apiError, DiscordErrors, MockApiError } from '../../src/bot/rest';
 import { Routes } from '../../src/bot/routes';
 import { mockWorld } from '../../src/bot/world';
 
@@ -227,7 +227,7 @@ describe('stateful world defaults', () => {
 		}
 
 		const bot = await createMockBot({ commands: [CatchRestError] });
-		bot.rest.intercept(Routes.ban, () => apiError(403, 50013, 'Missing Permissions'));
+		bot.rest.intercept(Routes.ban, () => apiError(DiscordErrors.MissingPermissions));
 		const result = await bot.slash({ name: 'catch-rest-error' });
 		expect(result.content).toBe('no permission');
 		expect(bot.restCalls(Routes.ban)).toHaveLength(1);

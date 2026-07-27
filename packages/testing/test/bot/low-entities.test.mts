@@ -2,7 +2,7 @@ import { Command, type CommandContext, Declare } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { apiUser } from '../../src/bot/payloads';
-import { ErrorCode } from '../../src/bot/rest';
+import { DiscordErrors } from '../../src/bot/rest';
 import { Routes } from '../../src/bot/routes';
 import { mockWorld } from '../../src/bot/world';
 
@@ -128,7 +128,7 @@ describe('scheduled events, stage, soundboard and audit logs (seedable reads)', 
 		const bot = await createMockBot({ world });
 		await expect(
 			bot.rest.request('PATCH', `/guilds/${guild.id}/scheduled-events/ghost`, { body: { name: 'x' } }),
-		).rejects.toMatchObject({ status: 404, code: ErrorCode.UnknownScheduledEvent });
+		).rejects.toMatchObject({ status: 404, code: DiscordErrors.UnknownScheduledEvent.code });
 		await bot.close();
 	});
 });

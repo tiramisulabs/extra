@@ -17,7 +17,7 @@ import {
 } from './default-context';
 import { assertAttachmentRefs } from './message-validation';
 import { apiChannel, apiMember, apiMessage, apiUser, apiWebhook } from './payloads';
-import { apiError, ErrorCode, type RouteResponder } from './rest';
+import { apiError, DiscordErrors, type RouteResponder } from './rest';
 import { Routes } from './routes';
 
 export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
@@ -53,10 +53,10 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 	rest.intercept(Routes.fetchMember, (_pending, params) => {
 		requireGuild(params.guildId);
 		if (removed.has(key(params.guildId, params.userId))) {
-			return apiError(404, ErrorCode.UnknownMember, 'Unknown Member');
+			return apiError(DiscordErrors.UnknownMember);
 		}
 		const entry = findMember(params.guildId, params.userId);
-		if (world && !entry) apiError(404, ErrorCode.UnknownMember, 'Unknown Member');
+		if (world && !entry) apiError(DiscordErrors.UnknownMember);
 		return entry?.member ?? apiMember({ user: apiUser({ id: params.userId }) });
 	});
 	interceptFetchOne(
@@ -64,7 +64,7 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 		Routes.fetchUser,
 		params => world?.users.find(user => user.id === params.userId),
 		params => apiUser({ id: params.userId }),
-		world ? { code: ErrorCode.UnknownUser, message: 'Unknown User' } : undefined,
+		world ? DiscordErrors.UnknownUser : undefined,
 	);
 	rest.intercept(Routes.fetchRoles, (_pending, params) => {
 		requireGuild(params.guildId);
@@ -86,7 +86,7 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 			return hooks.state.rawMessage(params.channelId, params.messageId);
 		},
 		params => apiMessage({ id: params.messageId, channelId: params.channelId }),
-		world ? { code: ErrorCode.UnknownMessage, message: 'Unknown Message' } : undefined,
+		world ? DiscordErrors.UnknownMessage : undefined,
 	);
 	// A webhook execute (POST /webhooks/:id/:token) and webhook-message ops share the route shape of
 	// interaction followups/webhook-messages. Disambiguate by the registry first; a known webhook id with the
@@ -94,30 +94,30 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 	const resolveWebhookChannel = (id: string, token: string): string | undefined => {
 		const entry = hooks.state.webhookById(id);
 		if (entry) {
-			if (entry.token !== token) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+			if (entry.token !== token) apiError(DiscordErrors.UnknownWebhook);
 			return entry.channel_id;
 		}
 		const encodedChannelId = webhookChannelOf(id);
 		if (!encodedChannelId) return undefined;
-		if (token !== 'mock-webhook-token') apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+		if (token !== 'mock-webhook-token') apiError(DiscordErrors.UnknownWebhook);
 		requireChannel(encodedChannelId);
 		return encodedChannelId;
 	};
 	const requireInteractionWebhook = (applicationId: string, token: string): void => {
-		if (!hooks.state.hasInteractionToken(token)) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+		if (!hooks.state.hasInteractionToken(token)) apiError(DiscordErrors.UnknownWebhook);
 		const expected = hooks.state.applicationIdForToken(token) ?? hooks.applicationId;
-		if (applicationId !== expected) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+		if (applicationId !== expected) apiError(DiscordErrors.UnknownWebhook);
 	};
 	rest.intercept(Routes.fetchWebhookMessage, (_pending, params) => {
 		const channelId = resolveWebhookChannel(params.applicationId, params.interactionToken);
 		if (channelId) {
 			const message = hooks.state.rawMessage(channelId, params.messageId);
-			if (!message) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
+			if (!message) apiError(DiscordErrors.UnknownMessage);
 			return message;
 		}
 		requireInteractionWebhook(params.applicationId, params.interactionToken);
 		const message = hooks.state.webhookMessage(params.interactionToken, params.messageId);
-		if (!message) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
+		if (!message) apiError(DiscordErrors.UnknownMessage);
 		return message;
 	});
 	// Channel webhooks (sendLog-style). list returns [] so the bot takes the create path; create hands
@@ -142,36 +142,36 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 	});
 	rest.intercept(Routes.fetchWebhook, (_pending, params) => {
 		const webhook = hooks.state.webhookById(params.webhookId);
-		if (!webhook && world) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+		if (!webhook && world) apiError(DiscordErrors.UnknownWebhook);
 		return webhook ?? apiWebhook({ id: params.webhookId });
 	});
 	rest.intercept(Routes.fetchWebhookToken, (_pending, params) => {
 		const webhook = hooks.state.webhookById(params.webhookId);
-		if (webhook && webhook.token !== params.webhookToken) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
-		if (!webhook && world) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+		if (webhook && webhook.token !== params.webhookToken) apiError(DiscordErrors.UnknownWebhook);
+		if (!webhook && world) apiError(DiscordErrors.UnknownWebhook);
 		return webhook ?? apiWebhook({ id: params.webhookId, token: params.webhookToken });
 	});
 	rest.intercept(Routes.editWebhook, (pending, params) => {
-		if (world && !hooks.state.webhookById(params.webhookId)) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+		if (world && !hooks.state.webhookById(params.webhookId)) apiError(DiscordErrors.UnknownWebhook);
 		return hooks.state.editWebhook(params.webhookId, bodyRecord(pending.body)) ?? apiWebhook({ id: params.webhookId });
 	});
 	rest.intercept(Routes.editWebhookToken, (pending, params) => {
 		const webhook = hooks.state.webhookById(params.webhookId);
-		if (webhook && webhook.token !== params.webhookToken) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
-		if (world && !webhook) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+		if (webhook && webhook.token !== params.webhookToken) apiError(DiscordErrors.UnknownWebhook);
+		if (world && !webhook) apiError(DiscordErrors.UnknownWebhook);
 		return (
 			hooks.state.editWebhook(params.webhookId, bodyRecord(pending.body)) ??
 			apiWebhook({ id: params.webhookId, token: params.webhookToken })
 		);
 	});
 	rest.intercept(Routes.deleteWebhook, (_pending, params) => {
-		if (world && !hooks.state.webhookById(params.webhookId)) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+		if (world && !hooks.state.webhookById(params.webhookId)) apiError(DiscordErrors.UnknownWebhook);
 		hooks.state.removeWebhook(params.webhookId);
 	});
 	rest.intercept(Routes.deleteWebhookToken, (_pending, params) => {
 		const webhook = hooks.state.webhookById(params.webhookId);
-		if (webhook && webhook.token !== params.webhookToken) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
-		if (world && !webhook) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+		if (webhook && webhook.token !== params.webhookToken) apiError(DiscordErrors.UnknownWebhook);
+		if (world && !webhook) apiError(DiscordErrors.UnknownWebhook);
 		hooks.state.removeWebhook(params.webhookId);
 	});
 	rest.intercept(Routes.listGuildWebhooks, (_pending, params) => {
@@ -209,15 +209,13 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 		if (origin !== undefined) {
 			if ((body.type === 6 || body.type === 7) && origin !== 3 && origin !== 5) {
 				apiError(
-					400,
-					50035,
+					DiscordErrors.InvalidFormBody,
 					'Invalid Form Body: message update callbacks are only valid for component or modal interactions',
 				);
 			}
 			if (body.type === 9 && origin === 5) {
 				apiError(
-					400,
-					ErrorCode.InvalidFormBody,
+					DiscordErrors.InvalidFormBody,
 					'Invalid Form Body: cannot respond to a modal submit with another modal',
 				);
 			}
@@ -225,7 +223,7 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 		// A token can be acknowledged exactly once. A second callback on it is Discord's 40060, not a duplicate
 		// message — the silent double-reply footgun.
 		if (hooks.state.isAcknowledged(params.token)) {
-			apiError(400, ErrorCode.AlreadyAcknowledged, 'Interaction has already been acknowledged.');
+			apiError(DiscordErrors.AlreadyAcknowledged);
 		}
 		hooks.state.acknowledgeToken(params.token);
 		if (body.type === 6 || body.type === 7) {
@@ -247,14 +245,13 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 		if (body.type === 8) {
 			const choices = Array.isArray(body.data?.choices) ? (body.data?.choices as unknown[]) : [];
 			if (choices.length > 25) {
-				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: autocomplete can return at most 25 choices');
+				apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: autocomplete can return at most 25 choices');
 			}
 			for (const choice of choices) {
 				const name = (choice as { name?: unknown }).name;
 				if (typeof name !== 'string' || name.length < 1 || [...name].length > 100) {
 					apiError(
-						400,
-						ErrorCode.InvalidFormBody,
+						DiscordErrors.InvalidFormBody,
 						'Invalid Form Body: autocomplete choice name must be between 1 and 100 in length',
 					);
 				}
@@ -277,8 +274,7 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 		// must be a known user; guide toward registering it instead of a bare "Unknown User"/"Unknown Channel".
 		if (world && !user) {
 			apiError(
-				404,
-				ErrorCode.UnknownUser,
+				DiscordErrors.UnknownUser,
 				`Unknown User: no user "${recipientId}" to open a DM with. Register the recipient first — ` +
 					`world.registerUser({ id: "${recipientId}" }) (and dispatch as that user) — to enable DM flows.`,
 			);
@@ -329,9 +325,8 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 		requireChannel(params.channelId);
 		assertAttachmentRefs(bodyRecord(pending.body), pending.files);
 		const channel = world?.channels.find(entry => entry.id === params.channelId);
-		if (channel?.type === 4)
-			apiError(400, ErrorCode.CannotExecuteOnChannelType, 'Cannot execute action on this channel type');
-		if (channel?.thread_metadata?.archived) apiError(400, ErrorCode.ThreadArchived, 'Thread is archived');
+		if (channel?.type === 4) apiError(DiscordErrors.CannotExecuteOnChannelType);
+		if (channel?.thread_metadata?.archived) apiError(DiscordErrors.ThreadArchived);
 		const view = hooks.state.addMessage(params.channelId, bodyRecord(pending.body));
 		return (
 			hooks.state.rawMessage(params.channelId, view.id) ?? apiMessage({ id: view.id, channelId: params.channelId })
@@ -344,7 +339,7 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 			requireMessage(params.channelId, params.messageId);
 			const existing = hooks.state.rawMessage(params.channelId, params.messageId)!;
 			if (existing.author.id !== hooks.botId) {
-				apiError(403, ErrorCode.CannotEditAnotherUsersMessage, 'Cannot edit a message authored by another user');
+				apiError(DiscordErrors.CannotEditAnotherUsersMessage);
 			}
 		}
 		assertAttachmentRefs(bodyRecord(pending.body), pending.files);
@@ -365,7 +360,7 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 		const messages = bodyRecord(pending.body).messages;
 		const ids = Array.isArray(messages) ? messages : [];
 		if (ids.length < 2 || ids.length > 100) {
-			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: messages must contain between 2 and 100 items');
+			apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: messages must contain between 2 and 100 items');
 		}
 		for (const messageId of ids) hooks.state.deleteMessage(params.channelId, String(messageId));
 	});
@@ -381,7 +376,7 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 		requireChannelPerm(params.channelId, PermissionFlagsBits.ManageMessages);
 		const pins = hooks.state.pins(params.channelId);
 		if (pins.length >= 50 && !pins.some(message => message.id === params.messageId)) {
-			apiError(400, ErrorCode.MaxPinnedMessages, 'Maximum number of pinned messages reached (50)');
+			apiError(DiscordErrors.MaxPinnedMessages);
 		}
 		hooks.state.pinMessage(params.channelId, params.messageId);
 	});
@@ -401,16 +396,16 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 	rest.intercept(Routes.endPoll, (_pending, params) => {
 		requireMessage(params.channelId, params.messageId);
 		const message = hooks.state.finalizePoll(params.channelId, params.messageId);
-		if (!message) apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: message has no poll');
+		if (!message) apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: message has no poll');
 		return message;
 	});
 	rest.intercept(Routes.getPollAnswerVoters, (_pending, params) => {
 		requireMessage(params.channelId, params.messageId);
 		const poll = hooks.state.rawMessage(params.channelId, params.messageId)?.poll;
-		if (!poll) apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: message has no poll');
+		if (!poll) apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: message has no poll');
 		const answerId = Number(params.answerId);
 		if (!poll.answers.some(answer => answer.answer_id === answerId)) {
-			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: unknown poll answer');
+			apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: unknown poll answer');
 		}
 		return {
 			users: hooks.state.pollVoters(params.channelId, params.messageId, answerId).map(userId => resolveUser(userId)),
@@ -419,10 +414,9 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 
 	rest.intercept(Routes.fetchOriginalResponse, (_pending, params) => {
 		requireInteractionWebhook(params.applicationId, params.interactionToken);
-		if (!hooks.state.isAcknowledged(params.interactionToken))
-			apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
+		if (!hooks.state.isAcknowledged(params.interactionToken)) apiError(DiscordErrors.UnknownMessage);
 		if (hooks.state.isOriginalDeleted(params.interactionToken)) {
-			apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
+			apiError(DiscordErrors.UnknownMessage);
 		}
 		return hooks.state.messageForToken(params.interactionToken) ?? apiMessage();
 	});

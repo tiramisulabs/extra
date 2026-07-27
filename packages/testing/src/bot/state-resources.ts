@@ -31,7 +31,7 @@ import {
 	type RawMessage,
 } from './payloads';
 import type { ChannelOverwriteLike } from './permissions';
-import { apiError, ErrorCode } from './rest';
+import { apiError, DiscordErrors } from './rest';
 import { WorldStateMutationCore } from './state-mutations';
 import type { ChannelView, GuildMemberView, MessageView } from './state-support';
 import {
@@ -442,7 +442,7 @@ export class WorldState extends WorldStateMutationCore {
 
 	/** @internal For an interaction's first visible reply. */
 	addOriginalResponse(token: string, channelId: string, raw: Record<string, unknown>, authorId: string): RawMessage {
-		if (this.deletedOriginalTokens.has(token)) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
+		if (this.deletedOriginalTokens.has(token)) apiError(DiscordErrors.UnknownMessage);
 		this.registerInteractionToken(token, channelId);
 		const view = this.addMessage(channelId, { ...raw, author_id: authorId });
 		this.deletedOriginalTokens.delete(token);
@@ -456,8 +456,8 @@ export class WorldState extends WorldStateMutationCore {
 		raw: Record<string, unknown>,
 		authorId: string,
 	): RawMessage | Record<string, never> {
-		if (!this.acknowledgedTokens.has(token)) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
-		if (this.deletedOriginalTokens.has(token)) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
+		if (!this.acknowledgedTokens.has(token)) apiError(DiscordErrors.UnknownMessage);
+		if (this.deletedOriginalTokens.has(token)) apiError(DiscordErrors.UnknownMessage);
 		const channelId = this.channelIdByToken.get(token);
 		if (!channelId) return {};
 		const messageId = this.messageIdByToken.get(token);
@@ -474,17 +474,17 @@ export class WorldState extends WorldStateMutationCore {
 		authorId: string,
 	): RawMessage | Record<string, never> {
 		if (messageId === '@original') return this.upsertOriginalResponse(token, raw, authorId);
-		if (!this.acknowledgedTokens.has(token)) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+		if (!this.acknowledgedTokens.has(token)) apiError(DiscordErrors.UnknownWebhook);
 		const channelId = this.channelIdByToken.get(token);
-		if (!channelId) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
-		if (!this.rawMessage(channelId, messageId)) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
+		if (!channelId) apiError(DiscordErrors.UnknownWebhook);
+		if (!this.rawMessage(channelId, messageId)) apiError(DiscordErrors.UnknownMessage);
 		this.editMessage(channelId, messageId, raw);
 		return this.rawMessageOr(channelId, messageId);
 	}
 
 	/** @internal For webhook followups. */
 	addFollowup(token: string, raw: Record<string, unknown>, authorId: string): RawMessage | Record<string, never> {
-		if (!this.acknowledgedTokens.has(token)) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+		if (!this.acknowledgedTokens.has(token)) apiError(DiscordErrors.UnknownWebhook);
 		const channelId = this.channelIdByToken.get(token);
 		if (!channelId) return {};
 		const view = this.addMessage(channelId, { ...raw, author_id: authorId });
@@ -493,8 +493,8 @@ export class WorldState extends WorldStateMutationCore {
 
 	/** @internal For webhook deletes of @original. */
 	deleteOriginalResponse(token: string): void {
-		if (!this.acknowledgedTokens.has(token)) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
-		if (this.deletedOriginalTokens.has(token)) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
+		if (!this.acknowledgedTokens.has(token)) apiError(DiscordErrors.UnknownMessage);
+		if (this.deletedOriginalTokens.has(token)) apiError(DiscordErrors.UnknownMessage);
 		const channelId = this.channelIdByToken.get(token);
 		const messageId = this.messageIdByToken.get(token);
 		if (channelId && messageId) this.deleteMessage(channelId, messageId);
@@ -512,10 +512,10 @@ export class WorldState extends WorldStateMutationCore {
 			this.deleteOriginalResponse(token);
 			return;
 		}
-		if (!this.acknowledgedTokens.has(token)) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
+		if (!this.acknowledgedTokens.has(token)) apiError(DiscordErrors.UnknownWebhook);
 		const channelId = this.channelIdByToken.get(token);
-		if (!channelId) apiError(404, ErrorCode.UnknownWebhook, 'Unknown Webhook');
-		if (!this.rawMessage(channelId, messageId)) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
+		if (!channelId) apiError(DiscordErrors.UnknownWebhook);
+		if (!this.rawMessage(channelId, messageId)) apiError(DiscordErrors.UnknownMessage);
 		this.deleteMessage(channelId, messageId);
 	}
 

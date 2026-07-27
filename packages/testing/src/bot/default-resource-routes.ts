@@ -19,7 +19,7 @@ import {
 	apiUser,
 	messageReactionAddEvent,
 } from './payloads';
-import { apiError, ErrorCode, MockApiError, type RouteMatcher } from './rest';
+import { apiError, DiscordErrors, MockApiError, type RouteMatcher } from './rest';
 import { AUDIT_ACTION, ROUTE_COVERAGE, Routes } from './routes';
 
 export function registerWorldResourceRoutes(context: WorldDefaultContext): void {
@@ -60,10 +60,10 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 		requireGuild(params.guildId);
 		requirePerm(params.guildId, PermissionFlagsBits.ManageRoles);
 		if (params.roleId === params.guildId) {
-			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: the @everyone role cannot be edited');
+			apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: the @everyone role cannot be edited');
 		}
 		if (world && !guildRolesOf(params.guildId).some(role => role.id === params.roleId)) {
-			apiError(404, ErrorCode.UnknownRole, 'Unknown Role');
+			apiError(DiscordErrors.UnknownRole);
 		}
 		requireManageableRole(params.guildId, params.roleId);
 		const updated = hooks.state.editRole(params.guildId, params.roleId, bodyRecord(pending.body));
@@ -74,10 +74,10 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 		requireGuild(params.guildId);
 		requirePerm(params.guildId, PermissionFlagsBits.ManageRoles);
 		if (params.roleId === params.guildId) {
-			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: the @everyone role cannot be deleted');
+			apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: the @everyone role cannot be deleted');
 		}
 		if (world && !guildRolesOf(params.guildId).some(role => role.id === params.roleId)) {
-			apiError(404, ErrorCode.UnknownRole, 'Unknown Role');
+			apiError(DiscordErrors.UnknownRole);
 		}
 		requireManageableRole(params.guildId, params.roleId);
 		hooks.state.removeRole(params.guildId, params.roleId);
@@ -112,8 +112,7 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 			requireGuild(guildId);
 			requirePerm(guildId, PermissionFlagsBits.ManageGuildExpressions);
 		},
-		unknownCode: world ? ErrorCode.UnknownEmoji : undefined,
-		unknownMessage: 'Unknown Emoji',
+		unknownError: world ? DiscordErrors.UnknownEmoji : undefined,
 	});
 	rest.intercept(Routes.createInvite, (pending, params) => {
 		requireChannel(params.channelId);
@@ -130,11 +129,11 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 	});
 	rest.intercept(Routes.fetchInvite, (_pending, params) => {
 		const invite = hooks.state.invite(params.code);
-		if (!invite && world) apiError(404, ErrorCode.UnknownInvite, 'Unknown Invite');
+		if (!invite && world) apiError(DiscordErrors.UnknownInvite);
 		return invite ?? apiInvite({ code: params.code });
 	});
 	rest.intercept(Routes.deleteInvite, (_pending, params) => {
-		if (world && !hooks.state.invite(params.code)) apiError(404, ErrorCode.UnknownInvite, 'Unknown Invite');
+		if (world && !hooks.state.invite(params.code)) apiError(DiscordErrors.UnknownInvite);
 		return hooks.state.removeInvite(params.code) ?? apiInvite({ code: params.code });
 	});
 	rest.intercept(Routes.bulkBan, async (pending, params) => {
@@ -217,7 +216,7 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 		requireThreadPerm(params.channelId, PermissionFlagsBits.ViewChannel);
 		const userId = resolveThreadUser(params.userId);
 		const members = hooks.state.threadMembers(params.channelId);
-		if (world && !members.includes(userId)) apiError(404, ErrorCode.UnknownMember, 'Unknown Member');
+		if (world && !members.includes(userId)) apiError(DiscordErrors.UnknownMember);
 		return apiThreadMember({ threadId: params.channelId, userId });
 	});
 	rest.intercept(Routes.fetchActiveThreads, (_pending, params) => {
@@ -257,8 +256,7 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 			requireGuild(guildId);
 			requirePerm(guildId, PermissionFlagsBits.ManageGuildExpressions);
 		},
-		unknownCode: world ? ErrorCode.UnknownSticker : undefined,
-		unknownMessage: 'Unknown Sticker',
+		unknownError: world ? DiscordErrors.UnknownSticker : undefined,
 	});
 	registerGuildCrud(rest, {
 		idParam: 'eventId',
@@ -276,14 +274,13 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 			requireGuild(guildId);
 			requirePerm(guildId, PermissionFlagsBits.ManageEvents);
 		},
-		unknownCode: world ? ErrorCode.UnknownScheduledEvent : undefined,
-		unknownMessage: 'Unknown Guild Scheduled Event',
+		unknownError: world ? DiscordErrors.UnknownScheduledEvent : undefined,
 	});
 	rest.intercept(Routes.editScheduledEvent, (pending, params) => {
 		requireGuild(params.guildId);
 		requirePerm(params.guildId, PermissionFlagsBits.ManageEvents);
 		const updated = hooks.state.editScheduledEvent(params.guildId, params.eventId, bodyRecord(pending.body));
-		if (!updated && world) apiError(404, ErrorCode.UnknownScheduledEvent, 'Unknown Guild Scheduled Event');
+		if (!updated && world) apiError(DiscordErrors.UnknownScheduledEvent);
 		return updated ?? apiScheduledEvent({ id: params.eventId, guildId: params.guildId });
 	});
 	rest.intercept(Routes.listGuildTemplates, (_pending, params) => {
@@ -296,7 +293,7 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 	});
 	rest.intercept(Routes.fetchGuildTemplate, (_pending, params) => {
 		const template = hooks.state.guildTemplate(params.code);
-		if (!template && world) apiError(404, ErrorCode.UnknownGuildTemplate, 'Unknown Guild Template');
+		if (!template && world) apiError(DiscordErrors.UnknownGuildTemplate);
 		return template ?? apiGuildTemplate({ code: params.code });
 	});
 	rest.intercept(Routes.listGuildSoundboardSounds, (_pending, params) => {
@@ -321,14 +318,14 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 			return hooks.state.stageInstance(params.channelId);
 		},
 		params => apiStageInstance({ channelId: params.channelId }),
-		world ? { code: ErrorCode.UnknownStageInstance, message: 'Unknown Stage Instance' } : undefined,
+		world ? DiscordErrors.UnknownStageInstance : undefined,
 	);
 	rest.intercept(Routes.editStageInstance, async (pending, params) => {
 		requireChannel(params.channelId);
 		requireChannelPerm(params.channelId, PermissionFlagsBits.ManageChannels);
 		const updated = hooks.state.editStageInstance(params.channelId, bodyRecord(pending.body));
 		if (!updated) {
-			if (world) apiError(404, ErrorCode.UnknownStageInstance, 'Unknown Stage Instance');
+			if (world) apiError(DiscordErrors.UnknownStageInstance);
 			return apiStageInstance({ channelId: params.channelId });
 		}
 		await cacheStage(updated);
@@ -338,7 +335,7 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 		requireChannel(params.channelId);
 		const stage = hooks.state.stageInstance(params.channelId);
 		if (world && !stage) {
-			apiError(404, ErrorCode.UnknownStageInstance, 'Unknown Stage Instance');
+			apiError(DiscordErrors.UnknownStageInstance);
 		}
 		hooks.state.removeStageInstance(params.channelId);
 		await removeCachedStage(params.channelId, stage?.guild_id ?? guildOfChannel(params.channelId));
@@ -364,7 +361,7 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 	rest.intercept(Routes.fetchBan, (_pending, params) => {
 		requireGuild(params.guildId);
 		if (!hooks.state.isBanned(params.guildId, params.userId)) {
-			return apiError(404, ErrorCode.UnknownBan, 'Unknown Ban');
+			return apiError(DiscordErrors.UnknownBan);
 		}
 		return { user: resolveUser(params.userId) };
 	});
@@ -386,7 +383,7 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 	rest.intercept(Routes.kick, async (pending, params) => {
 		requireGuild(params.guildId);
 		requirePerm(params.guildId, PermissionFlagsBits.KickMembers);
-		if (world && !findMember(params.guildId, params.userId)) apiError(404, ErrorCode.UnknownMember, 'Unknown Member');
+		if (world && !findMember(params.guildId, params.userId)) apiError(DiscordErrors.UnknownMember);
 		requireHierarchy(params.guildId, params.userId);
 		await removeMember(params.guildId, params.userId, false);
 		hooks.state.addAuditLogEntry(params.guildId, {
@@ -399,7 +396,7 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 		requireGuild(params.guildId);
 		requirePerm(params.guildId, PermissionFlagsBits.BanMembers);
 		if (world && !hooks.state.isBanned(params.guildId, params.userId)) {
-			apiError(404, ErrorCode.UnknownBan, 'Unknown Ban');
+			apiError(DiscordErrors.UnknownBan);
 		}
 		hooks.state.unban(params.guildId, params.userId);
 		await hooks.cacheRemove('bans', params.userId, params.guildId);
@@ -479,8 +476,7 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 	};
 
 	rest.intercept(Routes.addReaction, async (_pending, params) => {
-		if (!hooks.state.rawMessage(params.channelId, params.messageId))
-			apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
+		if (!hooks.state.rawMessage(params.channelId, params.messageId)) apiError(DiscordErrors.UnknownMessage);
 		hooks.state.addReaction(params.channelId, params.messageId, params.emoji, hooks.botId);
 		await emitReaction('MESSAGE_REACTION_ADD', params.channelId, params.messageId, params.emoji, hooks.botId);
 	});
@@ -529,15 +525,15 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 		rest.intercept(route, async (_pending, params) => {
 			requireGuild(params.guildId);
 			if (params.roleId === params.guildId) {
-				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: the @everyone role cannot be added or removed');
+				apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: the @everyone role cannot be added or removed');
 			}
 			requirePerm(params.guildId, PermissionFlagsBits.ManageRoles);
 			if (world && !guildRolesOf(params.guildId).some(role => role.id === params.roleId)) {
-				apiError(404, ErrorCode.UnknownRole, 'Unknown Role');
+				apiError(DiscordErrors.UnknownRole);
 			}
 			requireManageableRole(params.guildId, params.roleId);
 			const entry = findMember(params.guildId, params.userId);
-			if (world && !entry) apiError(404, ErrorCode.UnknownMember, 'Unknown Member');
+			if (world && !entry) apiError(DiscordErrors.UnknownMember);
 			const roles = entry && mutate(entry.member, params.roleId);
 			if (entry && roles) {
 				entry.member.roles = roles;
@@ -553,7 +549,7 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 		requireGuild(params.guildId);
 		const entry = findMember(params.guildId, params.userId);
 		if (!entry) {
-			if (world) apiError(404, ErrorCode.UnknownMember, 'Unknown Member');
+			if (world) apiError(DiscordErrors.UnknownMember);
 			return apiMember({ user: apiUser({ id: params.userId }) });
 		}
 		const body = bodyRecord(pending.body) as {
@@ -572,7 +568,7 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 			for (const roleId of new Set([...next, ...current])) {
 				if (next.has(roleId) === current.has(roleId)) continue; // unchanged
 				if (roleId === params.guildId) {
-					apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: the @everyone role cannot be assigned');
+					apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: the @everyone role cannot be assigned');
 				}
 				requireManageableRole(params.guildId, roleId);
 			}

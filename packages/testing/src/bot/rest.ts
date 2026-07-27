@@ -72,34 +72,61 @@ interface ApiObserverNotifier {
 	): Promise<void>;
 }
 
-/** Named Discord JSON error codes used by the mock's fail-loud guards, so no call site spells a bare number. */
-export const ErrorCode = {
-	UnknownChannel: 10003,
-	UnknownGuild: 10004,
-	UnknownUser: 10013,
-	UnknownMember: 10007,
-	UnknownMessage: 10008,
-	UnknownWebhook: 10015,
-	UnknownBan: 10026,
-	UnknownInvite: 10006,
-	UnknownGuildTemplate: 10057,
-	UnknownRole: 10011,
-	UnknownEmoji: 10014,
-	UnknownSticker: 10060,
-	UnknownStageInstance: 10067,
-	UnknownScheduledEvent: 180000,
-	MaxPinnedMessages: 30003,
-	CannotEditAnotherUsersMessage: 50005,
-	CannotSendEmptyMessage: 50006,
-	MissingPermissions: 50013,
-	CannotExecuteOnChannelType: 50024,
-	InvalidFormBody: 50035,
-	ThreadArchived: 50083,
-	AlreadyAcknowledged: 40060,
-} as const;
+/**
+ * Throw a Discord REST error, naming it from the one catalog.
+ *
+ * Takes a {@link DiscordErrors} entry rather than a loose status/code/message triple, because a triple has to
+ * be restated at every call site and there were a hundred of them — one wrong copy and the code no longer
+ * matches the message. `message` overrides the catalog's copy for the errors whose text is per-call, like
+ * Invalid Form Body naming the offending field.
+ */
+export function apiError(error: DiscordErrorInit, message?: string): never {
+	throw new MockApiError(
+		error.status,
+		error.code ?? 0,
+		message ?? error.message ?? STATUS_TEXT[error.status] ?? 'Unknown Error',
+	);
+}
 
-export function apiError(status: number, code: number, message: string): never {
-	throw new MockApiError(status, code, message);
+/**
+ * Narrow an unknown caught value to a Discord REST error, whichever shape it arrived in.
+ *
+ * `rest.fail()` produces seyfert's own error (it routes through the real `ApiHandler.parseError`), while the
+ * world guards throw the package's `MockApiError`; both are Discord errors as far as a test is concerned, and
+ * neither was narrowable without knowing which one to expect.
+ *
+ * ```ts
+ * catch (error) {
+ *   if (isDiscordError(error, { code: DiscordErrors.UnknownMessage.code })) return;
+ *   throw error;
+ * }
+ * ```
+ */
+export function isDiscordError(value: unknown, match: { status?: number; code?: number } = {}): boolean {
+	if (typeof value !== 'object' || value === null) return false;
+	const status = statusOf(value);
+	const code = codeOf(value);
+	if (status === undefined && code === undefined) return false;
+	if (match.status !== undefined && match.status !== status) return false;
+	if (match.code !== undefined && match.code !== code) return false;
+	return true;
+}
+
+function statusOf(value: object): number | undefined {
+	const direct = (value as { status?: unknown }).status;
+	if (typeof direct === 'number') return direct;
+	const response = (value as { metadata?: { response?: { status?: unknown } } }).metadata?.response;
+	return typeof response?.status === 'number' ? response.status : undefined;
+}
+
+function codeOf(value: object): number | undefined {
+	const direct = (value as { code?: unknown }).code;
+	if (typeof direct === 'number') return direct;
+	// seyfert stringifies the code into `API_<statusText>_<code>`; the body it parsed still holds the number.
+	const body = (value as { metadata?: { response?: { code?: unknown } } }).metadata?.response;
+	if (typeof body?.code === 'number') return body.code;
+	const match = typeof direct === 'string' ? /_(\d+)$/.exec(direct) : undefined;
+	return match ? Number(match[1]) : undefined;
 }
 
 export interface DiscordErrorInit {
@@ -147,6 +174,12 @@ export const DiscordErrors = {
 		message: 'Cannot edit a message authored by another user',
 	},
 	RateLimited: { status: 429, code: 0, message: 'You are being rate limited.' },
+	MaxPinnedMessages: { status: 400, code: 30003, message: 'Maximum number of pinned messages reached (50)' },
+	CannotSendEmptyMessage: { status: 400, code: 50006, message: 'Cannot send an empty message' },
+	CannotExecuteOnChannelType: { status: 400, code: 50024, message: 'Cannot execute action on this channel type' },
+	InvalidFormBody: { status: 400, code: 50035, message: 'Invalid Form Body' },
+	ThreadArchived: { status: 400, code: 50083, message: 'Thread is archived' },
+	AlreadyAcknowledged: { status: 400, code: 40060, message: 'Interaction has already been acknowledged.' },
 } as const satisfies Record<string, DiscordErrorInit>;
 
 export function gate(): { open: Promise<void>; release: () => void } {

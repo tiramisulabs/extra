@@ -14,7 +14,7 @@ import {
 	apiVoiceState,
 	type RawMessage,
 } from './payloads';
-import { apiError, ErrorCode } from './rest';
+import { apiError, DiscordErrors } from './rest';
 import { WorldStateReadCore } from './state-read';
 import type { DerivedMentions, MessageView, ReactionView } from './state-support';
 import {
@@ -197,7 +197,7 @@ export abstract class WorldStateMutationCore extends WorldStateReadCore {
 					)?.message
 				: undefined;
 			if (referencedId && !referenced && ref.fail_if_not_exists !== false) {
-				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: referenced message does not exist');
+				apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: referenced message does not exist');
 			}
 			if (referenced && numberValue(ref.type) === 1) {
 				message.message_snapshots = [
