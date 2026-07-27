@@ -580,9 +580,17 @@ export class MockApiHandler extends ApiHandler {
 			(!matcher || (typeof matcher === 'function' ? matcher(action) : this.matches(matcher, action)));
 		const entry = { test, hold: () => g.open, release: g.release };
 		this.gates.push(entry);
-		const hit = this.listenForAction(test, 2000, 'pending').finally(() => {
+		// Unwind on failure only. Releasing when the wait *succeeds* — which is what a .finally here does —
+		// opens the gate on the microtask that settles `hit`, always before the awaiting test resumes: the
+		// caller would be handed an action whose request has already been let go, and the returned release()
+		// would have nothing left to release. Holding is the whole point of the surface.
+		//
+		// The success path needs no cleanup here: `request()` removes the entry from `gates` when it matches.
+		// A timed-out or rejected wait does, or the parked request would wait on a gate nobody can reach.
+		const hit = this.listenForAction(test, 2000, 'pending').catch(error => {
 			this.gates = this.gates.filter(other => other !== entry);
 			g.release();
+			throw error;
 		});
 		return { hit, release: g.release };
 	}

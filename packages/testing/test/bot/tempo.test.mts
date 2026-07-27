@@ -120,6 +120,36 @@ describe('actors and dispatch tempo', () => {
 		await bot.close();
 	});
 
+	test('the gate holds the dispatch until release, not just until the wait resolves', async () => {
+		@Declare({ name: 'spam', description: 'posts three messages back to back' })
+		class SpamCommand extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.client.messages.write(ctx.channelId, { content: 'one' });
+				await ctx.client.messages.write(ctx.channelId, { content: 'two' });
+				await ctx.client.messages.write(ctx.channelId, { content: 'three' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [SpamCommand] });
+		const dispatch = bot.dispatch.slash({ name: 'spam' });
+
+		const hit = await dispatch.until(Routes.createMessage);
+		// README's guarantee for a resolved until(): the call started, the response is still undefined.
+		// A handler with no slow await between its calls is what makes this observable — the gate used to
+		// open on the microtask that settled the wait, so the rest of the handler ran anyway.
+		expect(hit.settled).toBe(false);
+		expect(hit.response).toBeUndefined();
+		expect(bot.restCalls(Routes.createMessage)).toHaveLength(1);
+
+		// Still parked several macrotasks later, with nothing released.
+		for (let turn = 0; turn < 5; turn++) await new Promise(resolve => setTimeout(resolve, 0));
+		expect(bot.restCalls(Routes.createMessage)).toHaveLength(1);
+
+		await dispatch;
+		expect(bot.restCalls(Routes.createMessage)).toHaveLength(3);
+		await bot.close();
+	});
+
 	test('checkpoints chain and advance between matching calls', async () => {
 		const bot = await createMockBot({ commands: [SlowBanCommand] });
 		const dispatch = bot.dispatch.slash({ name: 'slowban' });
