@@ -14,8 +14,9 @@ import { ApplicationCommandType, InteractionResponseType } from 'seyfert/lib/typ
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { apiMember, apiMessage, apiUser } from '../../src/bot/payloads';
+import { DiscordErrors, isDiscordError } from '../../src/bot/rest';
 import { mockWorld } from '../../src/bot/world';
-import { ReportMessage, ReportUser, SearchCommand } from './_setup';
+import { discordErrorDetail, ReportMessage, ReportUser, SearchCommand } from './_setup';
 
 const englishLang = { greeting: 'Hello!' };
 
@@ -154,9 +155,10 @@ describe('autocomplete and context menus', () => {
 		// seyfert's autocomplete runner swallows the 400 (as it does against real Discord), so the dispatch resolves;
 		// the over-limit respond is rejected at the callback boundary and recorded as an errored action.
 		const result = await bot.autocomplete({ name: 'too-many', focused: 'q', value: 'x' });
-		expect(result.actions.some(action => /at most 25 choices/.test(String((action.error as Error)?.message)))).toBe(
-			true,
-		);
+		const rejected = result.actions.filter(action => action.error !== undefined);
+		expect(rejected).toHaveLength(1);
+		expect(isDiscordError(rejected[0]?.error, { code: DiscordErrors.InvalidFormBody.code })).toBe(true);
+		expect(discordErrorDetail(rejected[0]?.error)).toMatch(/at most 25 choices/);
 		await bot.close();
 	});
 

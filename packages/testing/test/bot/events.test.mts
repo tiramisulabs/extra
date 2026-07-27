@@ -14,6 +14,7 @@ import {
 	threadCreateEvent,
 	voiceStateUpdateEvent,
 } from '../../src/bot/payloads';
+import { isDiscordError } from '../../src/bot/rest';
 import { mockWorld } from '../../src/bot/world';
 
 declare module 'seyfert/lib/events/event' {
@@ -195,6 +196,30 @@ describe('emit result and factories', () => {
 			bot.emit('THREAD_CREATE', { id: 'guildless-thread', parent_id: channel.id, type: 11 }, { allowNoHandler: true }),
 		).rejects.toThrow(/THREAD_CREATE requires guild_id/);
 		expect(bot.world.query.channel({ id: 'guildless-thread' })).toBeUndefined();
+		await bot.close();
+	});
+
+	test('a world-bridge write the REST guard would reject is a harness error, not a Discord one', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'bridge-guard-guild' });
+		const channel = world.registerChannel(guild.id, { id: 'bridge-guard-channel' });
+		const bot = await createMockBot({ world });
+
+		// The bridge writes through the same guard the create-message route applies, so an empty message is
+		// rejected here too. No request was made, so the rejection must not pretend to be a Discord 400: it names
+		// the emit and carries the guard's copy, and the one Discord error model stays behind MockApiHandler.
+		const error = await bot
+			.emit('MESSAGE_CREATE', { id: 'bridge-guard-msg', channel_id: channel.id, author: apiUser() } as never, {
+				allowNoHandler: true,
+			})
+			.then(
+				() => undefined,
+				(reason: unknown) => reason,
+			);
+		expect(isDiscordError(error)).toBe(false);
+		expect((error as Error).message).toMatch(/emit\("MESSAGE_CREATE"\).*Cannot send an empty message/s);
+		expect((error as Error).message).toMatch(/updateCache: false/);
+		expect(bot.world.query.message({ channelId: channel.id, id: 'bridge-guard-msg' })).toBeUndefined();
 		await bot.close();
 	});
 

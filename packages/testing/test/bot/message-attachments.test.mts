@@ -2,8 +2,10 @@ import { AttachmentBuilder, Command, type CommandContext, Declare } from 'seyfer
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { apiUser } from '../../src/bot/payloads';
+import { DiscordErrors } from '../../src/bot/rest';
 import { normalizeFile } from '../../src/bot/state';
 import { mockWorld } from '../../src/bot/world';
+import { expectDiscordError } from './_setup';
 
 describe('message attachments', () => {
 	test('a command attaching a file lands the attachment metadata in the message view', async () => {
@@ -74,7 +76,9 @@ describe('message attachments', () => {
 		}
 
 		const bot = await createMockBot({ commands: [EditRef], world });
-		await expect(bot.slash({ name: 'edit-ref', guildId: guild.id, channel, user: actor.user })).rejects.toThrow(
+		await expectDiscordError(
+			bot.slash({ name: 'edit-ref', guildId: guild.id, channel, user: actor.user }),
+			DiscordErrors.InvalidFormBody,
 			/references attachment:\/\/missing\.png/,
 		);
 		await bot.close();
@@ -120,7 +124,11 @@ describe('message attachments', () => {
 		}
 
 		const bot = await createMockBot({ commands: [OriginalRef] });
-		await expect(bot.slash({ name: 'original-ref' })).rejects.toThrow(/references attachment:\/\/missing\.png/);
+		await expectDiscordError(
+			bot.slash({ name: 'original-ref' }),
+			DiscordErrors.InvalidFormBody,
+			/references attachment:\/\/missing\.png/,
+		);
 		await bot.close();
 	});
 
@@ -202,14 +210,16 @@ describe('message references (replies and forwards)', () => {
 		const channel = world.registerChannel(guild.id, { id: 'missing-ref-chan' });
 		const bot = await createMockBot({ world });
 
-		await expect(
+		await expectDiscordError(
 			bot.rest.request('POST', `/channels/${channel.id}/messages`, {
 				body: {
 					content: 'bad ref',
 					message_reference: { message_id: 'ghost-msg', channel_id: channel.id },
 				},
 			}),
-		).rejects.toThrow(/referenced message does not exist/);
+			DiscordErrors.InvalidFormBody,
+			/referenced message does not exist/,
+		);
 
 		await expect(
 			bot.rest.request('POST', `/channels/${channel.id}/messages`, {

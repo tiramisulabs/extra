@@ -38,13 +38,20 @@ export function isOutgoingMessagePost(action: RecordedAction): boolean {
 	);
 }
 
+/**
+ * Internal carrier for a Discord failure raised where no route is in hand: the world guards call
+ * {@link apiError} from deep inside a responder, and a {@link DiscordErrorInit} is all they know.
+ *
+ * This is **not** the error a test catches. {@link MockApiHandler.request} translates it at the seam where the
+ * method and route are still known, so what leaves the package is the `SeyfertError` the real
+ * `ApiHandler.parseError` builds from a genuine Discord response — one error model, whether the failure came
+ * from a seeded world or from {@link MockApiHandler.fail}. Assert on it with {@link isDiscordError}.
+ *
+ * @internal
+ */
 export class MockApiError extends Error {
-	constructor(
-		readonly status: number,
-		readonly code: number,
-		message: string,
-	) {
-		super(message);
+	constructor(readonly discord: DiscordErrorInit) {
+		super(discord.message ?? STATUS_TEXT[discord.status] ?? 'Unknown Error');
 		this.name = 'MockApiError';
 	}
 }
@@ -73,27 +80,27 @@ interface ApiObserverNotifier {
 }
 
 /**
- * Throw a Discord REST error, naming it from the one catalog.
+ * Fail the request being answered, naming the error from the one catalog. Call it from inside an
+ * {@link MockApiHandler.intercept} responder; the caller receives the same `SeyfertError`
+ * {@link MockApiHandler.fail} produces, built by seyfert's own `parseError`.
  *
  * Takes a {@link DiscordErrors} entry rather than a loose status/code/message triple, because a triple has to
  * be restated at every call site and there were a hundred of them — one wrong copy and the code no longer
  * matches the message. `message` overrides the catalog's copy for the errors whose text is per-call, like
- * Invalid Form Body naming the offending field.
+ * Invalid Form Body naming the offending field; it lands on `error.metadata.response.message`, where the
+ * descriptive text survives.
  */
 export function apiError(error: DiscordErrorInit, message?: string): never {
-	throw new MockApiError(
-		error.status,
-		error.code ?? 0,
-		message ?? error.message ?? STATUS_TEXT[error.status] ?? 'Unknown Error',
-	);
+	throw new MockApiError(message === undefined ? error : { ...error, message });
 }
 
 /**
- * Narrow an unknown caught value to a Discord REST error, whichever shape it arrived in.
+ * Narrow an unknown caught value to a Discord REST error, by the fields Discord actually sends.
  *
- * `rest.fail()` produces seyfert's own error (it routes through the real `ApiHandler.parseError`), while the
- * world guards throw the package's `MockApiError`; both are Discord errors as far as a test is concerned, and
- * neither was narrowable without knowing which one to expect.
+ * `error.message` is not one of them: seyfert's `parseError` names the error `API_<statusText>_<code>` and
+ * uses that as the message, so a Missing Permissions failure reads `Api Forbidden 50013`. The status and the
+ * code are the contract — the descriptive copy stays on `error.metadata.response.message` for the handful of
+ * errors whose text carries per-call detail (Invalid Form Body naming the offending field).
  *
  * ```ts
  * catch (error) {
@@ -115,8 +122,10 @@ export function isDiscordError(value: unknown, match: { status?: number; code?: 
 function statusOf(value: object): number | undefined {
 	const direct = (value as { status?: unknown }).status;
 	if (typeof direct === 'number') return direct;
-	const response = (value as { metadata?: { response?: { status?: unknown } } }).metadata?.response;
-	return typeof response?.status === 'number' ? response.status : undefined;
+	// parseError files the HTTP status on the metadata it builds, beside — not inside — the body it parsed.
+	// `metadata.response` is Discord's `{ code, message }`, which carries no status of its own.
+	const metadata = (value as { metadata?: { status?: unknown } }).metadata;
+	return typeof metadata?.status === 'number' ? metadata.status : undefined;
 }
 
 function codeOf(value: object): number | undefined {
@@ -452,11 +461,10 @@ export class MockApiHandler extends ApiHandler {
 	}
 
 	/**
-	 * Make a route reject with a Discord-faithful {@link SeyfertError} (built via the same
-	 * parseError the real ApiHandler uses), so a command's own error handling runs. Persistent
-	 * until the returned disposer or reset() clears it; pass { times } to fail the first N matching
-	 * calls then fall through to normal handling. For sequential or request-conditional failures,
-	 * use intercept() with a closure counter.
+	 * Make a route reject with a Discord-faithful `SeyfertError` (built via the same parseError the real
+	 * ApiHandler uses), so a command's own error handling runs. Persistent until the returned disposer or
+	 * reset() clears it; pass { times } to fail the first N matching calls then fall through to normal
+	 * handling. For sequential or request-conditional failures, use intercept() with a closure counter.
 	 */
 	fail(
 		matcher: RouteMatcher,
@@ -467,8 +475,7 @@ export class MockApiHandler extends ApiHandler {
 			/**
 			 * Fail only the calls this answers true for — the Nth, the ones whose body matches, the ones for
 			 * one guild. `times` alone could only express "the first N", so anything else meant reaching for
-			 * `intercept()` with a closure counter, which cannot throw this error at all: the builder is
-			 * private and the exported thrower produces the package's own class, not the faithful one.
+			 * `intercept()` with a closure counter and restating the condition by hand.
 			 */
 			when?: (action: PendingAction, params: Record<string, string>) => boolean;
 		},
@@ -477,12 +484,15 @@ export class MockApiHandler extends ApiHandler {
 		const off = this.intercept(matcher, (action, params) => {
 			if (opts?.when && !opts.when(action, params)) return PASS_TO_NEXT;
 			if (opts?.times !== undefined && ++n >= opts.times) off();
-			throw this.discordError(matcher.method, matcher.route, error);
+			// Deliberately the same throw a world guard makes: request() builds the faithful error for both, off
+			// the concrete route, so an injected failure and a seeded one are indistinguishable to the command.
+			throw new MockApiError(error);
 		});
 		return off;
 	}
 
-	private discordError(method: HttpMethods, route: string, error: DiscordErrorInit): unknown {
+	/** Build the error seyfert's own `parseError` builds for this response — the only Discord error that leaves. */
+	private discordError(method: HttpMethods, route: string, error: DiscordErrorInit): Error {
 		const statusText = error.statusText ?? STATUS_TEXT[error.status] ?? '';
 		const body: Record<string, unknown> = { code: error.code ?? 0, message: error.message ?? statusText };
 		if (error.retryAfter !== undefined) body.retry_after = error.retryAfter;
@@ -690,9 +700,9 @@ export class MockApiHandler extends ApiHandler {
 	}
 
 	private statusCodeFor(error: unknown): number | undefined {
-		if (error instanceof MockApiError) return error.status;
 		if (isRecord(error)) {
 			if (typeof error.status === 'number') return error.status;
+			// parseError files the status under metadata; a rate-limit notification is decided off it.
 			const metadata = error.metadata;
 			if (isRecord(metadata) && typeof metadata.status === 'number') return metadata.status;
 		}
@@ -700,7 +710,6 @@ export class MockApiHandler extends ApiHandler {
 	}
 
 	private errorBodyFor(error: unknown): unknown {
-		if (error instanceof MockApiError) return { code: error.code, message: error.message };
 		if (isRecord(error) && isRecord(error.metadata) && 'response' in error.metadata) return error.metadata.response;
 		return { message: error instanceof Error ? error.message : String(error) };
 	}
@@ -766,7 +775,13 @@ export class MockApiHandler extends ApiHandler {
 				}
 				this.notifyListeners(action, 'settled');
 				return response as T;
-			} catch (error) {
+			} catch (thrown) {
+				// The single seam where a Discord failure becomes an error. World guards throw a MockApiError from
+				// call sites that know only the DiscordErrorInit; here the method and route are still in hand, so
+				// seyfert's own parseError can build exactly what it builds for a real 4xx. Translating once, for
+				// every route, is what keeps `rest.fail()` and a seeded world from training a command against two
+				// different error shapes. Anything else (a responder bug, an unusable payload) passes through.
+				const error = thrown instanceof MockApiError ? this.discordError(method, url, thrown.discord) : thrown;
 				action.error = error;
 				action.settled = true;
 				const statusCode = this.statusCodeFor(error);

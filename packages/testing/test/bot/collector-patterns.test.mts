@@ -16,7 +16,9 @@ import { describe, expect, test } from 'vitest';
 import { rendered } from '../../src';
 import { createMockBot } from '../../src/bot/bot';
 import { apiAttachment } from '../../src/bot/payloads';
+import { DiscordErrors } from '../../src/bot/rest';
 import { mockWorld } from '../../src/bot/world';
+import { expectDiscordError } from './_setup';
 
 // A common real-world flow: defer -> editOrReply(fetchReply) -> collector on that message, with a DYNAMIC
 // customId matched by regex (parameterized customIds are very common).
@@ -236,7 +238,11 @@ describe('collector patterns', () => {
 		const guild = world.registerGuild({ id: 'g1' });
 		const bot = await createMockBot({ commands: [DmUnknownCommand], world });
 		// default dispatch user isn't registered → createDm guides toward world.registerUser
-		await expect(bot.slash({ name: 'dm-unknown', guildId: guild.id })).rejects.toThrow(/world\.registerUser/);
+		await expectDiscordError(
+			bot.slash({ name: 'dm-unknown', guildId: guild.id }),
+			DiscordErrors.UnknownUser,
+			/world\.registerUser/,
+		);
 		await bot.close();
 	});
 

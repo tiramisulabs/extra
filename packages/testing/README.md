@@ -1044,14 +1044,19 @@ either and the other adopts it. Setting both to different values fails loudly at
 different users — which silently breaks `author.id === client.botId` checks and
 turns off the bot-permission enforcement above.
 
-Use `apiError()` to drive REST error branches:
+Use `apiError()` to drive REST error branches from your own interceptor:
 
 ```ts
-bot.rest.intercept(Routes.ban, () => apiError(403, 50013, 'Missing Permissions'));
+import { apiError, DiscordErrors } from '@slipher/testing';
+
+bot.rest.intercept(Routes.ban, () => apiError(DiscordErrors.MissingPermissions));
 ```
 
-`MockApiError` is intentionally small; commands that branch on Seyfert's real
-error classes should test that real parse path separately.
+There is one error model. A seeded world's guard, `bot.rest.fail(...)` and your
+own `apiError()` all reject with the `SeyfertError` Seyfert's real `parseError`
+builds from a Discord response, so the command's `catch` runs exactly the code it
+runs in production. Assert on it with `isDiscordError` — see **Simulating REST
+failures** below.
 
 ### Querying world state
 
@@ -1209,6 +1214,8 @@ Commands read these via `ctx.client` by duck typing; the fakes only need the
 methods the path under test touches. Audio/Lavalink playback itself is out of
 scope — stub the manager, don't emulate it.
 
+#### Simulating REST failures
+
 Simulate Discord **REST failures** to exercise your error handling. `fail`
 throws a faithful `SeyfertError` (same `code`/`metadata` a production `catch`
 sees), not a bespoke mock error:
@@ -1221,8 +1228,39 @@ bot.rest.fail(Routes.createMessage, { status: 429, retryAfter: 5 }); // raw shap
 bot.rest.fail(Routes.ban, DiscordErrors.MissingAccess, { times: 1 }); // fail once, then normal
 ```
 
-For sequential or request-conditional failures, use `bot.rest.intercept(...)`
-with a closure.
+For sequential or request-conditional failures, pass `when` — or use
+`bot.rest.intercept(...)` with a closure.
+
+Assert on a failure by **status and code**, never by message. Seyfert names the
+error `API_<statusText>_<code>` and uses that as `.message`, so a Missing
+Permissions rejection reads `Api Forbidden 50013`; matching that text pins
+Seyfert's formatting rather than your bot's behaviour. `isDiscordError` narrows
+a caught value on the fields Discord actually sends:
+
+```ts
+import { DiscordErrors, isDiscordError } from '@slipher/testing';
+
+const error = await bot.slash({ name: 'ban' }).catch((reason: unknown) => reason);
+expect(isDiscordError(error, { status: 403, code: DiscordErrors.MissingPermissions.code })).toBe(true);
+```
+
+The same predicate is what a command should branch on:
+
+```ts
+try {
+	await ctx.client.members.ban(guildId, userId);
+} catch (error) {
+	if (isDiscordError(error, { code: DiscordErrors.MissingPermissions.code })) {
+		return ctx.write({ content: 'I need Ban Members.' });
+	}
+	throw error;
+}
+```
+
+Discord's own copy survives on `error.metadata.response.message`. That is where
+to look for the errors whose text carries per-call detail the code does not —
+`Invalid Form Body: embed title must be 256 or fewer in length` is all code
+50035.
 
 ### MockGateway
 

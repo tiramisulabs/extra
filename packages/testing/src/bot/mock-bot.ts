@@ -76,7 +76,7 @@ import {
 	apiUser,
 	memberOptionsFrom,
 } from './payloads';
-import { isOutgoingMessagePost, type RecordedAction, type RestCalls, type RouteMatcher } from './rest';
+import { isOutgoingMessagePost, MockApiError, type RecordedAction, type RestCalls, type RouteMatcher } from './rest';
 import { FOLLOWUP_ROUTE, Routes, WEBHOOK_MESSAGE_ROUTE } from './routes';
 import { resolveSelectResolved } from './select-resolved';
 import {
@@ -1293,7 +1293,19 @@ export class MockBot extends MockBotDispatchCore {
 	}
 
 	protected applyWorldEvent(name: string, d: Record<string, unknown>): void {
-		applyWorldEvent(this._state, name, d);
+		try {
+			applyWorldEvent(this._state, name, d);
+		} catch (error) {
+			// The world bridge reuses the write path the REST routes use, so it inherits their payload guards. That
+			// guard speaks Discord REST — but no request was made here, and a Discord REST error would name a status
+			// and a route that never existed. Say what actually happened instead, and keep the REST error model to
+			// REST: `MockApiHandler.request` is the only place a Discord error is built.
+			if (!(error instanceof MockApiError)) throw error;
+			throw new TypeError(
+				`emit("${name}"): the payload was rejected by the same guard the REST route applies — ` +
+					`${error.message}. Fix the payload, or pass { updateCache: false } to emit without writing to the world.`,
+			);
+		}
 	}
 
 	/**

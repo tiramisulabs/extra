@@ -1,8 +1,9 @@
 import { Command, type CommandContext, createEvent, Declare } from 'seyfert';
+import { SeyfertError } from 'seyfert/lib/common';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { apiMember, apiUser } from '../../src/bot/payloads';
-import { apiError, DiscordErrors, MockApiError } from '../../src/bot/rest';
+import { apiError, DiscordErrors, isDiscordError } from '../../src/bot/rest';
 import { Routes } from '../../src/bot/routes';
 import { mockWorld } from '../../src/bot/world';
 
@@ -119,7 +120,11 @@ describe('stateful world defaults', () => {
 					await ctx.client.members.fetch(ctx.guildId ?? '', target.user.id, true);
 					await ctx.write({ content: 'found' });
 				} catch (error) {
-					await ctx.write({ content: error instanceof MockApiError ? error.message : 'other error' });
+					await ctx.write({
+						content: isDiscordError(error, { code: DiscordErrors.UnknownMember.code })
+							? 'Unknown Member'
+							: 'other error',
+					});
 				}
 			}
 		}
@@ -220,7 +225,10 @@ describe('stateful world defaults', () => {
 				try {
 					await ctx.client.members.ban(ctx.guildId ?? '', 'error-target');
 					await ctx.write({ content: 'banned' });
-				} catch {
+				} catch (error) {
+					// The command narrows the way it would against production Discord — apiError from a test's own
+					// responder has to arrive in the same shape rest.fail() and a seeded world guard arrive in.
+					if (!isDiscordError(error, { status: 403, code: DiscordErrors.MissingPermissions.code })) throw error;
 					await ctx.write({ content: 'no permission' });
 				}
 			}
@@ -230,7 +238,9 @@ describe('stateful world defaults', () => {
 		bot.rest.intercept(Routes.ban, () => apiError(DiscordErrors.MissingPermissions));
 		const result = await bot.slash({ name: 'catch-rest-error' });
 		expect(result.content).toBe('no permission');
+		const [banCall] = bot.restCalls(Routes.ban);
 		expect(bot.restCalls(Routes.ban)).toHaveLength(1);
+		expect(banCall?.error).toBeInstanceOf(SeyfertError);
 		await bot.close();
 	});
 
@@ -328,7 +338,8 @@ describe('stateful world defaults', () => {
 					await ctx.client.users.fetch('missing-user', true);
 					await ctx.write({ content: 'missing passed' });
 				} catch (error) {
-					await ctx.write({ content: `${seeded.username}:${error instanceof MockApiError ? error.message : 'error'}` });
+					const unknownUser = isDiscordError(error, { code: DiscordErrors.UnknownUser.code });
+					await ctx.write({ content: `${seeded.username}:${unknownUser ? 'Unknown User' : 'error'}` });
 				}
 			}
 		}

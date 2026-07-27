@@ -125,8 +125,8 @@ function assertValidEmbeds(embeds: unknown[]): void {
 /**
  * Validate an outgoing message's components against Discord's documented form limits (F5): every interactive
  * custom_id is <=100 chars and unique across the message, string selects carry 1..25 options, and select
- * min/max_values stay in 0..25 with min<=max. Throws a 50035 MockApiError, so an impossible component tree
- * fails loud instead of passing a happy-path test.
+ * min/max_values stay in 0..25 with min<=max. Fails the request with code 50035, so an impossible component
+ * tree fails loud instead of passing a happy-path test.
  */
 const isSelectType = (type: number | undefined): boolean => type !== undefined && type >= 3 && type <= 8;
 
@@ -279,9 +279,9 @@ function assertValidComponents(components: unknown, isV2: boolean): void {
 }
 
 /**
- * Validate an outgoing message body against Discord's documented limits, throwing a MockApiError (which the
- * REST layer surfaces like a real 400) so an over-limit send fails loud instead of passing a happy-path test.
- * `create` additionally rejects a fully empty body (real code 50006).
+ * Validate an outgoing message body against Discord's documented limits, failing the request the way a real
+ * 400 does, so an over-limit send fails loud instead of passing a happy-path test. `create` additionally
+ * rejects a fully empty body (real code 50006).
  */
 export function assertSendableMessage(raw: Record<string, unknown>, mode: 'create' | 'edit'): void {
 	const content = typeof raw.content === 'string' ? raw.content : undefined;

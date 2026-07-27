@@ -1,7 +1,8 @@
 import { ActionRow, Button, Command, type CommandContext, Declare } from 'seyfert';
 import { ButtonStyle, InteractionResponseType, InteractionType } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
-import { apiUser, createMockBot, mockWorld, Routes, rendered } from '../../src';
+import { apiUser, createMockBot, DiscordErrors, mockWorld, Routes, rendered } from '../../src';
+import { expectDiscordError } from './_setup';
 
 describe('restCalls', () => {
 	@Declare({ name: 'write-once', description: 'Writes one REST message' })
@@ -348,12 +349,13 @@ describe('restCalls', () => {
 		expect(
 			bot.restCalls(Routes.interactionCallback).find(call => call.params.token === callbackParams.token),
 		).toMatchObject({ settled: true, response: undefined });
-		await expect(
+		await expectDiscordError(
 			bot.rest.call(Routes.interactionCallback, callbackParams, {
 				body: { type: 8, data: { choices: [] } },
 				query: { with_response: false },
 			}),
-		).rejects.toThrow(/already been acknowledged/i);
+			DiscordErrors.AlreadyAcknowledged,
+		);
 		await bot.close();
 	});
 

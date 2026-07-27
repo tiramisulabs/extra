@@ -220,7 +220,6 @@ export {
 	type DiscordErrorInit,
 	DiscordErrors,
 	isDiscordError,
-	MockApiError,
 	type MockApiHandler,
 	matchRoute,
 	type PendingAction,

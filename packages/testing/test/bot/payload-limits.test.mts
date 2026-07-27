@@ -4,7 +4,8 @@ import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { TEST_BOT_ID } from '../../src/bot/constants';
 import { apiUser } from '../../src/bot/payloads';
-import { seedGuildFixture } from './_setup';
+import { DiscordErrors } from '../../src/bot/rest';
+import { expectDiscordError, seedGuildFixture } from './_setup';
 
 function botWith(run: (ctx: CommandContext, channelId: string) => Promise<unknown>) {
 	return async () => {
@@ -27,13 +28,13 @@ describe('outgoing message payload limits (fail loud)', () => {
 		const { dispatch, close } = await botWith((ctx, channelId) =>
 			ctx.client.messages.write(channelId, { content: 'x'.repeat(2001) }),
 		)();
-		await expect(dispatch).rejects.toThrow(/2000 or fewer/);
+		await expectDiscordError(dispatch, DiscordErrors.InvalidFormBody, /2000 or fewer/);
 		await close();
 	});
 
 	test('an empty message is rejected', async () => {
 		const { dispatch, close } = await botWith((ctx, channelId) => ctx.client.messages.write(channelId, {}))();
-		await expect(dispatch).rejects.toThrow(/empty message/i);
+		await expectDiscordError(dispatch, DiscordErrors.CannotSendEmptyMessage);
 		await close();
 	});
 
@@ -41,7 +42,7 @@ describe('outgoing message payload limits (fail loud)', () => {
 		const { dispatch, close } = await botWith((ctx, channelId) =>
 			ctx.client.messages.write(channelId, { embeds: Array.from({ length: 11 }, () => ({ title: 't' })) }),
 		)();
-		await expect(dispatch).rejects.toThrow(/10 embeds/);
+		await expectDiscordError(dispatch, DiscordErrors.InvalidFormBody, /10 embeds/);
 		await close();
 	});
 
@@ -56,8 +57,9 @@ describe('outgoing message payload limits (fail loud)', () => {
 			}
 		}
 		const bot = await createMockBot({ commands: [Cat], world });
-		await expect(bot.slash({ name: 'cat', guildId: guild.id, channel, user: actor.user })).rejects.toThrow(
-			/channel type/i,
+		await expectDiscordError(
+			bot.slash({ name: 'cat', guildId: guild.id, channel, user: actor.user }),
+			DiscordErrors.CannotExecuteOnChannelType,
 		);
 		await bot.close();
 	});
@@ -70,7 +72,7 @@ describe('outgoing message payload limits (fail loud)', () => {
 			]);
 			return ctx.client.messages.write(channelId, { content: 'x', components: [row] });
 		})();
-		await expect(dispatch).rejects.toThrow(/duplicate component custom_id/);
+		await expectDiscordError(dispatch, DiscordErrors.InvalidFormBody, /duplicate component custom_id/);
 		await close();
 	});
 
@@ -85,7 +87,7 @@ describe('outgoing message payload limits (fail loud)', () => {
 				components: [row],
 			});
 		})();
-		await expect(dispatch).rejects.toThrow(/IsComponentsV2/);
+		await expectDiscordError(dispatch, DiscordErrors.InvalidFormBody, /IsComponentsV2/);
 		await close();
 	});
 
@@ -94,11 +96,13 @@ describe('outgoing message payload limits (fail loud)', () => {
 		// (`as any`) payloads — drive the create route directly to exercise it.
 		const { world, channel } = seedGuildFixture('stk');
 		const bot = await createMockBot({ world });
-		await expect(
+		await expectDiscordError(
 			bot.rest.request('POST', `/channels/${channel.id}/messages`, {
 				body: { content: 'x', sticker_ids: ['1', '2', '3', '4'] },
 			}),
-		).rejects.toThrow(/3 stickers/);
+			DiscordErrors.InvalidFormBody,
+			/3 stickers/,
+		);
 		await bot.close();
 	});
 
@@ -109,7 +113,7 @@ describe('outgoing message payload limits (fail loud)', () => {
 				.setAnswers(...Array.from({ length: 11 }, (_, i) => ({ text: `A${i}` })));
 			return ctx.client.messages.write(channelId, { poll });
 		})();
-		await expect(dispatch).rejects.toThrow(/10 answers/);
+		await expectDiscordError(dispatch, DiscordErrors.InvalidFormBody, /10 answers/);
 		await close();
 	});
 
@@ -117,7 +121,7 @@ describe('outgoing message payload limits (fail loud)', () => {
 		const { dispatch, close } = await botWith((ctx, channelId) =>
 			ctx.client.messages.write(channelId, { embeds: [{ fields: [{ name: 'n', value: 'x'.repeat(1025) }] }] }),
 		)();
-		await expect(dispatch).rejects.toThrow(/field value must be between 1 and 1024/);
+		await expectDiscordError(dispatch, DiscordErrors.InvalidFormBody, /field value must be between 1 and 1024/);
 		await close();
 	});
 
@@ -125,7 +129,7 @@ describe('outgoing message payload limits (fail loud)', () => {
 		const { dispatch, close } = await botWith((ctx, channelId) =>
 			ctx.client.messages.write(channelId, { embeds: [{ footer: { text: 'x'.repeat(2049) } }] }),
 		)();
-		await expect(dispatch).rejects.toThrow(/footer text must be 2048/);
+		await expectDiscordError(dispatch, DiscordErrors.InvalidFormBody, /footer text must be 2048/);
 		await close();
 	});
 
@@ -133,7 +137,7 @@ describe('outgoing message payload limits (fail loud)', () => {
 		const { dispatch, close } = await botWith((ctx, channelId) =>
 			ctx.client.messages.write(channelId, { embeds: [{ author: { name: 'x'.repeat(257) } }] }),
 		)();
-		await expect(dispatch).rejects.toThrow(/author name must be 256/);
+		await expectDiscordError(dispatch, DiscordErrors.InvalidFormBody, /author name must be 256/);
 		await close();
 	});
 
@@ -143,7 +147,7 @@ describe('outgoing message payload limits (fail loud)', () => {
 				embeds: [{ description: 'x'.repeat(4096) }, { description: 'y'.repeat(4096) }],
 			}),
 		)();
-		await expect(dispatch).rejects.toThrow(/combined length of all embeds must be 6000/);
+		await expectDiscordError(dispatch, DiscordErrors.InvalidFormBody, /combined length of all embeds must be 6000/);
 		await close();
 	});
 
@@ -151,7 +155,7 @@ describe('outgoing message payload limits (fail loud)', () => {
 		const { dispatch, close } = await botWith((ctx, channelId) =>
 			ctx.client.messages.write(channelId, { embeds: [{ title: 't', color: 0x1000000 }] }),
 		)();
-		await expect(dispatch).rejects.toThrow(/color must be an integer/);
+		await expectDiscordError(dispatch, DiscordErrors.InvalidFormBody, /color must be an integer/);
 		await close();
 	});
 
@@ -159,7 +163,7 @@ describe('outgoing message payload limits (fail loud)', () => {
 		const { dispatch, close } = await botWith((ctx, channelId) =>
 			ctx.client.messages.write(channelId, { embeds: [{ title: 't', url: 'javascript:alert(1)' }] }),
 		)();
-		await expect(dispatch).rejects.toThrow(/embed url is not a valid URL/);
+		await expectDiscordError(dispatch, DiscordErrors.InvalidFormBody, /embed url is not a valid URL/);
 		await close();
 	});
 
@@ -184,7 +188,9 @@ describe('outgoing message payload limits (fail loud)', () => {
 			}
 		}
 		const bot = await createMockBot({ commands: [Cn], world });
-		await expect(bot.slash({ name: 'cn', guildId: guild.id, channel, user: actor.user })).rejects.toThrow(
+		await expectDiscordError(
+			bot.slash({ name: 'cn', guildId: guild.id, channel, user: actor.user }),
+			DiscordErrors.InvalidFormBody,
 			/channel name must be between 1 and 100/,
 		);
 		await bot.close();
@@ -202,13 +208,13 @@ describe('outgoing message payload limits (fail loud)', () => {
 
 	test('an empty action row is rejected', async () => {
 		const { send, close } = await postBody({ components: [row()] });
-		await expect(send).rejects.toThrow(/action row must contain a component/);
+		await expectDiscordError(send, DiscordErrors.InvalidFormBody, /action row must contain a component/);
 		await close();
 	});
 
 	test('a button label over 80 chars is rejected', async () => {
 		const { send, close } = await postBody({ components: [row(button({ custom_id: 'b', label: 'x'.repeat(81) }))] });
-		await expect(send).rejects.toThrow(/button label must be 80/);
+		await expectDiscordError(send, DiscordErrors.InvalidFormBody, /button label must be 80/);
 		await close();
 	});
 
@@ -216,7 +222,7 @@ describe('outgoing message payload limits (fail loud)', () => {
 		const { send, close } = await postBody({
 			components: [row({ type: 3, custom_id: 's', options: [{ label: 'x'.repeat(101), value: 'v' }] })],
 		});
-		await expect(send).rejects.toThrow(/select option label must be between 1 and 100/);
+		await expectDiscordError(send, DiscordErrors.InvalidFormBody, /select option label must be between 1 and 100/);
 		await close();
 	});
 
@@ -224,7 +230,7 @@ describe('outgoing message payload limits (fail loud)', () => {
 		const { send, close } = await postBody({
 			components: Array.from({ length: 6 }, (_, i) => row(button({ custom_id: `b${i}`, label: 'x' }))),
 		});
-		await expect(send).rejects.toThrow(/at most 5 action rows/);
+		await expectDiscordError(send, DiscordErrors.InvalidFormBody, /at most 5 action rows/);
 		await close();
 	});
 
@@ -234,13 +240,13 @@ describe('outgoing message payload limits (fail loud)', () => {
 				row(button({ custom_id: 'b', label: 'x' }), { type: 3, custom_id: 's', options: [{ label: 'a', value: 'a' }] }),
 			],
 		});
-		await expect(send).rejects.toThrow(/cannot mix buttons and a select/);
+		await expectDiscordError(send, DiscordErrors.InvalidFormBody, /cannot mix buttons and a select/);
 		await close();
 	});
 
 	test('an interactive button with no custom_id is rejected', async () => {
 		const { send, close } = await postBody({ components: [row(button({ label: 'no id' }))] });
-		await expect(send).rejects.toThrow(/requires a non-empty custom_id/);
+		await expectDiscordError(send, DiscordErrors.InvalidFormBody, /requires a non-empty custom_id/);
 		await close();
 	});
 
@@ -256,7 +262,7 @@ describe('outgoing message payload limits (fail loud)', () => {
 		const { send, close } = await postBody({
 			components: [row({ type: 2, style: 5, label: 'Open' })],
 		});
-		await expect(send).rejects.toThrow(/link button requires a url/);
+		await expectDiscordError(send, DiscordErrors.InvalidFormBody, /link button requires a url/);
 		await close();
 	});
 
@@ -264,7 +270,7 @@ describe('outgoing message payload limits (fail loud)', () => {
 		const { send, close } = await postBody({
 			components: [row({ type: 2, style: 5, label: 'Open', url: 'attachment://logo.png' })],
 		});
-		await expect(send).rejects.toThrow(/link button url is not a valid URL/);
+		await expectDiscordError(send, DiscordErrors.InvalidFormBody, /link button url is not a valid URL/);
 		await close();
 	});
 
@@ -272,7 +278,7 @@ describe('outgoing message payload limits (fail loud)', () => {
 		const { send, close } = await postBody({
 			components: [row({ type: 2, style: 5, label: 'Open', url: 'https://example.com', custom_id: 'open' })],
 		});
-		await expect(send).rejects.toThrow(/link button cannot have custom_id/);
+		await expectDiscordError(send, DiscordErrors.InvalidFormBody, /link button cannot have custom_id/);
 		await close();
 	});
 
@@ -280,7 +286,7 @@ describe('outgoing message payload limits (fail loud)', () => {
 		const { send, close } = await postBody({
 			components: [row(button({ custom_id: 'open', label: 'Open', url: 'https://example.com' }))],
 		});
-		await expect(send).rejects.toThrow(/non-link buttons cannot have url/);
+		await expectDiscordError(send, DiscordErrors.InvalidFormBody, /non-link buttons cannot have url/);
 		await close();
 	});
 
@@ -288,7 +294,7 @@ describe('outgoing message payload limits (fail loud)', () => {
 		const { dispatch, close } = await botWith((ctx, channelId) =>
 			ctx.client.messages.write(channelId, { content: '   \n  ' }),
 		)();
-		await expect(dispatch).rejects.toThrow(/empty message/i);
+		await expectDiscordError(dispatch, DiscordErrors.CannotSendEmptyMessage);
 		await close();
 	});
 
@@ -297,7 +303,7 @@ describe('outgoing message payload limits (fail loud)', () => {
 			flags: 32768,
 			components: [row(...Array.from({ length: 6 }, (_, i) => button({ custom_id: `b${i}`, label: 'x' })))],
 		});
-		await expect(send).rejects.toThrow(/at most 5 buttons/);
+		await expectDiscordError(send, DiscordErrors.InvalidFormBody, /at most 5 buttons/);
 		await close();
 	});
 
@@ -305,7 +311,7 @@ describe('outgoing message payload limits (fail loud)', () => {
 		const { send, close } = await postBody({
 			components: [row({ type: 3, custom_id: 's', max_values: 5, options: [{ label: 'a', value: 'a' }] })],
 		});
-		await expect(send).rejects.toThrow(/max_values cannot exceed the number of options/);
+		await expectDiscordError(send, DiscordErrors.InvalidFormBody, /max_values cannot exceed the number of options/);
 		await close();
 	});
 
@@ -313,7 +319,7 @@ describe('outgoing message payload limits (fail loud)', () => {
 		const { send, close } = await postBody({
 			components: [row({ type: 3, custom_id: 's', min_values: 2, options: [{ label: 'a', value: 'a' }] })],
 		});
-		await expect(send).rejects.toThrow(/min_values cannot exceed the number of options/);
+		await expectDiscordError(send, DiscordErrors.InvalidFormBody, /min_values cannot exceed the number of options/);
 		await close();
 	});
 
@@ -321,7 +327,7 @@ describe('outgoing message payload limits (fail loud)', () => {
 		const { send, close } = await postBody({
 			embeds: [{ description: 'hi', footer: { icon_url: 'https://x/y.png' } }],
 		});
-		await expect(send).rejects.toThrow(/footer\.text is required/);
+		await expectDiscordError(send, DiscordErrors.InvalidFormBody, /footer\.text is required/);
 		await close();
 	});
 
@@ -329,19 +335,19 @@ describe('outgoing message payload limits (fail loud)', () => {
 		const { send, close } = await postBody({
 			embeds: [{ description: 'hi', author: { icon_url: 'https://x/y.png' } }],
 		});
-		await expect(send).rejects.toThrow(/author\.name is required/);
+		await expectDiscordError(send, DiscordErrors.InvalidFormBody, /author\.name is required/);
 		await close();
 	});
 
 	test('a poll with zero answers is rejected', async () => {
 		const { send, close } = await postBody({ poll: { question: { text: 'Best?' }, answers: [] } });
-		await expect(send).rejects.toThrow(/poll must have between 1 and 10 answers/);
+		await expectDiscordError(send, DiscordErrors.InvalidFormBody, /poll must have between 1 and 10 answers/);
 		await close();
 	});
 
 	test('a poll with no question text is rejected', async () => {
 		const { send, close } = await postBody({ poll: { question: {}, answers: [{ poll_media: { text: 'A' } }] } });
-		await expect(send).rejects.toThrow(/poll\.question\.text is required/);
+		await expectDiscordError(send, DiscordErrors.InvalidFormBody, /poll\.question\.text is required/);
 		await close();
 	});
 
@@ -353,11 +359,13 @@ describe('outgoing message payload limits (fail loud)', () => {
 			content: 'hi',
 		});
 		const bot = await createMockBot({ world });
-		await expect(
+		await expectDiscordError(
 			bot.rest.request('PATCH', `/channels/${channel.id}/messages/${message.id}`, {
 				body: { poll: { question: { text: 'Q' }, answers: [{ poll_media: { text: 'A' } }] } },
 			}),
-		).rejects.toThrow(/poll cannot be edited/);
+			DiscordErrors.InvalidFormBody,
+			/poll cannot be edited/,
+		);
 		await bot.close();
 	});
 });

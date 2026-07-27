@@ -2,9 +2,10 @@ import { createPlugin } from 'seyfert';
 import { SeyfertError } from 'seyfert/lib/common';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
-import { DiscordErrors, isDiscordError, MockApiHandler, redactRouteTokens } from '../../src/bot/rest';
+import { apiError, DiscordErrors, isDiscordError, MockApiHandler, redactRouteTokens } from '../../src/bot/rest';
 import { Routes } from '../../src/bot/routes';
 import { mockWorld } from '../../src/bot/world';
+import { discordErrorDetail, expectDiscordError } from './_setup';
 
 const englishLang = { greeting: 'Hello!' };
 
@@ -54,9 +55,7 @@ describe('MockApiHandler', () => {
 		expect(real.id).toBe(channel.id);
 		expect(bot.rest.actions.at(-1)?.synthetic).toBeFalsy();
 
-		await expect(bot.rest.request('GET', '/channels/does-not-exist')).rejects.toMatchObject({
-			code: DiscordErrors.UnknownChannel.code,
-		});
+		await expectDiscordError(bot.rest.request('GET', '/channels/does-not-exist'), DiscordErrors.UnknownChannel);
 		await bot.close();
 
 		const synthetic = await createMockBot({ onUnhandledRest: 'silent' });
@@ -169,6 +168,29 @@ describe('MockApiHandler', () => {
 			{ phase: 'ratelimit', method: undefined, url: undefined, query: undefined, status: 429, statusCode: undefined },
 			{ phase: 'fail', method: undefined, url: undefined, query: undefined, status: undefined, statusCode: 429 },
 		]);
+		await bot.close();
+	});
+
+	test('a 429 raised by apiError still reaches onRatelimit, with the parsed body', async () => {
+		// The rate-limit notification is decided off the error's status. That lookup used to read MockApiError's
+		// own field; it now reads what parseError filed, and an interceptor's apiError has to keep tripping it.
+		const seen: { status: number; body: unknown }[] = [];
+		const plugin = createPlugin({
+			name: 'slipher-ratelimit-observer',
+			register(api) {
+				api.rest.observe({
+					async onRatelimit(payload) {
+						seen.push({ status: payload.response.status, body: await payload.response.json() });
+					},
+				});
+			},
+		});
+		const bot = await createMockBot({ plugins: [plugin], onUnhandledRest: 'silent' });
+		bot.rest.intercept(Routes.createMessage, () => apiError({ ...DiscordErrors.RateLimited, retryAfter: 7 }));
+
+		await expect(bot.rest.request('POST', '/channels/limited/messages')).rejects.toBeInstanceOf(SeyfertError);
+
+		expect(seen).toEqual([{ status: 429, body: { code: 0, message: 'You are being rate limited.', retry_after: 7 } }]);
 		await bot.close();
 	});
 
@@ -342,46 +364,67 @@ describe('responder return values', () => {
 	});
 });
 
-describe('one error catalog, one predicate', () => {
-	test('isDiscordError narrows both shapes the package can throw', async () => {
+describe('one error model, one predicate', () => {
+	test('a seeded world and rest.fail() reject with the same error a real 404 would', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'narrow-guild' });
 		const channel = world.registerChannel(guild.id);
 		const bot = await createMockBot({ world });
 
-		// a world guard: MockApiError
+		// a world guard, reached because the message was never seeded
 		const guardError = await bot.client.messages.fetch('ghost', channel.id).then(
 			() => undefined,
 			(reason: unknown) => reason,
 		);
-		// rest.fail(): seyfert's own error, via the real parseError
+		// an injected failure on a route the world would have answered
 		bot.rest.fail(Routes.fetchChannel, DiscordErrors.UnknownChannel);
 		const failError = await bot.client.channels.fetch('ghost').then(
 			() => undefined,
 			(reason: unknown) => reason,
 		);
 
-		expect(guardError?.constructor.name).toBe('MockApiError');
-		expect(failError?.constructor.name).toBe('SeyfertError');
-		// one predicate answers for both, which is the point
-		expect(isDiscordError(guardError, { code: DiscordErrors.UnknownMessage.code })).toBe(true);
-		expect(isDiscordError(failError, { code: DiscordErrors.UnknownChannel.code })).toBe(true);
+		// The point of the whole seam: a command cannot tell a seeded failure from an injected one, because
+		// both are what seyfert's own parseError builds from a Discord response.
+		expect(guardError).toBeInstanceOf(SeyfertError);
+		expect(failError).toBeInstanceOf(SeyfertError);
+		expect(guardError?.constructor).toBe(failError?.constructor);
+		expect((guardError as SeyfertError).metadata).toMatchObject({
+			method: 'GET',
+			route: `/channels/${channel.id}/messages/ghost`,
+			status: 404,
+			statusText: 'Not Found',
+			response: { code: DiscordErrors.UnknownMessage.code, message: 'Unknown Message' },
+		});
+
+		// one predicate answers for both, on the fields Discord sends
+		expect(isDiscordError(guardError, { status: 404, code: DiscordErrors.UnknownMessage.code })).toBe(true);
+		expect(isDiscordError(failError, { status: 404, code: DiscordErrors.UnknownChannel.code })).toBe(true);
 		expect(isDiscordError(guardError, { code: DiscordErrors.UnknownChannel.code })).toBe(false);
+		expect(isDiscordError(guardError, { status: 403, code: DiscordErrors.UnknownMessage.code })).toBe(false);
 		expect(isDiscordError(new Error('not a discord error'))).toBe(false);
 		await bot.close();
 	});
 
-	test('the catalog carries the copy, so a call site only names the error', async () => {
+	test('the catalog carries the copy, and per-call detail survives on the parsed response', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'copy-guild' });
 		const channel = world.registerChannel(guild.id, { id: 'copy-chan' });
 		const bot = await createMockBot({ world });
 
-		await expect(bot.client.channels.fetch('ghost')).rejects.toThrow('Unknown Channel');
-		// per-call detail still overrides it, which is why the second argument exists
-		await expect(
+		// seyfert renames the error after the status text and the code, so the copy lives on metadata.response
+		const catalogError = await bot.client.channels.fetch('ghost').then(
+			() => undefined,
+			(reason: unknown) => reason,
+		);
+		expect((catalogError as Error).message).toBe('Api Not found 10003');
+		expect(discordErrorDetail(catalogError)).toBe('Unknown Channel');
+
+		// per-call detail still overrides the catalog copy, which is why apiError's second argument exists
+		await expectDiscordError(
 			bot.rest.request('POST', `/channels/${channel.id}/messages`, { body: { embeds: new Array(11).fill({}) } }),
-		).rejects.toThrow(/Invalid Form Body: /);
+			DiscordErrors.InvalidFormBody,
+			/^Invalid Form Body: a message can have at most 10 embeds$/,
+		);
 		await bot.close();
 	});
 });

@@ -5,7 +5,7 @@ import { TEST_APPLICATION_ID } from '../../src/bot/constants';
 import { apiUser } from '../../src/bot/payloads';
 import { DiscordErrors } from '../../src/bot/rest';
 import { mockWorld } from '../../src/bot/world';
-import { seedGuildFixture } from './_setup';
+import { expectDiscordError, seedGuildFixture } from './_setup';
 
 describe('interaction acknowledgement (fail loud before ack)', () => {
 	const interactionTokenFromLastCallback = (bot: Awaited<ReturnType<typeof createMockBot>>) => {
@@ -26,8 +26,9 @@ describe('interaction acknowledgement (fail loud before ack)', () => {
 			}
 		}
 		const bot = await createMockBot({ commands: [FollowupFirst], world });
-		await expect(bot.slash({ name: 'fu', guildId: guild.id, channel, user: actor.user })).rejects.toThrow(
-			/unknown webhook|404|already/i,
+		await expectDiscordError(
+			bot.slash({ name: 'fu', guildId: guild.id, channel, user: actor.user }),
+			DiscordErrors.UnknownWebhook,
 		);
 		await bot.close();
 	});
@@ -44,9 +45,10 @@ describe('interaction acknowledgement (fail loud before ack)', () => {
 		await bot.slash({ name: 'app-id' });
 		const token = interactionTokenFromLastCallback(bot);
 
-		await expect(bot.rest.request('GET', `/webhooks/wrong-app/${token}/messages/@original`)).rejects.toMatchObject({
-			code: DiscordErrors.UnknownWebhook.code,
-		});
+		await expectDiscordError(
+			bot.rest.request('GET', `/webhooks/wrong-app/${token}/messages/@original`),
+			DiscordErrors.UnknownWebhook,
+		);
 		await bot.close();
 	});
 
@@ -63,12 +65,14 @@ describe('interaction acknowledgement (fail loud before ack)', () => {
 		const token = interactionTokenFromLastCallback(bot);
 		await bot.rest.request('DELETE', `/webhooks/real-app/${token}/messages/@original`);
 
-		await expect(bot.rest.request('GET', `/webhooks/real-app/${token}/messages/@original`)).rejects.toMatchObject({
-			code: DiscordErrors.UnknownMessage.code,
-		});
-		await expect(
+		await expectDiscordError(
+			bot.rest.request('GET', `/webhooks/real-app/${token}/messages/@original`),
+			DiscordErrors.UnknownMessage,
+		);
+		await expectDiscordError(
 			bot.rest.request('PATCH', `/webhooks/real-app/${token}/messages/@original`, { body: { content: 'again' } }),
-		).rejects.toMatchObject({ code: DiscordErrors.UnknownMessage.code });
+			DiscordErrors.UnknownMessage,
+		);
 		await bot.close();
 	});
 
@@ -86,14 +90,16 @@ describe('interaction acknowledgement (fail loud before ack)', () => {
 		const token = interactionTokenFromLastCallback(bot);
 		await bot.rest.request('DELETE', `/channels/${channel.id}`);
 
-		await expect(
+		await expectDiscordError(
 			bot.rest.request('GET', `/webhooks/${TEST_APPLICATION_ID}/${token}/messages/@original`),
-		).rejects.toMatchObject({ code: DiscordErrors.UnknownMessage.code });
-		await expect(
+			DiscordErrors.UnknownMessage,
+		);
+		await expectDiscordError(
 			bot.rest.request('PATCH', `/webhooks/${TEST_APPLICATION_ID}/${token}/messages/@original`, {
 				body: { content: 'again' },
 			}),
-		).rejects.toMatchObject({ code: DiscordErrors.UnknownMessage.code });
+			DiscordErrors.UnknownMessage,
+		);
 		await bot.close();
 	});
 
@@ -113,10 +119,10 @@ describe('interaction acknowledgement (fail loud before ack)', () => {
 			}
 		}
 		const bot = await createMockBot({ commands: [DoubleAck], world });
-		await expect(bot.slash({ name: 'dbl', guildId: guild.id, channel, user: actor.user })).rejects.toMatchObject({
-			status: 400,
-			code: 40060,
-		});
+		await expectDiscordError(
+			bot.slash({ name: 'dbl', guildId: guild.id, channel, user: actor.user }),
+			DiscordErrors.AlreadyAcknowledged,
+		);
 		// only the first reply materialized — no phantom second message
 		expect(bot.world.query.channel({ id: channel.id })?.messages.map(m => m.content)).toEqual(['one']);
 		await bot.close();
@@ -131,8 +137,9 @@ describe('interaction acknowledgement (fail loud before ack)', () => {
 			}
 		}
 		const bot = await createMockBot({ commands: [EditFirst], world });
-		await expect(bot.slash({ name: 'ed', guildId: guild.id, channel, user: actor.user })).rejects.toThrow(
-			/unknown message|404|already/i,
+		await expectDiscordError(
+			bot.slash({ name: 'ed', guildId: guild.id, channel, user: actor.user }),
+			DiscordErrors.UnknownMessage,
 		);
 		await bot.close();
 	});
@@ -140,30 +147,34 @@ describe('interaction acknowledgement (fail loud before ack)', () => {
 	test('unknown interaction webhook tokens cannot access original or followup messages', async () => {
 		const bot = await createMockBot();
 
-		await expect(
+		await expectDiscordError(
 			bot.rest.request('GET', `/webhooks/${TEST_APPLICATION_ID}/ghost-token/messages/@original`),
-		).rejects.toMatchObject({ code: DiscordErrors.UnknownWebhook.code });
-		await expect(
+			DiscordErrors.UnknownWebhook,
+		);
+		await expectDiscordError(
 			bot.rest.request('PATCH', `/webhooks/${TEST_APPLICATION_ID}/ghost-token/messages/@original`, {
 				body: { content: 'x' },
 			}),
-		).rejects.toMatchObject({ code: DiscordErrors.UnknownWebhook.code });
-		await expect(
+			DiscordErrors.UnknownWebhook,
+		);
+		await expectDiscordError(
 			bot.rest.request('DELETE', `/webhooks/${TEST_APPLICATION_ID}/ghost-token/messages/@original`),
-		).rejects.toMatchObject({ code: DiscordErrors.UnknownWebhook.code });
-		await expect(
+			DiscordErrors.UnknownWebhook,
+		);
+		await expectDiscordError(
 			bot.rest.request('GET', `/webhooks/${TEST_APPLICATION_ID}/ghost-token/messages/followup-id`),
-		).rejects.toMatchObject({ code: DiscordErrors.UnknownWebhook.code });
-		await expect(
+			DiscordErrors.UnknownWebhook,
+		);
+		await expectDiscordError(
 			bot.rest.request('PATCH', `/webhooks/${TEST_APPLICATION_ID}/ghost-token/messages/followup-id`, {
 				body: { content: 'x' },
 			}),
-		).rejects.toMatchObject({ code: DiscordErrors.UnknownWebhook.code });
-		await expect(
+			DiscordErrors.UnknownWebhook,
+		);
+		await expectDiscordError(
 			bot.rest.request('DELETE', `/webhooks/${TEST_APPLICATION_ID}/ghost-token/messages/followup-id`),
-		).rejects.toMatchObject({
-			code: DiscordErrors.UnknownWebhook.code,
-		});
+			DiscordErrors.UnknownWebhook,
+		);
 		await bot.close();
 	});
 

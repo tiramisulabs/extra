@@ -2,7 +2,9 @@ import { Command, type CommandContext, Declare } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { type ApiUser, createMockBot, mockWorld, richUser, TEST_BOT_ID, TEST_USER_ID } from '../../src';
 import { apiUser } from '../../src/bot/payloads';
+import { DiscordErrors } from '../../src/bot/rest';
 import { mockWorld as internalMockWorld } from '../../src/bot/world';
+import { expectDiscordError } from './_setup';
 
 @Declare({ name: 'whoami', description: 'Reports who is running it and where' })
 class WhoAmI extends Command {
@@ -76,8 +78,9 @@ describe('bot identity is stated once', () => {
 
 		// The bot role carries no BanMembers. Enforcement is opt-in via the seeded bot member, so if the custom
 		// botId leaves that member unreachable the ban silently succeeds instead of being rejected.
-		await expect(bot.slash({ name: 'ban-target', guildId: guild.id, channel, user: actor.user })).rejects.toThrow(
-			/Missing Permissions/,
+		await expectDiscordError(
+			bot.slash({ name: 'ban-target', guildId: guild.id, channel, user: actor.user }),
+			DiscordErrors.MissingPermissions,
 		);
 	});
 

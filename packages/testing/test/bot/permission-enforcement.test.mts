@@ -3,7 +3,9 @@ import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { TEST_BOT_ID } from '../../src/bot/constants';
 import { apiUser } from '../../src/bot/payloads';
+import { DiscordErrors } from '../../src/bot/rest';
 import { mockWorld } from '../../src/bot/world';
+import { expectDiscordError } from './_setup';
 
 @Declare({ name: 'ban-target', description: 'Bans the seeded target' })
 class BanTarget extends Command {
@@ -29,8 +31,9 @@ describe('permission enforcement (opt-in via seeded bot member)', () => {
 	test('ban without BanMembers is rejected 403 Missing Permissions', async () => {
 		const { world, guild, channel, actor } = seed([], 5, 1);
 		const bot = await createMockBot({ commands: [BanTarget], world });
-		await expect(bot.slash({ name: 'ban-target', guildId: guild.id, channel, user: actor.user })).rejects.toThrow(
-			/Missing Permissions/,
+		await expectDiscordError(
+			bot.slash({ name: 'ban-target', guildId: guild.id, channel, user: actor.user }),
+			DiscordErrors.MissingPermissions,
 		);
 		await bot.close();
 	});
@@ -47,8 +50,9 @@ describe('permission enforcement (opt-in via seeded bot member)', () => {
 	test('ban with BanMembers but a target ranked at/above the bot is rejected (hierarchy)', async () => {
 		const { world, guild, channel, actor } = seed(['BanMembers'], 5, 5);
 		const bot = await createMockBot({ commands: [BanTarget], world });
-		await expect(bot.slash({ name: 'ban-target', guildId: guild.id, channel, user: actor.user })).rejects.toThrow(
-			/Missing Permissions/,
+		await expectDiscordError(
+			bot.slash({ name: 'ban-target', guildId: guild.id, channel, user: actor.user }),
+			DiscordErrors.MissingPermissions,
 		);
 		await bot.close();
 	});
@@ -81,8 +85,9 @@ describe('role-assignment & bulk-ban edge enforcement', () => {
 			}
 		}
 		const bot = await createMockBot({ commands: [Promote], world });
-		await expect(bot.slash({ name: 'promote', guildId: guild.id, channel, user: actor.user })).rejects.toThrow(
-			/Missing Permissions/,
+		await expectDiscordError(
+			bot.slash({ name: 'promote', guildId: guild.id, channel, user: actor.user }),
+			DiscordErrors.MissingPermissions,
 		);
 		await bot.close();
 	});
@@ -97,7 +102,9 @@ describe('role-assignment & bulk-ban edge enforcement', () => {
 			}
 		}
 		const bot = await createMockBot({ commands: [AddEveryone], world });
-		await expect(bot.slash({ name: 'add-everyone', guildId: guild.id, channel, user: actor.user })).rejects.toThrow(
+		await expectDiscordError(
+			bot.slash({ name: 'add-everyone', guildId: guild.id, channel, user: actor.user }),
+			DiscordErrors.InvalidFormBody,
 			/@everyone role cannot be added/,
 		);
 		await bot.close();
@@ -108,18 +115,23 @@ describe('role-assignment & bulk-ban edge enforcement', () => {
 		const botRole = world.build().roles.find(entry => entry.role.id === 'bot-role')?.role;
 		if (botRole) botRole.permissions = '0';
 		const bot = await createMockBot({ world });
-		await expect(bot.rest.request('DELETE', `/guilds/${guild.id}/bans/subject`)).rejects.toThrow(/Missing Permissions/);
+		await expectDiscordError(
+			bot.rest.request('DELETE', `/guilds/${guild.id}/bans/subject`),
+			DiscordErrors.MissingPermissions,
+		);
 		await bot.close();
 	});
 
 	test('editRole and deleteRole reject roles at or above the bot', async () => {
 		const { world, guild, highRole } = seedRoles();
 		const bot = await createMockBot({ world });
-		await expect(
+		await expectDiscordError(
 			bot.rest.request('PATCH', `/guilds/${guild.id}/roles/${highRole.id}`, { body: { name: 'nope' } }),
-		).rejects.toThrow(/Missing Permissions/);
-		await expect(bot.rest.request('DELETE', `/guilds/${guild.id}/roles/${highRole.id}`)).rejects.toThrow(
-			/Missing Permissions/,
+			DiscordErrors.MissingPermissions,
+		);
+		await expectDiscordError(
+			bot.rest.request('DELETE', `/guilds/${guild.id}/roles/${highRole.id}`),
+			DiscordErrors.MissingPermissions,
 		);
 		await bot.close();
 	});
@@ -127,10 +139,14 @@ describe('role-assignment & bulk-ban edge enforcement', () => {
 	test('editRole and deleteRole reject the @everyone role', async () => {
 		const { world, guild } = seedRoles();
 		const bot = await createMockBot({ world });
-		await expect(
+		await expectDiscordError(
 			bot.rest.request('PATCH', `/guilds/${guild.id}/roles/${guild.id}`, { body: { name: 'everyone' } }),
-		).rejects.toThrow(/@everyone role cannot be edited/);
-		await expect(bot.rest.request('DELETE', `/guilds/${guild.id}/roles/${guild.id}`)).rejects.toThrow(
+			DiscordErrors.InvalidFormBody,
+			/@everyone role cannot be edited/,
+		);
+		await expectDiscordError(
+			bot.rest.request('DELETE', `/guilds/${guild.id}/roles/${guild.id}`),
+			DiscordErrors.InvalidFormBody,
 			/@everyone role cannot be deleted/,
 		);
 		await bot.close();
@@ -175,8 +191,9 @@ describe('expanded management-route enforcement (+ channel overwrites)', () => {
 	test('editChannel without ManageChannels is denied', async () => {
 		const { world, channel } = seedManage([]);
 		const bot = await createMockBot({ world });
-		await expect(bot.rest.request('PATCH', `/channels/${channel.id}`, { body: { name: 'renamed' } })).rejects.toThrow(
-			/Missing Permissions/,
+		await expectDiscordError(
+			bot.rest.request('PATCH', `/channels/${channel.id}`, { body: { name: 'renamed' } }),
+			DiscordErrors.MissingPermissions,
 		);
 		await bot.close();
 	});
@@ -193,8 +210,9 @@ describe('expanded management-route enforcement (+ channel overwrites)', () => {
 	test('a channel deny-overwrite beats a guild-wide grant (channel-level permissions are honored)', async () => {
 		const { world, channel } = seedManage(['ManageChannels'], 'ManageChannels');
 		const bot = await createMockBot({ world });
-		await expect(bot.rest.request('PATCH', `/channels/${channel.id}`, { body: { name: 'renamed' } })).rejects.toThrow(
-			/Missing Permissions/,
+		await expectDiscordError(
+			bot.rest.request('PATCH', `/channels/${channel.id}`, { body: { name: 'renamed' } }),
+			DiscordErrors.MissingPermissions,
 		);
 		await bot.close();
 	});
@@ -202,9 +220,10 @@ describe('expanded management-route enforcement (+ channel overwrites)', () => {
 	test('creating a guild emoji without ManageGuildExpressions is denied', async () => {
 		const { world, guild } = seedManage([]);
 		const bot = await createMockBot({ world });
-		await expect(
+		await expectDiscordError(
 			bot.rest.request('POST', `/guilds/${guild.id}/emojis`, { body: { name: 'sparkle', image: '' } }),
-		).rejects.toThrow(/Missing Permissions/);
+			DiscordErrors.MissingPermissions,
+		);
 		await bot.close();
 	});
 
@@ -223,8 +242,9 @@ describe('expanded management-route enforcement (+ channel overwrites)', () => {
 
 		await expect(bot.rest.request('PUT', `/channels/${thread.id}/thread-members/@me`)).resolves.toBeUndefined();
 		expect(bot.world.all.threadMember({ channelId: thread.id }).map(member => member.userId)).toContain(TEST_BOT_ID);
-		await expect(bot.rest.request('PUT', `/channels/${thread.id}/thread-members/user-1`)).rejects.toThrow(
-			/Missing Permissions/,
+		await expectDiscordError(
+			bot.rest.request('PUT', `/channels/${thread.id}/thread-members/user-1`),
+			DiscordErrors.MissingPermissions,
 		);
 		await expect(bot.rest.request('DELETE', `/channels/${thread.id}/thread-members/@me`)).resolves.toBeUndefined();
 		expect(bot.world.all.threadMember({ channelId: thread.id }).map(member => member.userId)).not.toContain(
@@ -249,8 +269,9 @@ describe('expanded management-route enforcement (+ channel overwrites)', () => {
 		world.registerBotMember(guild.id, { roles: [role.id] });
 		const bot = await createMockBot({ world });
 
-		await expect(bot.rest.request('PUT', `/channels/${thread.id}/thread-members/user-1`)).rejects.toThrow(
-			/Missing Permissions/,
+		await expectDiscordError(
+			bot.rest.request('PUT', `/channels/${thread.id}/thread-members/user-1`),
+			DiscordErrors.MissingPermissions,
 		);
 		await bot.close();
 	});

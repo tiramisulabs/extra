@@ -5,6 +5,7 @@ import { apiUser } from '../../src/bot/payloads';
 import { DiscordErrors } from '../../src/bot/rest';
 import { Routes } from '../../src/bot/routes';
 import { mockWorld } from '../../src/bot/world';
+import { expectDiscordError } from './_setup';
 
 describe('stickers', () => {
 	test('edit and delete a seeded sticker via the client', async () => {
@@ -126,9 +127,10 @@ describe('scheduled events, stage, soundboard and audit logs (seedable reads)', 
 		world.registerBotMember(guild.id, { roles: [botRole.id] });
 
 		const bot = await createMockBot({ world });
-		await expect(
+		await expectDiscordError(
 			bot.rest.request('PATCH', `/guilds/${guild.id}/scheduled-events/ghost`, { body: { name: 'x' } }),
-		).rejects.toMatchObject({ status: 404, code: DiscordErrors.UnknownScheduledEvent.code });
+			DiscordErrors.UnknownScheduledEvent,
+		);
 		await bot.close();
 	});
 });
