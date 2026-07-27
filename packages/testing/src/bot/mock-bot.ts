@@ -97,6 +97,8 @@ const realClearTimeout = clearTimeout.bind(globalThis);
 
 export class MockBot extends MockBotDispatchCore {
 	private actorSessionSequence = 0;
+	/** Event names already warned about in {@link emitGatewayEvent}, so a loop reports once, not per iteration. */
+	private readonly warnedUnbridged = new Set<string>();
 
 	readonly dispatch: RawInteractionDispatchers = {
 		slash: ((
@@ -1129,6 +1131,21 @@ export class MockBot extends MockBotDispatchCore {
 						throw new Error(
 							`emit: "${name}" had no effect — no handler ran and it is not a world-bridge event. ` +
 								`Check the gateway name is UPPER_SNAKE_CASE (e.g. 'GUILD_MEMBER_ADD'). ` +
+								`Bridged events: ${[...WORLD_EVENT_NAMES].join(', ')}.`,
+						);
+					}
+					// The guard above only covers "nothing happened at all". When a handler DOES run, an event with
+					// no mutator still leaves the world untouched — the handler fires, the bridge silently skips,
+					// and `world.query.ban(...)` afterwards reads as "not banned" rather than "not modelled". Say
+					// so once per name. Not an error: emitting an unbridged event to exercise its handler is a
+					// legitimate thing to do, which is exactly what `updateCache: false` states explicitly.
+					if (updateCache && handlerRan && !WORLD_EVENT_NAMES.includes(name) && !this.warnedUnbridged.has(name)) {
+						this.warnedUnbridged.add(name);
+						console.warn(
+							`[@slipher/testing] emit("${name}"): the handler ran, but this event has no world bridge, so ` +
+								'world state is unchanged — a later world query will read as "absent", not "not modelled". ' +
+								'Seed the state through REST (or the world builder) if you need to assert on it, or pass ' +
+								'{ updateCache: false } to say the world is deliberately not involved. ' +
 								`Bridged events: ${[...WORLD_EVENT_NAMES].join(', ')}.`,
 						);
 					}

@@ -283,3 +283,86 @@ describe('emit result and factories', () => {
 		await bot.close();
 	});
 });
+
+describe('emit and the world bridge', () => {
+	test('an event with no world mutator says so instead of leaving the world quietly unchanged', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'bridge-guild' });
+		const ran: string[] = [];
+		const onBan = createEvent({
+			data: { name: 'guildBanAdd' },
+			async run() {
+				ran.push('guildBanAdd');
+			},
+		});
+		const warnings: string[] = [];
+		const warn = console.warn;
+		console.warn = (...args: unknown[]) => {
+			warnings.push(args.join(' '));
+		};
+
+		try {
+			const bot = await createMockBot({ events: [onBan], world });
+			await bot.emit('GUILD_BAN_ADD', { guild_id: guild.id, user: apiUser({ id: 'bridge-banned' }) });
+			// the handler ran, so the existing "had no effect" guard stays silent — this is the other half
+			expect(ran).toEqual(['guildBanAdd']);
+			expect(bot.world.all.ban({})).toHaveLength(0);
+			expect(warnings.join('\n')).toMatch(/no world bridge.*world state is unchanged/s);
+
+			// once per name, not once per emit
+			await bot.emit('GUILD_BAN_ADD', { guild_id: guild.id, user: apiUser({ id: 'bridge-banned-2' }) });
+			expect(warnings).toHaveLength(1);
+			await bot.close();
+		} finally {
+			console.warn = warn;
+		}
+	});
+
+	test('saying the world is not involved silences it', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'bridge-quiet-guild' });
+		const onBan = createEvent({ data: { name: 'guildBanAdd' }, async run() {} });
+		const warnings: string[] = [];
+		const warn = console.warn;
+		console.warn = (...args: unknown[]) => {
+			warnings.push(args.join(' '));
+		};
+
+		try {
+			const bot = await createMockBot({ events: [onBan], world });
+			await bot.emit(
+				'GUILD_BAN_ADD',
+				{ guild_id: guild.id, user: apiUser({ id: 'quiet-banned' }) },
+				{ updateCache: false },
+			);
+			expect(warnings).toEqual([]);
+			await bot.close();
+		} finally {
+			console.warn = warn;
+		}
+	});
+
+	test('a bridged event stays silent', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'bridge-ok-guild' });
+		const onJoin = createEvent({ data: { name: 'guildMemberAdd' }, async run() {} });
+		const warnings: string[] = [];
+		const warn = console.warn;
+		console.warn = (...args: unknown[]) => {
+			warnings.push(args.join(' '));
+		};
+
+		try {
+			const bot = await createMockBot({ events: [onJoin], world });
+			await bot.emit('GUILD_MEMBER_ADD', {
+				guild_id: guild.id,
+				...apiMember({ user: apiUser({ id: 'bridge-joiner' }) }),
+			});
+			expect(bot.world.query.member({ guildId: guild.id, userId: 'bridge-joiner' })).toBeDefined();
+			expect(warnings).toEqual([]);
+			await bot.close();
+		} finally {
+			console.warn = warn;
+		}
+	});
+});
