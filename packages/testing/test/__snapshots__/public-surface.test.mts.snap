@@ -9,6 +9,7 @@ exports[`public API surface > exported names match the committed snapshot 1`] = 
   "DISPATCHER_VERBS",
   "DiscordErrors",
   "Dispatch",
+  "ErrorCode",
   "MockApiError",
   "MockBot",
   "MockGateway",

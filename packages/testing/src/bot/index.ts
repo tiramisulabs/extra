@@ -218,10 +218,13 @@ export {
 	permissionBits,
 } from './permissions';
 export {
+	type ActionPredicate,
 	apiError,
 	type DiscordErrorInit,
 	DiscordErrors,
+	ErrorCode,
 	MockApiError,
+	type MockApiHandler,
 	matchRoute,
 	type PendingAction,
 	type RecordedAction,
@@ -329,4 +332,4 @@ export {
 	type WorldRoleOptions,
 	type WorldThreadOptions,
 } from './world';
-export { WORLD_EVENT_NAMES } from './world-events';
+export { WORLD_EVENT_NAMES, type WorldEmitEvent } from './world-events';
