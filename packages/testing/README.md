@@ -153,6 +153,11 @@ Every subject below is read the same way:
 | `rendered(flow)` | what a parked `bot.dispatch.*` flow has rendered so far, before it settles |
 | `rendered(payload)` | a raw message payload, an array of them, or a Seyfert builder |
 
+`MockBot` and a parked `Dispatch` have no `lastEmbed()` / `lastComponents()` / `lastContent()` of
+their own: they read the same latest-step output `rendered(bot)` and `rendered(flow)` already
+expose, with one vocabulary instead of three. The mock contexts keep theirs, because
+`ctx.lastEmbeds()` means "the last *response*", which is a scope `rendered()` does not name.
+
 The three readers differ only in cardinality:
 
 - `get.*` requires exactly one match and throws with the candidates otherwise.

@@ -435,8 +435,12 @@ describe('more click/flow DX', () => {
 		const source = await flow.untilComponent('go'); // parked on waitFor
 
 		// assert what the parked (not-yet-settled) flow already rendered:
-		expect(flow.lastEmbed().title).toBe('Launch');
-		expect(flow.lastComponents().map(component => component.customId)).toContain('go');
+		expect(rendered(flow).get.embed().title).toBe('Launch');
+		expect(
+			rendered(flow)
+				.all.button()
+				.map(button => button.customId),
+		).toContain('go');
 		rendered(flow).get.button('go');
 		rendered(flow).get.embed({ title: 'Launch' });
 

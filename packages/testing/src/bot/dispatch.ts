@@ -3,7 +3,6 @@ import type { DispatchResult } from './bot';
 import type { ModalFields } from './interactions';
 import type { MockApiHandler, RecordedAction, RouteMatcher } from './rest';
 import { modalRegistry } from './seyfert-internals';
-import { type EmbedView, type InteractiveComponentView, renderedReply } from './state';
 
 export interface ModalWaiter {
 	dispatchId: number;
@@ -166,46 +165,6 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		// The awaiting test owns the dispatch promise; swallow a late rejection so this step never unhandles it.
 		this.execution!.catch(() => {});
 		return this.componentAwaiter(customId, this.dispatchId, this.execution!, timeoutMs);
-	}
-
-	/**
-	 * What this dispatch has rendered so far — content + normalized embeds/components — read from its recorded
-	 * REST actions. Works even while PARKED on a collector (not yet settled), so the accessors below can assert
-	 * what a flow already produced without awaiting it.
-	 */
-	private rendered(): { content?: string; embeds: EmbedView[]; components: InteractiveComponentView[] } {
-		return renderedReply(this.rest.actions, this.dispatchId);
-	}
-
-	/** Normalized embeds of this dispatch's latest reply; `rendered(flow)` reads the same parked-flow output. */
-	lastEmbeds(): EmbedView[] {
-		return this.rendered().embeds;
-	}
-
-	/** This dispatch's latest reply's embed at `index`; THROWS if it has rendered none or the index is out of range. */
-	lastEmbed(index = 0): EmbedView {
-		const embeds = this.rendered().embeds;
-		if (embeds.length === 0) {
-			throw new TypeError('Dispatch.lastEmbed: this dispatch has not rendered any embed yet.');
-		}
-		if (index < 0 || index >= embeds.length) {
-			throw new TypeError(`Dispatch.lastEmbed: index ${index} is out of range — rendered ${embeds.length} embed(s).`);
-		}
-		return embeds[index];
-	}
-
-	/** Normalized components of this dispatch's latest reply; `rendered(flow)` reads the same parked-flow output. */
-	lastComponents(): InteractiveComponentView[] {
-		return this.rendered().components;
-	}
-
-	/**
-	 * Best-effort latest text content this dispatch has rendered, or undefined if none. The text counterpart of
-	 * {@link lastEmbeds}/{@link lastComponents}; works while PARKED, so a flow whose reply lands on a different token
-	 * (e.g. an inline `await ctx.interaction.modal(...)` continuation that replies on the submit) is still readable.
-	 */
-	lastContent(): string | undefined {
-		return this.rendered().content;
 	}
 
 	/**

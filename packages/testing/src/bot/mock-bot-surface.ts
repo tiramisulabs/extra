@@ -797,30 +797,6 @@ export abstract class MockBotSurface {
 		return renderedReply(this.sessions.latestActions());
 	}
 
-	lastEmbeds(): EmbedView[] {
-		return this.renderedAcrossDispatches().embeds;
-	}
-
-	lastEmbed(index = 0): EmbedView {
-		const embeds = this.renderedAcrossDispatches().embeds;
-		if (embeds.length === 0) {
-			throw new TypeError('MockBot.lastEmbed: no embed has been sent.');
-		}
-		if (index < 0 || index >= embeds.length) {
-			throw new TypeError(`MockBot.lastEmbed: index ${index} is out of range — sent ${embeds.length} embed(s).`);
-		}
-		return embeds[index];
-	}
-
-	lastComponents(): InteractiveComponentView[] {
-		return this.renderedAcrossDispatches().components;
-	}
-
-	/** Latest text content rendered by the current stateful step, or undefined when that step rendered no content. */
-	lastContent(): string | undefined {
-		return renderedReply(this.sessions.latestActions()).content;
-	}
-
 	/**
 	 * Read-only command catalog. For directory-loaded commands this includes discovered paths before lazy import,
 	 * then fills `found` once Seyfert materializes the command or subcommand from that path. Pure read; no imports.

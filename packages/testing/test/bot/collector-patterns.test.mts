@@ -294,7 +294,7 @@ describe('collector patterns', () => {
 		await bot.slash({ name: 'reopen' });
 		await bot.clickButton('confirm');
 
-		expect(bot.lastEmbed().title).toBe('Reopened');
+		expect(rendered(bot).get.embed().title).toBe('Reopened');
 		rendered(bot).get.embed({ contains: /reopened/ });
 		await bot.close();
 	});
@@ -318,7 +318,7 @@ describe('collector patterns', () => {
 		await bot.slash({ name: 'ack' });
 		await bot.clickButton('ack');
 
-		expect(bot.lastContent()).toBe('acknowledged');
+		expect(rendered(bot).get.message().content).toBe('acknowledged');
 		await bot.close();
 	});
 });
