@@ -77,6 +77,16 @@ export interface MockWorld {
 	stageInstances?: ApiStageInstance[];
 	auditLogEntries?: { guildId: string; entry: ApiAuditLogEntry }[];
 	/**
+	 * Families the mock otherwise only ever derives from REST during a run. Seeding one states a precondition
+	 * that already held before the test started — "this user was already banned", "this message was already
+	 * pinned" — instead of establishing it with a REST call the assertion then has to skip past in `restCalls`.
+	 */
+	bans?: { guildId: string; userId: string; reason?: string }[];
+	pins?: { channelId: string; messageId: string }[];
+	reactions?: { channelId: string; messageId: string; emoji: string; userId: string }[];
+	threadMembers?: { channelId: string; userId: string }[];
+	pollVotes?: { channelId: string; messageId: string; answerId: number; userId: string }[];
+	/**
 	 * App-specific key/value store, untouched by the mock. A domain layer seeds its own state here (and a test
 	 * reads it back via {@link MockBot.worldData}); the mock never interprets or mutates it. Pure passthrough.
 	 */
@@ -368,6 +378,77 @@ export class WorldBuilder {
 		const entry = apiAuditLogEntry(options);
 		(this.world.auditLogEntries ??= []).push({ guildId, entry });
 		return entry;
+	}
+
+	/** State that a user is already banned, without dispatching the ban that would put it in `restCalls`. */
+	registerBan(guildId: string, options: { userId: string; reason?: string }): void {
+		this.requireGuild(guildId);
+		const bans = (this.world.bans ??= []);
+		if (bans.some(entry => entry.guildId === guildId && entry.userId === options.userId)) return;
+		bans.push({ guildId, userId: options.userId, ...(options.reason === undefined ? {} : { reason: options.reason }) });
+	}
+
+	/** State that a message is already pinned. The message must be registered first — a pin needs something to point at. */
+	registerPin(channelId: string, messageId: string): void {
+		this.requireMessage(channelId, messageId, 'registerPin');
+		const pins = (this.world.pins ??= []);
+		if (pins.some(entry => entry.channelId === channelId && entry.messageId === messageId)) return;
+		pins.push({ channelId, messageId });
+	}
+
+	/** State that a user already reacted. `emoji` takes the same forms the dispatch verbs accept (`'👍'`, `'name:id'`). */
+	registerReaction(channelId: string, messageId: string, options: { emoji: string; userId: string }): void {
+		this.requireMessage(channelId, messageId, 'registerReaction');
+		const reactions = (this.world.reactions ??= []);
+		if (
+			reactions.some(
+				entry =>
+					entry.channelId === channelId &&
+					entry.messageId === messageId &&
+					entry.emoji === options.emoji &&
+					entry.userId === options.userId,
+			)
+		) {
+			return;
+		}
+		reactions.push({ channelId, messageId, emoji: options.emoji, userId: options.userId });
+	}
+
+	/** State that a user is already in a thread. */
+	registerThreadMember(channelId: string, userId: string): void {
+		this.requireChannel(channelId);
+		const members = (this.world.threadMembers ??= []);
+		if (members.some(entry => entry.channelId === channelId && entry.userId === userId)) return;
+		members.push({ channelId, userId });
+	}
+
+	/** State that a user already voted on a poll answer. */
+	registerPollVote(channelId: string, messageId: string, options: { answerId: number; userId: string }): void {
+		this.requireMessage(channelId, messageId, 'registerPollVote');
+		const votes = (this.world.pollVotes ??= []);
+		if (
+			votes.some(
+				entry =>
+					entry.channelId === channelId &&
+					entry.messageId === messageId &&
+					entry.answerId === options.answerId &&
+					entry.userId === options.userId,
+			)
+		) {
+			return;
+		}
+		votes.push({ channelId, messageId, answerId: options.answerId, userId: options.userId });
+	}
+
+	private requireMessage(channelId: string, messageId: string, api: string): void {
+		this.requireChannel(channelId);
+		const exists = this.world.messages.some(entry => entry.channelId === channelId && entry.message.id === messageId);
+		if (!exists) {
+			throw new TypeError(
+				`${api}: no message "${messageId}" in channel "${channelId}". Register the message first — ` +
+					'world.registerMessage(channelId, { id }) returns it.',
+			);
+		}
 	}
 
 	registerUser(options: ApiUserOptions = {}): ApiUser {

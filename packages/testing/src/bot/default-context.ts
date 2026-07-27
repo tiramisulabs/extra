@@ -160,10 +160,10 @@ export function createWorldDefaultContext(
 		}
 	};
 
-	const removeMember = async (guildId: string, userId: string, banned: boolean) => {
+	const removeMember = async (guildId: string, userId: string, banned: boolean, reason?: string) => {
 		const entry = findMember(guildId, userId);
 		removed.add(key(guildId, userId));
-		hooks.state.removeMember(guildId, userId, banned);
+		hooks.state.removeMember(guildId, userId, banned, reason);
 		await hooks.removeCachedMember(guildId, userId);
 		if (hooks.simulateGateway) {
 			await hooks.emit('GUILD_MEMBER_REMOVE', {

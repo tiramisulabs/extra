@@ -67,10 +67,12 @@ export abstract class WorldStateQueryCore {
 	protected abstract messageView(channelId: string, messageId: string): MessageView | undefined;
 	protected abstract withReactions(channelId: string, message: MockWorld['messages'][number]['message']): RawMessage;
 	protected abstract reactionViews(channelId: string, messageId: string): ReactionView[];
+	protected abstract reactionKey(channelId: string, messageId: string): string;
 	protected abstract buildMessageView(message: MockWorld['messages'][number]['message']): MessageView;
 	protected readonly world: MockWorld;
 	protected readonly botId: string;
-	protected readonly bansByGuild = new Map<string, Set<string>>();
+	/** guildId -> userId -> the X-Audit-Log-Reason the ban carried, if any. */
+	protected readonly bansByGuild = new Map<string, Map<string, string | undefined>>();
 	protected readonly dmChannelByUser = new Map<string, string>();
 	protected readonly messageIdByToken = new Map<string, string>();
 	protected readonly channelIdByToken = new Map<string, string>();
@@ -207,6 +209,43 @@ export abstract class WorldStateQueryCore {
 		for (const webhook of this.world.webhooks ?? []) this.webhooksById.set(webhook.id, webhook);
 		for (const channel of this.world.channels) {
 			if (channel.type === 1 && channel.id) this.dmChannelByUser.set(channel.id, channel.id);
+		}
+		// Seeded derived state. Every write below is idempotent because seed() re-runs this over a world that
+		// already carries the previous rounds' entries, and a duplicated pin or vote would be visible.
+		for (const ban of this.world.bans ?? []) {
+			const bans = this.bansByGuild.get(ban.guildId) ?? new Map<string, string | undefined>();
+			bans.set(ban.userId, ban.reason);
+			this.bansByGuild.set(ban.guildId, bans);
+		}
+		for (const pin of this.world.pins ?? []) {
+			const ids = this.pinnedByChannel.get(pin.channelId) ?? [];
+			if (!ids.includes(pin.messageId)) ids.unshift(pin.messageId);
+			this.pinnedByChannel.set(pin.channelId, ids);
+			const message = this.world.messages.find(
+				entry => entry.channelId === pin.channelId && entry.message.id === pin.messageId,
+			);
+			if (message) message.message.pinned = true;
+		}
+		for (const reaction of this.world.reactions ?? []) {
+			const key = this.reactionKey(reaction.channelId, reaction.messageId);
+			const byEmoji = this.reactionsByMessage.get(key) ?? new Map<string, Set<string>>();
+			const users = byEmoji.get(decodeEmoji(reaction.emoji)) ?? new Set<string>();
+			users.add(reaction.userId);
+			byEmoji.set(decodeEmoji(reaction.emoji), users);
+			this.reactionsByMessage.set(key, byEmoji);
+		}
+		for (const entry of this.world.threadMembers ?? []) {
+			const set = this.threadMembersByChannel.get(entry.channelId) ?? new Set<string>();
+			set.add(entry.userId);
+			this.threadMembersByChannel.set(entry.channelId, set);
+		}
+		for (const vote of this.world.pollVotes ?? []) {
+			const key = this.reactionKey(vote.channelId, vote.messageId);
+			const byAnswer = this.pollVotersByMessage.get(key) ?? new Map<number, Set<string>>();
+			const voters = byAnswer.get(vote.answerId) ?? new Set<string>();
+			voters.add(vote.userId);
+			byAnswer.set(vote.answerId, voters);
+			this.pollVotersByMessage.set(key, byAnswer);
 		}
 	}
 
@@ -404,7 +443,9 @@ export abstract class WorldStateQueryCore {
 	protected banCandidates(query?: WorldBanFilter): WorldCandidate<BanSnapshot>[] {
 		return [...this.bansByGuild].flatMap(([guildId, users]) =>
 			[...users]
-				.map(userId => this.candidate({ guildId, userId }, `ban:${guildId}/${userId}`))
+				.map(([userId, reason]) =>
+					this.candidate({ guildId, userId, ...(reason === undefined ? {} : { reason }) }, `ban:${guildId}/${userId}`),
+				)
 				.filter(candidate => queryMatches(candidate.value, query)),
 		);
 	}

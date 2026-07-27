@@ -20,7 +20,7 @@ import {
 	messageReactionAddEvent,
 } from './payloads';
 import { apiError, ErrorCode, MockApiError, type RouteMatcher } from './rest';
-import { ROUTE_COVERAGE, Routes } from './routes';
+import { AUDIT_ACTION, ROUTE_COVERAGE, Routes } from './routes';
 
 export function registerWorldResourceRoutes(context: WorldDefaultContext): void {
 	const {
@@ -155,8 +155,16 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 				}
 				throw error;
 			}
-			await removeMember(params.guildId, userId, true);
-			await hooks.cacheSet('bans', userId, params.guildId, { reason: null, user: resolveUser(userId) });
+			await removeMember(params.guildId, userId, true, pending.reason);
+			await hooks.cacheSet('bans', userId, params.guildId, {
+				reason: pending.reason ?? null,
+				user: resolveUser(userId),
+			});
+			hooks.state.addAuditLogEntry(params.guildId, {
+				actionType: AUDIT_ACTION.memberBanAdd,
+				targetId: userId,
+				...(pending.reason === undefined ? {} : { reason: pending.reason }),
+			});
 			banned.push(userId);
 		}
 		return { banned_users: banned, failed_users: failed };
@@ -360,21 +368,34 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 		}
 		return { user: resolveUser(params.userId) };
 	});
-	rest.intercept(Routes.ban, async (_pending, params) => {
+	rest.intercept(Routes.ban, async (pending, params) => {
 		requireGuild(params.guildId);
 		requirePerm(params.guildId, PermissionFlagsBits.BanMembers);
 		requireHierarchy(params.guildId, params.userId);
-		await removeMember(params.guildId, params.userId, true);
-		await hooks.cacheSet('bans', params.userId, params.guildId, { reason: null, user: resolveUser(params.userId) });
+		await removeMember(params.guildId, params.userId, true, pending.reason);
+		await hooks.cacheSet('bans', params.userId, params.guildId, {
+			reason: pending.reason ?? null,
+			user: resolveUser(params.userId),
+		});
+		hooks.state.addAuditLogEntry(params.guildId, {
+			actionType: AUDIT_ACTION.memberBanAdd,
+			targetId: params.userId,
+			...(pending.reason === undefined ? {} : { reason: pending.reason }),
+		});
 	});
-	rest.intercept(Routes.kick, async (_pending, params) => {
+	rest.intercept(Routes.kick, async (pending, params) => {
 		requireGuild(params.guildId);
 		requirePerm(params.guildId, PermissionFlagsBits.KickMembers);
 		if (world && !findMember(params.guildId, params.userId)) apiError(404, ErrorCode.UnknownMember, 'Unknown Member');
 		requireHierarchy(params.guildId, params.userId);
 		await removeMember(params.guildId, params.userId, false);
+		hooks.state.addAuditLogEntry(params.guildId, {
+			actionType: AUDIT_ACTION.memberKick,
+			targetId: params.userId,
+			...(pending.reason === undefined ? {} : { reason: pending.reason }),
+		});
 	});
-	rest.intercept(Routes.unban, async (_pending, params) => {
+	rest.intercept(Routes.unban, async (pending, params) => {
 		requireGuild(params.guildId);
 		requirePerm(params.guildId, PermissionFlagsBits.BanMembers);
 		if (world && !hooks.state.isBanned(params.guildId, params.userId)) {
@@ -382,6 +403,11 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 		}
 		hooks.state.unban(params.guildId, params.userId);
 		await hooks.cacheRemove('bans', params.userId, params.guildId);
+		hooks.state.addAuditLogEntry(params.guildId, {
+			actionType: AUDIT_ACTION.memberBanRemove,
+			targetId: params.userId,
+			...(pending.reason === undefined ? {} : { reason: pending.reason }),
+		});
 	});
 	rest.intercept(Routes.fetchBans, (_pending, params) => {
 		requireGuild(params.guildId);

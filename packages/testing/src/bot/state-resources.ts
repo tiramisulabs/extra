@@ -4,6 +4,7 @@ import { isEphemeral, MESSAGE_FLAG_COMPONENTS_V2 } from './message-flags';
 import { assertNameBounds } from './message-validation';
 import {
 	type ApiAuditLogEntry,
+	type ApiAuditLogEntryOptions,
 	type ApiAutoModRule,
 	type ApiChannel,
 	type ApiEmoji,
@@ -18,6 +19,7 @@ import {
 	type ApiWebhook,
 	type AutoModAction,
 	type AutoModTriggerMetadata,
+	apiAuditLogEntry,
 	apiAutoModRule,
 	apiEmoji,
 	apiGuildTemplate,
@@ -381,6 +383,19 @@ export class WorldState extends WorldStateMutationCore {
 		const updated = { ...entries[index], ...patchFields(raw) };
 		this.world.stageInstances = entries.map((entry, at) => (at === index ? updated : entry));
 		return updated;
+	}
+
+	/**
+	 * @internal Record what Discord would have written to the audit log.
+	 *
+	 * Called by the moderation responders so "who did it and why" is world state, not something only the REST
+	 * journal remembers — reading the reason from `restCalls` while reading the ban itself from the world is
+	 * the split this closes. `userId` defaults to the bot, which is who performed the action.
+	 */
+	addAuditLogEntry(guildId: string, options: ApiAuditLogEntryOptions): ApiAuditLogEntry {
+		const entry = apiAuditLogEntry({ userId: this.botId, ...options });
+		(this.world.auditLogEntries ??= []).push({ guildId, entry });
+		return entry;
 	}
 
 	/** The audit log entries of a guild. */

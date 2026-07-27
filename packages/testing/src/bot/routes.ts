@@ -554,6 +554,16 @@ export const ROUTE_COVERAGE = {
 
 export const WEBHOOK_MESSAGE_ROUTE = /\/webhooks\/[^/]+\/[^/]+\/messages\/[^/]+$/;
 export const FOLLOWUP_ROUTE = /\/webhooks\/[^/]+\/[^/]+$/;
+/**
+ * The Discord audit-log action types the mock's own moderation responders record, so no responder spells a
+ * bare number. Discord's full list is much longer; these are the actions this package performs.
+ */
+export const AUDIT_ACTION = {
+	memberKick: 20,
+	memberBanAdd: 22,
+	memberBanRemove: 23,
+} as const;
+
 export const CHANNEL_MESSAGE_POST = /\/channels\/[^/]+\/messages$/;
 /**
  * A message posted through a webhook. Structurally `FOLLOWUP_ROUTE` — the two are the same route on the
