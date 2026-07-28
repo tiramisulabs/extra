@@ -14,6 +14,7 @@ import {
 	type PluginDiagnostics,
 	SubCommand,
 } from 'seyfert';
+import type { BaseClientOptions } from 'seyfert/lib/client/base';
 import type { MockBot } from './bot';
 import type { Dispatch } from './dispatch';
 import type { DispatchDenial } from './dispatch-context';
@@ -643,8 +644,15 @@ export interface MockBotOptions {
 	plugins?: readonly AnySeyfertPlugin[];
 	/** Raw Seyfert client constructor options, excluding plugin loading. Use `plugins` for plugins. */
 	clientOptions?: SeyfertClientOptions;
-	/** Global middlewares forwarded to the real Seyfert client. */
-	globalMiddlewares?: ClientOptions['globalMiddlewares'];
+	/**
+	 * Global middlewares forwarded to the real Seyfert client.
+	 *
+	 * Indexed off the interface that declares it rather than off `ConstructorParameters<typeof Client>`. The
+	 * key depends on the consumer's `SeyfertRegistry` augmentation, and reaching it through a generic class's
+	 * constructor adds an instantiation step that can degrade it — reported as the property resolving to
+	 * `undefined` and rejecting a real middleware tuple. Going straight to the declaration cannot.
+	 */
+	globalMiddlewares?: BaseClientOptions['globalMiddlewares'];
 	/** Prefixes enabled for message command dispatch through say(). */
 	prefixes?: string[];
 	/** Include bot mentions as valid prefixes for say(). */

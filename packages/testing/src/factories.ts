@@ -1,6 +1,16 @@
-import { CDNRouter, type CDNUrlOptions, ChannelType, calculateUserDefaultAvatarIndex, Formatter } from 'seyfert';
+import {
+	CDNRouter,
+	type CDNUrlOptions,
+	ChannelType,
+	calculateUserDefaultAvatarIndex,
+	Formatter,
+	type User,
+} from 'seyfert';
 import { PermissionsBitField } from 'seyfert/lib/structures/extra/Permissions';
 import { mockId, timestampFrom } from './id';
+
+/** seyfert's resolved avatar-decoration shape, the target these fixtures have to satisfy. */
+type AvatarDecoration = NonNullable<User['avatarDecorationData']>;
 
 /** Pure, stateless CDN string builder — `CDNRouter.createProxy()` needs no rest client (mirrors `rest.cdn`). */
 const cdn = () => CDNRouter.createProxy();
@@ -28,7 +38,7 @@ export interface RichUserOptions {
 	discriminator?: string;
 	avatar?: string | null;
 	banner?: string | null;
-	avatarDecorationData?: { asset: string; skuId?: string } | null;
+	avatarDecorationData?: (Omit<AvatarDecoration, 'skuId'> & Partial<Pick<AvatarDecoration, 'skuId'>>) | null;
 }
 
 export interface RichGuildOptions {
@@ -105,8 +115,11 @@ export interface RichUser extends SnowflakeDerived {
 	discriminator: string;
 	avatar: string | null;
 	banner: string | null;
-	/** Mirrors seyfert's `User`: a decoration always names the SKU it came from. */
-	avatarDecorationData: { asset: string; skuId: string } | null;
+	/**
+	 * Derived from seyfert's `User` rather than restated, so the two cannot drift apart again — restating it
+	 * is what left `skuId` off and made this fixture unassignable to the option it exists to populate.
+	 */
+	avatarDecorationData: AvatarDecoration | null;
 	/** `<@id>` mention — so `` `${user}` `` interpolates like seyfert, not `[object Object]`. */
 	toString(): string;
 	/** `globalName ?? username#discriminator`, mirroring seyfert's `User.tag`. */
