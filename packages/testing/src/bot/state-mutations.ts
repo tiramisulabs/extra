@@ -14,7 +14,7 @@ import {
 	apiVoiceState,
 	type RawMessage,
 } from './payloads';
-import { apiError, ErrorCode } from './rest';
+import { apiError, DiscordErrors } from './rest';
 import { WorldStateReadCore } from './state-read';
 import type { DerivedMentions, MessageView, ReactionView } from './state-support';
 import {
@@ -197,7 +197,7 @@ export abstract class WorldStateMutationCore extends WorldStateReadCore {
 					)?.message
 				: undefined;
 			if (referencedId && !referenced && ref.fail_if_not_exists !== false) {
-				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: referenced message does not exist');
+				apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: referenced message does not exist');
 			}
 			if (referenced && numberValue(ref.type) === 1) {
 				message.message_snapshots = [
@@ -348,13 +348,13 @@ export abstract class WorldStateMutationCore extends WorldStateReadCore {
 	}
 
 	/** @internal When Discord removes a member. */
-	removeMember(guildId: string, userId: string, banned: boolean): void {
+	removeMember(guildId: string, userId: string, banned: boolean, reason?: string): void {
 		this.world.members = this.world.members.filter(
 			entry => entry.guildId !== guildId || entry.member.user.id !== userId,
 		);
 		if (banned) {
-			const bans = this.bansByGuild.get(guildId) ?? new Set<string>();
-			bans.add(userId);
+			const bans = this.bansByGuild.get(guildId) ?? new Map<string, string | undefined>();
+			bans.set(userId, reason);
 			this.bansByGuild.set(guildId, bans);
 		}
 	}
@@ -366,7 +366,12 @@ export abstract class WorldStateMutationCore extends WorldStateReadCore {
 
 	/** The user ids currently banned in a guild. */
 	bans(guildId: string): string[] {
-		return [...(this.bansByGuild.get(guildId) ?? new Set<string>())];
+		return [...(this.bansByGuild.get(guildId) ?? new Map<string, string | undefined>()).keys()];
+	}
+
+	/** The X-Audit-Log-Reason a ban carried, if it carried one. */
+	banReason(guildId: string, userId: string): string | undefined {
+		return this.bansByGuild.get(guildId)?.get(userId);
 	}
 
 	/** @internal When Discord edits a channel. */

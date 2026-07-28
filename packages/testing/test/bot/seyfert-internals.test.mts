@@ -12,6 +12,10 @@ describe('seyfert internals contract', () => {
 		const client = bot.client;
 
 		const components = componentInternals(client);
+		expect(
+			typeof components.createComponentCollector,
+			'client.components.createComponentCollector (stateful waitFor checkpoints)',
+		).toBe('function');
 		expect(typeof components.execute, 'client.components.execute (component-command detection)').toBe('function');
 		expect(typeof components.onComponent, 'client.components.onComponent (collector detection)').toBe('function');
 		expect(typeof components.hasComponent, 'client.components.hasComponent (collector detection)').toBe('function');
@@ -21,6 +25,10 @@ describe('seyfert internals contract', () => {
 		expect(typeof components.values?.clear, 'client.components.values (reset clears runtime collectors)').toBe(
 			'function',
 		);
+		expect(
+			typeof components.clearValue,
+			'client.components.clearValue (close cancels collector idle/timeout handles)',
+		).toBe('function');
 
 		const modals = modalRegistry(client);
 		for (const method of ['has', 'get', 'set', 'delete', 'clear', 'keys'] as const) {

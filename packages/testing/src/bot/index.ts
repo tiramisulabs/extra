@@ -3,8 +3,8 @@
  * - New stateful route: add a Routes descriptor, a defaults responder, any needed
  *   WorldState mutator/view, a regression test, and a README line.
  * - New dispatcher verb: add the payload builder, MockBot method, Actor method,
- *   DISPATCHER_VERBS entry, matrix row, and README example.
- * - New world entity: add the payload factory, MockWorld field, WorldBuilder
+ *   Dispatcher method, DISPATCHER_VERBS entry, matrix row, and README example.
+ * - New world entity: add the payload factory, WorldData field, WorldBuilder
  *   registration, cache seeding, state view, read/write responders, and a test
  *   that asserts both cache and view behavior.
  * - Seyfert deep imports are accepted break points for this peer range. If Seyfert
@@ -14,7 +14,7 @@
  *
  * Public API surface: this barrel re-exports an explicit, curated allowlist - the
  * names a TEST AUTHOR legitimately uses. Internal helper modules (hooks,
- * option-validation, select-resolved, defaults, dispatch, dispatch-context),
+ * option-validation, select-resolved, defaults, dispatch-context),
  * world-events internals, rest.ts request plumbing, and the WorldState write
  * surface are deliberately NOT exported here. Deep imports remain available for
  * the package's own tests; do not promote internals into this list.
@@ -26,13 +26,10 @@ export {
 	type AutocompleteResult,
 	type BotDiagnostics,
 	type CapturedReply,
-	type ComponentActionView,
-	type ComponentClickOptions,
-	type ComponentSelectOptions,
-	type ComponentSourceView,
-	type CreatedResource,
+	type ComponentSourceOptions,
 	createMockBot,
 	DISPATCHER_VERBS,
+	type Dispatcher,
 	type DispatchMessageOptions,
 	type DispatchResult,
 	type EmitEventOptions,
@@ -48,6 +45,7 @@ export {
 	type MockEvent,
 	type MockSubCommandClass,
 	type MockTopLevelCommandClass,
+	type ModalSubmitOptions,
 	type OptionsRecordOf,
 	type OutgoingMessage,
 	type PluginInfo,
@@ -68,6 +66,7 @@ export {
 	TEST_GUILD_ID,
 	TEST_USER_ID,
 } from './constants';
+export { Dispatch, type DispatchOptions } from './dispatch';
 export { MockGateway, type MockGatewayOptions, type MockShard } from './gateway';
 export {
 	type ApiInteractionPayload,
@@ -81,8 +80,6 @@ export {
 	type ChatInputInteractionOptions,
 	channelOption,
 	chatInputInteraction,
-	DEFAULT_MEMBER_PERMISSIONS_STRING,
-	DEFAULT_PERMISSIONS,
 	type EncodedOption,
 	type EntryPointInteractionOptions,
 	entryPointInteraction,
@@ -113,9 +110,12 @@ export {
 	type ApiAuditLogEntryOptions,
 	type ApiAutoModRule,
 	type ApiAutoModRuleOptions,
+	type ApiButtonOptions,
+	type ApiButtonStyle,
 	type ApiChannel,
 	type ApiChannelInput,
 	type ApiChannelOptions,
+	type ApiComponent,
 	type ApiEmoji,
 	type ApiEmojiOptions,
 	type ApiGuild,
@@ -135,12 +135,16 @@ export {
 	type ApiRoleOptions,
 	type ApiScheduledEvent,
 	type ApiScheduledEventOptions,
+	type ApiSelectOption,
+	type ApiSelectOptions,
+	type ApiSelectType,
 	type ApiSoundboardSound,
 	type ApiSoundboardSoundOptions,
 	type ApiStageInstance,
 	type ApiStageInstanceOptions,
 	type ApiSticker,
 	type ApiStickerOptions,
+	type ApiTextInputOptions,
 	type ApiThreadMember,
 	type ApiThreadMemberOptions,
 	type ApiThreadOptions,
@@ -152,9 +156,11 @@ export {
 	type ApiWebhookOptions,
 	type AutoModAction,
 	type AutoModTriggerMetadata,
+	apiActionRow,
 	apiAttachment,
 	apiAuditLogEntry,
 	apiAutoModRule,
+	apiButton,
 	apiChannel,
 	apiEmoji,
 	apiGuild,
@@ -165,9 +171,11 @@ export {
 	apiPoll,
 	apiRole,
 	apiScheduledEvent,
+	apiSelect,
 	apiSoundboardSound,
 	apiStageInstance,
 	apiSticker,
+	apiTextInput,
 	apiThread,
 	apiThreadMember,
 	apiUser,
@@ -190,11 +198,13 @@ export {
 	messageReactionRemoveAllEvent,
 	messageReactionRemoveEmojiEvent,
 	messageReactionRemoveEvent,
+	type PlainPayload,
 	type RawMessage,
 	type ThreadMetadata,
 	threadCreateEvent,
 	threadDeleteEvent,
 	voiceStateUpdateEvent,
+	type WireFields,
 } from './payloads';
 export {
 	ALL_PERMISSIONS,
@@ -207,24 +217,23 @@ export {
 	permissionBits,
 } from './permissions';
 export {
-	type ActionFilter,
-	type ActionMatcher,
 	type ActionPredicate,
 	apiError,
 	type DiscordErrorInit,
 	DiscordErrors,
-	type MatchedAction,
-	MockApiError,
+	isDiscordError,
+	type MockApiHandler,
+	matchRoute,
 	type PendingAction,
 	type RecordedAction,
-	type RouteActionFilter,
+	type RestCall,
+	type RestCalls,
 	type RouteMatcher,
+	type RouteParams,
 	type RouteResponder,
 	routeUrl,
-	type TypedMatchedAction,
-	type ValuePredicate,
 } from './rest';
-export { Routes } from './routes';
+export { defineRoute, Routes } from './routes';
 export {
 	type AutoModRuleSnapshot,
 	type BanSnapshot,
@@ -234,6 +243,7 @@ export {
 	type EmbedView,
 	type EmojiSnapshot,
 	type EntityDiff,
+	type FileView,
 	type GuildMemberView,
 	type GuildView,
 	type InteractiveComponentView,
@@ -310,12 +320,14 @@ export {
 } from './state';
 export {
 	type ChannelOverwriteInput,
-	type MockWorld,
 	mockWorld,
+	type WorldBotMemberOptions,
 	WorldBuilder,
 	type WorldChannelOptions,
+	type WorldData,
+	type WorldGuild,
 	type WorldGuildOptions,
 	type WorldRoleOptions,
 	type WorldThreadOptions,
 } from './world';
-export { WORLD_EVENT_NAMES } from './world-events';
+export { WORLD_EVENT_NAMES, type WorldEmitEvent } from './world-events';

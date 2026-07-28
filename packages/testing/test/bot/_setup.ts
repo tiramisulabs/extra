@@ -21,8 +21,59 @@ import {
 	type UserCommandInteraction,
 } from 'seyfert';
 import { ApplicationCommandType, EntryPointCommandHandlerType } from 'seyfert/lib/types';
+import { expect } from 'vitest';
 import { apiUser } from '../../src/bot/payloads';
+import { type DiscordErrorInit, isDiscordError } from '../../src/bot/rest';
 import { mockWorld } from '../../src/bot/world';
+
+/**
+ * The descriptive text Discord sent. seyfert's `parseError` names the error `API_<statusText>_<code>` and uses
+ * that as `.message` — a Missing Permissions failure reads `Api Forbidden 50013` — but it keeps the body it
+ * parsed on `metadata.response`, which is where the per-call copy survives.
+ */
+export function discordErrorDetail(error: unknown): string | undefined {
+	const response = (error as { metadata?: { response?: { message?: unknown } } } | null | undefined)?.metadata
+		?.response;
+	return typeof response?.message === 'string' ? response.message : undefined;
+}
+
+function describeThrown(error: unknown): string {
+	if (!(error instanceof Error)) return `a non-Error ${JSON.stringify(error)}`;
+	const detail = discordErrorDetail(error);
+	return `${error.constructor.name} ${error.message}${detail === undefined ? '' : ` (${detail})`}`;
+}
+
+/**
+ * Assert a call fails with one Discord REST error, by the fields Discord actually sends.
+ *
+ * The message is deliberately not the subject: seyfert builds it from the status text and the code, so
+ * matching it pins seyfert's formatting rather than the mock's behaviour, and it goes green for any error
+ * that happens to be worded the same. `detail` is for the errors whose text carries per-call information the
+ * code does not — Invalid Form Body naming the offending field — and matches what Discord sent, not what
+ * seyfert renamed it to.
+ */
+export async function expectDiscordError(
+	call: PromiseLike<unknown>,
+	expected: DiscordErrorInit,
+	detail?: RegExp,
+): Promise<void> {
+	const thrown = await Promise.resolve(call).then(
+		value => ({ resolved: value }),
+		(reason: unknown) => ({ rejected: reason }),
+	);
+	if (!('rejected' in thrown)) {
+		expect.fail(
+			`expected a Discord ${expected.status}/${expected.code ?? 0} rejection, but the call resolved with ` +
+				`${JSON.stringify(thrown.resolved)}`,
+		);
+	}
+	const error = thrown.rejected;
+	expect(
+		isDiscordError(error, { status: expected.status, code: expected.code }),
+		`expected a Discord ${expected.status}/${expected.code ?? 0} error, got ${describeThrown(error)}`,
+	).toBe(true);
+	if (detail !== undefined) expect(discordErrorDetail(error)).toMatch(detail);
+}
 
 /** The common test opener: `const { world, guild, actor, channel } = seedGuildFixture('tag')`. */
 export function seedGuildFixture(tag: string) {

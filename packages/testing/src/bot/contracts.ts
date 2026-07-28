@@ -14,29 +14,37 @@ import {
 	type PluginDiagnostics,
 	SubCommand,
 } from 'seyfert';
+import type { BaseClientOptions } from 'seyfert/lib/client/base';
 import type { MockBot } from './bot';
 import type { Dispatch } from './dispatch';
 import type { DispatchDenial } from './dispatch-context';
 import type {
+	ApiRoleInput,
 	AutocompleteInteractionOptions,
-	ButtonInteractionOptions,
 	ChatInputInteractionOptions,
 	EntryPointInteractionOptions,
 	MessageCommandInteractionOptions,
 	ModalFields,
 	ModalSubmitInteractionOptions,
-	SelectMenuInteractionOptions,
 	UserCommandInteractionOptions,
 } from './interactions';
 import type { ApiChannel, ApiMember, ApiMessage, ApiUser, MemberInput } from './payloads';
-import type { RecordedAction } from './rest';
+import type { PermissionInput } from './permissions';
+import type { RecordedAction, RestCalls } from './rest';
 import { Routes } from './routes';
-import { type EmbedView, harvestComponents, type InteractiveComponentView, normalizeEmbed } from './state';
+import {
+	type EmbedView,
+	type FileView,
+	harvestComponents,
+	type InteractiveComponentView,
+	normalizeEmbed,
+	normalizeFile,
+} from './state';
 import type { WorldBuilder } from './world';
 
 type ClientConstructorOptions = ConstructorParameters<typeof Client>[0];
 type ClientOptions = NonNullable<ClientConstructorOptions>;
-type MockClientOptions = Omit<ClientOptions, 'plugins'>;
+type SeyfertClientOptions = Omit<ClientOptions, 'plugins'>;
 type ServicesOptions = Parameters<Client['setServices']>[0];
 
 export interface CapturedReply {
@@ -71,8 +79,44 @@ export interface OutgoingMessage {
 
 export type ComponentSourceOptions = {
 	source?: string | RecordedAction;
+	/**
+	 * Dispatch to a registered ComponentCommand with no rendered message behind it.
+	 *
+	 * For a bot whose panels are posted once and clicked forever after, synthetic IS the normal path. It
+	 * describes the click, not the surface the click was made from, so every dispatcher accepts it and an
+	 * actor can bind it once for the whole flow. On a stateful surface the resulting step is an ordinary
+	 * step of that identity — serialized with its other actions, committed as its latest rendered output,
+	 * and part of its `restCalls()`. Only the source message is missing, so there is no checkpoint to
+	 * consume and no parked flow to resume.
+	 */
 	allowSyntheticSource?: boolean;
+	/**
+	 * Send input the rendered source says should be impossible: a disabled component, or select values outside
+	 * the options it offered.
+	 *
+	 * Discord delivers all of these — a client can re-send a disabled button's interaction, and a select value
+	 * can be forged — so a handler that defends against them has branches worth testing. Without this the
+	 * guards reject the dispatch first and those branches are unreachable except by hand-patching the stored
+	 * message.
+	 *
+	 * Deliberately does NOT relax "the customId is not on this message": that one is almost always a test
+	 * pointing at the wrong source, and {@link allowSyntheticSource} already covers dispatching with no
+	 * rendered source at all.
+	 */
+	allowTamperedInput?: boolean;
 };
+
+/**
+ * Options accepted by every `submitModal` verb, on an {@link Actor} and on a {@link Dispatcher} alike.
+ *
+ * `allowSyntheticSource` is the modal half of {@link ComponentSourceOptions.allowSyntheticSource}: it says the
+ * ModalCommand is submitted with no opener in this run. It used to exist only on the un-sessioned surface, which
+ * meant a bot whose modals are opened from a long-lived panel had to abandon its identity binding to submit one.
+ * The submission is a step of the acting identity like any other; it simply resumes no opener, because none of
+ * this run's dispatches opened it.
+ */
+export type ModalSubmitOptions = Omit<ModalSubmitInteractionOptions, 'customId' | 'fields'> &
+	Pick<ComponentSourceOptions, 'allowSyntheticSource'>;
 
 export const INTERACTION_WEBHOOK_ROUTES = [
 	Routes.followup,
@@ -86,25 +130,6 @@ export const INTERACTION_WEBHOOK_ROUTES = [
 
 export type MessageSource = { id: string; channel_id?: string };
 export type MessagePart = { body: OutgoingMessage; source?: MessageSource };
-type BindComponentView = (view: InteractiveComponentView, source?: MessageSource) => ComponentActionView;
-
-export interface ComponentSourceView {
-	messageId: string;
-	channelId?: string;
-}
-
-export type ComponentClickOptions = Omit<ButtonInteractionOptions, 'customId' | 'message'> &
-	Omit<ComponentSourceOptions, 'source'>;
-
-export type ComponentSelectOptions = Omit<SelectMenuInteractionOptions, 'customId' | 'values' | 'message'> &
-	Omit<ComponentSourceOptions, 'source'>;
-
-/** Interactive component harvested from a dispatch result, bound to the message that rendered it. */
-export interface ComponentActionView extends InteractiveComponentView {
-	source?: ComponentSourceView;
-	click(options?: ComponentClickOptions): Dispatch<DispatchResult>;
-	select(values: string[], options?: ComponentSelectOptions): Dispatch<DispatchResult>;
-}
 
 /** Semantic result produced by interaction dispatchers. */
 export interface DispatchResult {
@@ -136,14 +161,14 @@ export interface DispatchResult {
 	embedViews: EmbedView[];
 	/** First parsed embed view, for the common single-embed assertion. */
 	embedView?: EmbedView;
-	/** Interactive components collected from `messages[].components`. */
-	components: ComponentActionView[];
-	/** Lookup for an interactive component by label or customId. */
-	component(labelOrCustomId: string): ComponentActionView | undefined;
+	/** Data-only normalized components collected from `messages[].components`; dispatch actions through `bot.*`. */
+	components: InteractiveComponentView[];
 	/** Components-v2 TextDisplay (type 10) contents, in dispatch order. */
 	textDisplays: string[];
 	/** Files flattened from `messages`, in dispatch order. */
 	files: unknown[];
+	/** Parsed, typed views over `files` — assert on these instead of casting the raw entries. */
+	fileViews: FileView[];
 	/** REST actions scoped to this dispatch. */
 	actions: RecordedAction[];
 	/** Best-effort latest user-visible content across replies, edits, and followups. */
@@ -203,15 +228,15 @@ export interface MessageResultBase {
 	embeds: unknown[];
 	embed?: unknown;
 	files: unknown[];
+	/** Parsed, typed views over `files` — assert on these instead of casting the raw entries. */
+	fileViews: FileView[];
 	content?: string;
 	/** Parsed, typed camelCase embed views over `messages` — assert on these instead of casting raw `embed`. */
 	embedViews: EmbedView[];
 	/** First parsed embed view, for the common single-embed assertion. */
 	embedView?: EmbedView;
-	/** Interactive components collected from `messages[].components`. */
-	components: ComponentActionView[];
-	/** Lookup for an interactive component by label or customId. */
-	component(labelOrCustomId: string): ComponentActionView | undefined;
+	/** Data-only normalized components collected from `messages[].components`; dispatch actions through `bot.*`. */
+	components: InteractiveComponentView[];
 	/** Components-v2 TextDisplay (type 10) contents, in dispatch order. */
 	textDisplays: string[];
 }
@@ -293,25 +318,22 @@ export interface PluginInfo {
 /** Plain-data snapshot for debugging a hung dispatch, surfaced by {@link MockBot.diagnostics}. */
 export interface BotDiagnostics {
 	/** Dispatches created but not yet settled. */
-	pending: { id?: string; started: boolean; settled: boolean }[];
+	pending: { dispatchId?: number; userId?: string; started: boolean; settled: boolean }[];
 	/** The most recent recorded REST actions, oldest-first. */
 	recentActions: RecordedAction[];
 }
 
-export function buildMessageResult(
-	actions: RecordedAction[],
-	parts: MessagePart[],
-	bindComponentView: BindComponentView,
-): MessageResultBase {
+export function buildMessageResult(actions: RecordedAction[], parts: MessagePart[]): MessageResultBase {
 	const messages = parts.map(part => part.body);
 	const embeds = messages.flatMap(message => message.embeds ?? []);
 	const files = messages.flatMap(message => message.files ?? []);
 	const embedViews = embeds.map(normalizeEmbed);
-	const components: ComponentActionView[] = [];
+	const fileViews = files.map(normalizeFile);
+	const components: InteractiveComponentView[] = [];
 	const textDisplays: string[] = [];
 	for (const part of parts) {
 		const harvested = harvestComponents((part.body as { components?: unknown }).components);
-		components.push(...harvested.components.map(component => bindComponentView(component, part.source)));
+		components.push(...harvested.components);
 		textDisplays.push(...harvested.textDisplays);
 	}
 	return {
@@ -319,12 +341,10 @@ export function buildMessageResult(
 		messages,
 		embeds,
 		files,
+		fileViews,
 		content: messages.at(-1)?.content,
 		embedViews,
 		components,
-		component(labelOrCustomId: string) {
-			return components.find(view => view.customId === labelOrCustomId || view.label === labelOrCustomId);
-		},
 		textDisplays,
 		get embed() {
 			return embeds[0];
@@ -345,10 +365,79 @@ export interface ActorOptions {
 	member?: ApiMember;
 	guildId?: string | null;
 	channel?: ApiChannel;
+	/**
+	 * The rest of the identity every step inherits.
+	 *
+	 * The bag used to bind four of the dispatchers' identity fields and drop the others, so a
+	 * Spanish-locale or non-admin actor restated them at every call — and a forgotten one does not fail,
+	 * it silently falls back to the default member permissions and `'en-US'`, which is a test passing for
+	 * the wrong reason.
+	 */
+	locale?: string;
+	guildLocale?: string;
+	memberPermissions?: PermissionInput | 'all';
+	memberRoles?: ApiRoleInput[];
+	/** Discord's interaction context (guild / bot DM / private channel). */
+	context?: number;
+	/** Default for this actor's component and modal steps; see {@link ComponentSourceOptions.allowSyntheticSource}. */
+	allowSyntheticSource?: boolean;
+	/**
+	 * Whether this identity takes *steps* (default) or hands back the lazy {@link Dispatch} (`false`).
+	 *
+	 * A session is what makes a step a step: actions for one identity are serialized, an action resolves at the
+	 * first real user-input checkpoint instead of at handler completion, implicit component/modal sources are
+	 * resolved from the current step only, and `restCalls` is scoped to the identity's causal history.
+	 *
+	 * `session: false` opts out of all of that and returns a {@link Dispatcher}, whose verbs return the
+	 * un-started `Dispatch` — which is what you need for REST gates ({@link Dispatch.until}), for driving a
+	 * modal from its opener, and for running several actions for the same user at once. The identity still
+	 * binds: going un-sessioned no longer means restating `user`/`guildId`/`channel` at every call.
+	 */
+	session?: boolean;
 }
 
-/** Bound dispatcher facade that reuses one identity across a flow. */
+/**
+ * One identity, taking one action at a time.
+ *
+ * Every verb resolves the step: causal handlers and their observable REST reached quiescence, or the flow parked
+ * on a real user input. Pair with {@link MockBot.actor}; pass `session: false` there for a {@link Dispatcher}.
+ */
 export interface Actor {
+	/** Complete causal REST history for this actor across all of its stateful steps. */
+	readonly restCalls: RestCalls;
+	slash<C extends SlashCommandClass>(command: C, options?: SlashClassOptions<C>): Promise<DispatchResult>;
+	slash(options: ChatInputInteractionOptions): Promise<DispatchResult>;
+	autocomplete(options: AutocompleteInteractionOptions): Dispatch<AutocompleteResult>;
+	userMenu(options: UserCommandInteractionOptions): Promise<UserMenuResult>;
+	messageMenu(options: MessageCommandInteractionOptions): Promise<MessageMenuResult>;
+	menu<C extends MenuCommandClass>(command: C, options?: MenuOptions<C>): Promise<MenuResultFor<C>>;
+	entryPoint(options?: EntryPointInteractionOptions): Promise<DispatchResult>;
+	submitModal(customId: string, fields?: ModalFields, options?: ModalSubmitOptions): Promise<DispatchResult>;
+	clickButton(customId: string, options?: Parameters<MockBot['clickButton']>[1]): Promise<DispatchResult>;
+	selectMenu(
+		customId: string,
+		values: string[],
+		options?: Parameters<MockBot['selectMenu']>[2],
+	): Promise<DispatchResult>;
+	say(content: string, options?: DispatchMessageOptions): Dispatch<SayResult>;
+	emit<TName extends GatewayDispatchPayload['t']>(
+		name: TName,
+		payload?: Partial<Extract<GatewayDispatchPayload, { t: TName }>['d']>,
+		options?: EmitEventOptions,
+	): Dispatch<EventDispatchResult>;
+	emit(name: string, payload?: object | readonly unknown[], options?: EmitEventOptions): Dispatch<EventDispatchResult>;
+}
+
+/**
+ * The same identity and the same verbs as an {@link Actor}, un-sessioned: each verb hands back the lazy
+ * {@link Dispatch} instead of taking a step.
+ *
+ * Built by `bot.actor({ ..., session: false })`. Awaiting one resolves at handler completion rather than at a
+ * user-input checkpoint, nothing serializes actions for the identity, and implicit component sources resolve
+ * against the whole recorded history rather than the current step — which is what makes REST gates, opener-driven
+ * modals, and concurrent actions for one user expressible.
+ */
+export interface Dispatcher {
 	slash<C extends SlashCommandClass>(command: C, options?: SlashClassOptions<C>): Dispatch<DispatchResult>;
 	slash(options: ChatInputInteractionOptions): Dispatch<DispatchResult>;
 	autocomplete(options: AutocompleteInteractionOptions): Dispatch<AutocompleteResult>;
@@ -356,11 +445,7 @@ export interface Actor {
 	messageMenu(options: MessageCommandInteractionOptions): Dispatch<MessageMenuResult>;
 	menu<C extends MenuCommandClass>(command: C, options?: MenuOptions<C>): Dispatch<MenuResultFor<C>>;
 	entryPoint(options?: EntryPointInteractionOptions): Dispatch<DispatchResult>;
-	fillModal(
-		customId: string,
-		fields?: ModalFields,
-		options?: Omit<ModalSubmitInteractionOptions, 'customId' | 'fields'>,
-	): Dispatch<DispatchResult>;
+	submitModal(customId: string, fields?: ModalFields, options?: ModalSubmitOptions): Dispatch<DispatchResult>;
 	clickButton(customId: string, options?: Parameters<MockBot['clickButton']>[1]): Dispatch<DispatchResult>;
 	selectMenu(
 		customId: string,
@@ -388,7 +473,7 @@ export const DISPATCHER_VERBS = [
 	'slash',
 	'clickButton',
 	'selectMenu',
-	'fillModal',
+	'submitModal',
 	'say',
 	'autocomplete',
 	'userMenu',
@@ -474,13 +559,25 @@ export type OptionsRecordOf<C extends SlashCommandClass> = InstanceType<C>['run'
  * because a plain object can't satisfy seyfert's branded method signatures (e.g. `User.toString(): `<@${id}>``),
  * which is what made a plain `Partial<User>` reject `{ id }`. A full resolved value is still assignable too.
  */
+type Scalar = string | number | boolean | bigint | undefined | null;
 type DataKeys<V> = { [K in keyof V]: V[K] extends (...args: never[]) => unknown ? never : K }[keyof V];
+/** Innermost level: data properties, loosened no further. Bounds the recursion below. */
 type DataPartial<V> = Partial<Pick<V, DataKeys<V>>>;
-type LooseOptionValue<V> = V extends string | number | boolean | bigint | undefined | null
-	? V
-	: V extends unknown
-		? DataPartial<V>
-		: never;
+/**
+ * One level deeper than {@link DataPartial}, because a loosened entity's own entity-valued properties are
+ * loosened too. Shallow was not enough: `richMember()` sets `user` to a `RichUser`, and a shallow partial
+ * still demanded the real seyfert `User` there (`fetch`, `dm`, `write`, …), so the package's own fixture was
+ * rejected by the package's own inference. Stops at two levels on purpose — seyfert entities reference the
+ * client, and unbounded recursion would walk the whole object graph.
+ */
+/**
+ * Naked type parameter on purpose: the conditional has to DISTRIBUTE over a union so a nullable entity
+ * (`{ asset } | null | undefined`) keeps its `null` and `undefined` members instead of collapsing into a
+ * partial of the whole union, which would reject `null`.
+ */
+type LooseLeaf<V> = V extends Scalar ? V : DataPartial<V>;
+type LoosePartial<V> = { [K in DataKeys<V>]?: LooseLeaf<V[K]> };
+type LooseOptionValue<V> = V extends Scalar ? V : V extends unknown ? LoosePartial<V> : never;
 type LooseResolvedOptions<T> = { [K in keyof T]: LooseOptionValue<T[K]> };
 
 export type SlashOptionsOf<C extends SlashCommandClass> =
@@ -546,9 +643,16 @@ export interface MockBotOptions {
 	 */
 	plugins?: readonly AnySeyfertPlugin[];
 	/** Raw Seyfert client constructor options, excluding plugin loading. Use `plugins` for plugins. */
-	clientOptions?: MockClientOptions;
-	/** Global middlewares forwarded to the real Seyfert client. */
-	globalMiddlewares?: ClientOptions['globalMiddlewares'];
+	clientOptions?: SeyfertClientOptions;
+	/**
+	 * Global middlewares forwarded to the real Seyfert client.
+	 *
+	 * Indexed off the interface that declares it rather than off `ConstructorParameters<typeof Client>`. The
+	 * key depends on the consumer's `SeyfertRegistry` augmentation, and reaching it through a generic class's
+	 * constructor adds an instantiation step that can degrade it — reported as the property resolving to
+	 * `undefined` and rejecting a real middleware tuple. Going straight to the declaration cannot.
+	 */
+	globalMiddlewares?: BaseClientOptions['globalMiddlewares'];
 	/** Prefixes enabled for message command dispatch through say(). */
 	prefixes?: string[];
 	/** Include bot mentions as valid prefixes for say(). */

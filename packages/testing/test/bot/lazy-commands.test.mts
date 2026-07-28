@@ -106,9 +106,10 @@ describe('lazy command loading', () => {
 		await bot.close();
 	});
 
-	test('a lazily-loaded command can drive a modal via fillModal chaining', async () => {
+	test('a lazily-loaded command can drive a modal via stateful submitModal', async () => {
 		const bot = await createMockBot({ commandsDir: COMMANDS_DIR, loadModule: p => import(p) });
-		const result = await bot.slash({ name: 'intake' }).fillModal('intake-modal', { reason: 'broken link' });
+		await bot.slash({ name: 'intake' });
+		const result = await bot.submitModal('intake-modal', { reason: 'broken link' });
 		expect(result.content).toBe('reason:broken link');
 		await bot.close();
 	});

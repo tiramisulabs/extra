@@ -5,6 +5,7 @@ import {
 	type ComponentContext,
 	createStringOption,
 	Declare,
+	type Guild,
 	ModalCommand,
 	type ModalContext,
 	Options,
@@ -12,8 +13,10 @@ import {
 } from 'seyfert';
 import {
 	type ButtonView,
+	type CapturedErrorView,
 	type ContainerView,
 	createMockBot,
+	type DenialView,
 	type DispatchResult,
 	type GuildMemberView,
 	type MessageView,
@@ -22,14 +25,11 @@ import {
 	mockCommandContext,
 	mockComponentContext,
 	mockModalContext,
-	type OutcomeCapturedError,
-	type OutcomeDenial,
-	type OutcomeResponse,
-	outcome,
 	type RegisteredCommand,
 	type RegisteredCommandFound,
 	type RoleView,
 	rendered,
+	richGuild,
 } from '../src';
 
 declare function expectType<T>(value: T): void;
@@ -39,6 +39,13 @@ const typedContext = mockCommandContext<{ reason: string; count: number }>({
 });
 expectType<string>(typedContext.options.reason);
 expectType<number>(typedContext.options.count);
+
+const typedGuild = richGuild({ icon: 'guild-icon' });
+expectType<string | null>(typedGuild.icon);
+expectType<string | undefined>(typedGuild.iconURL({ extension: 'webp', size: 128 }));
+expectType<Pick<Guild, 'icon' | 'iconURL'>>(typedGuild);
+// @ts-expect-error — guild icon hashes are strings or null, matching seyfert's guild shape.
+richGuild({ icon: 123 });
 
 // Class-first form: options are INFERRED from the command's `run(ctx: CommandContext<typeof options>)` annotation.
 const banOptions = { reason: createStringOption({ description: 'why', required: true }) };
@@ -157,6 +164,8 @@ expectType<ButtonView | undefined>(reader.query.button('save'));
 expectType<readonly ButtonView[]>(reader.all.button('save'));
 expectType<ContainerView>(reader.get.component('container', { content: /settings/i }));
 
+// @ts-expect-error — REST inspection belongs to bot/actor.restCalls() or result.actions.
+void reader.raw.actions;
 // @ts-expect-error — component kinds are closed over the supported reader map.
 reader.get.component('not-real', {});
 // @ts-expect-error — embeds do not have string shorthand; use { title } / { contains }.
@@ -165,55 +174,49 @@ reader.get.embed('Campaign');
 reader.get.button({ customID: 'save' });
 
 declare const result: DispatchResult;
-const state = outcome(result);
+// @ts-expect-error DispatchResult snapshots are data only; lookup belongs to rendered(result).
+result.component('save');
+// @ts-expect-error Snapshot components cannot dispatch actions; use bot.clickButton().
+result.components[0]?.click();
+// @ts-expect-error Snapshot components cannot dispatch actions; use bot.selectMenu().
+result.components[0]?.select(['x']);
+const dispatchUi = rendered(result);
 
-expectType<OutcomeResponse>(state.get.response());
-expectType<OutcomeResponse | undefined>(state.query.response());
-expectType<readonly OutcomeResponse[]>(state.all.response());
-expectType<OutcomeDenial>(state.get.denial());
-expectType<OutcomeCapturedError>(state.get.error());
+expectType<DenialView>(dispatchUi.get.denial());
+expectType<DenialView | undefined>(dispatchUi.query.denial());
+expectType<readonly DenialView[]>(dispatchUi.all.denial());
+expectType<CapturedErrorView>(dispatchUi.get.error());
+expectType<CapturedErrorView | undefined>(dispatchUi.query.error());
+expectType<readonly CapturedErrorView[]>(dispatchUi.all.error());
 
 declare const registeredCommand: RegisteredCommand;
 expectType<string | undefined>(registeredCommand.path);
 expectType<boolean>(registeredCommand.loaded);
 expectType<readonly RegisteredCommandFound[]>(registeredCommand.found);
 
-const response = state.get.response();
-response.events;
-
-const maybeResponse = state.query.response();
-if (maybeResponse) maybeResponse.deferred;
-
-const responses = state.all.response();
-responses.map(item => item.kind);
-
-const denial = state.get.denial();
+const denial = dispatchUi.get.denial();
 denial.denialKind;
+expectType<readonly string[]>(denial.missing);
 
-const captured = state.get.error();
-captured.error;
+const maybeError = dispatchUi.query.error();
+if (maybeError) maybeError.error;
 
-outcome(result).get.response({ kind: 'modal' });
-outcome(result).get.response({ ephemeral: true });
-outcome(result).get.denial({ kind: 'permissions', missing: ['BanMembers'] as const });
-outcome(result).get.error(/timeout/i);
-outcome(result).get.error(error => error instanceof Error);
-outcome(result).get.error({ match: error => error instanceof Error });
-
-// @ts-expect-error - unknown response query keys are rejected.
-outcome(result).get.response({ deferredReply: true });
-
-// @ts-expect-error - response kinds are closed.
-outcome(result).get.response({ kind: 'deferred' });
+dispatchUi.get.denial({ kind: 'permissions', missing: ['BanMembers'] as const });
+dispatchUi.get.error(/timeout/i);
+dispatchUi.get.error(error => error instanceof Error);
+dispatchUi.get.error({ match: error => error instanceof Error });
 
 // @ts-expect-error - unknown denial query keys are rejected.
-outcome(result).get.denial({ permission: 'BanMembers' });
+dispatchUi.get.denial({ permission: 'BanMembers' });
 
 // @ts-expect-error - denial kinds are closed over DispatchDenial["kind"].
-outcome(result).get.denial({ kind: 'permission' });
+dispatchUi.get.denial({ kind: 'permission' });
 
 // @ts-expect-error - unknown error query keys are rejected.
-outcome(result).get.error({ message: /timeout/i });
+dispatchUi.get.error({ message: /timeout/i });
+
+// @ts-expect-error - a denial belongs to the dispatch, not to one of its messages.
+dispatchUi.get.message().get.denial();
 
 expectType<MessageView>(bot.world.get.message({ channelId: 'c', id: 'm' }));
 expectType<MessageView | undefined>(bot.world.query.message({ id: 'm' }));

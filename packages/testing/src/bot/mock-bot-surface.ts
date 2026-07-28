@@ -7,19 +7,22 @@ import {
 	type ResolvedPluginList,
 	SubCommand,
 } from 'seyfert';
+import { registerRenderedSource } from '../rendered-output/source';
 import { type CommandPathCatalog } from './bootstrap';
 import type { CommandRuntime, SubcommandClassRoute } from './bot-support';
-import { collectComponentCustomIds, findComponentNode, findComponentType } from './component-tree';
+import {
+	actionRendersComponent,
+	collectComponentCustomIds,
+	findComponentNode,
+	findComponentType,
+} from './component-tree';
 import { TEST_USER_ID } from './constants';
 import {
 	buildMessageResult,
-	type ComponentActionView,
 	type ComponentSourceOptions,
-	type ComponentSourceView,
 	type DispatchResult,
 	type MessagePart,
 	type MessageResultBase,
-	type MessageSource,
 	type MockSubCommandClass,
 	type OutgoingMessage,
 	type PluginInfo,
@@ -29,6 +32,7 @@ import {
 } from './contracts';
 import { Dispatch, type ModalWaiter } from './dispatch';
 import { MockGateway } from './gateway';
+import { type InputCheckpoint, InteractionSessions, matchesCollector } from './interaction-session';
 import {
 	type BaseInteractionOptions,
 	type ButtonInteractionOptions,
@@ -37,7 +41,7 @@ import {
 } from './interactions';
 import { type ApiMember, type ApiMessage, type ApiUser, apiMessage, apiUser, memberOptionsFrom } from './payloads';
 import { computeChannelPermissions } from './permissions';
-import { MockApiHandler, type RecordedAction } from './rest';
+import { MockApiHandler, type RecordedAction, type RestCall, type RouteMatcher, type RouteParams } from './rest';
 import {
 	arrayValue,
 	asRecord,
@@ -49,19 +53,39 @@ import {
 	WorldState,
 	type WorldStateReader,
 } from './state';
-import { type MockWorld } from './world';
+import { type WorldData } from './world';
+
+/**
+ * Resolve the user a dispatch runs as when the caller names none.
+ *
+ * `apiUser()` mints a fresh random id so repeated `registerMember()` calls stay distinct people, while the
+ * dispatcher needs one stable identity — which is why the two layers disagreed. A world seeding exactly one
+ * human member describes a single-actor scenario, so that member *is* the default; anything else keeps the
+ * canonical TEST_USER_ID, and `applyWorldPermissions` warns when it turns out not to be in the guild.
+ */
+function resolveDefaultUser(world: WorldData | undefined): ApiUser {
+	const humanIds = new Set<string>();
+	let sole: ApiUser | undefined;
+	for (const entry of world?.members ?? []) {
+		if (entry.member.user.bot || humanIds.has(entry.member.user.id)) continue;
+		humanIds.add(entry.member.user.id);
+		sole = entry.member.user;
+	}
+	return humanIds.size === 1 && sole ? sole : apiUser({ id: TEST_USER_ID, username: 'slipher-tester' });
+}
 
 export abstract class MockBotSurface {
 	abstract clickButton(
 		customId: string,
 		options?: Omit<ButtonInteractionOptions, 'customId' | 'message'> & ComponentSourceOptions,
-	): Dispatch<DispatchResult>;
+	): Promise<DispatchResult>;
 	abstract selectMenu(
 		customId: string,
 		values: string[],
 		options?: Omit<SelectMenuInteractionOptions, 'customId' | 'values' | 'message'> & ComponentSourceOptions,
-	): Dispatch<DispatchResult>;
-	readonly defaultUser: ApiUser = apiUser({ id: TEST_USER_ID, username: 'slipher-tester' });
+	): Promise<DispatchResult>;
+	/** Identity a dispatch runs as when the caller names none; the world's sole human member if it has one. */
+	readonly defaultUser: ApiUser;
 	protected readonly unregisteredMemberWarnings = new Set<string>();
 	protected readonly dispatches: Dispatch<unknown>[] = [];
 	protected subcommandRoutes: SubcommandClassRoute[] = [];
@@ -70,7 +94,12 @@ export abstract class MockBotSurface {
 	/** The dispatch that owns the currently registered waitFor modal for a user. */
 	protected readonly modalOwners = new Map<string, number>();
 	/** Modal definition displayed to a user (customId + input customIds), captured when seyfert registers it. */
-	protected readonly displayedModals = new Map<string, { customId?: string; inputIds: Set<string> }>();
+	protected readonly displayedModals = new Map<
+		string,
+		{ customId?: string; inputIds: Set<string>; dispatchId?: number }
+	>();
+	/** Dispatches whose type-9 callback was captured eagerly by the modal registration hook. */
+	protected readonly modalRenderCapturedDispatches = new Set<number>();
 	protected virtualNowMs = Date.now();
 	protected closed = false;
 	/** Set once the fallback full scan has run, so no further on-demand command load is attempted. */
@@ -83,12 +112,13 @@ export abstract class MockBotSurface {
 	protected canDetectComponentCommand = false;
 	protected canDetectCollector = false;
 	protected canDetectModalCollector = false;
+	protected readonly sessions: InteractionSessions;
 
 	constructor(
 		readonly client: Client<true>,
 		readonly rest: MockApiHandler,
 		readonly gateway: MockGateway,
-		protected readonly _world: MockWorld | undefined,
+		protected readonly _world: WorldData | undefined,
 		// Required (no default): createMockBot passes the SAME WorldState it gives registerWorldDefaults. A default
 		// `new WorldState(world)` here would silently create a second instance that shares the world arrays by
 		// reference but has its own bans/reactions/token Maps — a split-brain. Keep them the one instance.
@@ -100,7 +130,21 @@ export abstract class MockBotSurface {
 		protected readonly lazyCommands?: { commandsDir?: string },
 		protected readonly commandCatalog?: CommandPathCatalog,
 	) {
+		this.defaultUser = resolveDefaultUser(_world);
 		this.refreshSubcommandRoutes();
+		this.sessions = new InteractionSessions({
+			actions: () => this.rest.actions,
+			assertCheckpointReady: checkpoint => this.assertCheckpointReady(checkpoint),
+			onDispatchCompleted: dispatchId => {
+				for (const [userId, ownerDispatchId] of this.modalOwners) {
+					if (ownerDispatchId !== dispatchId) continue;
+					this.client.components.modals.delete(userId);
+					this.modalOwners.delete(userId);
+					this.displayedModals.delete(userId);
+				}
+			},
+		});
+		registerRenderedSource(this, () => this.sessions.latestActions());
 	}
 
 	/**
@@ -189,50 +233,34 @@ export abstract class MockBotSurface {
 		return dispatch;
 	}
 
-	protected bindComponentView(view: InteractiveComponentView, source?: MessageSource): ComponentActionView {
-		const sourceView: ComponentSourceView | undefined = source
-			? { messageId: source.id, ...(source.channel_id ? { channelId: source.channel_id } : {}) }
-			: undefined;
-		const sourceOption = source ? { source: source.id } : {};
-		const requireCustomId = (verb: 'click' | 'select'): string => {
-			if (!view.customId) {
-				throw new TypeError(`component.${verb}: component has no customId and cannot be dispatched.`);
-			}
-			if (view.disabled) {
-				throw new TypeError(`component.${verb}: component "${view.customId}" is disabled.`);
-			}
-			return view.customId;
-		};
+	restCalls(): readonly RestCall[];
+	restCalls<TRoute extends string, TBody, TResponse>(
+		matcher: RouteMatcher<TRoute, TBody, TResponse>,
+	): readonly RestCall<RouteParams<TRoute>, TBody, TResponse>[];
+	restCalls(matcher?: RouteMatcher): readonly RestCall<Record<string, string | undefined>, unknown, unknown>[] {
+		return matcher ? this.snapshotRestCalls(this.rest.actions, matcher) : this.snapshotRestCalls(this.rest.actions);
+	}
 
-		return {
-			...view,
-			...(sourceView ? { source: sourceView } : {}),
-			click: (options = {}) => {
-				const customId = requireCustomId('click');
-				if (view.type !== 2) {
-					throw new TypeError(
-						`component.click: component "${customId}" is type ${view.type}, not a button. ` +
-							'Use component.select(values) for select menus.',
-					);
-				}
-				return this.clickButton(customId, { ...options, ...sourceOption });
-			},
-			select: (values, options = {}) => {
-				const customId = requireCustomId('select');
-				const isSelect = view.type === 3 || (view.type >= 5 && view.type <= 8);
-				if (!isSelect) {
-					throw new TypeError(
-						`component.select: component "${customId}" is type ${view.type}, not a select menu. ` +
-							'Use component.click() for buttons.',
-					);
-				}
-				return this.selectMenu(customId, values, { ...options, ...sourceOption });
-			},
-		};
+	protected snapshotRestCalls(actions: readonly RecordedAction[]): readonly RestCall[];
+	protected snapshotRestCalls<TRoute extends string, TBody, TResponse>(
+		actions: readonly RecordedAction[],
+		matcher: RouteMatcher<TRoute, TBody, TResponse>,
+	): readonly RestCall<RouteParams<TRoute>, TBody, TResponse>[];
+	protected snapshotRestCalls(
+		actions: readonly RecordedAction[],
+		matcher?: RouteMatcher,
+	): readonly RestCall<Record<string, string | undefined>, unknown, unknown>[] {
+		const calls: RestCall<Record<string, string | undefined>, unknown, unknown>[] = [];
+		for (const action of actions) {
+			const params = matcher ? this.rest.matchRouteParams(matcher, action) : {};
+			if (params === undefined) continue;
+			calls.push({ ...action, params });
+		}
+		return calls;
 	}
 
 	protected messageParts(actions: RecordedAction[], parts: MessagePart[]): MessageResultBase {
-		return buildMessageResult(actions, parts, (view, source) => this.bindComponentView(view, source));
+		return buildMessageResult(actions, parts);
 	}
 
 	protected outgoingMessagePart(action: RecordedAction): MessagePart {
@@ -350,23 +378,6 @@ export abstract class MockBotSurface {
 	}
 
 	/**
-	 * True when a registered ComponentCommand could handle `customId` — by a string/RegExp `customId`, or because
-	 * it has a `filter()` (which routes dynamically at dispatch, so it can't be ruled out statically). Lets a
-	 * source-less click auto-target it without the `allowSyntheticSource` flag: with no source there's no live
-	 * collector, so a ComponentCommand is the only destination; a customId that ultimately matches none fails loud
-	 * at dispatch ("no handler matched").
-	 */
-	protected componentCommandMatches(customId: string): boolean {
-		return this.componentCommands().some(command => {
-			if (command instanceof ModalCommand) return false;
-			const handler = command as { customId?: string | RegExp; filter?: unknown };
-			if (typeof handler.customId === 'string') return handler.customId === customId;
-			if (handler.customId instanceof RegExp) return handler.customId.test(customId);
-			return typeof handler.filter === 'function';
-		});
-	}
-
-	/**
 	 * Build a diagnostic for an unmatched component/modal dispatch that distinguishes the two failure modes:
 	 * (a) no handler of the right kind is registered at all, vs (b) one IS registered but its customId/filter
 	 * rejected this customId (e.g. a typo). Mirrors seyfert's `_filter`: the customId predicate is computed
@@ -447,6 +458,7 @@ export abstract class MockBotSurface {
 		verb: 'clickButton' | 'selectMenu',
 		customId: string,
 		message: ApiMessage,
+		allowTampered = false,
 	): Record<string, unknown> {
 		const component = findComponentNode(message.components, customId);
 		if (!component) {
@@ -456,7 +468,7 @@ export abstract class MockBotSurface {
 			);
 		}
 		this.assertComponentVerbType(verb, customId, message);
-		if (component.disabled === true) {
+		if (component.disabled === true && !allowTampered) {
 			throw new TypeError(`${verb}: component "${customId}" on source message "${message.id}" is disabled.`);
 		}
 		return component;
@@ -466,7 +478,9 @@ export abstract class MockBotSurface {
 		customId: string,
 		values: string[],
 		component: Record<string, unknown>,
+		allowTampered = false,
 	): void {
+		if (allowTampered) return;
 		const type = numberValue(component.type);
 		if (type !== 3 && !(type !== undefined && type >= 5 && type <= 8)) return;
 		const min = numberValue(component.min_values) ?? 1;
@@ -491,27 +505,29 @@ export abstract class MockBotSurface {
 		}
 	}
 
-	protected assertModalHandleable(customId: string, userId: string): void {
-		if (this.client.components.modals.has(userId) || this.hasModalCommand()) return;
+	protected assertModalHandleable(customId: string, userId: string, allowSyntheticSource: boolean): void {
+		if (this.displayedModals.has(userId)) return;
+		if (allowSyntheticSource && this.hasModalCommand()) return;
 		const otherUsers = [...this.client.components.modals.keys()].filter(id => id !== userId);
 		const pendingOpener = this.dispatches.some(dispatch => !dispatch.started && !dispatch.isSettled);
 		const hint =
 			otherUsers.length > 0
-				? `A modal IS waiting, but for a different user (${otherUsers.join(', ')}). Pass that same 'user' to fillModal.`
+				? `A modal IS waiting, but for a different user (${otherUsers.join(', ')}). Pass that same 'user' to submitModal.`
 				: pendingOpener
-					? 'The opener has not run yet — drive it in one call: `await bot.clickButton(...).fillModal(customId, fields)`.'
-					: 'Dispatch the button/command that opens the modal first, e.g. `await bot.clickButton(...).fillModal(customId, fields)`.';
+					? 'The opener has not run yet — await the opener, then call `await bot.submitModal(customId, fields)`.'
+					: 'Dispatch and await the button/command that opens the modal before calling submitModal.';
 		throw new TypeError(
-			`fillModal: no modal "${customId}" is waiting for user "${userId}" and no ModalCommand is registered. ${hint}`,
+			`submitModal: modal "${customId}" was not rendered for user "${userId}". ${hint} ` +
+				'A ModalCommand with no opener in this run needs submitModal(..., { allowSyntheticSource: true }).',
 		);
 	}
 
 	/**
 	 * Snapshot the modal definition seyfert just displayed to `userId` (custom_id + the set of input customIds),
 	 * read from the most recent type-9 interaction callback. Lets {@link assertModalMatchesDisplayed} reject a
-	 * fillModal aimed at the wrong customId or carrying field keys that no input on the modal accepts.
+	 * submitModal aimed at the wrong customId or carrying field keys that no input on the modal accepts.
 	 */
-	protected captureDisplayedModal(userId: string, dispatchId: number | undefined): void {
+	protected captureDisplayedModal(userId: string, dispatchId: number | undefined): string | undefined {
 		for (let i = this.rest.actions.length - 1; i >= 0; i--) {
 			const action = this.rest.actions[i];
 			if (dispatchId !== undefined && action.dispatchId !== dispatchId) continue;
@@ -521,22 +537,61 @@ export abstract class MockBotSurface {
 			const data = body.data ?? {};
 			const inputIds = new Set<string>();
 			collectComponentCustomIds(data.components, inputIds);
-			this.displayedModals.set(userId, { customId: data.custom_id as string | undefined, inputIds });
+			this.displayedModals.set(userId, {
+				customId: data.custom_id as string | undefined,
+				inputIds,
+				...(dispatchId === undefined ? {} : { dispatchId }),
+			});
+			if (dispatchId !== undefined) this.modalRenderCapturedDispatches.add(dispatchId);
+			return data.custom_id as string | undefined;
+		}
+		return undefined;
+	}
+
+	protected assertCheckpointReady(checkpoint: InputCheckpoint): void {
+		if (checkpoint.kind === 'modal') {
+			const displayed = this.displayedModals.get(checkpoint.userId);
+			if (!displayed) {
+				throw new TypeError(
+					`stateful step: modal checkpoint for user "${checkpoint.userId}" was registered but no modal was rendered.`,
+				);
+			}
+			if (checkpoint.customId !== undefined && displayed.customId !== checkpoint.customId) {
+				throw new TypeError(
+					`stateful step: modal checkpoint "${checkpoint.customId}" does not match rendered modal ` +
+						`"${displayed.customId ?? '(missing customId)'}".`,
+				);
+			}
 			return;
 		}
+
+		const message = this._state.rawMessage(checkpoint.channelId, checkpoint.messageId);
+		if (!message) {
+			throw new TypeError(
+				`stateful step: collector checkpoint on message "${checkpoint.messageId}" was registered, ` +
+					'but that message is not present in the simulated Discord state.',
+			);
+		}
+		const ids = new Set<string>();
+		collectComponentCustomIds(message.components, ids);
+		if ([...ids].some(customId => matchesCollector(checkpoint.match, customId))) return;
+		throw new TypeError(
+			`stateful step: collector on message "${checkpoint.messageId}" is waiting for ` +
+				`${String(checkpoint.match)}, but the rendered components are [${[...ids].join(', ') || '(none)'}].`,
+		);
 	}
 
 	/**
-	 * Cross-check a fillModal against the modal that was actually displayed: the customId must match, and every
-	 * field key must correspond to a real input on the modal. Skipped when no displayed modal was captured (e.g. a
-	 * ModalCommand-only flow), so it never blocks the registry path that {@link assertModalHandleable} already guards.
+	 * Cross-check a submitModal against the modal that was actually displayed: the customId must match, and every
+	 * field key must correspond to a real input on the modal. Skipped only for an explicitly synthetic raw
+	 * ModalCommand dispatch, which has no rendered definition to validate.
 	 */
 	protected assertModalMatchesDisplayed(customId: string, fields: ModalFields, userId: string): void {
 		const displayed = this.displayedModals.get(userId);
 		if (!displayed) return;
 		if (displayed.customId !== undefined && displayed.customId !== customId) {
 			throw new TypeError(
-				`fillModal: the displayed modal's customId is "${displayed.customId}", not "${customId}". ` +
+				`submitModal: the displayed modal's customId is "${displayed.customId}", not "${customId}". ` +
 					`Pass the customId the command opened the modal with.`,
 			);
 		}
@@ -544,11 +599,41 @@ export abstract class MockBotSurface {
 		if (ghost.length > 0) {
 			const known = [...displayed.inputIds].join(', ') || '(none)';
 			throw new TypeError(
-				`fillModal: field(s) ${ghost.map(key => `"${key}"`).join(', ')} are not inputs on the displayed modal. ` +
+				`submitModal: field(s) ${ghost.map(key => `"${key}"`).join(', ')} are not inputs on the displayed modal. ` +
 					`Known inputs: ${known}.`,
 			);
 		}
+	}
+
+	protected consumeDisplayedModal(userId: string): void {
 		this.displayedModals.delete(userId);
+	}
+
+	/** Whether this session opened `customId` for `userId` and is still parked on it, or rendered it this step. */
+	protected hasStatefulModal(customId: string, userId: string, sessionKey: string): boolean {
+		const displayed = this.displayedModals.get(userId);
+		if (!displayed) return false;
+		if (this.sessions.hasModalCheckpoint(sessionKey, customId, userId)) return true;
+		return (
+			displayed.dispatchId !== undefined &&
+			this.sessions.latestActions(sessionKey).some(action => action.dispatchId === displayed.dispatchId)
+		);
+	}
+
+	protected assertStatefulModalAvailable(
+		customId: string,
+		fields: ModalFields,
+		userId: string,
+		sessionKey: string,
+	): void {
+		if (!this.hasStatefulModal(customId, userId, sessionKey)) {
+			throw new TypeError(
+				`submitModal: modal "${customId}" is not available in the current state for user "${userId}". ` +
+					'Await the action that renders it and inspect it with rendered(bot) or rendered(actor), or pass ' +
+					'allowSyntheticSource: true when the modal was opened outside this test.',
+			);
+		}
+		this.assertModalMatchesDisplayed(customId, fields, userId);
 	}
 
 	/** Read a `{ id, channel_id? }` message source out of a recorded REST response, or undefined if it has no id. */
@@ -595,6 +680,92 @@ export abstract class MockBotSurface {
 		// Fall back to the most recent interaction-original message so a collector attached to an immediate
 		// reply (which produces no channel-message REST action) still has a resolvable source.
 		return this.lastSentMessage() ?? this.lastInteractionMessage;
+	}
+
+	/**
+	 * Resolve an implicit component target from the CURRENT stateful step, never from historical bot traffic.
+	 * An explicit `source` still addresses a historical message, on this surface and on an un-sessioned one alike.
+	 */
+	protected resolveCurrentComponentSource(
+		sessionKey: string,
+		verb: 'clickButton' | 'selectMenu',
+		customId: string,
+	): { id: string; channel_id?: string } | undefined {
+		const candidates = new Map<string, { id: string; channel_id?: string }>();
+		for (const checkpoint of this.sessions.checkpoints(sessionKey)) {
+			if (checkpoint.kind !== 'component' || !matchesCollector(checkpoint.match, customId)) continue;
+			const message = this._state.rawMessage(checkpoint.channelId, checkpoint.messageId);
+			if (!message || !findComponentNode(message.components, customId)) continue;
+			candidates.set(checkpoint.messageId, {
+				id: checkpoint.messageId,
+				channel_id: checkpoint.channelId,
+			});
+		}
+		if (candidates.size === 1) return [...candidates.values()][0];
+		if (candidates.size > 1) {
+			throw new TypeError(
+				`${verb}: component "${customId}" is ambiguous in the current bot state; it has active waits on messages ` +
+					`${[...candidates.keys()].map(id => `"${id}"`).join(', ')}. Pass an explicit source.`,
+			);
+		}
+		const actions = this.sessions.latestActions(sessionKey);
+		for (let index = actions.length - 1; index >= 0; index--) {
+			const action = actions[index];
+			if (!actionRendersComponent(action, customId)) continue;
+			const source = this.messageSourceForRenderedAction(action);
+			if (!source) continue;
+			const message = this._state.rawMessageById(source.id);
+			if (!message || !findComponentNode(message.components, customId)) continue;
+			candidates.set(source.id, source);
+		}
+		if (candidates.size === 1) return [...candidates.values()][0];
+		if (candidates.size > 1) {
+			throw new TypeError(
+				`${verb}: component "${customId}" is ambiguous in the current bot state; it appears on messages ` +
+					`${[...candidates.keys()].map(id => `"${id}"`).join(', ')}. Pass an explicit source.`,
+			);
+		}
+		return undefined;
+	}
+
+	/** Most recent message rendered by this session's current step, regardless of its component ids. */
+	protected resolveCurrentMessageSource(sessionKey: string): { id: string; channel_id?: string } | undefined {
+		const actions = this.sessions.latestActions(sessionKey);
+		for (let index = actions.length - 1; index >= 0; index--) {
+			const source = this.messageSourceForRenderedAction(actions[index]);
+			if (source) return source;
+		}
+		return undefined;
+	}
+
+	private messageSourceForRenderedAction(action: RecordedAction): { id: string; channel_id?: string } | undefined {
+		const responseSource = this.messageSourceFrom(action.response);
+		if (responseSource) return responseSource;
+		const callback = /^\/interactions\/[^/]+\/([^/]+)\/callback$/.exec(action.route);
+		if (callback) return this.messageSourceFrom(this._state.messageForToken(callback[1]));
+		return undefined;
+	}
+
+	/**
+	 * Honour `allowSyntheticSource` against an *implicitly* resolved candidate message.
+	 *
+	 * Implicit resolution answers "the latest message in scope", which for a bot whose panels are posted once and
+	 * clicked forever after is some unrelated reply. Taking that as the source made the flag inert in exactly the
+	 * case it exists for — set it, a foreign message resolved anyway, and the click failed as "not rendered" — so
+	 * a candidate that does not actually carry `customId` is a coincidence, not a source. An explicit `source` is
+	 * a statement about which message was clicked, so it always stands. A typo is still loud: it now fails on
+	 * "no handler matched customId", which names the registered handlers.
+	 */
+	protected sourceForSyntheticClaim(
+		candidate: { id: string; channel_id?: string } | undefined,
+		customId: string,
+		claim: { implicit: boolean; allowSynthetic: boolean },
+	): { id: string; channel_id?: string } | undefined {
+		if (!candidate || !claim.implicit || !claim.allowSynthetic) return candidate;
+		const stored = candidate.channel_id
+			? this._state.rawMessage(candidate.channel_id, candidate.id)
+			: this._state.rawMessageById(candidate.id);
+		return stored && findComponentNode(stored.components, customId) !== undefined ? candidate : undefined;
 	}
 
 	protected hydrateSourceMessage(
@@ -653,48 +824,9 @@ export abstract class MockBotSurface {
 		);
 	}
 
-	get actions(): readonly RecordedAction[] {
-		return this.rest.actions;
-	}
-
-	/**
-	 * The latest reply rendered by ANY dispatch — scanned UNSCOPED across all recorded actions. Unlike a
-	 * `DispatchResult` (scoped to one dispatch) or `Dispatch.lastEmbed` (scoped to that flow), this also sees a
-	 * reply written inside a collector handler: that followup runs after the dispatch's async context is gone, so
-	 * it records under no dispatch and is invisible to the scoped accessors. Last-write-wins: it reflects the most
-	 * recent rendering dispatch, regardless of which produced it — use `rendered(bot)` for a full rendered-output
-	 * reader, or a flow's own `flow.lastEmbed()` to assert a specific dispatch.
-	 */
+	/** Rendered output from the current stateful step. */
 	protected renderedAcrossDispatches(): { embeds: EmbedView[]; components: InteractiveComponentView[] } {
-		return renderedReply(this.rest.actions);
-	}
-
-	lastEmbeds(): EmbedView[] {
-		return this.renderedAcrossDispatches().embeds;
-	}
-
-	lastEmbed(index = 0): EmbedView {
-		const embeds = this.renderedAcrossDispatches().embeds;
-		if (embeds.length === 0) {
-			throw new TypeError('MockBot.lastEmbed: no embed has been sent.');
-		}
-		if (index < 0 || index >= embeds.length) {
-			throw new TypeError(`MockBot.lastEmbed: index ${index} is out of range — sent ${embeds.length} embed(s).`);
-		}
-		return embeds[index];
-	}
-
-	lastComponents(): InteractiveComponentView[] {
-		return this.renderedAcrossDispatches().components;
-	}
-
-	/**
-	 * Latest text content rendered by ANY dispatch — scanned UNSCOPED like {@link lastEmbeds}, so a reply written
-	 * inside a collector handler or on a modal-submit token (invisible to a flow's scoped `DispatchResult.content`)
-	 * is still readable. Undefined if no content has been sent.
-	 */
-	lastContent(): string | undefined {
-		return renderedReply(this.rest.actions).content;
+		return renderedReply(this.sessions.latestActions());
 	}
 
 	/**

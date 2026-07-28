@@ -2,7 +2,7 @@ import { Command, type CommandContext, Declare } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { apiUser } from '../../src/bot/payloads';
-import { DiscordErrors } from '../../src/bot/rest';
+import { DiscordErrors, isDiscordError } from '../../src/bot/rest';
 import { mockWorld } from '../../src/bot/world';
 
 describe('single message fetch', () => {
@@ -15,7 +15,7 @@ describe('single message fetch', () => {
 
 		let seededContent: string | undefined;
 		let seededId: string | undefined;
-		let missingCode: number | undefined;
+		let missingWasUnknownMessage: boolean | undefined;
 
 		@Declare({ name: 'fetch-one', description: 'Fetches a single message' })
 		class FetchOne extends Command {
@@ -26,7 +26,7 @@ describe('single message fetch', () => {
 				try {
 					await ctx.client.messages.fetch('not-seeded', channel.id, true);
 				} catch (error) {
-					missingCode = (error as { code?: number }).code;
+					missingWasUnknownMessage = isDiscordError(error, { code: DiscordErrors.UnknownMessage.code });
 				}
 				await ctx.write({ content: 'done' });
 			}
@@ -37,7 +37,7 @@ describe('single message fetch', () => {
 
 		expect(seededId).toBe('seeded-message');
 		expect(seededContent).toBe('real content');
-		expect(missingCode).toBe(DiscordErrors.UnknownMessage.code);
+		expect(missingWasUnknownMessage).toBe(true);
 		await bot.close();
 	});
 });

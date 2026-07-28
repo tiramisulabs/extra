@@ -2,7 +2,7 @@ import { Command, type CommandContext, Declare } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { apiUser } from '../../src/bot/payloads';
-import { MockApiError } from '../../src/bot/rest';
+import { DiscordErrors, isDiscordError } from '../../src/bot/rest';
 import { mockWorld } from '../../src/bot/world';
 
 describe('management routes', () => {
@@ -100,7 +100,9 @@ describe('management routes', () => {
 					await ctx.client.bans.fetch(ctx.guildId ?? '', 'never-banned', true);
 					await ctx.write({ content: 'found' });
 				} catch (error) {
-					await ctx.write({ content: error instanceof MockApiError ? error.message : 'other error' });
+					await ctx.write({
+						content: isDiscordError(error, { code: DiscordErrors.UnknownBan.code }) ? 'Unknown Ban' : 'other error',
+					});
 				}
 			}
 		}

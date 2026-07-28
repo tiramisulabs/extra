@@ -1,5 +1,5 @@
 import { MESSAGE_FLAG_COMPONENTS_V2 } from './message-flags';
-import { apiError, ErrorCode } from './rest';
+import { apiError, DiscordErrors } from './rest';
 import { arrayValue, asRecord, numberValue, stringValue, walkComponents } from './state-support';
 
 // Server-side message-body validation: the mock simulates Discord's 400s for impossible payloads so an
@@ -19,7 +19,7 @@ function assertEmbedUrl(value: unknown, label: string, allowAttachment: boolean)
 	if (typeof value !== 'string' || value.length === 0) return;
 	const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(value)?.[1]?.toLowerCase();
 	const ok = scheme === 'http' || scheme === 'https' || (allowAttachment && scheme === 'attachment');
-	if (!ok) apiError(400, ErrorCode.InvalidFormBody, `Invalid Form Body: ${label} is not a valid URL`);
+	if (!ok) apiError(DiscordErrors.InvalidFormBody, `Invalid Form Body: ${label} is not a valid URL`);
 }
 
 /**
@@ -30,45 +30,39 @@ function assertEmbedUrl(value: unknown, label: string, allowAttachment: boolean)
  */
 function assertValidEmbeds(embeds: unknown[]): void {
 	if (embeds.length > 10)
-		apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: a message can have at most 10 embeds');
+		apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: a message can have at most 10 embeds');
 	let total = 0;
 	for (const entry of embeds) {
 		const embed = asRecord(entry);
 		const title = stringValue(embed.title);
 		if (title !== undefined) {
 			if (cp(title) > 256)
-				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: embed title must be 256 or fewer in length');
+				apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: embed title must be 256 or fewer in length');
 			total += cp(title);
 		}
 		const description = stringValue(embed.description);
 		if (description !== undefined) {
 			if (cp(description) > 4096) {
-				apiError(
-					400,
-					ErrorCode.InvalidFormBody,
-					'Invalid Form Body: embed description must be 4096 or fewer in length',
-				);
+				apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: embed description must be 4096 or fewer in length');
 			}
 			total += cp(description);
 		}
 		const fields = arrayValue(embed.fields);
 		if (fields.length > 25)
-			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: an embed can have at most 25 fields');
+			apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: an embed can have at most 25 fields');
 		for (const rawField of fields) {
 			const field = asRecord(rawField);
 			const name = stringValue(field.name) ?? '';
 			const value = stringValue(field.value) ?? '';
 			if (cp(name) < 1 || cp(name) > 256) {
 				apiError(
-					400,
-					ErrorCode.InvalidFormBody,
+					DiscordErrors.InvalidFormBody,
 					'Invalid Form Body: embed field name must be between 1 and 256 in length',
 				);
 			}
 			if (cp(value) < 1 || cp(value) > 1024) {
 				apiError(
-					400,
-					ErrorCode.InvalidFormBody,
+					DiscordErrors.InvalidFormBody,
 					'Invalid Form Body: embed field value must be between 1 and 1024 in length',
 				);
 			}
@@ -79,18 +73,13 @@ function assertValidEmbeds(embeds: unknown[]): void {
 		// Discord requires footer.text whenever footer.icon_url is set (icon has nothing to anchor to otherwise).
 		if (footer.icon_url !== undefined && (footerText === undefined || footerText.length === 0)) {
 			apiError(
-				400,
-				ErrorCode.InvalidFormBody,
+				DiscordErrors.InvalidFormBody,
 				'Invalid Form Body: embed footer.text is required when footer.icon_url is set',
 			);
 		}
 		if (footerText !== undefined) {
 			if (cp(footerText) > 2048) {
-				apiError(
-					400,
-					ErrorCode.InvalidFormBody,
-					'Invalid Form Body: embed footer text must be 2048 or fewer in length',
-				);
+				apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: embed footer text must be 2048 or fewer in length');
 			}
 			total += cp(footerText);
 		}
@@ -102,21 +91,19 @@ function assertValidEmbeds(embeds: unknown[]): void {
 			(authorName === undefined || authorName.length === 0)
 		) {
 			apiError(
-				400,
-				ErrorCode.InvalidFormBody,
+				DiscordErrors.InvalidFormBody,
 				'Invalid Form Body: embed author.name is required when author.icon_url or author.url is set',
 			);
 		}
 		if (authorName !== undefined) {
 			if (cp(authorName) > 256)
-				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: embed author name must be 256 or fewer in length');
+				apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: embed author name must be 256 or fewer in length');
 			total += cp(authorName);
 		}
 		const color = numberValue(embed.color);
 		if (color !== undefined && (!Number.isInteger(color) || color < 0 || color > 0xffffff)) {
 			apiError(
-				400,
-				ErrorCode.InvalidFormBody,
+				DiscordErrors.InvalidFormBody,
 				'Invalid Form Body: embed color must be an integer between 0 and 16777215',
 			);
 		}
@@ -129,8 +116,7 @@ function assertValidEmbeds(embeds: unknown[]): void {
 	}
 	if (total > 6000) {
 		apiError(
-			400,
-			ErrorCode.InvalidFormBody,
+			DiscordErrors.InvalidFormBody,
 			'Invalid Form Body: the combined length of all embeds must be 6000 or fewer in length',
 		);
 	}
@@ -139,8 +125,8 @@ function assertValidEmbeds(embeds: unknown[]): void {
 /**
  * Validate an outgoing message's components against Discord's documented form limits (F5): every interactive
  * custom_id is <=100 chars and unique across the message, string selects carry 1..25 options, and select
- * min/max_values stay in 0..25 with min<=max. Throws a 50035 MockApiError, so an impossible component tree
- * fails loud instead of passing a happy-path test.
+ * min/max_values stay in 0..25 with min<=max. Fails the request with code 50035, so an impossible component
+ * tree fails loud instead of passing a happy-path test.
  */
 const isSelectType = (type: number | undefined): boolean => type !== undefined && type >= 3 && type <= 8;
 
@@ -149,7 +135,7 @@ function assertValidComponents(components: unknown, isV2: boolean): void {
 	// containers/sections). The PER-ROW rules below — at most 5 buttons OR 1 select per row, never mixed — hold
 	// for any type-1 action row, v1 or v2, so they run inside the tree walk to also catch nested rows.
 	if (!isV2 && Array.isArray(components) && components.length > 5) {
-		apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: a message can have at most 5 action rows');
+		apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: a message can have at most 5 action rows');
 	}
 
 	const customIds = new Set<string>();
@@ -159,36 +145,31 @@ function assertValidComponents(components: unknown, isV2: boolean): void {
 		if (type === 1) {
 			const children = arrayValue(node.components).map(asRecord);
 			if (children.length === 0) {
-				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: an action row must contain a component');
+				apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: an action row must contain a component');
 			}
 			const buttons = children.filter(child => numberValue(child.type) === 2);
 			const selects = children.filter(child => isSelectType(numberValue(child.type)));
 			if (buttons.length > 0 && selects.length > 0) {
 				apiError(
-					400,
-					ErrorCode.InvalidFormBody,
+					DiscordErrors.InvalidFormBody,
 					'Invalid Form Body: an action row cannot mix buttons and a select menu',
 				);
 			}
 			if (buttons.length > 5) {
-				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: an action row can contain at most 5 buttons');
+				apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: an action row can contain at most 5 buttons');
 			}
 			if (selects.length > 1) {
-				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: an action row can contain at most 1 select menu');
+				apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: an action row can contain at most 1 select menu');
 			}
 		}
 		if (type === 9) {
 			const children = arrayValue(node.components);
 			if (children.length < 1 || children.length > 3) {
-				apiError(
-					400,
-					ErrorCode.InvalidFormBody,
-					'Invalid Form Body: a section must contain between 1 and 3 components',
-				);
+				apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: a section must contain between 1 and 3 components');
 			}
 		}
 		if (type === 17 && arrayValue(node.components).length === 0) {
-			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: a container must contain at least 1 component');
+			apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: a container must contain at least 1 component');
 		}
 		const isButton = type === 2;
 		const isLinkButton = isButton && numberValue(node.style) === 5;
@@ -198,21 +179,19 @@ function assertValidComponents(components: unknown, isV2: boolean): void {
 		// Interactive components (buttons except Link-style, and all selects) require a non-empty custom_id.
 		if (((isButton && !isLinkButton) || isSelect) && (customId === undefined || customId.length === 0)) {
 			apiError(
-				400,
-				ErrorCode.InvalidFormBody,
+				DiscordErrors.InvalidFormBody,
 				'Invalid Form Body: an interactive component requires a non-empty custom_id',
 			);
 		}
 		if (customId !== undefined && customId.length > 0) {
 			if ([...customId].length > 100) {
 				apiError(
-					400,
-					ErrorCode.InvalidFormBody,
+					DiscordErrors.InvalidFormBody,
 					'Invalid Form Body: component custom_id must be 100 or fewer in length',
 				);
 			}
 			if (customIds.has(customId)) {
-				apiError(400, ErrorCode.InvalidFormBody, `Invalid Form Body: duplicate component custom_id "${customId}"`);
+				apiError(DiscordErrors.InvalidFormBody, `Invalid Form Body: duplicate component custom_id "${customId}"`);
 			}
 			customIds.add(customId);
 		}
@@ -222,17 +201,17 @@ function assertValidComponents(components: unknown, isV2: boolean): void {
 			const url = stringValue(node.url);
 			if (isLinkButton) {
 				if (url === undefined || url.length === 0) {
-					apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: a link button requires a url');
+					apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: a link button requires a url');
 				}
 				assertEmbedUrl(url, 'link button url', false);
 				if (customId !== undefined) {
-					apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: a link button cannot have custom_id');
+					apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: a link button cannot have custom_id');
 				}
 			} else if (url !== undefined) {
-				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: non-link buttons cannot have url');
+				apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: non-link buttons cannot have url');
 			}
 			if (label !== undefined && [...label].length > 80) {
-				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: button label must be 80 or fewer in length');
+				apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: button label must be 80 or fewer in length');
 			}
 		}
 
@@ -241,8 +220,7 @@ function assertValidComponents(components: unknown, isV2: boolean): void {
 				const options = arrayValue(node.options);
 				if (options.length < 1 || options.length > 25) {
 					apiError(
-						400,
-						ErrorCode.InvalidFormBody,
+						DiscordErrors.InvalidFormBody,
 						'Invalid Form Body: a string select menu must have between 1 and 25 options',
 					);
 				}
@@ -253,22 +231,19 @@ function assertValidComponents(components: unknown, isV2: boolean): void {
 					const description = stringValue(option.description);
 					if (label === undefined || [...label].length < 1 || [...label].length > 100) {
 						apiError(
-							400,
-							ErrorCode.InvalidFormBody,
+							DiscordErrors.InvalidFormBody,
 							'Invalid Form Body: select option label must be between 1 and 100 in length',
 						);
 					}
 					if (value === undefined || [...value].length < 1 || [...value].length > 100) {
 						apiError(
-							400,
-							ErrorCode.InvalidFormBody,
+							DiscordErrors.InvalidFormBody,
 							'Invalid Form Body: select option value must be between 1 and 100 in length',
 						);
 					}
 					if (description !== undefined && [...description].length > 100) {
 						apiError(
-							400,
-							ErrorCode.InvalidFormBody,
+							DiscordErrors.InvalidFormBody,
 							'Invalid Form Body: select option description must be 100 or fewer in length',
 						);
 					}
@@ -276,16 +251,14 @@ function assertValidComponents(components: unknown, isV2: boolean): void {
 				const maxValues = numberValue(node.max_values);
 				if (maxValues !== undefined && maxValues > options.length) {
 					apiError(
-						400,
-						ErrorCode.InvalidFormBody,
+						DiscordErrors.InvalidFormBody,
 						'Invalid Form Body: select max_values cannot exceed the number of options',
 					);
 				}
 				const minValues = numberValue(node.min_values);
 				if (minValues !== undefined && minValues > options.length) {
 					apiError(
-						400,
-						ErrorCode.InvalidFormBody,
+						DiscordErrors.InvalidFormBody,
 						'Invalid Form Body: select min_values cannot exceed the number of options',
 					);
 				}
@@ -293,29 +266,28 @@ function assertValidComponents(components: unknown, isV2: boolean): void {
 			const min = numberValue(node.min_values);
 			const max = numberValue(node.max_values);
 			if (min !== undefined && (min < 0 || min > 25)) {
-				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: select min_values must be between 0 and 25');
+				apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: select min_values must be between 0 and 25');
 			}
 			if (max !== undefined && (max < 1 || max > 25)) {
-				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: select max_values must be between 1 and 25');
+				apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: select max_values must be between 1 and 25');
 			}
 			if (min !== undefined && max !== undefined && min > max) {
-				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: select min_values cannot exceed max_values');
+				apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: select min_values cannot exceed max_values');
 			}
 		}
 	});
 }
 
 /**
- * Validate an outgoing message body against Discord's documented limits, throwing a MockApiError (which the
- * REST layer surfaces like a real 400) so an over-limit send fails loud instead of passing a happy-path test.
- * `create` additionally rejects a fully empty body (real code 50006).
+ * Validate an outgoing message body against Discord's documented limits, failing the request the way a real
+ * 400 does, so an over-limit send fails loud instead of passing a happy-path test. `create` additionally
+ * rejects a fully empty body (real code 50006).
  */
 export function assertSendableMessage(raw: Record<string, unknown>, mode: 'create' | 'edit'): void {
 	const content = typeof raw.content === 'string' ? raw.content : undefined;
 	if (content !== undefined && [...content].length > MAX_MESSAGE_CONTENT) {
 		apiError(
-			400,
-			ErrorCode.InvalidFormBody,
+			DiscordErrors.InvalidFormBody,
 			`Invalid Form Body: content must be ${MAX_MESSAGE_CONTENT} or fewer in length`,
 		);
 	}
@@ -325,22 +297,13 @@ export function assertSendableMessage(raw: Record<string, unknown>, mode: 'creat
 	// F19: a Components-v2 body forbids top-level content/embeds and requires a non-empty components tree.
 	if (isV2) {
 		if (content !== undefined && content !== '') {
-			apiError(
-				400,
-				ErrorCode.InvalidFormBody,
-				'Invalid Form Body: content is not allowed with the IsComponentsV2 flag',
-			);
+			apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: content is not allowed with the IsComponentsV2 flag');
 		}
 		if (embeds.length > 0)
-			apiError(
-				400,
-				ErrorCode.InvalidFormBody,
-				'Invalid Form Body: embeds are not allowed with the IsComponentsV2 flag',
-			);
+			apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: embeds are not allowed with the IsComponentsV2 flag');
 		if (!Array.isArray(raw.components) || raw.components.length === 0) {
 			apiError(
-				400,
-				ErrorCode.InvalidFormBody,
+				DiscordErrors.InvalidFormBody,
 				'Invalid Form Body: the IsComponentsV2 flag requires a non-empty components array',
 			);
 		}
@@ -348,36 +311,36 @@ export function assertSendableMessage(raw: Record<string, unknown>, mode: 'creat
 	if (Array.isArray(raw.components)) assertValidComponents(raw.components, isV2);
 	// F20: at most 3 stickers per message.
 	if (Array.isArray(raw.sticker_ids) && raw.sticker_ids.length > 3) {
-		apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: a message can have at most 3 stickers');
+		apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: a message can have at most 3 stickers');
 	}
 	// F21: poll caps + required fields.
 	if (raw.poll !== undefined) {
 		// A poll is not an editable field: PATCH /messages rejects it outright.
 		if (mode === 'edit') {
-			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: a message poll cannot be edited');
+			apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: a message poll cannot be edited');
 		}
 		const poll = asRecord(raw.poll);
 		const question = stringValue(asRecord(poll.question).text);
 		if (question === undefined || question.trim() === '') {
-			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: poll.question.text is required');
+			apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: poll.question.text is required');
 		}
 		if ([...question].length > 300) {
-			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: poll question must be 300 or fewer in length');
+			apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: poll question must be 300 or fewer in length');
 		}
 		const answers = arrayValue(poll.answers);
 		if (answers.length < 1)
-			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: a poll must have between 1 and 10 answers');
+			apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: a poll must have between 1 and 10 answers');
 		if (answers.length > 10)
-			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: a poll can have at most 10 answers');
+			apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: a poll can have at most 10 answers');
 		for (const entry of answers) {
 			const text = stringValue(asRecord(asRecord(entry).poll_media).text);
 			if (text !== undefined && [...text].length > 55) {
-				apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: poll answer text must be 55 or fewer in length');
+				apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: poll answer text must be 55 or fewer in length');
 			}
 		}
 		const duration = numberValue(poll.duration);
 		if (duration !== undefined && (duration < 1 || duration > 768)) {
-			apiError(400, ErrorCode.InvalidFormBody, 'Invalid Form Body: poll duration must be between 1 and 768 hours');
+			apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: poll duration must be between 1 and 768 hours');
 		}
 	}
 	if (mode === 'create') {
@@ -389,7 +352,7 @@ export function assertSendableMessage(raw: Record<string, unknown>, mode: 'creat
 			raw.message_reference === undefined &&
 			(!Array.isArray(raw.sticker_ids) || raw.sticker_ids.length === 0) &&
 			(!Array.isArray(raw.attachments) || raw.attachments.length === 0);
-		if (empty) apiError(400, ErrorCode.CannotSendEmptyMessage, 'Cannot send an empty message');
+		if (empty) apiError(DiscordErrors.CannotSendEmptyMessage);
 	}
 }
 
@@ -401,10 +364,10 @@ export function assertNameBounds(value: unknown, min: number, max: number, label
 	if (typeof value !== 'string') return;
 	const length = [...value].length;
 	if (length < min || length > max) {
-		apiError(400, ErrorCode.InvalidFormBody, `Invalid Form Body: ${label} must be between ${min} and ${max} in length`);
+		apiError(DiscordErrors.InvalidFormBody, `Invalid Form Body: ${label} must be between ${min} and ${max} in length`);
 	}
 	if (charset && value.length > 0 && !charset.test(value)) {
-		apiError(400, ErrorCode.InvalidFormBody, `Invalid Form Body: ${label} contains invalid characters`);
+		apiError(DiscordErrors.InvalidFormBody, `Invalid Form Body: ${label} contains invalid characters`);
 	}
 }
 
@@ -459,8 +422,7 @@ export function assertAttachmentRefs(body: unknown, files: unknown): void {
 	for (const ref of refs) {
 		if (!uploaded.has(ref)) {
 			apiError(
-				400,
-				ErrorCode.InvalidFormBody,
+				DiscordErrors.InvalidFormBody,
 				`Invalid Form Body: references attachment://${ref} but no file named "${ref}" was uploaded in this request`,
 			);
 		}

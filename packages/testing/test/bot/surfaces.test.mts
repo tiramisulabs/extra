@@ -1,6 +1,8 @@
 import {
 	Command,
 	type CommandContext,
+	ComponentCommand,
+	type ComponentContext,
 	createAttachmentOption,
 	createChannelOption,
 	createIntegerOption,
@@ -11,6 +13,8 @@ import {
 	EntryPointCommand,
 	Label,
 	Modal,
+	ModalCommand,
+	type ModalContext,
 	Options,
 	TextInput,
 } from 'seyfert';
@@ -21,12 +25,13 @@ import {
 	TextInputStyle,
 } from 'seyfert/lib/types';
 import { describe, expect, test, vi } from 'vitest';
-import { createMockBot } from '../../src/bot/bot';
+import { createMockBot, Dispatch } from '../../src/bot/bot';
 import { TEST_USER_ID } from '../../src/bot/constants';
 import { attachmentOption, chatInputInteraction, mentionableOption } from '../../src/bot/interactions';
 import { apiAttachment, apiChannel, apiUser } from '../../src/bot/payloads';
 import { Routes } from '../../src/bot/routes';
 import { mockWorld } from '../../src/bot/world';
+import { seedGuildFixture } from './_setup';
 
 const englishLang = { greeting: 'Hello!' };
 
@@ -180,7 +185,7 @@ describe('additional command surfaces', () => {
 	test('attachment options require resolved attachment payloads by default', async () => {
 		const bot = await createMockBot({ commands: [AttachmentCheckCommand] });
 
-		expect(() => bot.slash({ name: 'attachment-check', options: { file: 'attachment-id' } })).toThrow(
+		await expect(bot.slash({ name: 'attachment-check', options: { file: 'attachment-id' } })).rejects.toThrow(
 			/attachmentOption/,
 		);
 		await bot.close();
@@ -203,7 +208,7 @@ describe('additional command surfaces', () => {
 	test('mentionable options require resolved user or role payloads by default', async () => {
 		const bot = await createMockBot({ commands: [MentionableCheckCommand] });
 
-		expect(() => bot.slash({ name: 'mentionable-check', options: { target: 'mention-user' } })).toThrow(
+		await expect(bot.slash({ name: 'mentionable-check', options: { target: 'mention-user' } })).rejects.toThrow(
 			/mentionableOption/,
 		);
 		await bot.close();
@@ -257,9 +262,9 @@ describe('additional command surfaces', () => {
 		expect(payload.authorizing_integration_owners).toEqual({ '1': 'owner-user' });
 	});
 
-	test('entry point commands dispatch and capture replies', async () => {
+	test('un-sessioned entry point commands dispatch and capture replies', async () => {
 		const bot = await createMockBot({ commands: [LaunchEntryPoint] });
-		const result = await bot.entryPoint();
+		const result = await bot.actor({ session: false }).entryPoint();
 
 		expect(result.content).toBe('launched');
 		await bot.close();
@@ -343,15 +348,17 @@ describe('additional command surfaces', () => {
 
 		const result = await bot.slash({ name: 'route-fetch-guild', guildId: '9' });
 		expect(result.content).toBe('Stubbed');
-		expect(bot.findAction(Routes.fetchGuild)?.params).toMatchObject({ guildId: '9' });
+		expect(bot.restCalls(Routes.fetchGuild)[0]?.params).toMatchObject({ guildId: '9' });
 		await bot.close();
 	});
 
-	test('waitForAction accepts route descriptors for side effects', async () => {
+	test('restCalls reads route descriptors after the stateful step settles', async () => {
 		const bot = await createMockBot({ commands: [RouteMessageWriteCommand] });
 		await bot.slash({ name: 'route-message-write' });
 
-		await expect(bot.waitForAction(Routes.createMessage)).resolves.toMatchObject({
+		const calls = bot.restCalls(Routes.createMessage);
+		expect(calls).toHaveLength(1);
+		expect(calls[0]).toMatchObject({
 			body: { content: 'side' },
 			params: { channelId: 'route-channel' },
 		});
@@ -380,7 +387,7 @@ describe('additional command surfaces', () => {
 	test('slash validates options before dispatching to Seyfert by default', async () => {
 		const bot = await createMockBot({ commands: [NumericCheckCommand] });
 
-		expect(() => bot.slash({ name: 'numeric-check', options: { count: 11, ratio: 1 } })).toThrow(
+		await expect(bot.slash({ name: 'numeric-check', options: { count: 11, ratio: 1 } })).rejects.toThrow(
 			/count.*greater than 10/i,
 		);
 		await bot.close();
@@ -389,7 +396,7 @@ describe('additional command surfaces', () => {
 	test('slash rejects duplicate option names in array payloads by default', async () => {
 		const bot = await createMockBot({ commands: [NumericCheckCommand] });
 
-		expect(() =>
+		await expect(
 			bot.slash({
 				name: 'numeric-check',
 				options: [
@@ -398,22 +405,22 @@ describe('additional command surfaces', () => {
 					{ name: 'ratio', value: 1 },
 				],
 			}),
-		).toThrow(/option "count" is provided more than once/);
+		).rejects.toThrow(/option "count" is provided more than once/);
 		await bot.close();
 	});
 
 	test('slash rejects non-finite and unsafe numeric option values by default', async () => {
 		const bot = await createMockBot({ commands: [NumericCheckCommand] });
 
-		expect(() => bot.slash({ name: 'numeric-check', options: { count: Number.NaN, ratio: 1 } })).toThrow(
+		await expect(bot.slash({ name: 'numeric-check', options: { count: Number.NaN, ratio: 1 } })).rejects.toThrow(
 			/count.*finite number/i,
 		);
-		expect(() => bot.slash({ name: 'numeric-check', options: { count: 1, ratio: Number.POSITIVE_INFINITY } })).toThrow(
-			/ratio.*finite number/i,
-		);
-		expect(() =>
+		await expect(
+			bot.slash({ name: 'numeric-check', options: { count: 1, ratio: Number.POSITIVE_INFINITY } }),
+		).rejects.toThrow(/ratio.*finite number/i);
+		await expect(
 			bot.slash({ name: 'numeric-check', options: { count: Number.MAX_SAFE_INTEGER + 1, ratio: 1 } }),
-		).toThrow(/count.*safe integer/i);
+		).rejects.toThrow(/count.*safe integer/i);
 		await bot.close();
 	});
 
@@ -421,7 +428,7 @@ describe('additional command surfaces', () => {
 		const channel = apiChannel({ id: 'text-channel', type: ChannelType.GuildText });
 		const bot = await createMockBot({ commands: [ChannelCheckCommand] });
 
-		expect(() =>
+		await expect(
 			bot.slash({
 				name: 'channel-check',
 				options: {
@@ -433,7 +440,7 @@ describe('additional command surfaces', () => {
 					},
 				},
 			}),
-		).toThrow(/resolved channel is missing a numeric type/);
+		).rejects.toThrow(/resolved channel is missing a numeric type/);
 		await expect(
 			bot.slash({
 				name: 'channel-check',
@@ -462,9 +469,133 @@ describe('additional command surfaces', () => {
 	test('slash throws for an unregistered subcommand target', async () => {
 		const bot = await createMockBot({ commands: [NumericCheckCommand] });
 
-		expect(() => bot.slash({ name: 'numeric-check', subcommand: 'missing', options: { count: 2, ratio: 1 } })).toThrow(
-			/subcommand "missing" is not registered/i,
-		);
+		await expect(
+			bot.slash({ name: 'numeric-check', subcommand: 'missing', options: { count: 2, ratio: 1 } }),
+		).rejects.toThrow(/subcommand "missing" is not registered/i);
+		await bot.close();
+	});
+});
+
+describe('one dispatcher: the identity binds, the session is the option', () => {
+	class PanelButton extends ComponentCommand {
+		componentType = 'Button' as const;
+		filter(ctx: ComponentContext<'Button'>) {
+			return ctx.customId === 'panel:confirm';
+		}
+		async run(ctx: ComponentContext<'Button'>) {
+			await ctx.write({
+				content: `panel:${ctx.interaction.user.id}:${ctx.interaction.guildId}:${ctx.interaction.locale}`,
+			});
+		}
+	}
+
+	class PanelSelect extends ComponentCommand {
+		componentType = 'StringSelect' as const;
+		filter(ctx: ComponentContext<'StringSelect'>) {
+			return ctx.customId === 'panel:theme';
+		}
+		async run(ctx: ComponentContext<'StringSelect'>) {
+			await ctx.write({ content: `theme:${ctx.interaction.values.join(',')}` });
+		}
+	}
+
+	class PanelModal extends ModalCommand {
+		filter(ctx: ModalContext) {
+			return ctx.customId === 'panel:feedback';
+		}
+		async run(ctx: ModalContext) {
+			await ctx.write({ content: `feedback:${ctx.interaction.user.id}:${ctx.interaction.locale}` });
+		}
+	}
+
+	@Declare({ name: 'slowpost', description: 'Writes, waits on a gate, then writes again' })
+	class SlowPostCommand extends Command {
+		async run(ctx: CommandContext) {
+			await ctx.client.messages.write('gate-channel', { content: `first:${ctx.interaction.user.id}` });
+			await ctx.write({ content: 'done' });
+		}
+	}
+
+	test('session: false keeps the whole bound identity instead of restating it per call', async () => {
+		const { world, guild, actor, channel } = seedGuildFixture('merged-raw');
+		const bot = await createMockBot({ components: [PanelButton], world });
+
+		// Reaching the un-sessioned handle used to mean abandoning actor() and restating user/guild/channel/locale.
+		const raw = bot.actor({ member: actor, locale: 'es-ES', allowSyntheticSource: true, session: false });
+		const flow = raw.clickButton('panel:confirm');
+
+		expect(flow).toBeInstanceOf(Dispatch);
+		const result = await flow;
+		expect(result.content).toBe(`panel:${actor.user.id}:${guild.id}:es-ES`);
+		expect(bot.restCalls().some(call => call.route.includes(channel.id))).toBe(false);
+		await bot.close();
+	});
+
+	test('session: false is the concurrency hatch: one identity, two flows in flight', async () => {
+		const bot = await createMockBot({ commands: [SlowPostCommand] });
+		const raw = bot.actor({ user: apiUser({ id: 'concurrent-one' }), session: false });
+
+		const first = raw.slash({ name: 'slowpost' });
+		const second = raw.slash({ name: 'slowpost' });
+		await Promise.all([first.until(Routes.createMessage), second.until(Routes.createMessage)]);
+		expect(bot.diagnostics().pending.filter(entry => entry.started && !entry.settled)).toHaveLength(2);
+
+		await Promise.all([first, second]);
+		// The same two actions through the session surface are refused, which is what makes them different modes.
+		const stateful = bot.actor({ user: apiUser({ id: 'concurrent-one' }) });
+		const parked = stateful.slash({ name: 'slowpost' });
+		await expect(stateful.slash({ name: 'slowpost' })).rejects.toThrow(/already has a pending flow/);
+		await parked;
+		await bot.close();
+	});
+
+	test('allowSyntheticSource binds on the modal step, not only on the un-sessioned one', async () => {
+		const { world, actor } = seedGuildFixture('merged-modal');
+		const bot = await createMockBot({ components: [PanelModal], world });
+
+		// Per call...
+		await expect(
+			bot.submitModal('panel:feedback', { rating: '5' }, { allowSyntheticSource: true }),
+		).resolves.toMatchObject({ content: `feedback:${actor.user.id}:en-US` });
+		// ...and once, on the actor, for the whole flow.
+		const panelist = bot.actor({ member: actor, locale: 'es-ES', allowSyntheticSource: true });
+		await expect(panelist.submitModal('panel:feedback', { rating: '5' })).resolves.toMatchObject({
+			content: `feedback:${actor.user.id}:es-ES`,
+		});
+		await bot.close();
+	});
+
+	test("a synthetic select carries its values, and the actor's opt-in reaches it", async () => {
+		const { world, actor } = seedGuildFixture('merged-select');
+		const bot = await createMockBot({ components: [PanelSelect], world });
+		const panelist = bot.actor({ member: actor, allowSyntheticSource: true });
+
+		// `values` is positional, not part of the options bag: reading it off the bag dispatched an empty selection.
+		await expect(panelist.selectMenu('panel:theme', ['dark'])).resolves.toMatchObject({ content: 'theme:dark' });
+		await expect(bot.selectMenu('panel:theme', ['light'], { allowSyntheticSource: true })).resolves.toMatchObject({
+			content: 'theme:light',
+		});
+		await bot.close();
+	});
+
+	test('a step whose own output does not carry the panel still reaches it synthetically', async () => {
+		@Declare({ name: 'brief', description: 'Replies with something unrelated to the panel' })
+		class BriefCommand extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.write({ content: 'briefing' });
+			}
+		}
+
+		const { world, guild, actor } = seedGuildFixture('merged-panel');
+		const bot = await createMockBot({ commands: [BriefCommand], components: [PanelButton], world });
+		const panelist = bot.actor({ member: actor, allowSyntheticSource: true });
+
+		// The panel bot's real shape: every step renders SOMETHING, and none of it is the panel. Taking the last
+		// rendered message as the source made the opt-in inert here, which is why these flows dropped to raw.
+		await panelist.slash({ name: 'brief' });
+		await expect(panelist.clickButton('panel:confirm')).resolves.toMatchObject({
+			content: `panel:${actor.user.id}:${guild.id}:en-US`,
+		});
 		await bot.close();
 	});
 });

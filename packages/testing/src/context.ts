@@ -2,25 +2,25 @@ import type { ComponentCommand, ModalCommand } from 'seyfert';
 import type { SlashCommandClass, SlashOptionsOf } from './bot/bot';
 import { type EmbedView, harvestComponents, type InteractiveComponentView, normalizeEmbed } from './bot/state';
 import {
-	type MockChannel,
-	type MockChannelOptions,
-	type MockGuild,
-	type MockMember,
-	type MockUser,
-	mockChannel,
-	mockGuild,
-	mockMember,
-	mockUser,
+	type RichChannel,
+	type RichChannelOptions,
+	type RichGuild,
+	type RichMember,
+	type RichUser,
+	richChannel,
+	richGuild,
+	richMember,
+	richUser,
 } from './factories';
 import {
-	type MockClient,
-	type MockLogger,
-	type MockQueues,
-	type MockScheduler,
-	mockClient,
-	mockLogger,
-	mockQueues,
-	mockScheduler,
+	type StubClient,
+	type StubLogger,
+	type StubQueues,
+	type StubScheduler,
+	stubClient,
+	stubLogger,
+	stubQueues,
+	stubScheduler,
 } from './stubs';
 
 export type MockContextResponse = Record<string, unknown> | string;
@@ -102,16 +102,16 @@ export interface MockCommandContextOptions<TOptions extends Record<string, unkno
 	channelId?: string;
 	locale?: string;
 	guildLocale?: string;
-	author?: MockUser;
-	guild?: MockGuild | null;
-	channel?: MockChannelOptions;
-	member?: MockMember;
+	author?: RichUser;
+	guild?: RichGuild | null;
+	channel?: RichChannelOptions;
+	member?: RichMember;
 	options?: TOptions;
 	metadata?: Record<string, unknown>;
-	logger?: MockLogger;
-	queues?: MockQueues;
-	scheduler?: MockScheduler;
-	client?: MockClient;
+	logger?: StubLogger;
+	queues?: StubQueues;
+	scheduler?: StubScheduler;
+	client?: StubClient;
 	botId?: string;
 	applicationId?: string;
 }
@@ -119,23 +119,37 @@ export interface MockCommandContextOptions<TOptions extends Record<string, unkno
 export interface MockCommandContext<TOptions extends Record<string, unknown> = Record<string, unknown>> {
 	command: { name: string };
 	fullCommandName: string;
-	client: MockClient;
-	author: MockUser;
-	user: MockUser;
+	/**
+	 * `modal()` records what the command asked to show into {@link MockCommandContext.modals} — a command whose
+	 * whole job is to open a modal is assertable at this layer. Read it with `rendered(ctx).get.modal(...)`.
+	 * Driving the *submission* still belongs to the stateful harness: `createMockBot` + `bot.submitModal(...)`.
+	 *
+	 * Non-enumerable, like the other directed stubs, so it stays invisible to deepEqual/spread of the context —
+	 * but writable, so the README's "replace the method or nested surface you need" recipe holds here too.
+	 *
+	 * Thinner than seyfert's on purpose: seyfert types `interaction` as `ChatInputCommandInteraction |
+	 * undefined` whenever the bot has prefix commands, so production code should guard it regardless.
+	 */
+	interaction: { modal(payload: unknown): Promise<void> };
+	client: StubClient;
+	author: RichUser;
+	user: RichUser;
 	guildId?: string;
 	channelId: string;
 	locale: string;
 	guildLocale?: string;
-	guild(): Promise<MockGuild | null>;
-	channel(): Promise<MockChannel>;
-	me(): Promise<MockMember | null>;
-	member: MockMember | null;
+	guild(): Promise<RichGuild | null>;
+	channel(): Promise<RichChannel>;
+	me(): Promise<RichMember | null>;
+	member: RichMember | null;
 	options: TOptions;
 	metadata: Record<string, unknown>;
-	logger: MockLogger;
-	queues: MockQueues;
-	scheduler: MockScheduler;
+	logger: StubLogger;
+	queues: StubQueues;
+	scheduler: StubScheduler;
 	responses: MockContextResponse[];
+	/** Modal payloads the handler asked to show, in order — raw, as passed. `rendered(ctx).get.modal()` reads them. */
+	modals: unknown[];
 	write(response: MockContextResponse): Promise<MockContextResponse>;
 	editOrReply(response: MockContextResponse): Promise<MockContextResponse>;
 	followup(response: MockContextResponse): Promise<MockContextResponse>;
@@ -180,15 +194,15 @@ export interface MockInteractionContextOptions {
 	channelId?: string;
 	locale?: string;
 	guildLocale?: string;
-	author?: MockUser;
-	guild?: MockGuild | null;
-	channel?: MockChannelOptions;
-	member?: MockMember;
+	author?: RichUser;
+	guild?: RichGuild | null;
+	channel?: RichChannelOptions;
+	member?: RichMember;
 	metadata?: Record<string, unknown>;
-	logger?: MockLogger;
-	queues?: MockQueues;
-	scheduler?: MockScheduler;
-	client?: MockClient;
+	logger?: StubLogger;
+	queues?: StubQueues;
+	scheduler?: StubScheduler;
+	client?: StubClient;
 	botId?: string;
 	applicationId?: string;
 }
@@ -222,22 +236,24 @@ export interface MockModalContextOptions extends MockInteractionContextOptions {
 }
 
 export interface MockInteractionContextBase {
-	client: MockClient;
-	author: MockUser;
-	user: MockUser;
+	client: StubClient;
+	author: RichUser;
+	user: RichUser;
 	guildId?: string;
 	channelId: string;
 	locale: string;
 	guildLocale?: string;
-	guild(): Promise<MockGuild | null>;
-	channel(): Promise<MockChannel>;
-	me(): Promise<MockMember | null>;
-	member: MockMember | null;
+	guild(): Promise<RichGuild | null>;
+	channel(): Promise<RichChannel>;
+	me(): Promise<RichMember | null>;
+	member: RichMember | null;
 	metadata: Record<string, unknown>;
-	logger: MockLogger;
-	queues: MockQueues;
-	scheduler: MockScheduler;
+	logger: StubLogger;
+	queues: StubQueues;
+	scheduler: StubScheduler;
 	responses: MockContextResponse[];
+	/** Modal payloads the handler asked to show, in order — raw, as passed. `rendered(ctx).get.modal()` reads them. */
+	modals: unknown[];
 	write(response: MockContextResponse): Promise<MockContextResponse>;
 	editOrReply(response: MockContextResponse): Promise<MockContextResponse>;
 	followup(response: MockContextResponse): Promise<MockContextResponse>;
@@ -284,6 +300,8 @@ export interface MockComponentContext<T extends MockComponentType = 'Button'> ex
 		custom_id: string;
 		componentType: T;
 		values: string[];
+		/** Records into {@link MockInteractionContextBase.modals}; read it with `rendered(ctx).get.modal(...)`. */
+		modal(payload: unknown): Promise<void>;
 	};
 	deferredUpdate: boolean;
 	update(response: MockContextResponse): Promise<MockContextResponse>;
@@ -319,30 +337,30 @@ export interface MockModalContextHarness {
 }
 
 /**
- * Resolve the `channel` option to a full {@link MockChannel}. A partial ({@link MockChannelOptions}) is completed
- * via {@link mockChannel} (filling position/permission_overwrites/nsfw and spreading any `extra` stubs); an
+ * Resolve the `channel` option to a full {@link RichChannel}. A partial ({@link RichChannelOptions}) is completed
+ * via {@link richChannel} (filling position/permission_overwrites/nsfw and spreading any `extra` stubs); an
  * already-built channel (detected by its output-only `position`) is returned as-is, preserving reference identity.
  */
-function resolveChannelOption(input: MockChannelOptions | undefined, fallback: MockChannelOptions): MockChannel {
-	if (input && 'position' in input) return input as MockChannel;
-	return mockChannel({ ...fallback, ...input });
+function resolveChannelOption(input: RichChannelOptions | undefined, fallback: RichChannelOptions): RichChannel {
+	if (input && 'position' in input) return input as RichChannel;
+	return richChannel({ ...fallback, ...input });
 }
 
 function mockInteractionBase(
 	options: MockInteractionContextOptions = {},
 	command?: RunnableCommand,
 ): MockInteractionContextBase {
-	const author = options.author ?? mockUser({ id: options.userId });
-	const guild = options.guild === null ? null : (options.guild ?? mockGuild({ id: options.guildId }));
+	const author = options.author ?? richUser({ id: options.userId });
+	const guild = options.guild === null ? null : (options.guild ?? richGuild({ id: options.guildId }));
 	const guildId = guild?.id;
 	const channel = resolveChannelOption(options.channel, { id: options.channelId, guildId: guildId ?? null });
-	const member = guild ? (options.member ?? mockMember({ user: author, guildId: guild.id })) : null;
-	const logger = options.logger ?? options.client?.logger ?? mockLogger();
-	const queues = options.queues ?? options.client?.queues ?? mockQueues();
-	const scheduler = options.scheduler ?? options.client?.scheduler ?? mockScheduler();
+	const member = guild ? (options.member ?? richMember({ user: author, guildId: guild.id })) : null;
+	const logger = options.logger ?? options.client?.logger ?? stubLogger();
+	const queues = options.queues ?? options.client?.queues ?? stubQueues();
+	const scheduler = options.scheduler ?? options.client?.scheduler ?? stubScheduler();
 	const client =
 		options.client ??
-		mockClient({
+		stubClient({
 			logger,
 			queues,
 			scheduler,
@@ -350,6 +368,7 @@ function mockInteractionBase(
 			applicationId: options.applicationId,
 		});
 	const responses: MockContextResponse[] = [];
+	const modals: unknown[] = [];
 	const recordResponse = async (response: MockContextResponse) => {
 		responses.push(response); // verbatim — the `responses` log is the contract; the wrapper below is non-enumerable
 		if (typeof response === 'string') return response;
@@ -362,7 +381,7 @@ function mockInteractionBase(
 				throw new TypeError(
 					'createComponentCollector is not available on mockCommandContext (the light unit harness has no ' +
 						'component runtime). For collector/confirm flows use createMockBot({ commands: [...] }) and drive them ' +
-						'with bot.slash(...).untilComponent(id) + bot.clickButton(id).',
+						'step-by-step with await bot.slash(...) + await bot.clickButton(id).',
 				);
 			},
 		});
@@ -392,6 +411,7 @@ function mockInteractionBase(
 		queues,
 		scheduler,
 		responses,
+		modals,
 		write: recordResponse,
 		editOrReply: recordResponse,
 		followup: recordResponse,
@@ -460,12 +480,24 @@ export function mockCommandContext(
 	const name = options.commandName ?? instance?.name ?? 'test';
 	// A command context is an interaction context plus command identity + typed options. Build on the shared base
 	// (as the component/modal contexts do) so the response surface lives in exactly one place.
-	return {
+	const context = {
 		...mockInteractionBase(options, instance),
 		command: { name },
 		fullCommandName: options.fullCommandName ?? name,
 		options: options.options ?? {},
-	};
+	} as MockCommandContext;
+	// Non-enumerable so deepEqual/spread of the context is unchanged; writable + configurable so the documented
+	// "replace the method or nested surface you need" recipe is true of `interaction` as it is of `guild`.
+	Object.defineProperty(context, 'interaction', {
+		value: {
+			async modal(payload: unknown): Promise<void> {
+				context.modals.push(payload);
+			},
+		},
+		writable: true,
+		configurable: true,
+	});
+	return context;
 }
 
 function isMockInteractionContext(value: unknown): value is MockInteractionContextBase {
@@ -523,6 +555,9 @@ function createMockComponentContext<T extends MockComponentType>(
 			custom_id: customId,
 			componentType,
 			values,
+			async modal(payload: unknown): Promise<void> {
+				base.modals.push(payload);
+			},
 		},
 		get deferredUpdate() {
 			return deferredUpdate;
@@ -678,17 +713,17 @@ export function mockModalContext(
 }
 
 export interface MockScene<TOptions extends Record<string, unknown> = Record<string, unknown>> {
-	user: MockUser;
-	guild: MockGuild | null;
-	channel: MockChannel;
-	member: MockMember | null;
+	user: RichUser;
+	guild: RichGuild | null;
+	channel: RichChannel;
+	member: RichMember | null;
 	ctx: MockCommandContext<TOptions>;
 }
 
 /**
  * Build a consistently-wired set of entities plus a command context in one call: the channel belongs to the
  * guild, the member wraps the user, and `ctx` is built from all of them. Removes the boilerplate of threading
- * ids between `mockUser`/`mockGuild`/`mockChannel`/`mockMember` and `mockCommandContext`.
+ * ids between `richUser`/`richGuild`/`richChannel`/`richMember` and `mockCommandContext`.
  */
 export function mockScene<C extends SlashCommandClass>(
 	command: C,
@@ -703,10 +738,10 @@ export function mockScene(
 ): MockScene {
 	const isClass = typeof commandOrOptions === 'function';
 	const options = (isClass ? classOptions : (commandOrOptions as MockCommandContextOptions)) ?? {};
-	const user = options.author ?? mockUser({ id: options.userId });
-	const guild = options.guild === null ? null : (options.guild ?? mockGuild({ id: options.guildId }));
+	const user = options.author ?? richUser({ id: options.userId });
+	const guild = options.guild === null ? null : (options.guild ?? richGuild({ id: options.guildId }));
 	const channel = resolveChannelOption(options.channel, { id: options.channelId, guildId: guild ? guild.id : null });
-	const member = guild ? (options.member ?? mockMember({ user, guildId: guild.id })) : null;
+	const member = guild ? (options.member ?? richMember({ user, guildId: guild.id })) : null;
 	const sceneOptions = { ...options, author: user, guild, channel, member: member ?? undefined };
 	const ctx = isClass
 		? mockCommandContext(commandOrOptions as SlashCommandClass, sceneOptions)

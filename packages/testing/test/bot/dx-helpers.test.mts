@@ -107,7 +107,7 @@ class PanelCommand extends Command {
 }
 
 describe('F34 typed DispatchResult accessors', () => {
-	test('embedView and component(...) read parsed views without casts', async () => {
+	test('embedView and components expose parsed data without action shortcuts', async () => {
 		const bot = await createMockBot({ commands: [PanelCommand] });
 		const result = await bot.slash({ name: 'panel' });
 
@@ -117,9 +117,8 @@ describe('F34 typed DispatchResult accessors', () => {
 		expect(result.embedViews).toHaveLength(1);
 
 		expect(result.components.map(view => view.customId)).toEqual(['approve']);
-		expect(result.component('Approve')?.customId).toBe('approve');
-		expect(result.component('approve')?.label).toBe('Approve');
-		expect(result.component('missing')).toBeUndefined();
+		expect(result.components.find(view => view.label === 'Approve')?.customId).toBe('approve');
+		expect(result.components.find(view => view.customId === 'approve')?.label).toBe('Approve');
 		await bot.close();
 	});
 });

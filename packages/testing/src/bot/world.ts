@@ -58,7 +58,15 @@ import {
 import type { PermissionInput } from './permissions';
 import { permissionBits } from './permissions';
 
-export interface MockWorld {
+/**
+ * The built world: plain, cloneable data, which is what `createMockBot({ world })` seeds into the cache.
+ *
+ * Named for what it is, not `MockWorld` — that name belongs to whatever `mockWorld()` returns by the
+ * package's own `mockX(): MockX` rule, and `mockWorld()` returns the builder. Typing a helper parameter
+ * `MockWorld` and passing it `mockWorld()` used not to compile, which is the wrong thing to learn from a
+ * name. Use {@link WorldBuilder} for the thing with the `register*` methods.
+ */
+export interface WorldData {
 	guilds: ApiGuild[];
 	channels: ApiChannel[];
 	users: ApiUser[];
@@ -76,6 +84,16 @@ export interface MockWorld {
 	soundboardSounds?: { guildId: string; sound: ApiSoundboardSound }[];
 	stageInstances?: ApiStageInstance[];
 	auditLogEntries?: { guildId: string; entry: ApiAuditLogEntry }[];
+	/**
+	 * Families the mock otherwise only ever derives from REST during a run. Seeding one states a precondition
+	 * that already held before the test started — "this user was already banned", "this message was already
+	 * pinned" — instead of establishing it with a REST call the assertion then has to skip past in `restCalls`.
+	 */
+	bans?: { guildId: string; userId: string; reason?: string }[];
+	pins?: { channelId: string; messageId: string }[];
+	reactions?: { channelId: string; messageId: string; emoji: string; userId: string }[];
+	threadMembers?: { channelId: string; userId: string }[];
+	pollVotes?: { channelId: string; messageId: string; answerId: number; userId: string }[];
 	/**
 	 * App-specific key/value store, untouched by the mock. A domain layer seeds its own state here (and a test
 	 * reads it back via {@link MockBot.worldData}); the mock never interprets or mutates it. Pure passthrough.
@@ -143,20 +161,58 @@ export type WorldEmojiOptions = Omit<ApiEmojiOptions, 'guildId'>;
 
 export type WorldInviteOptions = Omit<ApiInviteOptions, 'channelId' | 'guildId'>;
 
+export type WorldBotMemberOptions = { roles?: string[]; botId?: string };
+
+/** Username given to the member seeded by {@link WorldBuilder.registerBotMember}. */
+const BOT_USERNAME = 'slipher-test-bot';
+
+/**
+ * A registered guild: the `ApiGuild` payload plus the guild-scoped registrars, so the guild id is stated
+ * once at `registerGuild` instead of at every call. The methods are non-enumerable, so the value still
+ * clones, serializes and deep-equals as the plain payload it also is.
+ */
+export interface WorldGuild extends ApiGuild {
+	registerRole(options?: WorldRoleOptions): ApiRole;
+	registerChannel(options?: WorldChannelOptions): ApiChannel;
+	registerMember(options?: ApiMemberOptions): ApiMember;
+	registerBotMember(options?: WorldBotMemberOptions): ApiMember;
+	registerVoiceState(options?: ApiVoiceStateOptions): ApiVoiceState;
+	registerEmoji(options?: WorldEmojiOptions): ApiEmoji;
+	registerSticker(options?: Omit<ApiStickerOptions, 'guildId'>): ApiSticker;
+	registerAutoModRule(options?: Omit<ApiAutoModRuleOptions, 'guildId'>): ApiAutoModRule;
+	registerScheduledEvent(options?: Omit<ApiScheduledEventOptions, 'guildId'>): ApiScheduledEvent;
+	registerGuildTemplate(options?: Omit<ApiGuildTemplateOptions, 'sourceGuildId'>): ApiGuildTemplate;
+	registerSoundboardSound(options?: Omit<ApiSoundboardSoundOptions, 'guildId'>): ApiSoundboardSound;
+	registerAuditLogEntry(options?: ApiAuditLogEntryOptions): ApiAuditLogEntry;
+}
+
 export class WorldBuilder {
-	private readonly world: MockWorld = {
-		guilds: [],
-		channels: [],
-		users: [],
-		members: [],
-		roles: [],
-		messages: [],
-		voiceStates: [],
-		guildEmojis: [],
-		invites: [],
-		autoModRules: [],
-		webhooks: [],
-	};
+	private readonly world: WorldData;
+
+	/**
+	 * @internal Passing a world continues seeding one that is already live. `MockBot.seed` uses it so the
+	 * registrars stay usable against a running bot instead of being frozen at `createMockBot`.
+	 */
+	constructor(seed?: WorldData) {
+		this.world = seed ?? {
+			guilds: [],
+			channels: [],
+			users: [],
+			members: [],
+			roles: [],
+			messages: [],
+			voiceStates: [],
+			guildEmojis: [],
+			invites: [],
+			autoModRules: [],
+			webhooks: [],
+		};
+	}
+
+	/** Members seeded by registerBotMember, kept so adoptBotId can restate their user id. */
+	private readonly botMembers: ApiMember[] = [];
+	/** Bot id explicitly given to registerBotMember, if any. */
+	private pinnedBotId?: string;
 
 	private requireGuild(guildId: string): void {
 		if (this.world.guilds.some(guild => guild.id === guildId)) return;
@@ -171,7 +227,7 @@ export class WorldBuilder {
 		throw new TypeError(`mockWorld: channel "${channelId}" is not registered. Seeded channels: ${seeded}.`);
 	}
 
-	registerGuild(options: WorldGuildOptions = {}): ApiGuild {
+	registerGuild(options: WorldGuildOptions = {}): WorldGuild {
 		const guild = apiGuild(options);
 		this.world.guilds.push(guild);
 		this.world.roles.push({
@@ -183,7 +239,33 @@ export class WorldBuilder {
 				position: 0,
 			}),
 		});
-		return guild;
+		return this.scopeToGuild(guild);
+	}
+
+	/**
+	 * Bind the guild-scoped registrars onto the payload itself.
+	 *
+	 * Non-enumerable is load-bearing, not cosmetic: `createMockBot` runs `structuredClone(world.build())`,
+	 * which throws `DataCloneError` on an enumerable function, and a seeded guild has to keep deep-equalling
+	 * the plain payload that assertions and `JSON.stringify` expect.
+	 */
+	private scopeToGuild(guild: ApiGuild): WorldGuild {
+		const scope: Omit<WorldGuild, keyof ApiGuild> = {
+			registerRole: options => this.registerRole(guild.id, options),
+			registerChannel: options => this.registerChannel(guild.id, options),
+			registerMember: options => this.registerMember(guild.id, options),
+			registerBotMember: options => this.registerBotMember(guild.id, options),
+			registerVoiceState: options => this.registerVoiceState(guild.id, options),
+			registerEmoji: options => this.registerEmoji(guild.id, options),
+			registerSticker: options => this.registerSticker(guild.id, options),
+			registerAutoModRule: options => this.registerAutoModRule(guild.id, options),
+			registerScheduledEvent: options => this.registerScheduledEvent(guild.id, options),
+			registerGuildTemplate: options => this.registerGuildTemplate(guild.id, options),
+			registerSoundboardSound: options => this.registerSoundboardSound(guild.id, options),
+			registerAuditLogEntry: options => this.registerAuditLogEntry(guild.id, options),
+		};
+		for (const [name, bound] of Object.entries(scope)) Object.defineProperty(guild, name, { value: bound });
+		return guild as WorldGuild;
 	}
 
 	registerRole(guildId: string, options: WorldRoleOptions = {}): ApiRole {
@@ -306,6 +388,77 @@ export class WorldBuilder {
 		return entry;
 	}
 
+	/** State that a user is already banned, without dispatching the ban that would put it in `restCalls`. */
+	registerBan(guildId: string, options: { userId: string; reason?: string }): void {
+		this.requireGuild(guildId);
+		const bans = (this.world.bans ??= []);
+		if (bans.some(entry => entry.guildId === guildId && entry.userId === options.userId)) return;
+		bans.push({ guildId, userId: options.userId, ...(options.reason === undefined ? {} : { reason: options.reason }) });
+	}
+
+	/** State that a message is already pinned. The message must be registered first — a pin needs something to point at. */
+	registerPin(channelId: string, messageId: string): void {
+		this.requireMessage(channelId, messageId, 'registerPin');
+		const pins = (this.world.pins ??= []);
+		if (pins.some(entry => entry.channelId === channelId && entry.messageId === messageId)) return;
+		pins.push({ channelId, messageId });
+	}
+
+	/** State that a user already reacted. `emoji` takes the same forms the dispatch verbs accept (`'👍'`, `'name:id'`). */
+	registerReaction(channelId: string, messageId: string, options: { emoji: string; userId: string }): void {
+		this.requireMessage(channelId, messageId, 'registerReaction');
+		const reactions = (this.world.reactions ??= []);
+		if (
+			reactions.some(
+				entry =>
+					entry.channelId === channelId &&
+					entry.messageId === messageId &&
+					entry.emoji === options.emoji &&
+					entry.userId === options.userId,
+			)
+		) {
+			return;
+		}
+		reactions.push({ channelId, messageId, emoji: options.emoji, userId: options.userId });
+	}
+
+	/** State that a user is already in a thread. */
+	registerThreadMember(channelId: string, userId: string): void {
+		this.requireChannel(channelId);
+		const members = (this.world.threadMembers ??= []);
+		if (members.some(entry => entry.channelId === channelId && entry.userId === userId)) return;
+		members.push({ channelId, userId });
+	}
+
+	/** State that a user already voted on a poll answer. */
+	registerPollVote(channelId: string, messageId: string, options: { answerId: number; userId: string }): void {
+		this.requireMessage(channelId, messageId, 'registerPollVote');
+		const votes = (this.world.pollVotes ??= []);
+		if (
+			votes.some(
+				entry =>
+					entry.channelId === channelId &&
+					entry.messageId === messageId &&
+					entry.answerId === options.answerId &&
+					entry.userId === options.userId,
+			)
+		) {
+			return;
+		}
+		votes.push({ channelId, messageId, answerId: options.answerId, userId: options.userId });
+	}
+
+	private requireMessage(channelId: string, messageId: string, api: string): void {
+		this.requireChannel(channelId);
+		const exists = this.world.messages.some(entry => entry.channelId === channelId && entry.message.id === messageId);
+		if (!exists) {
+			throw new TypeError(
+				`${api}: no message "${messageId}" in channel "${channelId}". Register the message first — ` +
+					'world.registerMessage(channelId, { id }) returns it.',
+			);
+		}
+	}
+
 	registerUser(options: ApiUserOptions = {}): ApiUser {
 		const user = apiUser(options);
 		this.world.users.push(user);
@@ -329,11 +482,44 @@ export class WorldBuilder {
 		return voiceState;
 	}
 
-	registerBotMember(guildId: string, options: { roles?: string[]; botId?: string } = {}): ApiMember {
-		return this.registerMember(guildId, {
-			user: apiUser({ id: options.botId ?? TEST_BOT_ID, bot: true, username: TEST_BOT_ID }),
+	registerBotMember(guildId: string, options: WorldBotMemberOptions = {}): ApiMember {
+		if (options.botId !== undefined && this.pinnedBotId !== undefined && options.botId !== this.pinnedBotId) {
+			throw new TypeError(
+				`mockWorld: registerBotMember is already pinned to botId "${this.pinnedBotId}" but got "${options.botId}". ` +
+					'A world has one bot; seed the other guild without botId.',
+			);
+		}
+		if (options.botId !== undefined) this.pinnedBotId = options.botId;
+		const member = this.registerMember(guildId, {
+			user: apiUser({ id: this.pinnedBotId ?? TEST_BOT_ID, bot: true, username: BOT_USERNAME }),
 			roles: options.roles,
 		});
+		this.botMembers.push(member);
+		return member;
+	}
+
+	/**
+	 * @internal Reconcile the seeded bot member with the client's bot id. Called by `createMockBot`.
+	 *
+	 * The world is seeded before the client is built, so without this the bot's user id is stated twice —
+	 * here and as `createMockBot({ botId })` — with nothing keeping the two equal, and a message authored by
+	 * the bot member fails `author.id === client.botId`. Runs against the live world *before* `createMockBot`
+	 * clones it, so the `ApiMember` that `registerBotMember` already handed back is corrected in place too.
+	 *
+	 * Returns the stated bot id, or `undefined` when neither side stated one (leaving the default in place).
+	 */
+	adoptBotId(explicit?: string): string | undefined {
+		if (explicit !== undefined && this.pinnedBotId !== undefined && explicit !== this.pinnedBotId) {
+			throw new TypeError(
+				`createMockBot: botId "${explicit}" conflicts with registerBotMember({ botId: "${this.pinnedBotId}" }). ` +
+					'State the bot id once: keep it on createMockBot and drop it from registerBotMember, or the reverse.',
+			);
+		}
+		const stated = explicit ?? this.pinnedBotId;
+		if (stated !== undefined) {
+			for (const member of this.botMembers) member.user.id = stated;
+		}
+		return stated;
 	}
 
 	/**
@@ -356,7 +542,7 @@ export class WorldBuilder {
 		return message;
 	}
 
-	build(): MockWorld {
+	build(): WorldData {
 		return this.world;
 	}
 }
@@ -365,8 +551,34 @@ export function mockWorld(): WorldBuilder {
 	return new WorldBuilder();
 }
 
-/** Writes a MockWorld into a Seyfert client's cache using CacheFrom.Test. */
-export async function seedWorld(client: UsingClient, world: MockWorld): Promise<void> {
+/**
+ * Clone a world into the shape the client cache gets, translating the one failure that is easy to
+ * cause and impossible to read.
+ *
+ * This is now the backstop, not the primary defence: the `api*` payload types declare themselves plain data
+ * (see `PlainPayload`), so `registerMember({ user: richUser(...) })` is a compile error rather than the
+ * `DataCloneError` it used to be. The check stays because the types are reachable around — `MockBot.seed`
+ * takes a `WorldBuilder` callback, a cast or an `any` bypasses them, and a builder or any other uncloneable
+ * value can still reach a world field the types never named. Raw, that failure reads as
+ * `DataCloneError: () => Formatter.userMention(id) could not be cloned`, which names neither factory nor the
+ * call that seeded it. `api` names the entry point the author actually called.
+ */
+export function cloneWorld(built: WorldData, api: string): WorldData {
+	try {
+		return structuredClone(built);
+	} catch (error) {
+		throw new TypeError(
+			`${api}: the seeded world holds a value that cannot be cloned into the client cache — usually a ` +
+				'lightweight fixture (richUser, richGuild, richChannel, richMember) or a builder passed where a payload ' +
+				'belongs. World seeding takes the payload factories: apiUser, apiGuild, apiChannel, apiMember, apiRole. ' +
+				`The rich* fixtures are for mockCommandContext. Original error: ${String(error)}`,
+			{ cause: error },
+		);
+	}
+}
+
+/** Writes a WorldData into a Seyfert client's cache using CacheFrom.Test. */
+export async function seedWorld(client: UsingClient, world: WorldData): Promise<void> {
 	for (const guild of world.guilds) {
 		await client.cache.guilds?.set(CacheFrom.Test, guild.id, guild);
 	}

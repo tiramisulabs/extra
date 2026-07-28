@@ -1,6 +1,4 @@
 import { Client, type Command, type ContextMenuCommand, type EntryPointCommand } from 'seyfert';
-import { type RouteMatcher } from './rest';
-import { Routes } from './routes';
 
 export * from './contracts';
 export { Dispatch } from './dispatch';
@@ -24,28 +22,6 @@ export const realSetImmediate: typeof setImmediate | undefined = capturedSetImme
 	: undefined;
 
 /**
- * Entity-create routes for {@link MockBot.created}, mapping a friendly resource name to the POST route that
- * creates it. `message` is a direct channel send (`POST /channels/:id/messages`), NOT an interaction reply —
- * for those query {@link Routes.editOriginalResponse}/`followup`.
- */
-export const CREATE_ROUTES = {
-	channel: Routes.createChannel,
-	role: Routes.createRole,
-	message: Routes.createMessage,
-	thread: Routes.createThread,
-	dm: Routes.createDm,
-	webhook: Routes.createWebhook,
-	invite: Routes.createInvite,
-	emoji: Routes.createEmoji,
-	sticker: Routes.createSticker,
-	scheduledEvent: Routes.createScheduledEvent,
-	autoModRule: Routes.createAutoModRule,
-	stageInstance: Routes.createStageInstance,
-} as const satisfies Record<string, RouteMatcher>;
-
-export type CreatedResource = keyof typeof CREATE_ROUTES;
-
-/**
  * Yield once so pending async (REST hops, collector onStop continuations) can settle. Uses the real
  * setImmediate captured at load — so it advances even when the user faked global timers — and otherwise a
  * microtask. Robust to faked timers: never schedules through the faked global, so it cannot hang.
@@ -57,15 +33,15 @@ export function drainTick(): Promise<void> {
 
 /**
  * Fail fast if the global setImmediate the drain relies on has been faked since module load. vi.useFakeTimers()
- * with its default toFake replaces globalThis.setImmediate, which deadlocks {@link drainTick} (it would spin to
- * the iteration cap and return non-quiescent). Only trips when a real setImmediate was captured at load and the
+ * with its default toFake replaces globalThis.setImmediate, which makes the drain spin to its iteration cap.
+ * Only trips when a real setImmediate was captured at load and the
  * current global no longer matches it; on runtimes without setImmediate the guard is skipped.
  */
-export function assertRealSetImmediate(): void {
+export function assertRealSetImmediate(operation: string): void {
 	if (!capturedSetImmediate) return;
 	if (globalThis.setImmediate === capturedSetImmediate) return;
 	throw new Error(
-		'advanceTime/flushPending: global setImmediate has been replaced by fake timers, which deadlocks the ' +
+		`${operation}: global setImmediate has been replaced by fake timers, which deadlocks the ` +
 			"mock's async drain. Fake only the timers seyfert uses: " +
 			"vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }).",
 	);
