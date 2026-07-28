@@ -458,6 +458,7 @@ export abstract class MockBotSurface {
 		verb: 'clickButton' | 'selectMenu',
 		customId: string,
 		message: ApiMessage,
+		allowTampered = false,
 	): Record<string, unknown> {
 		const component = findComponentNode(message.components, customId);
 		if (!component) {
@@ -467,7 +468,7 @@ export abstract class MockBotSurface {
 			);
 		}
 		this.assertComponentVerbType(verb, customId, message);
-		if (component.disabled === true) {
+		if (component.disabled === true && !allowTampered) {
 			throw new TypeError(`${verb}: component "${customId}" on source message "${message.id}" is disabled.`);
 		}
 		return component;
@@ -477,7 +478,9 @@ export abstract class MockBotSurface {
 		customId: string,
 		values: string[],
 		component: Record<string, unknown>,
+		allowTampered = false,
 	): void {
+		if (allowTampered) return;
 		const type = numberValue(component.type);
 		if (type !== 3 && !(type !== undefined && type >= 5 && type <= 8)) return;
 		const min = numberValue(component.min_values) ?? 1;

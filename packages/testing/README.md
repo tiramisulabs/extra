@@ -74,7 +74,7 @@ test('replies after banning', async () => {
 - `responses`, `lastResponse()`, and `clearResponses()`
 - `modals` — payloads the handler passed to `ctx.interaction.modal()`, in order
 
-`ctx.client.logger === ctx.logger`, `ctx.client.queues === ctx.queues`, and `ctx.client.scheduler === ctx.scheduler`. Use `stubClient({ extra })` when a command touches client surfaces that this package does not model.
+`ctx.client.logger === ctx.logger`, `ctx.client.queues === ctx.queues`, and `ctx.client.scheduler === ctx.scheduler`. Use `stubClient({ extra })` when a command touches client surfaces that this package does not model. `extra` is spread one level deep, so each key you pass **replaces** that surface rather than patching into it: `extra: { users: { fetch } }` swaps out the whole `users` manager, and `extra: { cache: { members: undefined } }` swaps out the whole `cache`. Restate the parts you still need.
 
 When the assertion needs the entities as well as the context — the user who ran it, the
 guild it ran in, the channel it replied to — `mockScene()` builds them wired to each
@@ -152,7 +152,7 @@ Every subject below is read the same way:
 | `rendered(bot)` | output from the latest step of the most recently active actor |
 | `rendered(actor)` | output from that actor's latest step |
 | `rendered(flow)` | what a parked `Dispatch` has rendered so far, before it settles |
-| `rendered(payload)` | a raw message payload, an array of them, or a Seyfert builder |
+| `rendered(payload)` | a raw message payload, an array of them, or a Seyfert **message** builder (a bare component or embed builder throws — wrap it as the handler sends it) |
 
 `MockBot` and a parked `Dispatch` have no `lastEmbed()` / `lastComponents()` / `lastContent()` of
 their own: they read the same latest-step output `rendered(bot)` and `rendered(flow)` already
@@ -162,7 +162,8 @@ expose, with one vocabulary instead of three. The mock contexts keep theirs, bec
 The three readers differ only in cardinality:
 
 - `get.*` requires exactly one match and throws with the candidates otherwise.
-- `query.*` returns the first match, or `undefined`.
+- `query.*` allows zero and returns `undefined`, but throws when more than one matches — returning the
+  first was the one reader variant that could let an ambiguous match pass green.
 - `all.*` returns every match.
 
 A miss reports what *was* rendered, so a wrong matcher does not read like a rendering

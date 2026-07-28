@@ -89,6 +89,20 @@ export type ComponentSourceOptions = {
 	 * consume and no parked flow to resume.
 	 */
 	allowSyntheticSource?: boolean;
+	/**
+	 * Send input the rendered source says should be impossible: a disabled component, or select values outside
+	 * the options it offered.
+	 *
+	 * Discord delivers all of these — a client can re-send a disabled button's interaction, and a select value
+	 * can be forged — so a handler that defends against them has branches worth testing. Without this the
+	 * guards reject the dispatch first and those branches are unreachable except by hand-patching the stored
+	 * message.
+	 *
+	 * Deliberately does NOT relax "the customId is not on this message": that one is almost always a test
+	 * pointing at the wrong source, and {@link allowSyntheticSource} already covers dispatching with no
+	 * rendered source at all.
+	 */
+	allowTamperedInput?: boolean;
 };
 
 /**
@@ -544,13 +558,25 @@ export type OptionsRecordOf<C extends SlashCommandClass> = InstanceType<C>['run'
  * because a plain object can't satisfy seyfert's branded method signatures (e.g. `User.toString(): `<@${id}>``),
  * which is what made a plain `Partial<User>` reject `{ id }`. A full resolved value is still assignable too.
  */
+type Scalar = string | number | boolean | bigint | undefined | null;
 type DataKeys<V> = { [K in keyof V]: V[K] extends (...args: never[]) => unknown ? never : K }[keyof V];
+/** Innermost level: data properties, loosened no further. Bounds the recursion below. */
 type DataPartial<V> = Partial<Pick<V, DataKeys<V>>>;
-type LooseOptionValue<V> = V extends string | number | boolean | bigint | undefined | null
-	? V
-	: V extends unknown
-		? DataPartial<V>
-		: never;
+/**
+ * One level deeper than {@link DataPartial}, because a loosened entity's own entity-valued properties are
+ * loosened too. Shallow was not enough: `richMember()` sets `user` to a `RichUser`, and a shallow partial
+ * still demanded the real seyfert `User` there (`fetch`, `dm`, `write`, …), so the package's own fixture was
+ * rejected by the package's own inference. Stops at two levels on purpose — seyfert entities reference the
+ * client, and unbounded recursion would walk the whole object graph.
+ */
+/**
+ * Naked type parameter on purpose: the conditional has to DISTRIBUTE over a union so a nullable entity
+ * (`{ asset } | null | undefined`) keeps its `null` and `undefined` members instead of collapsing into a
+ * partial of the whole union, which would reject `null`.
+ */
+type LooseLeaf<V> = V extends Scalar ? V : DataPartial<V>;
+type LoosePartial<V> = { [K in DataKeys<V>]?: LooseLeaf<V[K]> };
+type LooseOptionValue<V> = V extends Scalar ? V : V extends unknown ? LoosePartial<V> : never;
 type LooseResolvedOptions<T> = { [K in keyof T]: LooseOptionValue<T[K]> };
 
 export type SlashOptionsOf<C extends SlashCommandClass> =

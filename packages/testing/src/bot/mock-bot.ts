@@ -717,7 +717,7 @@ export class MockBot extends MockBotDispatchCore {
 			const hydrated = message?.id ? this.hydrateSourceMessage(message, { verb: 'clickButton', customId }) : undefined;
 			let messageForInteraction: ApiMessage | undefined;
 			if (hydrated) {
-				this.requireComponentOnMessage('clickButton', customId, hydrated);
+				this.requireComponentOnMessage('clickButton', customId, hydrated, options.allowTamperedInput);
 				messageForInteraction = hydrated;
 			}
 			if (!messageForInteraction && synthetic) this.assertSyntheticComponentAllowed('clickButton', customId);
@@ -751,7 +751,7 @@ export class MockBot extends MockBotDispatchCore {
 			options,
 			sessionKeyOverride,
 			(prepared, sourceComponent) => {
-				this.assertSelectValuesMatchSource(customId, values, sourceComponent);
+				this.assertSelectValuesMatchSource(customId, values, sourceComponent, options.allowTamperedInput);
 				return this.dispatchSelectMenu(customId, values, prepared);
 			},
 			// `values` is a positional parameter, not part of the options bag, so a synthetic select has to be
@@ -800,7 +800,7 @@ export class MockBot extends MockBotDispatchCore {
 		}
 
 		const sourceMessage = this.hydrateSourceMessage(resolvedSource, { verb, customId });
-		const sourceComponent = this.requireComponentOnMessage(verb, customId, sourceMessage);
+		const sourceComponent = this.requireComponentOnMessage(verb, customId, sourceMessage, options.allowTamperedInput);
 		const checkpoint = this.sessions.componentCheckpoint(
 			customId,
 			resolvedSource.id,
@@ -858,9 +858,12 @@ export class MockBot extends MockBotDispatchCore {
 			}
 			if (synthetic && !message) this.assertSyntheticComponentAllowed('selectMenu', customId);
 			const hydrated = message?.id ? this.hydrateSourceMessage(message, { verb: 'selectMenu', customId }) : undefined;
-			const sourceComponent = hydrated ? this.requireComponentOnMessage('selectMenu', customId, hydrated) : undefined;
+			const sourceComponent = hydrated
+				? this.requireComponentOnMessage('selectMenu', customId, hydrated, options.allowTamperedInput)
+				: undefined;
 			if (!sourceComponent && synthetic) this.assertSyntheticComponentAllowed('selectMenu', customId);
-			if (sourceComponent) this.assertSelectValuesMatchSource(customId, values, sourceComponent);
+			if (sourceComponent)
+				this.assertSelectValuesMatchSource(customId, values, sourceComponent, options.allowTamperedInput);
 			const sourceType = selectTypeForInteraction(numberValue(sourceComponent?.type));
 			const preparedWithSourceType = sourceType ? { ...prepared, componentType: sourceType } : prepared;
 			const resolved = resolveSelectResolved(this._world, customId, values, preparedWithSourceType);
@@ -1061,6 +1064,12 @@ export class MockBot extends MockBotDispatchCore {
 	 * / `timeoutModal()` to drive a modal from its opener, or several actions for one user in flight at once.
 	 */
 	actor(options: ActorOptions & { session: false }): Dispatcher;
+	/**
+	 * A non-literal `session` cannot pick a side, so it returns both and the caller narrows. Without this
+	 * overload a `boolean` silently fell through to `Actor`, and the mistake only surfaced further down the
+	 * chain — `Dispatch` methods missing from a `Promise` — pointing at the chain rather than at the flag.
+	 */
+	actor(options: ActorOptions & { session: boolean }): Actor | Dispatcher;
 	actor(options: ActorOptions): Actor;
 	actor(options: ActorOptions): Actor | Dispatcher {
 		const user = options.user ?? options.member?.user;

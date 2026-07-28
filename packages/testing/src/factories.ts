@@ -28,7 +28,7 @@ export interface RichUserOptions {
 	discriminator?: string;
 	avatar?: string | null;
 	banner?: string | null;
-	avatarDecorationData?: { asset: string } | null;
+	avatarDecorationData?: { asset: string; skuId?: string } | null;
 }
 
 export interface RichGuildOptions {
@@ -105,7 +105,8 @@ export interface RichUser extends SnowflakeDerived {
 	discriminator: string;
 	avatar: string | null;
 	banner: string | null;
-	avatarDecorationData: { asset: string } | null;
+	/** Mirrors seyfert's `User`: a decoration always names the SKU it came from. */
+	avatarDecorationData: { asset: string; skuId: string } | null;
 	/** `<@id>` mention — so `` `${user}` `` interpolates like seyfert, not `[object Object]`. */
 	toString(): string;
 	/** `globalName ?? username#discriminator`, mirroring seyfert's `User.tag`. */
@@ -180,8 +181,12 @@ export interface RichChannel extends Record<string, unknown>, ChannelGuards, Sno
 	nsfw: boolean;
 	/** `<#id>` mention, via seyfert's Formatter. */
 	toString(): string;
-	/** `https://discord.com/channels/{guild}/{id}`, via seyfert's Formatter. */
-	readonly url: string;
+	/**
+	 * `https://discord.com/channels/{guild}/{id}`, via seyfert's Formatter. Typed as the template literal
+	 * Formatter actually returns, not widened to `string` — a widened one is not assignable to a seyfert
+	 * channel option, which is where this fixture is meant to go.
+	 */
+	readonly url: ReturnType<typeof Formatter.channelLink>;
 }
 
 export interface RichMember extends SnowflakeDerived {
@@ -233,7 +238,9 @@ export function richUser(options: RichUserOptions = {}): RichUser {
 	const discriminator = options.discriminator ?? '0';
 	const avatar = options.avatar ?? null;
 	const banner = options.banner ?? null;
-	const avatarDecorationData = options.avatarDecorationData ?? null;
+	const avatarDecorationData = options.avatarDecorationData
+		? { ...options.avatarDecorationData, skuId: options.avatarDecorationData.skuId ?? mockId() }
+		: null;
 	// calculateUserDefaultAvatarIndex does BigInt(id) for the new (discriminator '0') system — guard non-snowflake
 	// test ids (e.g. 'u1') the same way snowflakeDerived does, so a friendly-id user's avatarURL() won't throw.
 	const defaultAvatarURL = () =>

@@ -112,6 +112,53 @@ function assertSubject(subject: RenderedSubject): void {
 				'first, e.g. rendered(await bot.slash(...)). A parked Dispatch needs no await.',
 		);
 	}
+	assertNotBareBuilder(subject);
+}
+
+/** Message-body keys. A payload carrying any of these is a message, whatever else it also carries. */
+const MESSAGE_KEYS = [
+	'content',
+	'embeds',
+	'components',
+	'attachments',
+	'files',
+	'poll',
+	'flags',
+	'tts',
+	'allowed_mentions',
+	'sticker_ids',
+	'message_reference',
+] as const;
+const EMBED_KEYS = ['title', 'description', 'fields', 'color', 'footer', 'author', 'image', 'thumbnail'] as const;
+
+/**
+ * A component or embed builder passed on its own is normalized as if it were a message, so an ActionRow's
+ * `components` read as a message's rows and an Embed's fields match nothing — the reader answers "0 buttons"
+ * for output that plainly has one. That is the silent-empty scope this whole function exists to reject, so it
+ * belongs here rather than in the docs.
+ */
+function assertNotBareBuilder(subject: object): void {
+	const toJSON = (subject as { toJSON?: unknown }).toJSON;
+	if (typeof toJSON !== 'function') return;
+	const body: unknown = (subject as { toJSON(): unknown }).toJSON();
+	if (typeof body !== 'object' || body === null || Array.isArray(body)) return;
+	const record = body as Record<string, unknown>;
+	// `type` is checked before the message keys, not after: an ActionRow serializes to
+	// `{ type: 1, components: [...] }`, and `components` alone would read as a message body. A message payload
+	// never carries a top-level numeric `type`.
+	const kind =
+		typeof record.type === 'number'
+			? 'component'
+			: MESSAGE_KEYS.some(key => key in record)
+				? undefined
+				: EMBED_KEYS.some(key => key in record)
+					? 'embed'
+					: undefined;
+	if (!kind) return;
+	throw new TypeError(
+		`rendered(): got a bare ${kind} builder, which has no message to read it from — every query would answer ` +
+			`"found 0". Wrap it the way the handler sends it, e.g. rendered({ ${kind === 'embed' ? 'embeds: [embed]' : 'components: [row]'} }).`,
+	);
 }
 
 function describeSubject(subject: unknown): string {

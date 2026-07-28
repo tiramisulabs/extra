@@ -152,6 +152,59 @@ describe('component flows', () => {
 		if (!source) throw new Error('expected source message action');
 
 		await expect(bot.clickButton('confirm', { source })).rejects.toThrow(/component "confirm".+disabled/);
+
+		// Discord does deliver a disabled button's interaction — a client can re-send it — so the handler branch
+		// that defends against it has to be reachable.
+		await expect(bot.clickButton('confirm', { source, allowTamperedInput: true })).resolves.toMatchObject({
+			content: 'Confirmed!',
+		});
+		await bot.close();
+	});
+
+	test('allowTamperedInput reaches a forged select value, but never a wrong source', async () => {
+		class PickOne extends ComponentCommand {
+			componentType = 'StringSelect' as const;
+			filter(ctx: ComponentContext<'StringSelect'>) {
+				return ctx.customId === 'pick';
+			}
+			async run(ctx: ComponentContext<'StringSelect'>) {
+				await ctx.write({ content: ctx.interaction.values.join(',') });
+			}
+		}
+
+		const bot = await createMockBot({ components: [PickOne] });
+		await bot.rest.request('POST', '/channels/forge-channel/messages', {
+			body: {
+				content: 'pick one',
+				components: [
+					{
+						type: 1,
+						components: [
+							{
+								type: 3,
+								custom_id: 'pick',
+								options: [
+									{ label: 'One', value: '1' },
+									{ label: 'Two', value: '2' },
+								],
+							},
+						],
+					},
+				],
+			},
+		});
+		const source = bot.rest.actions.at(-1);
+		if (!source) throw new Error('expected source message action');
+
+		await expect(bot.selectMenu('pick', ['abc'], { source })).rejects.toThrow(/not an option for "pick"/);
+		await expect(bot.selectMenu('pick', ['abc'], { source, allowTamperedInput: true })).resolves.toMatchObject({
+			content: 'abc',
+		});
+
+		// The customId-not-on-this-source throw is NOT relaxed: that one is a test pointing at the wrong message.
+		await expect(bot.selectMenu('absent', ['1'], { source, allowTamperedInput: true })).rejects.toThrow(
+			/does not contain a component with customId "absent"/,
+		);
 		await bot.close();
 	});
 

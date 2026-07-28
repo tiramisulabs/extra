@@ -1,6 +1,12 @@
 import {
+	Command,
+	type CommandContext,
 	ContextMenuCommand,
+	createMentionableOption,
+	createUserOption,
+	Declare,
 	type MenuCommandContext,
+	Options,
 	type RESTDeleteAPIChannelMessageResult,
 	type RESTGetAPIGuildResult,
 	type RESTPatchAPIGuildMemberJSONBody,
@@ -16,6 +22,7 @@ import { ApplicationCommandType } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
 import { Dispatch, type DispatchOptions, type RestCall, type RestCalls, type RouteMatcher, Routes } from '../../src';
 import {
+	type Actor,
 	type AutocompleteResult,
 	createMockBot,
 	type Dispatcher,
@@ -41,6 +48,7 @@ import {
 	apiUser,
 } from '../../src/bot/payloads';
 import { mockWorld, type WorldBuilder } from '../../src/bot/world';
+import { mockCommandContext } from '../../src/context';
 import { richChannel, richGuild, richMember, richRole, richUser } from '../../src/factories';
 import { GreetCommand, ReportUser } from './_setup';
 
@@ -410,5 +418,47 @@ describe('type DX: S20 menu<C> as-const target discrimination', () => {
 		// Degraded result keeps `target` optional (DispatchResult), so it needs optional chaining.
 		const probe = (r: Result) => r.target?.kind;
 		void probe;
+	});
+});
+
+describe('actor() session overload', () => {
+	test('a literal picks a side and a non-literal returns the union to narrow', async () => {
+		const bot = await createMockBot({});
+		// A `boolean` cannot pick a side. It used to fall through to Actor silently, and the mistake only
+		// surfaced later as "Dispatch methods missing from a Promise", pointing at the chain not the flag.
+		const session: boolean = Math.round(0) === 0;
+
+		const dispatcher: Dispatcher = bot.actor({ session: false });
+		const actor: Actor = bot.actor({});
+		const either: Actor | Dispatcher = bot.actor({ session });
+		// @ts-expect-error a non-literal session must not silently resolve to Actor
+		const wrong: Actor = bot.actor({ session });
+
+		expect([dispatcher, actor, either, wrong].every(Boolean)).toBe(true);
+		await bot.close();
+	});
+});
+
+describe('rich fixtures satisfy the package own option inference', () => {
+	test('a rich fixture is assignable where seyfert resolves that entity', async () => {
+		const opts = {
+			who: createUserOption({ description: 'u' }),
+			someone: createMentionableOption({ description: 'm' }),
+		};
+		@Declare({ name: 'rich-opts', description: 'rich' })
+		@Options(opts)
+		class RichOpts extends Command {
+			async run(ctx: CommandContext<typeof opts>) {
+				await ctx.editOrReply({ content: `${ctx.options.who?.id}` });
+			}
+		}
+
+		// Each of these was a compile error: RichUser lacked `skuId` on avatarDecorationData, and the loosened
+		// option type was shallow, so a RichMember's `user` still demanded the full seyfert User.
+		mockCommandContext(RichOpts, { options: { someone: richUser({ id: 'u' }) } });
+		mockCommandContext(RichOpts, { options: { someone: richMember({ user: richUser({ id: 'u' }) }) } });
+
+		const ctx = mockCommandContext(RichOpts, { options: { who: richUser({ id: 'u' }) } });
+		expect(ctx.options.who?.id).toBe('u');
 	});
 });

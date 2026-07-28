@@ -1,7 +1,10 @@
 import {
+	ActionRow,
+	Button,
 	Command,
 	type CommandContext,
 	Declare,
+	Embed,
 	FileUpload,
 	Label,
 	Modal,
@@ -28,6 +31,18 @@ describe('rendered subject guards', () => {
 		expect(() => rendered(42 as never)).toThrow(/expected a MockBot, Actor, DispatchResult.*got the number 42/s);
 		expect(() => rendered(null as never)).toThrow(/got null/);
 		expect(() => rendered('Ready' as never)).toThrow(/got the string "Ready"/);
+	});
+
+	test('a bare component or embed builder says so instead of answering "found 0"', () => {
+		const row = new ActionRow<Button>().addComponents(new Button().setCustomId('go').setLabel('Go'));
+		const embed = new Embed().setTitle('T');
+
+		expect(() => rendered(row)).toThrow(/bare component builder.*components: \[row\]/s);
+		expect(() => rendered(embed)).toThrow(/bare embed builder.*embeds: \[embed\]/s);
+
+		// wrapped the way a handler sends them, both read normally
+		expect(rendered({ content: 'hi', components: [row] }).all.button()).toHaveLength(1);
+		expect(rendered({ embeds: [embed] }).all.embed()).toHaveLength(1);
 	});
 
 	test('an un-awaited dispatch says so rather than reporting zero output', async () => {
