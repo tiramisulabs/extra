@@ -1,9 +1,6 @@
+import { serializeError } from 'serialize-error';
 import { ConsoleLoggerAdapter } from './console';
 import { getString, isLogData, stripUndefined } from './utils';
-
-type SerializeErrorModule = Pick<typeof import('serialize-error'), 'serializeError'>;
-
-let serializeErrorModule: Promise<SerializeErrorModule> | undefined;
 
 export type Awaitable<T> = T | PromiseLike<T>;
 export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'silent';
@@ -170,19 +167,16 @@ export class RootLogger {
 	async writeEntry(entry: LogEntry): Promise<void> {
 		if (!this.isEnabled(entry.level)) return;
 
-		const writeAdapters = (normalizedEntry: LogEntry) =>
-			Promise.all(
-				this.adapters.map(async adapter => {
-					try {
-						await adapter.write(normalizedEntry);
-					} catch (error) {
-						console.error('[logger] adapter.write failed:', error);
-					}
-				}),
-			).then(() => undefined);
 		const normalizedEntry = normalizeLogEntry(entry);
-		const write =
-			normalizedEntry instanceof Promise ? normalizedEntry.then(writeAdapters) : writeAdapters(normalizedEntry);
+		const write = Promise.all(
+			this.adapters.map(async adapter => {
+				try {
+					await adapter.write(normalizedEntry);
+				} catch (error) {
+					console.error('[logger] adapter.write failed:', error);
+				}
+			}),
+		).then(() => undefined);
 		this.pendingWrites.add(write);
 		try {
 			await write;
@@ -316,35 +310,14 @@ export class WideEventLogger {
 	}
 }
 
-function normalizeLogEntry(entry: LogEntry): LogEntry | Promise<LogEntry> {
-	if (entry.data.error === undefined) return entry;
-
-	return loadSerializeError().then(serializer => {
-		const error = serializer.serializeError(entry.data.error);
-		return {
-			...entry,
-			data: stripUndefined({
-				...entry.data,
-				error,
-			}),
-		};
-	});
-}
-
-function loadSerializeError(): Promise<SerializeErrorModule> {
-	serializeErrorModule ??= importEsmModule<SerializeErrorModule>('serialize-error');
-	return serializeErrorModule;
-}
-
-function importEsmModule<TModule>(specifier: string): Promise<TModule> {
-	const importer = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<TModule>;
-	return importer(specifier).catch(error => {
-		if (error instanceof TypeError && error.message.includes('dynamic import callback')) {
-			return import(specifier) as Promise<TModule>;
-		}
-
-		throw error;
-	});
+function normalizeLogEntry(entry: LogEntry): LogEntry {
+	let data: LogData | undefined;
+	for (const [key, value] of Object.entries(entry.data)) {
+		if (!(value instanceof Error)) continue;
+		data ??= { ...entry.data };
+		data[key] = serializeError(value, { maxDepth: 5, useToJSON: false });
+	}
+	return data ? { ...entry, data } : entry;
 }
 
 export function createLogger(options: LoggerOptions = {}): RootLogger {

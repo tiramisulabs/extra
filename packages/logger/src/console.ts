@@ -1,3 +1,4 @@
+import type { ErrorObject } from 'serialize-error';
 import type { LogEntry, LoggerAdapter, WritableLogLevel } from './core';
 import { getString, stripUndefined } from './utils';
 
@@ -82,13 +83,9 @@ function formatConsolePayload(entry: LogEntry): string {
 	const tag = getString(fields._source) ?? getString(fields.name);
 	for (const key of ['level', 'message', 'time', '_source', 'name']) delete fields[key];
 
-	const errors: ErrorLike[] = [];
-	for (const key of Object.keys(fields)) {
-		const value = fields[key];
-		if (isErrorLike(value)) {
-			errors.push(value);
-			delete fields[key];
-		}
+	const error = entry.data.error as ErrorObject | undefined;
+	if (error !== undefined) {
+		delete fields.error;
 	}
 	const head = [
 		paint(formatConsoleTime(entry.time), COLOR.time, enabled),
@@ -108,7 +105,7 @@ function formatConsolePayload(entry: LogEntry): string {
 			lines.push(`    ${paint(key, COLOR.key, enabled)}${gap}${formatConsoleFieldValue(key, fields[key])}`);
 		}
 	}
-	for (const error of errors) lines.push(formatConsoleError(error, enabled));
+	if (error) lines.push(formatConsoleError(error, enabled));
 
 	return lines.join('\n');
 }
@@ -138,26 +135,8 @@ function formatConsoleValue(value: unknown): string {
 	return JSON.stringify(value);
 }
 
-interface ErrorLike {
-	name: string;
-	message: string;
-	stack?: string;
-}
-
-function isErrorLike(value: unknown): value is ErrorLike {
-	if (value instanceof Error) return true;
-	if (!value || typeof value !== 'object') return false;
-
-	const candidate = value as Record<string, unknown>;
-	return (
-		typeof candidate.name === 'string' &&
-		typeof candidate.message === 'string' &&
-		(candidate.stack === undefined || typeof candidate.stack === 'string')
-	);
-}
-
-function formatConsoleError(error: ErrorLike, enabled: boolean): string {
-	const stack = error.stack ?? `${error.name}: ${error.message}`;
+function formatConsoleError(error: ErrorObject, enabled: boolean): string {
+	const stack = error.stack ?? `${error.name ?? 'Error'}: ${error.message ?? ''}`;
 	return stack
 		.split('\n')
 		.map(line => {

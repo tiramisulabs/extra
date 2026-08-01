@@ -14,7 +14,7 @@ So the plugin gives every command, component, and modal one wide event as `ctx.l
 pnpm add @slipher/logger
 ```
 
-Requires Seyfert v5.
+Requires Node.js 22.13 or newer and Seyfert v5.
 
 ## Use with Seyfert
 
@@ -217,7 +217,9 @@ Factories: `prettyRenderer()` (slipher's own console), `silentRenderer()` (no ou
 
 evlog and pino are optional peer dependencies, imported only by their factories. Install the one you use (`pnpm add evlog` or `pnpm add pino`). On field collisions, data from `add()` and level methods wins over bindings.
 
-> **Redaction belongs to the sink.** `prettyRenderer()` does **not** redact. Configure it in your collector, your Pino instance, or evlog's config. evlog's built-in patterns (`creditCard`, `email`, `jwt`, …) do **not** cover Discord bot tokens — add a pattern for those.
+Before fan-out, the core uses `serialize-error` on every top-level field containing an `Error` instance. Adapters receive plain objects containing the error details, including nested causes and custom enumerable fields. The original prototypes and object identities are intentionally not preserved.
+
+> **Redaction belongs to the sink.** Error properties become plain fields and can include SDK request/response metadata. `prettyRenderer()` and custom adapters do **not** redact. Configure paths such as `error.config.headers.authorization`, `error.cookie`, and `error.apiKey` in your collector, Pino instance, or evlog config. evlog's built-in patterns (`creditCard`, `email`, `jwt`, …) do **not** cover Discord bot tokens — add a pattern for those.
 
 ### Console (default)
 

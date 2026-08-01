@@ -281,8 +281,9 @@ describe('logger plugin', () => {
 		assert.equal(adapter.entries[0].message, 'command failed');
 		assert.equal(adapter.entries[0].data.outcome, 'error');
 		assert.notEqual(adapter.entries[0].data.error, error);
-		assert.equal((adapter.entries[0].data.error as Record<string, unknown>).message, 'boom');
-		assert.match((adapter.entries[0].data.error as Record<string, unknown>).stack as string, /boom/);
+		const serializedError = adapter.entries[0].data.error as Record<string, unknown>;
+		assert.equal(serializedError.message, 'boom');
+		assert.match(serializedError.stack as string, /boom/);
 		assert.equal(adapter.entries[0].data.command, 'admin ban');
 	});
 
@@ -496,7 +497,7 @@ describe('logger plugin', () => {
 		assert.equal(adapter.entries[1].level, 'error');
 		assert.equal(adapter.entries[1].message, 'lost shard');
 		assert.equal(adapter.entries[1].data._source, 'seyfert:Gateway');
-		assert.instanceOf(adapter.entries[1].data.err, Error);
+		assert.equal((adapter.entries[1].data.err as Record<string, unknown>).message, 'socket closed');
 		assert.equal(chained.length, 2);
 		assert.deepEqual(chained[0], ['[API]', LogLevels.Info, ['identify', { requestId: 'req-1' }]]);
 		assert.equal(chained[1]?.[0], '[Gateway]');
@@ -631,6 +632,32 @@ describe('logger adapters', () => {
 		assert.equal(output.includes('error\x1b[0m'), false, 'error not rendered as a field');
 	});
 
+	test('ConsoleLoggerAdapter keeps name/message business objects as ordinary fields', () => {
+		const calls: unknown[][] = [];
+		const originalInfo = console.info;
+		const originalNoColor = process.env.NO_COLOR;
+		process.env.NO_COLOR = '1';
+		console.info = (...args: unknown[]) => calls.push(args);
+
+		try {
+			new ConsoleLoggerAdapter().write({
+				bindings: {},
+				data: { notification: { name: 'welcome', message: 'hello' } },
+				level: 'info',
+				message: 'received',
+				time: new Date('2026-05-29T10:00:00.000Z'),
+			});
+		} finally {
+			if (originalNoColor === undefined) delete process.env.NO_COLOR;
+			else process.env.NO_COLOR = originalNoColor;
+			console.info = originalInfo;
+		}
+
+		const output = calls[0][0] as string;
+		assert.match(output, /notification\s+\{"name":"welcome","message":"hello"\}/);
+		assert.equal(output.includes('welcome: hello'), false);
+	});
+
 	test('ConsoleLoggerAdapter writes JSON in production', () => {
 		const calls: unknown[][] = [];
 		const originalEnv = process.env.NODE_ENV;
@@ -727,13 +754,13 @@ describe('logger adapters', () => {
 			transports: [pinoAdapter({ error: (...args: unknown[]) => calls.push(args) })],
 		});
 
-		await root.error({ command: 'campaign pause' }, 'command failed', new Error('Missing Permissions'));
+		await root.error({ operation: 'sync' }, 'request failed', new Error('connection closed'));
 
 		const payload = calls[0][0] as Record<string, unknown>;
 		const error = payload.error as Record<string, unknown>;
-		assert.equal(error.message, 'Missing Permissions');
-		assert.match(error.stack as string, /Missing Permissions/);
-		assert.equal(calls[0][1], 'command failed');
+		assert.equal(error.message, 'connection closed');
+		assert.match(error.stack as string, /connection closed/);
+		assert.equal(calls[0][1], 'request failed');
 	});
 
 	test('evlogTransport routes entries through the evlog global pipeline', async () => {
@@ -809,31 +836,32 @@ describe('logger adapters', () => {
 			},
 		});
 		const root = createLogger({
-			name: 'clip-money',
+			name: 'service',
 			renderer: new RecordingAdapter(),
 			transports: [evlogTransport()],
 		});
 		const cause = new TypeError('database unavailable');
-		const error = Object.assign(new Error('campaign pause failed', { cause }), { code: 'MISSING_PERMISSIONS' });
+		const error = Object.assign(new Error('request failed', { cause }), {
+			code: 'E_REQUEST_FAILED',
+		});
 
 		await root
 			.event({
-				command: 'campaign pause',
-				interactionId: 'interaction-1',
-				kind: 'command',
+				operation: 'sync',
+				requestId: 'request-1',
 			})
-			.emit({ error, message: 'command failed' });
+			.emit({ error, message: 'request failed' });
 		await flushEvlogDrain();
 
 		const serialized = JSON.parse(JSON.stringify(events[0])) as Record<string, unknown>;
 		const serializedError = serialized.error as Record<string, unknown>;
 		const serializedCause = serializedError.cause as Record<string, unknown>;
 
-		assert.equal(serialized.interactionId, 'interaction-1');
+		assert.equal(serialized.requestId, 'request-1');
 		assert.equal(serializedError.name, 'Error');
-		assert.equal(serializedError.message, 'campaign pause failed');
-		assert.equal(serializedError.code, 'MISSING_PERMISSIONS');
-		assert.match(serializedError.stack as string, /campaign pause failed/);
+		assert.equal(serializedError.message, 'request failed');
+		assert.equal(serializedError.code, 'E_REQUEST_FAILED');
+		assert.match(serializedError.stack as string, /request failed/);
 		assert.equal(serializedCause.name, 'TypeError');
 		assert.equal(serializedCause.message, 'database unavailable');
 	});
@@ -888,6 +916,20 @@ describe('logger adapters', () => {
 });
 
 describe('createLogger', () => {
+	test('serializes Error values regardless of their field name', async () => {
+		const adapter = new RecordingAdapter();
+		const root = createLogger({ renderer: adapter });
+		const error = new Error('connection closed');
+		const metadata = { message: 'not an error', name: 'metadata' };
+
+		await root.error({ arbitraryField: error, metadata }, 'request failed');
+
+		const serialized = adapter.entries[0].data.arbitraryField as Record<string, unknown>;
+		assert.notEqual(serialized, error);
+		assert.equal(serialized.message, 'connection closed');
+		assert.equal(adapter.entries[0].data.metadata, metadata);
+	});
+
 	test('writes immediate root logs and supports child bindings', async () => {
 		const adapter = new RecordingAdapter();
 		const root = createLogger({ renderer: adapter, bindings: { app: 'bot' } }).child({ shardId: 1 });
