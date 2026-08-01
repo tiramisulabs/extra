@@ -10,12 +10,10 @@ import {
 	type RestObserverSuccessPayload,
 	sanitizeRestTarget,
 } from '../src/instrument/rest';
-import { setTraceServiceName } from '../src/trace-api';
 import { installTestTracer } from './helpers/otel-test-provider.mts';
 
 function withProvider(run: (exporter: InMemorySpanExporter) => Promise<void> | void) {
 	const { exporter, shutdown } = installTestTracer();
-	setTraceServiceName('rest-test');
 	return Promise.resolve(run(exporter)).finally(() => shutdown());
 }
 
@@ -123,7 +121,7 @@ describe('sanitizeRestTarget', () => {
 });
 
 describe('instrumentRest (api.rest.observe)', () => {
-	test('success → CLIENT span + status', async () => {
+	test('success → current HTTP CLIENT semantic conventions', async () => {
 		await withProvider(async exporter => {
 			const { api, getObserver } = fakeRestApi();
 			const cleanup = instrumentRest(api, {
@@ -146,9 +144,12 @@ describe('instrumentRest (api.rest.observe)', () => {
 
 			const spans = exporter.getFinishedSpans();
 			assert.equal(spans.length, 1);
-			assert.equal(spans[0].name, 'HTTP GET');
+			assert.equal(spans[0].name, 'GET /users/@me');
 			assert.equal(spans[0].kind, SpanKind.CLIENT);
 			assert.equal(spans[0].attributes['http.request.method'], 'GET');
+			assert.equal(spans[0].attributes['server.address'], 'discord.com');
+			assert.equal(spans[0].attributes['server.port'], 443);
+			assert.equal(spans[0].attributes['url.full'], 'https://discord.com/api/v10/users/@me');
 			assert.equal(spans[0].attributes['url.path'], '/users/@me');
 			assert.equal(spans[0].attributes['url.template'], '/users/@me');
 			assert.equal(spans[0].attributes['http.response.status_code'], 200);
@@ -179,7 +180,7 @@ describe('instrumentRest (api.rest.observe)', () => {
 
 			const spans = exporter.getFinishedSpans();
 			assert.equal(spans.length, 1);
-			assert.equal(spans[0].name, 'HTTP POST');
+			assert.equal(spans[0].name, 'POST /channels/:id/messages');
 			assert.equal(spans[0].kind, SpanKind.CLIENT);
 			assert.equal(spans[0].status.code, SpanStatusCode.ERROR);
 			assert.ok(spans[0].events.some(e => e.name === 'exception'));
@@ -348,8 +349,56 @@ describe('instrumentRest (api.rest.observe)', () => {
 			assertNoSensitiveAttributes(spans[0].attributes as Record<string, unknown>);
 			// Only expected attribute keys
 			const keys = Object.keys(spans[0].attributes).sort();
-			assert.deepEqual(keys, ['http.request.method', 'http.response.status_code', 'url.path', 'url.template']);
+			assert.deepEqual(keys, [
+				'http.request.method',
+				'http.response.status_code',
+				'server.address',
+				'server.port',
+				'url.full',
+				'url.path',
+				'url.template',
+			]);
 
+			cleanup();
+		});
+	});
+
+	test('unknown HTTP method uses _OTHER and preserves the original method', async () => {
+		await withProvider(async exporter => {
+			const { api, getObserver } = fakeRestApi();
+			const cleanup = instrumentRest(api, {
+				checkIfShouldTrace: () => true,
+				getMetrics: () => undefined,
+			});
+
+			const observer = getObserver()!;
+			await observer.onRequest!(requestPayload({ method: 'CUSTOM', url: '/gateway/bot' }));
+			await observer.onSuccess!(successPayload({ method: 'CUSTOM', url: '/gateway/bot', response: { status: 200 } }));
+
+			const span = exporter.getFinishedSpans()[0];
+			assert.equal(span.name, 'HTTP /gateway/bot');
+			assert.equal(span.attributes['http.request.method'], '_OTHER');
+			assert.equal(span.attributes['http.request.method_original'], 'CUSTOM');
+			cleanup();
+		});
+	});
+
+	test('canonicalizes known HTTP methods and preserves non-canonical casing', async () => {
+		await withProvider(async exporter => {
+			const { api, getObserver } = fakeRestApi();
+			const cleanup = instrumentRest(api, {
+				checkIfShouldTrace: () => true,
+				getMetrics: () => undefined,
+			});
+
+			const observer = getObserver()!;
+			await observer.onRequest!(requestPayload({ method: 'get', url: '/gateway/bot' }));
+			await observer.onSuccess!(successPayload({ method: 'get', url: '/gateway/bot', response: { status: 200 } }));
+
+			const span = exporter.getFinishedSpans()[0];
+			assert.equal(span.name, 'GET /gateway/bot');
+			assert.equal(span.attributes['http.request.method'], 'GET');
+			assert.equal(span.attributes['http.request.method_original'], 'get');
 			cleanup();
 		});
 	});
@@ -422,6 +471,34 @@ describe('instrumentRest (api.rest.observe)', () => {
 			assertNoSensitiveAttributes(recorded[0].attrs);
 			assert.equal(exporter.getFinishedSpans().length, 1);
 
+			cleanup();
+		});
+	});
+
+	test('records REST metrics without creating a span when tracing is disabled', async () => {
+		await withProvider(async exporter => {
+			const recorded: Record<string, unknown>[] = [];
+			const { api, getObserver } = fakeRestApi();
+			const cleanup = instrumentRest(api, {
+				traceEnabled: false,
+				checkIfShouldTrace: () => true,
+				getMetrics: () => ({
+					recordInteraction() {},
+					recordEvent() {},
+					recordRest(_durationSeconds, attributes) {
+						recorded.push(attributes as Record<string, unknown>);
+					},
+					recordCache() {},
+				}),
+			});
+
+			const observer = getObserver()!;
+			await observer.onRequest!(requestPayload({ method: 'GET', url: '/gateway/bot' }));
+			await observer.onSuccess!(successPayload({ method: 'GET', url: '/gateway/bot', response: { status: 200 } }));
+
+			assert.equal(recorded.length, 1);
+			assert.equal(recorded[0]['url.template'], '/gateway/bot');
+			assert.equal(exporter.getFinishedSpans().length, 0);
 			cleanup();
 		});
 	});

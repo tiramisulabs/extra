@@ -8,7 +8,6 @@ import { instrumentRest } from './instrument/rest';
 import { type CoreMetrics, createCoreMetrics } from './metrics';
 import { type OpenTelemetryPluginOptions, resolvePluginOptions } from './options';
 import { type OwnedSdk, startOwnedSdk } from './sdk';
-import { setTraceServiceName } from './trace-api';
 
 export function opentelemetry(options: OpenTelemetryPluginOptions = {}) {
 	const resolved = resolvePluginOptions(options);
@@ -38,11 +37,11 @@ export function opentelemetry(options: OpenTelemetryPluginOptions = {}) {
 			trace: () => handle,
 		},
 		options() {
-			if (!resolved.instrument.interactions) return {};
+			if (!resolved.traces.interactions && !resolved.metrics.interactions) return {};
 			return {
 				contextScopes: [
 					createInteractionContextScope({
-						serviceName: resolved.serviceName,
+						traceEnabled: resolved.traces.interactions,
 						checkIfShouldTrace: resolved.checkIfShouldTrace,
 						getMetrics: () => metrics,
 					}),
@@ -50,7 +49,7 @@ export function opentelemetry(options: OpenTelemetryPluginOptions = {}) {
 			};
 		},
 		register(api) {
-			if (!resolved.instrument.interactions) return;
+			if (!resolved.traces.interactions) return;
 			registerInteractionInstrumentation(api, {
 				checkIfShouldTrace: resolved.checkIfShouldTrace,
 			});
@@ -65,16 +64,16 @@ export function opentelemetry(options: OpenTelemetryPluginOptions = {}) {
 			}
 			setupActive = true;
 
-			setTraceServiceName(resolved.serviceName);
 			// Keep an already-owned SDK; a second start would no-op and drop the handle.
 			owned ??= startOwnedSdk(resolved);
-			metrics = createCoreMetrics(resolved.serviceName, resolved.instrument);
+			metrics = createCoreMetrics(resolved.metrics);
 
-			if (resolved.instrument.events) {
+			if (resolved.traces.events || resolved.metrics.events) {
 				cleanups.push(
 					instrumentEvents(
 						client,
 						{
+							traceEnabled: resolved.traces.events,
 							checkIfShouldTrace: resolved.checkIfShouldTrace,
 							getMetrics: () => metrics,
 						},
@@ -82,17 +81,19 @@ export function opentelemetry(options: OpenTelemetryPluginOptions = {}) {
 					),
 				);
 			}
-			if (resolved.instrument.rest) {
+			if (resolved.traces.rest || resolved.metrics.rest) {
 				cleanups.push(
 					instrumentRest(api, {
+						traceEnabled: resolved.traces.rest,
 						checkIfShouldTrace: resolved.checkIfShouldTrace,
 						getMetrics: () => metrics,
 					}),
 				);
 			}
-			if (resolved.instrument.cache) {
+			if (resolved.traces.cache || resolved.metrics.cache) {
 				cleanups.push(
 					instrumentCache(client, {
+						traceEnabled: resolved.traces.cache,
 						checkIfShouldTrace: resolved.checkIfShouldTrace,
 						skipResources: resolved.cache.skipResources,
 						getMetrics: () => metrics,

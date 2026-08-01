@@ -1,7 +1,7 @@
 export { createTraceHandle, type TraceHandle } from './handle';
 export type {
-	InstrumentFlags,
 	OpenTelemetryPluginOptions,
+	SignalFlags,
 	TraceSource,
 } from './options';
 export { opentelemetry } from './plugin';

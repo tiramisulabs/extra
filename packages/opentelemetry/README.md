@@ -2,12 +2,12 @@
 
 Full-surface [OpenTelemetry](https://opentelemetry.io/) for [Seyfert](https://seyfert.dev) v5: automatic traces and duration metrics for interactions, gateway events, Discord REST, and cache — with module helpers and a thin `client.trace` / `ctx.trace` API.
 
-| Surface | Span kind | Default |
-| --- | --- | --- |
-| Interactions (commands, components, modals) | `INTERNAL` root + lifecycle children | on |
-| Gateway event handlers | `INTERNAL` root | on |
-| Discord REST (Seyfert API client) | `CLIENT` | on |
-| Cache adapter operations | `INTERNAL` | on |
+| Surface | Span kind | Traces | Metrics |
+| --- | --- | --- | --- |
+| Interactions (commands, components, modals) | `INTERNAL` root + lifecycle children | on | on |
+| Gateway event handlers | `CONSUMER` root | on | on |
+| Discord REST (Seyfert HTTP client) | `CLIENT` | on | on |
+| Cache adapter operations | `INTERNAL` | off | on |
 
 The plugin auto-starts a `NodeSDK` when no real tracer provider is registered yet. If you already preload an SDK, the plugin reuses that provider and only installs instrumentation.
 
@@ -62,32 +62,39 @@ await client.start();
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `serviceName` | `string` | `'seyfert'` | Tracer/meter name; resource service name when the plugin owns the SDK |
-| `instrument` | `InstrumentFlags` | all `true` | Toggle each surface without removing the plugin |
-| `checkIfShouldTrace` | `(source: TraceSource) => boolean` | always `true` | Filter before starting a root span |
+| `serviceName` | `string` | `'seyfert'` | Resource service name when the plugin owns the SDK |
+| `traces` | `SignalFlags` | all on except `cache` | Toggle spans by surface |
+| `metrics` | `SignalFlags` | all on | Toggle duration histograms by surface |
+| `checkIfShouldTrace` | `(source: TraceSource) => boolean` | always `true` | Filter before starting a root span; metrics are unaffected |
 | `contextManager` | `ContextManager` | — | Registered only if no global context manager is active |
-| `cache.skipResources` | `string[]` | `['presence', 'voice_state']` | Cache resources never traced |
+| `cache.skipResources` | `string[]` | `['presence', 'voice_state']` | Cache resources neither traced nor measured |
 | NodeSDK fields | `spanProcessors`, … | — | Passed through when the plugin starts the SDK |
 
-Plugin identity (`name: '@slipher/opentelemetry'`) is stable and is **not** overwritten by `serviceName`.
+Plugin identity and instrumentation scope are fixed to `@slipher/opentelemetry` version `1.0.0`; `serviceName` identifies the application resource and never replaces the scope.
 
-## Instrument flags
+## Signal flags
 
 | Flag | Default | What it instruments |
 | --- | --- | --- |
-| `instrument.interactions` | `true` | Commands, components, modals — root span via `contextScopes` + lifecycle children (`Options`, `Middlewares`, `Run`) |
-| `instrument.events` | `true` | Gateway handlers via `client.events.runEvent` (`event {name}`) |
-| `instrument.rest` | `true` | Discord REST via `api.rest.observe` (`HTTP {METHOD}`, span kind `CLIENT`) |
-| `instrument.cache` | `true` | Cache adapter methods (`cache {op} {resource}`) |
+| `traces.interactions` / `metrics.interactions` | `true` / `true` | Commands, components, modals |
+| `traces.events` / `metrics.events` | `true` / `true` | Gateway handlers via `client.events.runEvent` |
+| `traces.rest` / `metrics.rest` | `true` / `true` | Outbound Discord HTTP requests via `api.rest.observe` |
+| `traces.cache` / `metrics.cache` | `false` / `true` | Cache adapter methods; keep aggregate latency without adding a span per lookup |
 
 ```ts
 opentelemetry({
   serviceName: 'my-bot',
-  instrument: {
+  traces: {
     interactions: true,
     events: true,
     rest: true,
-    cache: false, // disable cache spans/metrics only
+    cache: false,
+  },
+  metrics: {
+    interactions: true,
+    events: true,
+    rest: true,
+    cache: true,
   },
   checkIfShouldTrace(source) {
     if (source.kind === 'event' && source.name === 'RAW') return false;
@@ -112,8 +119,8 @@ Module-level helpers use the global OpenTelemetry API (work with a plugin-owned 
 
 | Export | Behavior |
 | --- | --- |
-| `getTracer()` | Tracer for the active `serviceName` |
-| `getMeter()` | Meter for the active `serviceName` (custom metrics) |
+| `getTracer()` | Tracer in the `@slipher/opentelemetry` instrumentation scope |
+| `getMeter()` | Meter in the `@slipher/opentelemetry` instrumentation scope |
 | `record` / `startActiveSpan` | Active span; auto-`end`; on throw/reject sets `ERROR` + `recordException` and rethrows |
 | `startSpan` | Manual span (you must end it) |
 | `getCurrentSpan()` | Active span or `undefined` |
@@ -192,13 +199,17 @@ Attributes are set only when values are available. Sensitive data is never captu
 | Attribute | Description |
 | --- | --- |
 | `http.request.method` | HTTP method |
+| `http.request.method_original` | Original method when casing is normalized or the result is `_OTHER` |
+| `server.address` | Discord API host |
+| `server.port` | Discord API port |
+| `url.full` | Absolute sanitized URL, with tokens and query omitted |
 | `url.path` | URI path with Discord webhook/interaction tokens redacted and query omitted |
 | `url.template` | Low-cardinality Discord route template (`/channels/:id/messages`) |
 | `http.response.status_code` | Response status when known |
 | `http.request.resend_count` | 502/503 resend count when Seyfert retries |
 | `error.type` | HTTP status or exception type for failed client operations |
 
-**Span name:** `HTTP {METHOD}`. HTTP 4xx/5xx and thrown client failures set span status `ERROR`. Seyfert 502/503 retries stay on one logical span and update `http.request.resend_count`.
+**Span name:** `{METHOD} {url.template}`; unknown methods use `HTTP {url.template}`. These are outbound HTTP `CLIENT` spans from the bot to Discord's API. HTTP 4xx/5xx and thrown client failures set span status `ERROR`. Seyfert 502/503 retries stay on one logical span and update `http.request.resend_count`.
 
 ### Cache
 
@@ -208,7 +219,7 @@ Attributes are set only when values are available. Sensitive data is never captu
 | `seyfert.cache.resource` | Resource namespace derived from the key |
 | `seyfert.cache.hit` | On `get`, whether the result was non-nullish |
 
-**Span name:** `cache {op} {resource}`. High-churn resources default-skipped: `presence`, `voice_state` (override with `cache.skipResources`).
+**Span name:** `cache {op} {resource}` when cache traces are enabled. High-churn resources default-skipped: `presence`, `voice_state` (override with `cache.skipResources`).
 
 ### Metrics-only
 
@@ -218,11 +229,11 @@ Attributes are set only when values are available. Sensitive data is never captu
 
 ## Metrics reference
 
-Four duration histograms (unit `s`) on the meter named `serviceName`. Instruments are created only for enabled `instrument.*` surfaces.
+Four duration histograms (unit `s`) in the package instrumentation scope. Instruments are created only for enabled `metrics.*` surfaces. Cache uses sub-millisecond buckets because adapter operations are much faster than handlers and HTTP requests.
 
 | Instrument | Unit | Typical attributes |
 | --- | --- | --- |
-| `seyfert.interaction.duration` | s | interaction kind, command/custom_id when known, shard, `seyfert.error` |
+| `seyfert.interaction.duration` | s | interaction kind, command when known, shard, `seyfert.error` |
 | `seyfert.event.duration` | s | `seyfert.event.name`, `seyfert.error` |
 | `seyfert.rest.duration` | s | method, low-cardinality URL template, status, `seyfert.error` |
 | `seyfert.cache.operation.duration` | s | op, resource, hit (when applicable), `seyfert.error` |
@@ -247,7 +258,7 @@ const plugins = definePlugins(
 );
 ```
 
-Works alongside `@slipher/logger` and other plugins: logs and traces are orthogonal.
+Works alongside `@slipher/logger`: logs emitted inside an active span can carry its `trace_id` and `span_id` for correlation.
 
 ## Security
 
@@ -258,7 +269,7 @@ By default the plugin **never** puts on spans:
 - **Authorization** (or cookie) headers
 - Other secrets from Discord HTTP traffic
 
-REST query strings are omitted, Discord webhook/interaction tokens are replaced with `REDACTED`, and metric dimensions use low-cardinality route templates. User, guild, channel, and interaction IDs remain span-only attributes; `custom_id` is intentionally included in interaction metrics. Prefer `checkIfShouldTrace` if certain paths, IDs, or custom IDs must not appear in telemetry at all.
+REST query strings are omitted, Discord webhook/interaction tokens are replaced with `REDACTED`, and metric dimensions use low-cardinality route templates. User, guild, channel, interaction, and custom IDs remain span-only attributes. Use `checkIfShouldTrace` if certain paths or IDs must not appear in spans at all.
 
 ## Limitations
 

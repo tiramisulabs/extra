@@ -1,13 +1,11 @@
-import { SpanStatusCode } from '@opentelemetry/api';
+import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
 import type { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import { assert, describe, test } from 'vitest';
 import { type EventsApi, instrumentEvents } from '../src/instrument/events';
-import { setTraceServiceName } from '../src/trace-api';
 import { installTestTracer } from './helpers/otel-test-provider.mts';
 
 function withProvider(run: (exporter: InMemorySpanExporter) => Promise<void> | void) {
 	const { exporter, shutdown } = installTestTracer();
-	setTraceServiceName('events-test');
 	return Promise.resolve(run(exporter)).finally(() => shutdown());
 }
 
@@ -62,10 +60,37 @@ describe('instrumentEvents (gateway runEvent)', () => {
 			const spans = exporter.getFinishedSpans();
 			assert.equal(spans.length, 1);
 			assert.equal(spans[0].name, 'event messageCreate');
+			assert.equal(spans[0].kind, SpanKind.CONSUMER);
 			assert.equal(spans[0].attributes['seyfert.event.name'], 'messageCreate');
 			assert.equal(spans[0].attributes['seyfert.shard_id'], 0);
 			assert.equal(spans[0].status.code, SpanStatusCode.UNSET);
 
+			cleanup();
+		});
+	});
+
+	test('records event metrics without creating a span when tracing is disabled', async () => {
+		await withProvider(async exporter => {
+			const recorded: Record<string, unknown>[] = [];
+			const { client } = fakeClient();
+			const cleanup = instrumentEvents(client, {
+				traceEnabled: false,
+				checkIfShouldTrace: () => true,
+				getMetrics: () => ({
+					recordInteraction() {},
+					recordEvent(_durationSeconds, attributes) {
+						recorded.push(attributes as Record<string, unknown>);
+					},
+					recordRest() {},
+					recordCache() {},
+				}),
+			});
+
+			await client.events.runEvent('messageCreate', client, {}, 0);
+
+			assert.equal(recorded.length, 1);
+			assert.equal(recorded[0]['seyfert.event.name'], 'messageCreate');
+			assert.equal(exporter.getFinishedSpans().length, 0);
 			cleanup();
 		});
 	});

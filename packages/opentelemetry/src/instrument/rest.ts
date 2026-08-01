@@ -1,9 +1,21 @@
 import { type Span, SpanKind, SpanStatusCode } from '@opentelemetry/api';
+import {
+	ATTR_ERROR_TYPE,
+	ATTR_HTTP_REQUEST_METHOD,
+	ATTR_HTTP_REQUEST_METHOD_ORIGINAL,
+	ATTR_HTTP_REQUEST_RESEND_COUNT,
+	ATTR_HTTP_RESPONSE_STATUS_CODE,
+	ATTR_SERVER_ADDRESS,
+	ATTR_SERVER_PORT,
+	ATTR_URL_FULL,
+	ATTR_URL_PATH,
+} from '@opentelemetry/semantic-conventions';
 import { type CoreMetrics, durationSecondsSince } from '../metrics';
 import type { TraceSource } from '../options';
 import { getTracer } from '../trace-api';
 
 export interface RestInstrumentDeps {
+	traceEnabled?: boolean;
 	checkIfShouldTrace: (source: TraceSource) => boolean;
 	getMetrics: () => CoreMetrics | undefined;
 }
@@ -47,12 +59,16 @@ export interface RestObserverRatelimitPayload extends RestObserverRequestPayload
 }
 
 interface PendingRest {
-	span: Span;
+	span?: Span;
 	start: number;
 	method: string;
+	methodAttribute: string;
 	rawPath: string;
 	template: string;
 }
+
+const DISCORD_API_BASE_URL = 'https://discord.com/api/v10';
+const KNOWN_HTTP_METHODS = new Set(['CONNECT', 'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PATCH', 'POST', 'PUT', 'TRACE']);
 
 function flightKey(method: string, path: string): string {
 	return `${method}\0${path}`;
@@ -88,6 +104,31 @@ export function sanitizeRestTarget(value: string): SanitizedRestTarget {
 	return { path, template };
 }
 
+function normalizeHttpMethod(method: string): { method: string; original?: string } {
+	const normalized = method.toUpperCase();
+	if (KNOWN_HTTP_METHODS.has(normalized)) {
+		return normalized === method ? { method: normalized } : { method: normalized, original: method };
+	}
+	return { method: '_OTHER', original: method };
+}
+
+function createSanitizedUrl(value: string, path: string): URL {
+	try {
+		if (/^[a-z][a-z\d+.-]*:\/\//i.test(value)) {
+			const url = new URL(value);
+			url.username = '';
+			url.password = '';
+			url.pathname = path;
+			url.search = '';
+			url.hash = '';
+			return url;
+		}
+	} catch {
+		// Use Discord's default API endpoint for malformed or relative observer URLs.
+	}
+	return new URL(`${DISCORD_API_BASE_URL}${path}`);
+}
+
 function shouldTrace(deps: RestInstrumentDeps, source: TraceSource): boolean {
 	try {
 		return deps.checkIfShouldTrace(source);
@@ -97,7 +138,8 @@ function shouldTrace(deps: RestInstrumentDeps, source: TraceSource): boolean {
 	}
 }
 
-function safeEnd(span: Span): void {
+function safeEnd(span: Span | undefined): void {
+	if (!span) return;
 	try {
 		span.end();
 	} catch {
@@ -126,7 +168,7 @@ function markError(span: Span, error: unknown): void {
 	try {
 		const err = error instanceof Error ? error : new Error(String(error));
 		span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
-		span.setAttribute('error.type', err.name || 'Error');
+		span.setAttribute(ATTR_ERROR_TYPE, err.name || 'Error');
 		span.recordException(err);
 	} catch {
 		// never throw from instrumentation
@@ -136,7 +178,7 @@ function markError(span: Span, error: unknown): void {
 function markHttpError(span: Span, status: number): void {
 	try {
 		span.setStatus({ code: SpanStatusCode.ERROR });
-		span.setAttribute('error.type', String(status));
+		span.setAttribute(ATTR_ERROR_TYPE, String(status));
 	} catch {
 		// never throw from instrumentation
 	}
@@ -145,7 +187,7 @@ function markHttpError(span: Span, status: number): void {
 function setStatusAttribute(span: Span, status: number | undefined): void {
 	try {
 		if (status !== undefined) {
-			span.setAttribute('http.response.status_code', status);
+			span.setAttribute(ATTR_HTTP_RESPONSE_STATUS_CODE, status);
 		}
 	} catch {
 		// never throw from instrumentation
@@ -168,7 +210,7 @@ export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDep
 		return () => {};
 	}
 
-	/** In-flight CLIENT spans awaiting success/fail, FIFO per method+raw path. */
+	/** In-flight requests awaiting success/fail, FIFO per method+raw path. */
 	const pending = new Map<string, PendingRest[]>();
 
 	const pushPending = (item: PendingRest): void => {
@@ -199,8 +241,11 @@ export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDep
 				const method = String(payload.method);
 				const rawPath = String(payload.url);
 				const { path, template } = sanitizeRestTarget(rawPath);
+				const url = createSanitizedUrl(rawPath, path);
+				const normalizedMethod = normalizeHttpMethod(method);
 				const source: TraceSource = { kind: 'rest', method, path };
-				if (!shouldTrace(deps, source)) return;
+				const traceEnabled = deps.traceEnabled ?? true;
+				const createSpan = traceEnabled && shouldTrace(deps, source);
 
 				const retryValue = payload.request?._50xRetries;
 				const resendCount =
@@ -209,7 +254,7 @@ export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDep
 					const active = peekPending(method, rawPath);
 					if (active) {
 						try {
-							active.span.setAttribute('http.request.resend_count', resendCount);
+							active.span?.setAttribute(ATTR_HTTP_REQUEST_RESEND_COUNT, resendCount);
 						} catch {
 							// never throw from instrumentation
 						}
@@ -218,16 +263,25 @@ export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDep
 				}
 
 				const start = performance.now();
-				const span = getTracer().startSpan(`HTTP ${method}`, {
-					kind: SpanKind.CLIENT,
-					attributes: {
-						'http.request.method': method,
-						'url.path': path,
-						'url.template': template,
-						...(resendCount > 0 ? { 'http.request.resend_count': resendCount } : {}),
-					},
-				});
-				pushPending({ span, start, method, rawPath, template });
+				const spanMethod = normalizedMethod.method === '_OTHER' ? 'HTTP' : normalizedMethod.method;
+				const span = createSpan
+					? getTracer().startSpan(`${spanMethod} ${template}`, {
+							kind: SpanKind.CLIENT,
+							attributes: {
+								[ATTR_HTTP_REQUEST_METHOD]: normalizedMethod.method,
+								...(normalizedMethod.original
+									? { [ATTR_HTTP_REQUEST_METHOD_ORIGINAL]: normalizedMethod.original }
+									: {}),
+								[ATTR_SERVER_ADDRESS]: url.hostname,
+								[ATTR_SERVER_PORT]: url.port ? Number(url.port) : url.protocol === 'https:' ? 443 : 80,
+								[ATTR_URL_FULL]: url.href,
+								[ATTR_URL_PATH]: path,
+								'url.template': template,
+								...(resendCount > 0 ? { [ATTR_HTTP_REQUEST_RESEND_COUNT]: resendCount } : {}),
+							},
+						})
+					: undefined;
+				pushPending({ span, start, method, methodAttribute: normalizedMethod.method, rawPath, template });
 			} catch {
 				// never throw from instrumentation into the request path
 			}
@@ -245,15 +299,17 @@ export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDep
 					payload.response && typeof payload.response.status === 'number' ? payload.response.status : undefined;
 
 				try {
-					setStatusAttribute(span, status);
-					if (status !== undefined && status >= 400) markHttpError(span, status);
+					if (span) {
+						setStatusAttribute(span, status);
+						if (status !== undefined && status >= 400) markHttpError(span, status);
+					}
 				} catch {
 					// never throw from instrumentation
 				}
 
 				const isError = status !== undefined && status >= 400;
 				recordRestMetrics(deps, start, {
-					'http.request.method': method,
+					'http.request.method': item.methodAttribute,
 					'url.template': item.template,
 					...(status !== undefined ? { 'http.response.status_code': status } : {}),
 					'seyfert.error': isError,
@@ -275,16 +331,18 @@ export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDep
 				const status = typeof payload.statusCode === 'number' ? payload.statusCode : undefined;
 
 				try {
-					setStatusAttribute(span, status);
-					if (status === undefined) markError(span, payload.error);
-					else if (status >= 400) markHttpError(span, status);
+					if (span) {
+						setStatusAttribute(span, status);
+						if (status === undefined) markError(span, payload.error);
+						else if (status >= 400) markHttpError(span, status);
+					}
 				} catch {
 					// never throw from instrumentation
 				}
 
 				const isError = status === undefined || status >= 400;
 				recordRestMetrics(deps, start, {
-					'http.request.method': method,
+					'http.request.method': item.methodAttribute,
 					'url.template': item.template,
 					...(status !== undefined ? { 'http.response.status_code': status } : {}),
 					'seyfert.error': isError,
@@ -306,17 +364,17 @@ export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDep
 				const status =
 					payload.response && typeof payload.response.status === 'number' ? payload.response.status : undefined;
 
-				setStatusAttribute(span, status);
+				if (span) setStatusAttribute(span, status);
 				try {
-					span.setAttribute('seyfert.rest.ratelimited', true);
-					if (status !== undefined && status >= 400) markHttpError(span, status);
+					span?.setAttribute('seyfert.rest.ratelimited', true);
+					if (span && status !== undefined && status >= 400) markHttpError(span, status);
 				} catch {
 					// never throw from instrumentation
 				}
 
 				const isError = status !== undefined && status >= 400;
 				recordRestMetrics(deps, start, {
-					'http.request.method': method,
+					'http.request.method': item.methodAttribute,
 					'url.template': item.template,
 					...(status !== undefined ? { 'http.response.status_code': status } : {}),
 					'seyfert.error': isError,

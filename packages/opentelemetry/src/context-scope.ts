@@ -7,7 +7,7 @@ import type { TraceSource } from './options';
 import { getTracer } from './trace-api';
 
 export interface InteractionScopeDeps {
-	serviceName: string;
+	traceEnabled?: boolean;
 	checkIfShouldTrace: (source: TraceSource) => boolean;
 	getMetrics: () => CoreMetrics | undefined;
 }
@@ -78,57 +78,28 @@ export function createInteractionContextScope(deps: InteractionScopeDeps): Conte
 	return (context, run) => {
 		const kind = detectKind(context);
 		const source: TraceSource = { kind, context };
-
-		let shouldTrace = true;
-		try {
-			shouldTrace = deps.checkIfShouldTrace(source);
-		} catch {
-			// Fail open: prefer a span over silently dropping telemetry.
-			shouldTrace = true;
-		}
-		if (!shouldTrace) return run();
-
-		const tracer = getTracer();
 		const name = interactionSpanName(kind, context);
 		const attributes = extractInteractionAttributes(kind, context);
 		const start = performance.now();
 
-		return tracer.startActiveSpan(name, { kind: SpanKind.INTERNAL, attributes }, span => {
-			const finish = (error?: unknown) => {
-				finishInteractionLifecycle(context, error);
-				if (error !== undefined) {
-					try {
-						const err = error instanceof Error ? error : new Error(String(error));
-						span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
-						span.recordException(err);
-					} catch {
-						// never throw instrumentation errors into user code
-					}
-				}
-				try {
-					deps.getMetrics()?.recordInteraction(durationSecondsSince(start), {
-						'seyfert.interaction.kind': kind,
-						...(typeof attributes['seyfert.command'] === 'string'
-							? { 'seyfert.command': attributes['seyfert.command'] }
-							: {}),
-						...(typeof attributes['seyfert.custom_id'] === 'string'
-							? { 'seyfert.custom_id': attributes['seyfert.custom_id'] }
-							: {}),
-						...(typeof attributes['seyfert.shard_id'] === 'number'
-							? { 'seyfert.shard_id': attributes['seyfert.shard_id'] }
-							: {}),
-						'seyfert.error': error !== undefined,
-					});
-				} catch {
-					// metrics must not break handlers
-				}
-				try {
-					span.end();
-				} catch {
-					// never throw instrumentation errors into user code
-				}
-			};
+		const recordMetrics = (error?: unknown) => {
+			try {
+				deps.getMetrics()?.recordInteraction(durationSecondsSince(start), {
+					'seyfert.interaction.kind': kind,
+					...(typeof attributes['seyfert.command'] === 'string'
+						? { 'seyfert.command': attributes['seyfert.command'] }
+						: {}),
+					...(typeof attributes['seyfert.shard_id'] === 'number'
+						? { 'seyfert.shard_id': attributes['seyfert.shard_id'] }
+						: {}),
+					'seyfert.error': error !== undefined,
+				});
+			} catch {
+				// metrics must not break handlers
+			}
+		};
 
+		const execute = (finish: (error?: unknown) => void) => {
 			try {
 				const result = run();
 				if (result !== null && typeof result === 'object' && typeof (result as Promise<unknown>).then === 'function') {
@@ -149,6 +120,42 @@ export function createInteractionContextScope(deps: InteractionScopeDeps): Conte
 				finish(error);
 				throw error;
 			}
+		};
+
+		let shouldTrace = deps.traceEnabled ?? true;
+		if (shouldTrace) {
+			try {
+				shouldTrace = deps.checkIfShouldTrace(source);
+			} catch {
+				// Fail open: prefer a span over silently dropping telemetry.
+				shouldTrace = true;
+			}
+		}
+		if (!shouldTrace) return execute(recordMetrics);
+
+		const tracer = getTracer();
+
+		return tracer.startActiveSpan(name, { kind: SpanKind.INTERNAL, attributes }, span => {
+			const finish = (error?: unknown) => {
+				finishInteractionLifecycle(context, error);
+				if (error !== undefined) {
+					try {
+						const err = error instanceof Error ? error : new Error(String(error));
+						span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+						span.recordException(err);
+					} catch {
+						// never throw instrumentation errors into user code
+					}
+				}
+				recordMetrics(error);
+				try {
+					span.end();
+				} catch {
+					// never throw instrumentation errors into user code
+				}
+			};
+
+			return execute(finish);
 		});
 	};
 }

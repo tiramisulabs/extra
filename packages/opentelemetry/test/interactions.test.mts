@@ -4,12 +4,10 @@ import { assert, describe, test } from 'vitest';
 import { createInteractionContextScope } from '../src/context-scope';
 import { registerInteractionInstrumentation } from '../src/instrument/interactions';
 import { opentelemetry } from '../src/plugin';
-import { setTraceServiceName } from '../src/trace-api';
 import { installTestTracer } from './helpers/otel-test-provider.mts';
 
 function withProvider(run: (exporter: InMemorySpanExporter) => Promise<void> | void) {
 	const { exporter, shutdown } = installTestTracer();
-	setTraceServiceName('interactions-test');
 	return Promise.resolve(run(exporter)).finally(() => shutdown());
 }
 
@@ -17,7 +15,6 @@ describe('interaction context scope (root spans)', () => {
 	test('creates root span named command ping', async () => {
 		await withProvider(async exporter => {
 			const scope = createInteractionContextScope({
-				serviceName: 'interactions-test',
 				checkIfShouldTrace: () => true,
 				getMetrics: () => undefined,
 			});
@@ -33,7 +30,6 @@ describe('interaction context scope (root spans)', () => {
 	test('error path sets SpanStatusCode.ERROR', async () => {
 		await withProvider(async exporter => {
 			const scope = createInteractionContextScope({
-				serviceName: 'interactions-test',
 				checkIfShouldTrace: () => true,
 				getMetrics: () => undefined,
 			});
@@ -55,7 +51,6 @@ describe('interaction context scope (root spans)', () => {
 	test('async rejection sets ERROR status', async () => {
 		await withProvider(async exporter => {
 			const scope = createInteractionContextScope({
-				serviceName: 'interactions-test',
 				checkIfShouldTrace: () => true,
 				getMetrics: () => undefined,
 			});
@@ -78,7 +73,6 @@ describe('interaction context scope (root spans)', () => {
 	test('checkIfShouldTrace false → zero spans', async () => {
 		await withProvider(async exporter => {
 			const scope = createInteractionContextScope({
-				serviceName: 'interactions-test',
 				checkIfShouldTrace: () => false,
 				getMetrics: () => undefined,
 			});
@@ -88,10 +82,35 @@ describe('interaction context scope (root spans)', () => {
 		});
 	});
 
+	test('records interaction metrics without creating a span when tracing is disabled', async () => {
+		await withProvider(async exporter => {
+			const recorded: Record<string, unknown>[] = [];
+			const scope = createInteractionContextScope({
+				traceEnabled: false,
+				checkIfShouldTrace: () => true,
+				getMetrics: () => ({
+					recordInteraction(_durationSeconds, attributes) {
+						recorded.push(attributes as Record<string, unknown>);
+					},
+					recordEvent() {},
+					recordRest() {},
+					recordCache() {},
+				}),
+			});
+
+			assert.equal(
+				scope({ fullCommandName: 'ping' }, () => 'ok'),
+				'ok',
+			);
+			assert.equal(recorded.length, 1);
+			assert.equal(recorded[0]['seyfert.command'], 'ping');
+			assert.equal(exporter.getFinishedSpans().length, 0);
+		});
+	});
+
 	test('checkIfShouldTrace throw → fail open (still traces)', async () => {
 		await withProvider(async exporter => {
 			const scope = createInteractionContextScope({
-				serviceName: 'interactions-test',
 				checkIfShouldTrace: () => {
 					throw new Error('filter boom');
 				},
@@ -107,7 +126,6 @@ describe('interaction context scope (root spans)', () => {
 	test('user result still returns when metrics throw on finish', async () => {
 		await withProvider(async exporter => {
 			const scope = createInteractionContextScope({
-				serviceName: 'interactions-test',
 				checkIfShouldTrace: () => true,
 				getMetrics: () => ({
 					recordInteraction() {
@@ -126,11 +144,10 @@ describe('interaction context scope (root spans)', () => {
 		});
 	});
 
-	test('interaction metrics include custom_id but exclude unique entity IDs', async () => {
+	test('interaction metrics exclude high-cardinality IDs while spans retain diagnostics', async () => {
 		await withProvider(async exporter => {
 			const recorded: Record<string, unknown>[] = [];
 			const scope = createInteractionContextScope({
-				serviceName: 'interactions-test',
 				checkIfShouldTrace: () => true,
 				getMetrics: () => ({
 					recordInteraction(_duration, attributes) {
@@ -158,11 +175,11 @@ describe('interaction context scope (root spans)', () => {
 			assert.deepEqual(recorded, [
 				{
 					'seyfert.interaction.kind': 'component',
-					'seyfert.custom_id': 'user-specific:123',
 					'seyfert.shard_id': 2,
 					'seyfert.error': false,
 				},
 			]);
+			assert.equal(exporter.getFinishedSpans()[0].attributes['seyfert.custom_id'], 'user-specific:123');
 			assert.equal(exporter.getFinishedSpans()[0].attributes['seyfert.user_id'], 'user-1');
 		});
 	});
@@ -170,7 +187,6 @@ describe('interaction context scope (root spans)', () => {
 	test('detectKind uses isModal / isComponent markers', async () => {
 		await withProvider(async exporter => {
 			const scope = createInteractionContextScope({
-				serviceName: 'interactions-test',
 				checkIfShouldTrace: () => true,
 				getMetrics: () => undefined,
 			});
@@ -270,7 +286,6 @@ describe('registerInteractionInstrumentation', () => {
 				{ checkIfShouldTrace: () => true },
 			);
 			const scope = createInteractionContextScope({
-				serviceName: 'interactions-test',
 				checkIfShouldTrace: () => true,
 				getMetrics: () => undefined,
 			});
@@ -308,7 +323,6 @@ describe('registerInteractionInstrumentation', () => {
 				{ checkIfShouldTrace: () => true },
 			);
 			const scope = createInteractionContextScope({
-				serviceName: 'interactions-test',
 				checkIfShouldTrace: () => true,
 				getMetrics: () => undefined,
 			});
@@ -347,7 +361,8 @@ describe('registerInteractionInstrumentation', () => {
 		};
 
 		const plugin = opentelemetry({
-			instrument: { interactions: true, events: false, rest: false, cache: false },
+			traces: { interactions: true, events: false, rest: false, cache: false },
+			metrics: { interactions: false, events: false, rest: false, cache: false },
 		});
 		plugin.register?.(api as never);
 		assert.deepEqual(calls, ['commands', 'components', 'modals']);
@@ -374,7 +389,8 @@ describe('registerInteractionInstrumentation', () => {
 		};
 
 		const plugin = opentelemetry({
-			instrument: { interactions: false, events: false, rest: false, cache: false },
+			traces: { interactions: false, events: false, rest: false, cache: false },
+			metrics: { interactions: false, events: false, rest: false, cache: false },
 		});
 		plugin.register?.(api as never);
 		assert.equal(called, false);
@@ -409,7 +425,6 @@ describe('registerInteractionInstrumentation', () => {
 			registerInteractionInstrumentation(api, { checkIfShouldTrace: () => true });
 
 			const scope = createInteractionContextScope({
-				serviceName: 'interactions-test',
 				checkIfShouldTrace: () => true,
 				getMetrics: () => undefined,
 			});

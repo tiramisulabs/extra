@@ -5,6 +5,7 @@ import type { TraceSource } from '../options';
 import { getTracer } from '../trace-api';
 
 export interface EventsInstrumentDeps {
+	traceEnabled?: boolean;
 	checkIfShouldTrace: (source: TraceSource) => boolean;
 	getMetrics: () => CoreMetrics | undefined;
 }
@@ -32,11 +33,8 @@ export interface EventsApi {
 type RunEvent = (name: string, ...args: unknown[]) => unknown;
 
 interface ActiveEvent {
-	attributes: Attributes;
 	error?: unknown;
 	name: string;
-	span: Span;
-	start: number;
 }
 
 function shouldTrace(deps: EventsInstrumentDeps, source: TraceSource): boolean {
@@ -104,18 +102,14 @@ export function instrumentEvents(
 
 	events.runEvent = function instrumentedRunEvent(name: string, ...args: unknown[]): unknown {
 		const source: TraceSource = { kind: 'event', name, args };
-		if (!shouldTrace(deps, source)) {
-			return original.call(events, name, ...args);
-		}
-
 		const attributes = eventAttributes(name, args);
 		const start = performance.now();
 
-		return getTracer().startActiveSpan(`event ${name}`, { kind: SpanKind.INTERNAL, attributes }, span => {
-			const active: ActiveEvent = { attributes, name, span, start };
+		const run = (span?: Span) => {
+			const active: ActiveEvent = { name };
 			const finish = (error?: unknown) => {
 				const finalError = error ?? active.error;
-				if (finalError !== undefined) {
+				if (span && finalError !== undefined) {
 					markError(span, finalError);
 				}
 				try {
@@ -127,7 +121,7 @@ export function instrumentEvents(
 					// metrics must not break handlers
 				}
 				try {
-					span.end();
+					span?.end();
 				} catch {
 					// never throw from instrumentation
 				}
@@ -159,7 +153,13 @@ export function instrumentEvents(
 					throw error;
 				}
 			});
-		});
+		};
+
+		const traceEnabled = deps.traceEnabled ?? true;
+		if (!traceEnabled || !shouldTrace(deps, source)) {
+			return run();
+		}
+		return getTracer().startActiveSpan(`event ${name}`, { kind: SpanKind.CONSUMER, attributes }, run);
 	};
 
 	return () => {

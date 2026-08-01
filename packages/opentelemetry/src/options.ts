@@ -8,14 +8,14 @@ export const DEFAULT_SERVICE_NAME = 'seyfert';
 /** High-churn cache resources skipped by default (Seyfert key namespaces). */
 export const DEFAULT_CACHE_SKIP_RESOURCES = ['presence', 'voice_state'] as const;
 
-export interface InstrumentFlags {
+export interface SignalFlags {
 	interactions?: boolean;
 	events?: boolean;
 	rest?: boolean;
 	cache?: boolean;
 }
 
-export interface ResolvedInstrumentFlags {
+export interface ResolvedSignalFlags {
 	interactions: boolean;
 	events: boolean;
 	rest: boolean;
@@ -30,7 +30,8 @@ export type TraceSource =
 
 export interface OpenTelemetryPluginOptions extends Partial<NodeSDKOptions> {
 	serviceName?: string;
-	instrument?: InstrumentFlags;
+	traces?: SignalFlags;
+	metrics?: SignalFlags;
 	checkIfShouldTrace?: (source: TraceSource) => boolean;
 	contextManager?: ContextManager;
 	cache?: {
@@ -40,7 +41,8 @@ export interface OpenTelemetryPluginOptions extends Partial<NodeSDKOptions> {
 
 export interface ResolvedOpenTelemetryOptions {
 	serviceName: string;
-	instrument: ResolvedInstrumentFlags;
+	traces: ResolvedSignalFlags;
+	metrics: ResolvedSignalFlags;
 	checkIfShouldTrace: (source: TraceSource) => boolean;
 	contextManager?: ContextManager;
 	cache: { skipResources: ReadonlySet<string> };
@@ -48,19 +50,28 @@ export interface ResolvedOpenTelemetryOptions {
 	sdk: Partial<NodeSDKOptions>;
 }
 
-export function resolveInstrumentFlags(flags: InstrumentFlags = {}): ResolvedInstrumentFlags {
+function resolveSignalFlags(flags: SignalFlags, cacheDefault: boolean): ResolvedSignalFlags {
 	return {
 		interactions: flags.interactions ?? true,
 		events: flags.events ?? true,
 		rest: flags.rest ?? true,
-		cache: flags.cache ?? true,
+		cache: flags.cache ?? cacheDefault,
 	};
+}
+
+export function resolveTraceFlags(flags: SignalFlags = {}): ResolvedSignalFlags {
+	return resolveSignalFlags(flags, false);
+}
+
+export function resolveMetricFlags(flags: SignalFlags = {}): ResolvedSignalFlags {
+	return resolveSignalFlags(flags, true);
 }
 
 export function resolvePluginOptions(options: OpenTelemetryPluginOptions = {}): ResolvedOpenTelemetryOptions {
 	const {
 		serviceName = DEFAULT_SERVICE_NAME,
-		instrument,
+		traces,
+		metrics,
 		checkIfShouldTrace = () => true,
 		contextManager,
 		cache,
@@ -71,7 +82,8 @@ export function resolvePluginOptions(options: OpenTelemetryPluginOptions = {}): 
 
 	return {
 		serviceName,
-		instrument: resolveInstrumentFlags(instrument),
+		traces: resolveTraceFlags(traces),
+		metrics: resolveMetricFlags(metrics),
 		checkIfShouldTrace,
 		contextManager,
 		cache: { skipResources: new Set(skip) },

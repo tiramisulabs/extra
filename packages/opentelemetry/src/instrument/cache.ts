@@ -4,6 +4,7 @@ import type { TraceSource } from '../options';
 import { getTracer } from '../trace-api';
 
 export interface CacheInstrumentDeps {
+	traceEnabled?: boolean;
 	checkIfShouldTrace: (source: TraceSource) => boolean;
 	skipResources: ReadonlySet<string>;
 	getMetrics: () => CoreMetrics | undefined;
@@ -161,15 +162,44 @@ export function instrumentCache(client: CacheClient | unknown, deps: CacheInstru
 				if (deps.skipResources.has(resource)) {
 					return original(...args);
 				}
-				const source: TraceSource = { kind: 'cache', op: method, resource };
-				if (!shouldTrace(deps, source)) {
-					return original(...args);
-				}
 			} catch {
 				return original(...args);
 			}
 
 			const start = performance.now();
+			const metricAttributes = (value: unknown, error?: unknown) => ({
+				'seyfert.cache.op': method,
+				'seyfert.cache.resource': resource,
+				'seyfert.error': error !== undefined,
+				...(method === 'get' && error === undefined
+					? { 'seyfert.cache.hit': value !== undefined && value !== null }
+					: {}),
+			});
+			const traceEnabled = deps.traceEnabled ?? true;
+			const source: TraceSource = { kind: 'cache', op: method, resource };
+
+			if (!traceEnabled || !shouldTrace(deps, source)) {
+				try {
+					const result = original(...args);
+					if (isThenable(result)) {
+						return Promise.resolve(result).then(
+							value => {
+								recordCacheMetrics(deps, start, metricAttributes(value));
+								return value;
+							},
+							error => {
+								recordCacheMetrics(deps, start, metricAttributes(undefined, error));
+								throw error;
+							},
+						);
+					}
+					recordCacheMetrics(deps, start, metricAttributes(result));
+					return result;
+				} catch (error) {
+					recordCacheMetrics(deps, start, metricAttributes(undefined, error));
+					throw error;
+				}
+			}
 
 			// User errors from `original` must propagate; only instrumentation
 			// setup failures fall back to an untraced call.
@@ -199,20 +229,7 @@ export function instrumentCache(client: CacheClient | unknown, deps: CacheInstru
 								markError(span, error);
 							}
 
-							const metricAttrs: {
-								'seyfert.cache.op': string;
-								'seyfert.cache.resource': string;
-								'seyfert.error': boolean;
-								'seyfert.cache.hit'?: boolean;
-							} = {
-								'seyfert.cache.op': method,
-								'seyfert.cache.resource': resource,
-								'seyfert.error': isError,
-							};
-							if (method === 'get' && !isError) {
-								metricAttrs['seyfert.cache.hit'] = value !== undefined && value !== null;
-							}
-							recordCacheMetrics(deps, start, metricAttrs);
+							recordCacheMetrics(deps, start, metricAttributes(value, error));
 							safeEnd(span);
 						};
 

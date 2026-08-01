@@ -2,12 +2,10 @@ import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
 import type { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import { assert, describe, test } from 'vitest';
 import { type CacheClient, extractCacheResource, instrumentCache } from '../src/instrument/cache';
-import { setTraceServiceName } from '../src/trace-api';
 import { installTestTracer } from './helpers/otel-test-provider.mts';
 
 function withProvider(run: (exporter: InMemorySpanExporter) => Promise<void> | void) {
 	const { exporter, shutdown } = installTestTracer();
-	setTraceServiceName('cache-test');
 	return Promise.resolve(run(exporter)).finally(() => shutdown());
 }
 
@@ -370,6 +368,35 @@ describe('instrumentCache (adapter wraps)', () => {
 			assert.equal(recorded[0].attrs['seyfert.error'], false);
 			assert.equal(exporter.getFinishedSpans().length, 1);
 
+			cleanup();
+		});
+	});
+
+	test('records cache metrics without creating spans when tracing is disabled', async () => {
+		await withProvider(async exporter => {
+			const recorded: Record<string, unknown>[] = [];
+			const { adapter, store } = fakeAdapter();
+			store.set('role.1', { id: '1' });
+			const dependencies = {
+				traceEnabled: false,
+				checkIfShouldTrace: () => true,
+				skipResources: new Set<string>(),
+				getMetrics: () => ({
+					recordInteraction() {},
+					recordEvent() {},
+					recordRest() {},
+					recordCache(_durationSeconds: number, attributes: Record<string, unknown>) {
+						recorded.push(attributes);
+					},
+				}),
+			};
+			const cleanup = instrumentCache(fakeClient(adapter), dependencies);
+
+			(adapter.get as (key: string) => unknown)('role.1');
+
+			assert.equal(recorded.length, 1);
+			assert.equal(recorded[0]['seyfert.cache.hit'], true);
+			assert.equal(exporter.getFinishedSpans().length, 0);
 			cleanup();
 		});
 	});
