@@ -1,3 +1,4 @@
+import { isSpanContextValid, trace } from '@opentelemetry/api';
 import { serializeError } from 'serialize-error';
 import { ConsoleLoggerAdapter } from './console';
 import { getString, isLogData, stripUndefined } from './utils';
@@ -167,7 +168,7 @@ export class RootLogger {
 	async writeEntry(entry: LogEntry): Promise<void> {
 		if (!this.isEnabled(entry.level)) return;
 
-		const normalizedEntry = normalizeLogEntry(entry);
+		const normalizedEntry = normalizeLogEntry(withActiveTraceContext(entry));
 		const write = Promise.all(
 			this.adapters.map(async adapter => {
 				try {
@@ -308,6 +309,20 @@ export class WideEventLogger {
 	private writeImmediate(level: WritableLogLevel, args: readonly unknown[]): Awaitable<void> {
 		return this.root.writeLevel(level, args);
 	}
+}
+
+function withActiveTraceContext(entry: LogEntry): LogEntry {
+	const spanContext = trace.getActiveSpan()?.spanContext();
+	if (!spanContext || !isSpanContextValid(spanContext)) return entry;
+
+	return {
+		...entry,
+		data: {
+			...entry.data,
+			trace_id: spanContext.traceId,
+			span_id: spanContext.spanId,
+		},
+	};
 }
 
 function normalizeLogEntry(entry: LogEntry): LogEntry {

@@ -217,6 +217,21 @@ Factories: `prettyRenderer()` (slipher's own console), `silentRenderer()` (no ou
 
 evlog and pino are optional peer dependencies, imported only by their factories. Install the one you use (`pnpm add evlog` or `pnpm add pino`). On field collisions, data from `add()` and level methods wins over bindings.
 
+### OpenTelemetry trace correlation
+
+When an OpenTelemetry span is active, the logger automatically adds its `trace_id` and `span_id` to every entry before sending it to the renderer and transports. Invalid or missing span contexts are ignored, so applications that do not configure tracing keep the same output.
+
+This works automatically with `@slipher/opentelemetry`; no logger option is required:
+
+```ts
+{
+	level: 'info',
+	message: 'deployment queued',
+	trace_id: '0af7651916cd43dd8448eb211c80319c',
+	span_id: 'b7ad6b7169203331',
+}
+```
+
 Before fan-out, the core uses `serialize-error` on every top-level field containing an `Error` instance. Adapters receive plain objects containing the error details, including nested causes and custom enumerable fields. The original prototypes and object identities are intentionally not preserved.
 
 > **Redaction belongs to the sink.** Error properties become plain fields and can include SDK request/response metadata. `prettyRenderer()` and custom adapters do **not** redact. Configure paths such as `error.config.headers.authorization`, `error.cookie`, and `error.apiKey` in your collector, Pino instance, or evlog config. evlog's built-in patterns (`creditCard`, `email`, `jwt`, …) do **not** cover Discord bot tokens — add a pattern for those.
