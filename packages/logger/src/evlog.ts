@@ -104,9 +104,10 @@ function writeEvlogImmediateEntry(entry: LogEntry, core: EvlogCoreModule): void 
 		return;
 	}
 
-	// Object form renders its `[bracket]` from the event's `service`; set it to the
-	// derived tag so the bracket matches the tagged form instead of evlog's default.
-	core.log[level]({ service: tag, message, ...extra });
+	// Keep the logger source as an event tag. Leaving `service` unset lets evlog
+	// apply its application-level service envelope instead of creating one OTLP
+	// resource per Seyfert logger source.
+	core.log[level]({ tag, message, ...extra });
 }
 
 function writeEvlogWideEvent(entry: LogEntry, core: EvlogCoreModule): void {
@@ -115,15 +116,14 @@ function writeEvlogWideEvent(entry: LogEntry, core: EvlogCoreModule): void {
 
 	// Emit via the object form (not createLogger) so evlog does not stamp its own
 	// createLogger -> emit stopwatch as `duration` ("in 0ms"); our real elapsed time is
-	// already in the `durationMs` field. The `[bracket]` comes from `service`, set to the
-	// derived tag (source ?? name ?? 'app') — same ordering as the console adapter and the
-	// immediate path — and consumed here so it is not also a plain field.
+	// already in the `durationMs` field. Preserve the source as a tag while evlog
+	// supplies the application service from its global envelope.
 	let fields = stripUndefined({ ...entry.bindings, ...entry.data });
 	delete fields.name;
 	delete fields._source;
 	fields = translateTraceContextForEvlog(fields);
 	const payload: LogData = stripUndefined({
-		service: getEvlogTag(entry),
+		tag: getEvlogTag(entry),
 		...fields,
 		message,
 		level: entry.level === level ? undefined : entry.level,

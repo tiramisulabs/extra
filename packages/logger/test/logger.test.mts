@@ -866,10 +866,11 @@ describe('logger adapters', () => {
 		assert.equal(serializedCause.message, 'database unavailable');
 	});
 
-	test('evlogTransport maps logger trace fields to evlog native correlation fields', async () => {
+	test('evlogTransport preserves the application service when mapping trace correlation fields', async () => {
 		const events: Array<Record<string, unknown>> = [];
 		initLogger({
 			_suppressDrainWarning: true,
+			env: { service: 'bot-service' },
 			silent: true,
 			drain(context) {
 				events.push(context.event as Record<string, unknown>);
@@ -880,8 +881,9 @@ describe('logger adapters', () => {
 		const spanId = 'b7ad6b7169203331';
 
 		await adapter.write({
-			bindings: { name: 'bot' },
+			bindings: { name: 'bot-service' },
 			data: {
+				_source: 'seyfert:Seyfert',
 				durationMs: 12,
 				kind: 'event',
 				outcome: 'success',
@@ -893,8 +895,8 @@ describe('logger adapters', () => {
 			time: new Date('2026-05-29T10:00:00.000Z'),
 		});
 		await adapter.write({
-			bindings: { name: 'bot' },
-			data: { span_id: spanId, trace_id: traceId },
+			bindings: { name: 'bot-service' },
+			data: { _source: 'seyfert:Seyfert', span_id: spanId, trace_id: traceId },
 			level: 'info',
 			message: 'ready',
 			time: new Date('2026-05-29T10:00:01.000Z'),
@@ -903,6 +905,8 @@ describe('logger adapters', () => {
 
 		assert.equal(events.length, 2);
 		for (const event of events) {
+			assert.equal(event.service, 'bot-service');
+			assert.equal(event.tag, 'seyfert:Seyfert');
 			assert.equal(event.traceId, traceId);
 			assert.equal(event.spanId, spanId);
 			assert.equal('trace_id' in event, false);
