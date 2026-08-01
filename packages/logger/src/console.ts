@@ -82,13 +82,16 @@ function formatConsolePayload(entry: LogEntry): string {
 	const tag = getString(fields._source) ?? getString(fields.name);
 	for (const key of ['level', 'message', 'time', '_source', 'name']) delete fields[key];
 
-	const errors: Error[] = [];
+	const errors: ErrorLike[] = [];
 	for (const key of Object.keys(fields)) {
 		const value = fields[key];
-		if (value instanceof Error) {
+		if (isErrorLike(value)) {
 			errors.push(value);
 			delete fields[key];
 		}
+	}
+	if (errors.length) {
+		for (const key of ['exception.type', 'exception.message', 'exception.stacktrace']) delete fields[key];
 	}
 
 	const head = [
@@ -139,7 +142,25 @@ function formatConsoleValue(value: unknown): string {
 	return JSON.stringify(value);
 }
 
-function formatConsoleError(error: Error, enabled: boolean): string {
+interface ErrorLike {
+	name: string;
+	message: string;
+	stack?: string;
+}
+
+function isErrorLike(value: unknown): value is ErrorLike {
+	if (value instanceof Error) return true;
+	if (!value || typeof value !== 'object') return false;
+
+	const candidate = value as Record<string, unknown>;
+	return (
+		typeof candidate.name === 'string' &&
+		typeof candidate.message === 'string' &&
+		(candidate.stack === undefined || typeof candidate.stack === 'string')
+	);
+}
+
+function formatConsoleError(error: ErrorLike, enabled: boolean): string {
 	const stack = error.stack ?? `${error.name}: ${error.message}`;
 	return stack
 		.split('\n')

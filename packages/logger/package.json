@@ -31,6 +31,9 @@
 		"test": "pnpm typecheck && vitest run --config ./test/vitest.config.mts ./test/",
 		"prepublish": "pnpm build"
 	},
+	"dependencies": {
+		"serialize-error": "^13.0.1"
+	},
 	"devDependencies": {
 		"@types/node": "^26.0.1",
 		"evlog": "^2.18.1",

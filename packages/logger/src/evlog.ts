@@ -93,7 +93,7 @@ function writeEvlogImmediateEntry(entry: LogEntry, core: EvlogCoreModule): void 
 
 	// `name`/`source` become the evlog tag (the `[bracket]`), never plain fields. The
 	// remaining fields decide between evlog's clean tagged form and its object form.
-	const extra = normalizeEvlogFields(stripUndefined({ ...entry.bindings, ...entry.data }));
+	const extra = stripUndefined({ ...entry.bindings, ...entry.data });
 	delete extra.name;
 	delete extra._source;
 	if (entry.level !== level) extra.level = entry.level;
@@ -117,7 +117,7 @@ function writeEvlogWideEvent(entry: LogEntry, core: EvlogCoreModule): void {
 	// already in the `durationMs` field. The `[bracket]` comes from `service`, set to the
 	// derived tag (source ?? name ?? 'app') — same ordering as the console adapter and the
 	// immediate path — and consumed here so it is not also a plain field.
-	const fields = normalizeEvlogFields(stripUndefined({ ...entry.bindings, ...entry.data }));
+	const fields = stripUndefined({ ...entry.bindings, ...entry.data });
 	delete fields.name;
 	delete fields._source;
 	const payload: LogData = stripUndefined({
@@ -127,48 +127,6 @@ function writeEvlogWideEvent(entry: LogEntry, core: EvlogCoreModule): void {
 		level: entry.level === level ? undefined : entry.level,
 	});
 	core.log[level](payload);
-}
-
-function normalizeEvlogFields(fields: LogData): LogData {
-	const error = fields.error;
-	if (!(error instanceof Error)) return fields;
-
-	return stripUndefined({
-		...fields,
-		error: serializeError(error),
-		'exception.type': error.name,
-		'exception.message': error.message,
-		'exception.stacktrace': error.stack,
-	});
-}
-
-function serializeError(error: Error): LogData {
-	return serializeErrorValue(error, new WeakSet<Error>()) as LogData;
-}
-
-function serializeErrorValue(value: unknown, seen: WeakSet<Error>): unknown {
-	if (!(value instanceof Error)) return value;
-	if (seen.has(value)) return '[Circular Error]';
-
-	seen.add(value);
-	const serialized: LogData = stripUndefined({
-		...value,
-		name: value.name,
-		message: value.message,
-		stack: value.stack,
-		cause: serializeErrorValue(value.cause, seen),
-	});
-
-	if (value instanceof AggregateError) {
-		const errors: unknown[] = [];
-		for (const nestedError of value.errors as Iterable<unknown>) {
-			errors.push(serializeErrorValue(nestedError, seen));
-		}
-		serialized.errors = errors;
-	}
-
-	seen.delete(value);
-	return serialized;
 }
 
 function getEvlogTag(entry: LogEntry): string {

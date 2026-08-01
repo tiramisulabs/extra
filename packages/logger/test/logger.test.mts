@@ -280,7 +280,9 @@ describe('logger plugin', () => {
 		assert.equal(adapter.entries[0].level, 'error');
 		assert.equal(adapter.entries[0].message, 'command failed');
 		assert.equal(adapter.entries[0].data.outcome, 'error');
-		assert.equal(adapter.entries[0].data.error, error);
+		assert.notEqual(adapter.entries[0].data.error, error);
+		assert.equal((adapter.entries[0].data.error as Record<string, unknown>).message, 'boom');
+		assert.match((adapter.entries[0].data.error as Record<string, unknown>).stack as string, /boom/);
 		assert.equal(adapter.entries[0].data.command, 'admin ban');
 	});
 
@@ -458,7 +460,8 @@ describe('logger plugin', () => {
 		assert.equal(thrown, boom);
 		assert.equal(adapter.entries.length, 1);
 		assert.equal(adapter.entries[0].data.outcome, 'error');
-		assert.equal(adapter.entries[0].data.error, boom);
+		assert.notEqual(adapter.entries[0].data.error, boom);
+		assert.equal((adapter.entries[0].data.error as Record<string, unknown>).message, 'boom');
 
 		await plugin.teardown?.(client);
 	});
@@ -593,7 +596,7 @@ describe('logger adapters', () => {
 		assert.equal(calls[0][0], '10:00:00.000 CRITICAL [bot] override\n    shardId   1\n    guildId   guild-1');
 	});
 
-	test('ConsoleLoggerAdapter colorizes by level and appends error stacks when color is enabled', () => {
+	test('default console colorizes by level and appends serialized error stacks', async () => {
 		const calls: unknown[][] = [];
 		const originalNoColor = process.env.NO_COLOR;
 		const originalForceColor = process.env.FORCE_COLOR;
@@ -606,13 +609,11 @@ describe('logger adapters', () => {
 		const error = new Error('socket closed');
 
 		try {
-			new ConsoleLoggerAdapter().write({
-				bindings: {},
-				data: { command: 'ban', err: error },
-				level: 'error',
-				message: 'command failed',
-				time: new Date('2026-05-29T10:00:00.000Z'),
-			});
+			await createLogger({ now: () => new Date('2026-05-29T10:00:00.000Z') }).error(
+				{ command: 'ban' },
+				'command failed',
+				error,
+			);
 		} finally {
 			if (originalNoColor === undefined) delete process.env.NO_COLOR;
 			else process.env.NO_COLOR = originalNoColor;
@@ -627,7 +628,8 @@ describe('logger adapters', () => {
 		assert.ok(output.includes('command failed'), 'message rendered');
 		assert.ok(output.includes('command\x1b[0m'), 'field key colorized in its own column');
 		assert.ok(output.includes('    Error: socket closed'), 'error stack indented on following lines');
-		assert.equal(output.includes('err\x1b[0m'), false, 'error not rendered as a field');
+		assert.equal(output.includes('exception.'), false, 'OTel exception fields are hidden from pretty output');
+		assert.equal(output.includes('error\x1b[0m'), false, 'error not rendered as a field');
 	});
 
 	test('ConsoleLoggerAdapter writes JSON in production', () => {
@@ -719,6 +721,25 @@ describe('logger adapters', () => {
 		assert.deepEqual(calls, [[{ cluster: 'use1', region: 'runtime', guildId: 'guild-1' }, 'ready']]);
 	});
 
+	test('core sends serialized errors to pino with standard exception fields', async () => {
+		const calls: unknown[][] = [];
+		const root = createLogger({
+			renderer: new RecordingAdapter(),
+			transports: [pinoAdapter({ error: (...args: unknown[]) => calls.push(args) })],
+		});
+
+		await root.error({ command: 'campaign pause' }, 'command failed', new Error('Missing Permissions'));
+
+		const payload = calls[0][0] as Record<string, unknown>;
+		const error = payload.error as Record<string, unknown>;
+		assert.equal(error.message, 'Missing Permissions');
+		assert.match(error.stack as string, /Missing Permissions/);
+		assert.equal(payload['exception.type'], 'Error');
+		assert.equal(payload['exception.message'], 'Missing Permissions');
+		assert.match(payload['exception.stacktrace'] as string, /Missing Permissions/);
+		assert.equal(calls[0][1], 'command failed');
+	});
+
 	test('evlogTransport routes entries through the evlog global pipeline', async () => {
 		const events: Array<Record<string, unknown>> = [];
 		initLogger({
@@ -791,24 +812,21 @@ describe('logger adapters', () => {
 				events.push(context.event as Record<string, unknown>);
 			},
 		});
-		const adapter = evlogTransport();
+		const root = createLogger({
+			name: 'clip-money',
+			renderer: new RecordingAdapter(),
+			transports: [evlogTransport()],
+		});
 		const cause = new TypeError('database unavailable');
 		const error = Object.assign(new Error('campaign pause failed', { cause }), { code: 'MISSING_PERMISSIONS' });
 
-		await adapter.write({
-			bindings: { name: 'clip-money' },
-			data: {
+		await root
+			.event({
 				command: 'campaign pause',
-				durationMs: 12,
-				error,
 				interactionId: 'interaction-1',
 				kind: 'command',
-				outcome: 'error',
-			},
-			level: 'error',
-			message: 'command failed',
-			time: new Date('2026-05-29T10:00:00.000Z'),
-		});
+			})
+			.emit({ error, message: 'command failed' });
 		await flushEvlogDrain();
 
 		const serialized = JSON.parse(JSON.stringify(events[0])) as Record<string, unknown>;
@@ -886,7 +904,12 @@ describe('createLogger', () => {
 
 		assert.equal(adapter.entries.length, 1);
 		assert.deepEqual(adapter.entries[0].bindings, { app: 'bot', shardId: 1 });
-		assert.deepEqual(adapter.entries[0].data, { route: '/sync', error });
+		assert.equal(adapter.entries[0].data.route, '/sync');
+		assert.notEqual(adapter.entries[0].data.error, error);
+		assert.equal((adapter.entries[0].data.error as Record<string, unknown>).message, 'boom');
+		assert.equal(adapter.entries[0].data['exception.type'], 'Error');
+		assert.equal(adapter.entries[0].data['exception.message'], 'boom');
+		assert.match(adapter.entries[0].data['exception.stacktrace'] as string, /boom/);
 		assert.equal(adapter.entries[0].message, 'sync failed');
 		assert.equal('levelValue' in adapter.entries[0], false);
 	});
