@@ -782,6 +782,51 @@ describe('logger adapters', () => {
 		assert.equal('method' in events[0]!, false);
 	});
 
+	test('evlogTransport preserves native errors and correlation fields through JSON serialization', async () => {
+		const events: Array<Record<string, unknown>> = [];
+		initLogger({
+			_suppressDrainWarning: true,
+			silent: true,
+			drain(context) {
+				events.push(context.event as Record<string, unknown>);
+			},
+		});
+		const adapter = evlogTransport();
+		const cause = new TypeError('database unavailable');
+		const error = Object.assign(new Error('campaign pause failed', { cause }), { code: 'MISSING_PERMISSIONS' });
+
+		await adapter.write({
+			bindings: { name: 'clip-money' },
+			data: {
+				command: 'campaign pause',
+				durationMs: 12,
+				error,
+				interactionId: 'interaction-1',
+				kind: 'command',
+				outcome: 'error',
+			},
+			level: 'error',
+			message: 'command failed',
+			time: new Date('2026-05-29T10:00:00.000Z'),
+		});
+		await flushEvlogDrain();
+
+		const serialized = JSON.parse(JSON.stringify(events[0])) as Record<string, unknown>;
+		const serializedError = serialized.error as Record<string, unknown>;
+		const serializedCause = serializedError.cause as Record<string, unknown>;
+
+		assert.equal(serialized.interactionId, 'interaction-1');
+		assert.equal(serializedError.name, 'Error');
+		assert.equal(serializedError.message, 'campaign pause failed');
+		assert.equal(serializedError.code, 'MISSING_PERMISSIONS');
+		assert.match(serializedError.stack as string, /campaign pause failed/);
+		assert.equal(serializedCause.name, 'TypeError');
+		assert.equal(serializedCause.message, 'database unavailable');
+		assert.equal(serialized['exception.type'], 'Error');
+		assert.equal(serialized['exception.message'], 'campaign pause failed');
+		assert.match(serialized['exception.stacktrace'] as string, /campaign pause failed/);
+	});
+
 	test('evlogTransport uses the tagged form for simple entries, folding name into the tag', async () => {
 		const events: Array<Record<string, unknown>> = [];
 		initLogger({
