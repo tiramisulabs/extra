@@ -90,10 +90,6 @@ function formatConsolePayload(entry: LogEntry): string {
 			delete fields[key];
 		}
 	}
-	if (errors.length) {
-		for (const key of ['exception.type', 'exception.message', 'exception.stacktrace']) delete fields[key];
-	}
-
 	const head = [
 		paint(formatConsoleTime(entry.time), COLOR.time, enabled),
 		paint(levelText.toUpperCase().padEnd(5), levelAnsiColor(entry.level), enabled),

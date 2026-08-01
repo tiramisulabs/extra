@@ -628,7 +628,6 @@ describe('logger adapters', () => {
 		assert.ok(output.includes('command failed'), 'message rendered');
 		assert.ok(output.includes('command\x1b[0m'), 'field key colorized in its own column');
 		assert.ok(output.includes('    Error: socket closed'), 'error stack indented on following lines');
-		assert.equal(output.includes('exception.'), false, 'OTel exception fields are hidden from pretty output');
 		assert.equal(output.includes('error\x1b[0m'), false, 'error not rendered as a field');
 	});
 
@@ -721,7 +720,7 @@ describe('logger adapters', () => {
 		assert.deepEqual(calls, [[{ cluster: 'use1', region: 'runtime', guildId: 'guild-1' }, 'ready']]);
 	});
 
-	test('core sends serialized errors to pino with standard exception fields', async () => {
+	test('core sends serialized errors to pino', async () => {
 		const calls: unknown[][] = [];
 		const root = createLogger({
 			renderer: new RecordingAdapter(),
@@ -734,9 +733,6 @@ describe('logger adapters', () => {
 		const error = payload.error as Record<string, unknown>;
 		assert.equal(error.message, 'Missing Permissions');
 		assert.match(error.stack as string, /Missing Permissions/);
-		assert.equal(payload['exception.type'], 'Error');
-		assert.equal(payload['exception.message'], 'Missing Permissions');
-		assert.match(payload['exception.stacktrace'] as string, /Missing Permissions/);
 		assert.equal(calls[0][1], 'command failed');
 	});
 
@@ -840,9 +836,6 @@ describe('logger adapters', () => {
 		assert.match(serializedError.stack as string, /campaign pause failed/);
 		assert.equal(serializedCause.name, 'TypeError');
 		assert.equal(serializedCause.message, 'database unavailable');
-		assert.equal(serialized['exception.type'], 'Error');
-		assert.equal(serialized['exception.message'], 'campaign pause failed');
-		assert.match(serialized['exception.stacktrace'] as string, /campaign pause failed/);
 	});
 
 	test('evlogTransport uses the tagged form for simple entries, folding name into the tag', async () => {
@@ -907,9 +900,6 @@ describe('createLogger', () => {
 		assert.equal(adapter.entries[0].data.route, '/sync');
 		assert.notEqual(adapter.entries[0].data.error, error);
 		assert.equal((adapter.entries[0].data.error as Record<string, unknown>).message, 'boom');
-		assert.equal(adapter.entries[0].data['exception.type'], 'Error');
-		assert.equal(adapter.entries[0].data['exception.message'], 'boom');
-		assert.match(adapter.entries[0].data['exception.stacktrace'] as string, /boom/);
 		assert.equal(adapter.entries[0].message, 'sync failed');
 		assert.equal('levelValue' in adapter.entries[0], false);
 	});

@@ -326,9 +326,6 @@ function normalizeLogEntry(entry: LogEntry): LogEntry | Promise<LogEntry> {
 			data: stripUndefined({
 				...entry.data,
 				error,
-				'exception.type': getString(error.name),
-				'exception.message': getString(error.message),
-				'exception.stacktrace': getString(error.stack),
 			}),
 		};
 	});
