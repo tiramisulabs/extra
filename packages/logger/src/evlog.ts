@@ -93,10 +93,11 @@ function writeEvlogImmediateEntry(entry: LogEntry, core: EvlogCoreModule): void 
 
 	// `name`/`source` become the evlog tag (the `[bracket]`), never plain fields. The
 	// remaining fields decide between evlog's clean tagged form and its object form.
-	const extra = stripUndefined({ ...entry.bindings, ...entry.data });
+	let extra = stripUndefined({ ...entry.bindings, ...entry.data });
 	delete extra.name;
 	delete extra._source;
 	if (entry.level !== level) extra.level = entry.level;
+	extra = translateTraceContextForEvlog(extra);
 
 	if (Object.keys(extra).length === 0) {
 		core.log[level](tag, message);
@@ -117,9 +118,10 @@ function writeEvlogWideEvent(entry: LogEntry, core: EvlogCoreModule): void {
 	// already in the `durationMs` field. The `[bracket]` comes from `service`, set to the
 	// derived tag (source ?? name ?? 'app') — same ordering as the console adapter and the
 	// immediate path — and consumed here so it is not also a plain field.
-	const fields = stripUndefined({ ...entry.bindings, ...entry.data });
+	let fields = stripUndefined({ ...entry.bindings, ...entry.data });
 	delete fields.name;
 	delete fields._source;
+	fields = translateTraceContextForEvlog(fields);
 	const payload: LogData = stripUndefined({
 		service: getEvlogTag(entry),
 		...fields,
@@ -127,6 +129,23 @@ function writeEvlogWideEvent(entry: LogEntry, core: EvlogCoreModule): void {
 		level: entry.level === level ? undefined : entry.level,
 	});
 	core.log[level](payload);
+}
+
+function translateTraceContextForEvlog(fields: LogData): LogData {
+	const traceId = getString(fields.trace_id);
+	const spanId = getString(fields.span_id);
+	if (!(traceId || spanId)) return fields;
+
+	const translated = { ...fields };
+	if (traceId) {
+		delete translated.trace_id;
+		translated.traceId = traceId;
+	}
+	if (spanId) {
+		delete translated.span_id;
+		translated.spanId = spanId;
+	}
+	return translated;
 }
 
 function getEvlogTag(entry: LogEntry): string {

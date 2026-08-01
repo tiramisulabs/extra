@@ -866,6 +866,50 @@ describe('logger adapters', () => {
 		assert.equal(serializedCause.message, 'database unavailable');
 	});
 
+	test('evlogTransport maps logger trace fields to evlog native correlation fields', async () => {
+		const events: Array<Record<string, unknown>> = [];
+		initLogger({
+			_suppressDrainWarning: true,
+			silent: true,
+			drain(context) {
+				events.push(context.event as Record<string, unknown>);
+			},
+		});
+		const adapter = evlogTransport();
+		const traceId = '0af7651916cd43dd8448eb211c80319c';
+		const spanId = 'b7ad6b7169203331';
+
+		await adapter.write({
+			bindings: { name: 'bot' },
+			data: {
+				durationMs: 12,
+				kind: 'event',
+				outcome: 'success',
+				span_id: spanId,
+				trace_id: traceId,
+			},
+			level: 'info',
+			message: 'BOT_READY completed',
+			time: new Date('2026-05-29T10:00:00.000Z'),
+		});
+		await adapter.write({
+			bindings: { name: 'bot' },
+			data: { span_id: spanId, trace_id: traceId },
+			level: 'info',
+			message: 'ready',
+			time: new Date('2026-05-29T10:00:01.000Z'),
+		});
+		await flushEvlogDrain();
+
+		assert.equal(events.length, 2);
+		for (const event of events) {
+			assert.equal(event.traceId, traceId);
+			assert.equal(event.spanId, spanId);
+			assert.equal('trace_id' in event, false);
+			assert.equal('span_id' in event, false);
+		}
+	});
+
 	test('evlogTransport uses the tagged form for simple entries, folding name into the tag', async () => {
 		const events: Array<Record<string, unknown>> = [];
 		initLogger({
