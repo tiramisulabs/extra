@@ -221,6 +221,8 @@ evlog and pino are optional peer dependencies, imported only by their factories.
 
 When an OpenTelemetry span is active, the logger automatically adds its `trace_id` and `span_id` to every entry before sending it to the renderer and transports. Invalid or missing span contexts are ignored, so applications that do not configure tracing keep the same output.
 
+`@opentelemetry/api` is an optional peer dependency. Installing `@slipher/logger` alone does not install or initialize OpenTelemetry. The logger resolves the API once at startup when it is available; register `@slipher/opentelemetry` in the application to create the active spans used for correlation.
+
 The evlog adapter translates those fields to evlog's native `traceId` and `spanId` properties. OTLP drains can therefore populate the native log correlation fields used to navigate between logs and traces in backends such as SigNoz.
 
 This works automatically with `@slipher/opentelemetry`; no logger option is required:

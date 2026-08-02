@@ -98,13 +98,13 @@ importers:
 
   packages/logger:
     dependencies:
-      '@opentelemetry/api':
-        specifier: ^1.9.1
-        version: 1.9.1
       serialize-error:
         specifier: ^13.0.1
         version: 13.0.1
     devDependencies:
+      '@opentelemetry/api':
+        specifier: ^1.9.1
+        version: 1.9.1
       '@opentelemetry/context-async-hooks':
         specifier: ^2.0.1
         version: 2.0.1(@opentelemetry/api@1.9.1)

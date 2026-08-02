@@ -1,4 +1,4 @@
-import { isSpanContextValid, trace } from '@opentelemetry/api';
+import { createRequire } from 'node:module';
 import { serializeError } from 'serialize-error';
 import { ConsoleLoggerAdapter } from './console';
 import { getString, isLogData, stripUndefined } from './utils';
@@ -35,6 +35,8 @@ export interface LoggerOptions {
 	/** @internal */
 	now?: () => Date;
 }
+
+const openTelemetryApi = loadOpenTelemetryApi();
 
 function resolveAdapters(options: LoggerOptions): readonly LoggerAdapter[] {
 	return [options.renderer ?? new ConsoleLoggerAdapter(), ...(options.transports ?? [])];
@@ -312,8 +314,8 @@ export class WideEventLogger {
 }
 
 function withActiveTraceContext(entry: LogEntry): LogEntry {
-	const spanContext = trace.getActiveSpan()?.spanContext();
-	if (!spanContext || !isSpanContextValid(spanContext)) return entry;
+	const spanContext = openTelemetryApi?.trace.getActiveSpan()?.spanContext();
+	if (!spanContext || !openTelemetryApi?.isSpanContextValid(spanContext)) return entry;
 
 	return {
 		...entry,
@@ -323,6 +325,22 @@ function withActiveTraceContext(entry: LogEntry): LogEntry {
 			span_id: spanContext.spanId,
 		},
 	};
+}
+
+function loadOpenTelemetryApi(): typeof import('@opentelemetry/api') | undefined {
+	try {
+		return createRequire(__filename)('@opentelemetry/api') as typeof import('@opentelemetry/api');
+	} catch (error) {
+		if (
+			error instanceof Error &&
+			'code' in error &&
+			error.code === 'MODULE_NOT_FOUND' &&
+			error.message.includes("'@opentelemetry/api'")
+		) {
+			return;
+		}
+		throw error;
+	}
 }
 
 function normalizeLogEntry(entry: LogEntry): LogEntry {

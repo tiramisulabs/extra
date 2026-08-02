@@ -35,10 +35,10 @@
 		"prepublish": "pnpm build"
 	},
 	"dependencies": {
-		"@opentelemetry/api": "^1.9.1",
 		"serialize-error": "^13.0.1"
 	},
 	"devDependencies": {
+		"@opentelemetry/api": "^1.9.1",
 		"@opentelemetry/context-async-hooks": "^2.0.1",
 		"@types/node": "^26.0.1",
 		"evlog": "^2.18.1",
@@ -46,10 +46,14 @@
 		"typescript": "^6.0.3"
 	},
 	"peerDependencies": {
+		"@opentelemetry/api": "^1.9.1",
 		"evlog": "^2.18.1",
 		"seyfert": ">=5.0.0"
 	},
 	"peerDependenciesMeta": {
+		"@opentelemetry/api": {
+			"optional": true
+		},
 		"evlog": {
 			"optional": true
 		}
