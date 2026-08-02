@@ -10,6 +10,7 @@ import {
 import { MeterProvider } from '@opentelemetry/sdk-metrics';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { assert, describe, test } from 'vitest';
+import * as publicApi from '../src';
 import { resolvePluginOptions } from '../src/options';
 import { shouldStartNodeSDK, startOwnedSdk } from '../src/sdk';
 
@@ -52,6 +53,13 @@ class CountingContextManager implements ContextManager {
 		return this;
 	}
 }
+
+describe('public SDK bootstrap', () => {
+	test('exports an early bootstrap entrypoint', () => {
+		const exports = publicApi as unknown as Record<string, unknown>;
+		assert.equal(typeof exports.startOpenTelemetry, 'function');
+	});
+});
 
 describe('shouldStartNodeSDK', () => {
 	test('true for ProxyTracerProvider without a real delegate', () => {

@@ -1,7 +1,7 @@
 import type { ContextManager } from '@opentelemetry/api';
 import { NodeSDK } from '@opentelemetry/sdk-node';
 
-type NodeSDKOptions = NonNullable<ConstructorParameters<typeof NodeSDK>[0]>;
+export type NodeSDKOptions = NonNullable<ConstructorParameters<typeof NodeSDK>[0]>;
 
 export const DEFAULT_SERVICE_NAME = 'seyfert';
 
@@ -37,6 +37,12 @@ export interface OpenTelemetryPluginOptions extends Partial<NodeSDKOptions> {
 	cache?: {
 		skipResources?: string[];
 	};
+}
+
+/** Options for starting OpenTelemetry before application modules are loaded. */
+export interface OpenTelemetryBootstrapOptions extends Partial<NodeSDKOptions> {
+	serviceName?: string;
+	contextManager?: ContextManager;
 }
 
 export interface ResolvedOpenTelemetryOptions {

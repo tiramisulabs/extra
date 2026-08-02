@@ -1,4 +1,5 @@
 import type { Attributes, Span } from '@opentelemetry/api';
+import type { InteractionHandlerKind } from './instrument/interactions';
 import { getCurrentSpan, record, type StartActiveSpan } from './trace-api';
 
 export interface TraceHandle {
@@ -6,9 +7,14 @@ export interface TraceHandle {
 	setAttributes(attributes: Attributes): boolean;
 	recordException(error: unknown): void;
 	record: StartActiveSpan;
+	instrumentInteractions(handlers: Iterable<object>, kind?: InteractionHandlerKind): number;
 }
 
-export function createTraceHandle(): TraceHandle {
+export interface TraceHandleOptions {
+	instrumentInteractions?: (handlers: Iterable<object>, kind?: InteractionHandlerKind) => number;
+}
+
+export function createTraceHandle(options: TraceHandleOptions = {}): TraceHandle {
 	return {
 		get span() {
 			return getCurrentSpan();
@@ -26,5 +32,8 @@ export function createTraceHandle(): TraceHandle {
 			span.recordException(err);
 		},
 		record,
+		instrumentInteractions(handlers, kind) {
+			return options.instrumentInteractions?.(handlers, kind) ?? 0;
+		},
 	};
 }

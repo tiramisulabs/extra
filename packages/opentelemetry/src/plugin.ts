@@ -3,7 +3,12 @@ import { createInteractionContextScope } from './context-scope';
 import { createTraceHandle } from './handle';
 import { instrumentCache } from './instrument/cache';
 import { instrumentEvents } from './instrument/events';
-import { registerInteractionInstrumentation } from './instrument/interactions';
+import {
+	type InteractionHandlerKind,
+	type InteractionInstrumentor,
+	instrumentInteractionMiddlewares,
+	registerInteractionInstrumentation,
+} from './instrument/interactions';
 import { instrumentRest } from './instrument/rest';
 import { type CoreMetrics, createCoreMetrics } from './metrics';
 import { type OpenTelemetryPluginOptions, resolvePluginOptions } from './options';
@@ -11,7 +16,11 @@ import { type OwnedSdk, startOwnedSdk } from './sdk';
 
 export function opentelemetry(options: OpenTelemetryPluginOptions = {}) {
 	const resolved = resolvePluginOptions(options);
-	const handle = createTraceHandle();
+	let interactionInstrumentor: InteractionInstrumentor | undefined;
+	const handle = createTraceHandle({
+		instrumentInteractions: (handlers: Iterable<object>, kind?: InteractionHandlerKind) =>
+			interactionInstrumentor?.instrument(handlers, kind) ?? 0,
+	});
 	let owned: OwnedSdk | undefined;
 	let metrics: CoreMetrics | undefined;
 	const cleanups: Array<() => void> = [];
@@ -50,7 +59,7 @@ export function opentelemetry(options: OpenTelemetryPluginOptions = {}) {
 		},
 		register(api) {
 			if (!resolved.traces.interactions) return;
-			registerInteractionInstrumentation(api, {
+			interactionInstrumentor = registerInteractionInstrumentation(api, {
 				checkIfShouldTrace: resolved.checkIfShouldTrace,
 			});
 		},
@@ -67,6 +76,13 @@ export function opentelemetry(options: OpenTelemetryPluginOptions = {}) {
 			// Keep an already-owned SDK; a second start would no-op and drop the handle.
 			owned ??= startOwnedSdk(resolved);
 			metrics = createCoreMetrics(resolved.metrics);
+			if (resolved.traces.interactions) {
+				cleanups.push(
+					instrumentInteractionMiddlewares(client, {
+						checkIfShouldTrace: resolved.checkIfShouldTrace,
+					}),
+				);
+			}
 
 			if (resolved.traces.events || resolved.metrics.events) {
 				cleanups.push(

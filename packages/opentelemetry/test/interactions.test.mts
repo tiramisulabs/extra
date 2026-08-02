@@ -4,6 +4,7 @@ import { assert, describe, test } from 'vitest';
 import { createInteractionContextScope } from '../src/context-scope';
 import { registerInteractionInstrumentation } from '../src/instrument/interactions';
 import { opentelemetry } from '../src/plugin';
+import { getTracer } from '../src/trace-api';
 import { installTestTracer } from './helpers/otel-test-provider.mts';
 
 function withProvider(run: (exporter: InMemorySpanExporter) => Promise<void> | void) {
@@ -413,6 +414,7 @@ describe('registerInteractionInstrumentation', () => {
 					) {
 						const instance = {
 							run(ctx: object) {
+								getTracer().startSpan('run dependency').end();
 								return `ran:${(ctx as { fullCommandName?: string }).fullCommandName}`;
 							},
 						};
@@ -453,6 +455,164 @@ describe('registerInteractionInstrumentation', () => {
 				assert.ok(child, childName);
 				assert.equal(child.parentSpanContext?.spanId, root.spanContext().spanId);
 			}
+			const run = spans.find(s => s.name === 'Run');
+			const dependency = spans.find(s => s.name === 'run dependency');
+			assert.ok(run);
+			assert.ok(dependency);
+			assert.equal(dependency.parentSpanContext?.spanId, run.spanContext().spanId);
+		});
+	});
+
+	test('creates one active child span per registered middleware', async () => {
+		await withProvider(async exporter => {
+			const hooks: Record<string, (...args: never[]) => void> = {};
+			const plugin = opentelemetry({
+				traces: { interactions: true, events: false, rest: false, cache: false },
+				metrics: { interactions: false, events: false, rest: false, cache: false },
+			});
+			plugin.register?.({
+				commands: {
+					defaults(h: object) {
+						Object.assign(hooks, h);
+					},
+				},
+				components: { defaults() {} },
+				modals: { defaults() {} },
+				handlers: { transform() {} },
+			} as never);
+
+			let nextCalls = 0;
+			const client = {
+				middlewares: {
+					usage: async (middle: { context: object; next: () => void }) => {
+						getTracer().startSpan('middleware dependency').end();
+						middle.next();
+					},
+				},
+			};
+			await plugin.setup?.(client as never, {} as never);
+
+			const scope = createInteractionContextScope({
+				checkIfShouldTrace: () => true,
+				getMetrics: () => undefined,
+			});
+			const ctx = { fullCommandName: 'referral stats' };
+			await scope(ctx, async () => {
+				hooks.onBeforeMiddlewares?.(ctx as never);
+				await client.middlewares.usage({
+					context: ctx,
+					next() {
+						nextCalls += 1;
+					},
+				});
+				hooks.onAfterRun?.(ctx as never, undefined as never);
+			});
+			await plugin.teardown?.({} as never);
+
+			assert.equal(nextCalls, 1);
+			const spans = exporter.getFinishedSpans();
+			const phase = spans.find(span => span.name === 'Middlewares');
+			const middleware = spans.find(span => span.name === 'middleware usage');
+			const dependency = spans.find(span => span.name === 'middleware dependency');
+			assert.ok(phase);
+			assert.ok(middleware);
+			assert.ok(dependency);
+			assert.equal(middleware.parentSpanContext?.spanId, phase.spanContext().spanId);
+			assert.equal(dependency.parentSpanContext?.spanId, middleware.spanContext().spanId);
+		});
+	});
+
+	test('wraps Run on nested subcommands', async () => {
+		await withProvider(async exporter => {
+			const hooks: Record<string, (...args: never[]) => void> = {};
+			let transformed: { options: Array<{ run: (ctx: object) => string }> } | undefined;
+			const api = {
+				commands: {
+					defaults(h: object) {
+						Object.assign(hooks, h);
+					},
+				},
+				components: { defaults() {} },
+				modals: { defaults() {} },
+				handlers: {
+					transform(transformer: (instance: object, metadata: { kind: string }) => void) {
+						transformed = {
+							options: [
+								{
+									run: ctx => `ran:${(ctx as { fullCommandName?: string }).fullCommandName}`,
+								},
+							],
+						};
+						transformer(transformed, { kind: 'command' });
+					},
+				},
+			};
+
+			registerInteractionInstrumentation(api, { checkIfShouldTrace: () => true });
+			assert.ok(transformed);
+
+			const scope = createInteractionContextScope({
+				checkIfShouldTrace: () => true,
+				getMetrics: () => undefined,
+			});
+			const ctx = { fullCommandName: 'referral stats' };
+			const result = scope(ctx, () => {
+				hooks.onBeforeOptions?.(ctx as never);
+				hooks.onBeforeMiddlewares?.(ctx as never);
+				const output = transformed?.options[0].run(ctx);
+				hooks.onAfterRun?.(ctx as never, undefined as never);
+				return output;
+			});
+
+			assert.equal(result, 'ran:referral stats');
+			assert.ok(exporter.getFinishedSpans().some(span => span.name === 'Run'));
+		});
+	});
+
+	test('can instrument handlers added after plugin registration', async () => {
+		await withProvider(async exporter => {
+			const hooks: Record<string, (...args: never[]) => void> = {};
+			const plugin = opentelemetry({
+				traces: { interactions: true, events: false, rest: false, cache: false },
+				metrics: { interactions: false, events: false, rest: false, cache: false },
+			});
+			plugin.register?.({
+				commands: {
+					defaults(h: object) {
+						Object.assign(hooks, h);
+					},
+				},
+				components: { defaults() {} },
+				modals: { defaults() {} },
+				handlers: { transform() {} },
+			} as never);
+
+			const handle = plugin.client?.trace?.({} as never) as unknown as {
+				instrumentInteractions?: (handlers: Iterable<object>, kind?: string) => number;
+			};
+			assert.equal(typeof handle.instrumentInteractions, 'function');
+
+			const lateCommand = {
+				options: [
+					{
+						run: (ctx: object) => `late:${(ctx as { fullCommandName?: string }).fullCommandName}`,
+					},
+				],
+			};
+			assert.equal(handle.instrumentInteractions?.([lateCommand], 'command'), 1);
+
+			const scope = createInteractionContextScope({
+				checkIfShouldTrace: () => true,
+				getMetrics: () => undefined,
+			});
+			const ctx = { fullCommandName: 'referral stats' };
+			scope(ctx, () => {
+				hooks.onBeforeMiddlewares?.(ctx as never);
+				lateCommand.options[0].run(ctx);
+				hooks.onAfterRun?.(ctx as never, undefined as never);
+			});
+
+			assert.ok(exporter.getFinishedSpans().some(span => span.name === 'Run'));
 		});
 	});
 

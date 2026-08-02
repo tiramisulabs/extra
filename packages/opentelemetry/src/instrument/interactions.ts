@@ -1,4 +1,4 @@
-import { type Span, SpanStatusCode } from '@opentelemetry/api';
+import { context as otelContext, trace as otelTrace, type Span, SpanStatusCode } from '@opentelemetry/api';
 import type { TraceSource } from '../options';
 import { getCurrentSpan, getTracer } from '../trace-api';
 
@@ -48,15 +48,17 @@ function endChild(context: unknown): void {
 	openChildren.delete(key);
 }
 
-function beginChild(context: unknown, name: string): void {
+function beginChild(context: unknown, name: string): Span | undefined {
 	const key = asContextKey(context);
-	if (!key) return;
+	if (!key) return undefined;
 	endChild(key);
 	try {
 		const span = getTracer().startSpan(name);
 		openChildren.set(key, span);
+		return span;
 	} catch {
 		// never throw from instrumentation
+		return undefined;
 	}
 }
 
@@ -194,13 +196,174 @@ function createComponentHooks(kind: 'component' | 'modal', deps: InteractionInst
 
 type RunnableInstance = {
 	run?: (context: unknown, ...args: unknown[]) => unknown;
+	options?: readonly unknown[];
 };
+
+export type InteractionHandlerKind = 'command' | 'component' | 'modal';
+
+export interface InteractionInstrumentor {
+	instrument(handlers: Iterable<object>, kind?: InteractionHandlerKind): number;
+}
+
+type MiddlewareInvocation = {
+	context?: unknown;
+	next?: (...args: unknown[]) => unknown;
+	stop?: (...args: unknown[]) => unknown;
+	[key: string]: unknown;
+};
+
+type MiddlewareHandler = (middle: MiddlewareInvocation) => unknown;
+
+type MiddlewareClient = {
+	middlewares?: Record<string, MiddlewareHandler>;
+};
+
+function markSpanError(span: Span, error: unknown): void {
+	const err = error instanceof Error ? error : new Error(String(error));
+	span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+	span.recordException(err);
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+	if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return false;
+	return typeof (value as { then?: unknown }).then === 'function';
+}
+
+function endSpanAfterResult(span: Span, result: unknown): unknown {
+	if (!isPromiseLike(result)) {
+		span.end();
+		return result;
+	}
+	return Promise.resolve(result).then(
+		value => {
+			span.end();
+			return value;
+		},
+		error => {
+			markSpanError(span, error);
+			span.end();
+			throw error;
+		},
+	);
+}
+
+function detectMiddlewareKind(context: unknown): InteractionHandlerKind {
+	if (context === null || typeof context !== 'object') return 'command';
+	const candidate = context as { isComponent?: () => boolean; isModal?: () => boolean };
+	try {
+		if (candidate.isModal?.()) return 'modal';
+		if (candidate.isComponent?.()) return 'component';
+	} catch {
+		// Fall back to command for incomplete third-party contexts.
+	}
+	return 'command';
+}
+
+/** Wrap registered Seyfert middleware functions with individually named spans. */
+export function instrumentInteractionMiddlewares(client: unknown, deps: InteractionInstrumentDeps): () => void {
+	const middlewareClient = client as MiddlewareClient;
+	const registry = middlewareClient.middlewares;
+	if (!registry) return () => undefined;
+
+	const restorations: Array<() => void> = [];
+	for (const [name, original] of Object.entries(registry)) {
+		if (typeof original !== 'function') continue;
+
+		const wrapped: MiddlewareHandler = function otelWrappedMiddleware(this: unknown, middle) {
+			const interactionContext = middle.context;
+			const key = asContextKey(interactionContext);
+			const phaseSpan = key ? openChildren.get(key) : undefined;
+			const kind = detectMiddlewareKind(interactionContext);
+			if (!phaseSpan || !shouldTrace(deps, kind, interactionContext)) {
+				return original.call(this, middle);
+			}
+
+			const phaseContext = otelTrace.setSpan(otelContext.active(), phaseSpan);
+			const next = middle.next;
+			const instrumentedMiddle =
+				typeof next === 'function'
+					? {
+							...middle,
+							next: (...args: unknown[]) => otelContext.with(phaseContext, () => next(...args)),
+						}
+					: middle;
+
+			return otelContext.with(phaseContext, () =>
+				getTracer().startActiveSpan(`middleware ${name}`, span => {
+					try {
+						return endSpanAfterResult(span, original.call(this, instrumentedMiddle));
+					} catch (error) {
+						markSpanError(span, error);
+						span.end();
+						throw error;
+					}
+				}),
+			);
+		};
+
+		registry[name] = wrapped;
+		restorations.push(() => {
+			if (registry[name] === wrapped) registry[name] = original;
+		});
+	}
+
+	return () => {
+		for (const restore of restorations.reverse()) restore();
+	};
+}
+
+function asRunnableInstance(value: unknown): RunnableInstance | undefined {
+	return value !== null && typeof value === 'object' ? (value as RunnableInstance) : undefined;
+}
+
+function createInteractionInstrumentor(deps: InteractionInstrumentDeps): InteractionInstrumentor {
+	const wrapped = new WeakSet<object>();
+
+	const instrumentOne = (value: unknown, kind: InteractionHandlerKind): number => {
+		const instance = asRunnableInstance(value);
+		if (!instance) return 0;
+
+		let count = 0;
+		const original = instance.run;
+		if (typeof original === 'function' && !wrapped.has(instance)) {
+			instance.run = function otelWrappedRun(this: unknown, context: unknown, ...rest: unknown[]) {
+				if (!shouldTrace(deps, kind, context)) {
+					return original.call(this, context, ...rest);
+				}
+				// Leave Middlewares (if open) and enter Run under the active root span.
+				const span = beginChild(context, 'Run');
+				if (!span) return original.call(this, context, ...rest);
+				const runContext = otelTrace.setSpan(otelContext.active(), span);
+				return otelContext.with(runContext, () => original.call(this, context, ...rest));
+			};
+			wrapped.add(instance);
+			count += 1;
+		}
+
+		if (kind === 'command' && Array.isArray(instance.options)) {
+			for (const option of instance.options) {
+				count += instrumentOne(option, kind);
+			}
+		}
+		return count;
+	};
+
+	return {
+		instrument(handlers, kind = 'command') {
+			let count = 0;
+			for (const handler of handlers) {
+				count += instrumentOne(handler, kind);
+			}
+			return count;
+		},
+	};
+}
 
 /**
  * Wrap `run` so a `Run` child starts when the main handler begins
  * (ends Middlewares if still open). Ended by onAfterRun defaults.
  */
-function installRunWrappers(api: InteractionApi, deps: InteractionInstrumentDeps): void {
+function installRunWrappers(api: InteractionApi, instrumentor: InteractionInstrumentor): void {
 	const transform = api.handlers?.transform;
 	if (typeof transform !== 'function') return;
 
@@ -208,20 +371,9 @@ function installRunWrappers(api: InteractionApi, deps: InteractionInstrumentDeps
 	(transform as (transformer: (instance: RunnableInstance, metadata: { kind: string }) => void) => void)(
 		(instance, metadata) => {
 			if (metadata.kind === 'event') return;
-			const original = instance.run;
-			if (typeof original !== 'function') return;
-
-			const kind: 'command' | 'component' | 'modal' =
+			const kind: InteractionHandlerKind =
 				metadata.kind === 'component' ? 'component' : metadata.kind === 'modal' ? 'modal' : 'command';
-
-			instance.run = function otelWrappedRun(this: unknown, context: unknown, ...rest: unknown[]) {
-				if (!shouldTrace(deps, kind, context)) {
-					return original.call(this, context, ...rest);
-				}
-				// Leave Middlewares (if open) and enter Run under the active root span.
-				beginChild(context, 'Run');
-				return original.call(this, context, ...rest);
-			};
+			instrumentor.instrument([instance], kind);
 		},
 	);
 }
@@ -234,9 +386,14 @@ function installRunWrappers(api: InteractionApi, deps: InteractionInstrumentDeps
  * - commands: onBeforeOptions, onBeforeMiddlewares, onAfterRun, onRunError, …
  * - components/modals: onBeforeMiddlewares, onAfterRun, onRunError, …
  */
-export function registerInteractionInstrumentation(api: InteractionApi, deps: InteractionInstrumentDeps): void {
+export function registerInteractionInstrumentation(
+	api: InteractionApi,
+	deps: InteractionInstrumentDeps,
+): InteractionInstrumentor {
+	const instrumentor = createInteractionInstrumentor(deps);
 	api.commands.defaults(createCommandHooks(deps));
 	api.components.defaults(createComponentHooks('component', deps));
 	api.modals.defaults(createComponentHooks('modal', deps));
-	installRunWrappers(api, deps);
+	installRunWrappers(api, instrumentor);
+	return instrumentor;
 }

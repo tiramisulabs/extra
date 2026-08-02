@@ -148,6 +148,7 @@ interface TraceHandle {
   setAttributes(attributes: Attributes): boolean;
   recordException(error: unknown): void;
   record: typeof record; // child active span
+  instrumentInteractions(handlers: Iterable<object>, kind?: 'command' | 'component' | 'modal'): number;
 }
 ```
 
@@ -160,6 +161,12 @@ await ctx.trace.record('load-settings', async () => {
 
 // Outside an active span, span is undefined; setAttributes returns false
 client.trace.span; // Span | undefined
+```
+
+Seyfert handlers registered after plugin setup can be instrumented explicitly. Command options and subcommands are traversed recursively:
+
+```ts
+client.trace.instrumentInteractions(lateCommands.values);
 ```
 
 Also exported: `createTraceHandle` and type `TraceHandle` if you need a handle in custom code.
@@ -183,7 +190,7 @@ Attributes are set only when values are available. Sensitive data is never captu
 
 **Root span names:** `command {name}`, `component {customId}`, `modal {customId}`.
 
-**Lifecycle children:** `Options` (commands), `Middlewares`, `Run`.
+**Lifecycle children:** `Options` (commands), `Middlewares`, `middleware {registeredName}` for each executed middleware, and `Run`. Code executed by a middleware or handler remains inside its corresponding active child span.
 
 ### Gateway events
 
@@ -241,6 +248,21 @@ Four duration histograms (unit `s`) in the package instrumentation scope. Instru
 For custom metrics, use `getMeter()` and the global meter provider (works whether or not this plugin owns the SDK).
 
 ## Preload / external SDK
+
+When instrumented libraries must see the SDK before application imports run, use `startOpenTelemetry` from a Node preload module:
+
+```ts
+// instrumentation.ts
+import { startOpenTelemetry } from '@slipher/opentelemetry';
+
+startOpenTelemetry({ serviceName: 'my-bot' });
+```
+
+```bash
+node --import ./dist/instrumentation.js dist/index.js
+```
+
+The plugin detects this provider and reuses it. Calling `startOpenTelemetry` when another real provider is already registered returns `undefined` without replacing it.
 
 If a real tracer provider is already registered (preload script, host process, tests):
 
