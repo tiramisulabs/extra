@@ -1,3 +1,4 @@
+export type { TelemetryMetadata } from './attributes';
 export { createTraceHandle, type TraceHandle } from './handle';
 export type {
 	OpenTelemetryBootstrapOptions,

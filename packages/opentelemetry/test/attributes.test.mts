@@ -1,5 +1,5 @@
 import { assert, describe, test } from 'vitest';
-import { extractInteractionAttributes, interactionSpanName, truncate } from '../src/attributes';
+import { extractInteractionAttributes, interactionSpanName } from '../src/attributes';
 
 describe('extractInteractionAttributes', () => {
 	test('pulls command fields', () => {
@@ -24,15 +24,34 @@ describe('interactionSpanName', () => {
 		assert.equal(interactionSpanName('command', { fullCommandName: 'ping' }), 'command ping');
 	});
 
-	test('truncates long customId', () => {
-		const id = 'x'.repeat(200);
-		const name = interactionSpanName('component', { customId: id });
-		assert.equal(name, `component ${'x'.repeat(63)}…`);
+	test('prefers a name declared by the handler', () => {
+		const context = { customId: 'open-settings:a1b2c3', command: { spanName: 'open-settings' } };
+		assert.equal(interactionSpanName('component', context), 'component open-settings');
 	});
 
-	test('truncate honors the full limit and does not split Unicode code points', () => {
-		assert.equal(truncate('abcdef', 4), 'abc…');
-		assert.equal(Array.from(truncate('😀'.repeat(100), 64)).length, 64);
-		assert.ok(truncate('😀'.repeat(100), 64).endsWith('…'));
+	test('resolves a declared name function against the context', () => {
+		const context = {
+			customId: 'menu:profile',
+			command: {
+				spanName: (ctx: unknown) => `menu:${String((ctx as { customId: string }).customId).split(':')[1]}`,
+			},
+		};
+		assert.equal(interactionSpanName('component', context), 'component menu:profile');
+	});
+
+	test('ignores a throwing declared name', () => {
+		const context = {
+			customId: 'btn-1',
+			command: {
+				spanName: () => {
+					throw new Error('boom');
+				},
+			},
+		};
+		assert.equal(interactionSpanName('component', context), 'component btn-1');
+	});
+
+	test('falls back to the custom id', () => {
+		assert.equal(interactionSpanName('component', { customId: 'btn-1' }), 'component btn-1');
 	});
 });
