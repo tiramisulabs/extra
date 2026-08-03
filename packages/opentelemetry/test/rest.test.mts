@@ -1,5 +1,6 @@
 import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
 import type { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
+import { SeyfertError } from 'seyfert';
 import { assert, describe, test } from 'vitest';
 import {
 	instrumentRest,
@@ -218,7 +219,7 @@ describe('instrumentRest (api.rest.observe)', () => {
 		});
 	});
 
-	test('fail with 4xx → CLIENT ERROR status', async () => {
+	test('Discord 4xx failure records its safe error details', async () => {
 		await withProvider(async exporter => {
 			const { api, getObserver } = fakeRestApi();
 			const cleanup = instrumentRest(api, {
@@ -232,16 +233,32 @@ describe('instrumentRest (api.rest.observe)', () => {
 				failPayload({
 					method: 'GET',
 					url: '/users/0',
-					error: new Error('Unknown User'),
+					error: new SeyfertError('API_Not Found_10013', {
+						metadata: {
+							response: {
+								code: 10013,
+								message: 'Unknown User',
+								token: 'SUPER_SECRET_WEBHOOK_TOKEN',
+							},
+						},
+					}),
 					statusCode: 404,
 				}),
 			);
 
 			const spans = exporter.getFinishedSpans();
 			assert.equal(spans.length, 1);
-			assert.equal(spans[0].attributes['http.response.status_code'], 404);
-			assert.equal(spans[0].status.code, SpanStatusCode.ERROR);
-			assert.equal(spans[0].attributes['error.type'], '404');
+			const span = spans[0];
+			const exception = span.events.find(event => event.name === 'exception');
+			assert.equal(span.attributes['http.response.status_code'], 404);
+			assert.equal(span.attributes['error.type'], '404');
+			assert.equal(span.attributes['discord.error.code'], 10013);
+			assert.equal(span.status.code, SpanStatusCode.ERROR);
+			assert.equal(span.status.message, 'Unknown User');
+			assert.equal(exception?.attributes?.['exception.type'], 'SeyfertError');
+			assert.equal(exception?.attributes?.['exception.message'], 'Unknown User');
+			assert.ok(exception?.attributes?.['exception.stacktrace']);
+			assert.ok(!JSON.stringify(span.events).includes('SUPER_SECRET_WEBHOOK_TOKEN'));
 
 			cleanup();
 		});

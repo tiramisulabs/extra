@@ -164,12 +164,28 @@ function recordRestMetrics(
 	}
 }
 
-function markError(span: Span, error: unknown): void {
+function getDiscordErrorDetails(error: Error): { code?: number | string; message?: string } {
+	const metadata = 'metadata' in error ? error.metadata : undefined;
+	if (!metadata || typeof metadata !== 'object' || !('response' in metadata)) return {};
+
+	const response = metadata.response;
+	if (!response || typeof response !== 'object') return {};
+
+	const rawCode = 'code' in response ? response.code : undefined;
+	const code = typeof rawCode === 'number' || typeof rawCode === 'string' ? rawCode : undefined;
+	const message = 'message' in response && typeof response.message === 'string' ? response.message : undefined;
+	return { code, message };
+}
+
+function markError(span: Span, error: unknown, errorType?: string): void {
 	try {
 		const err = error instanceof Error ? error : new Error(String(error));
-		span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
-		span.setAttribute(ATTR_ERROR_TYPE, err.name || 'Error');
-		span.recordException(err);
+		const details = getDiscordErrorDetails(err);
+		const message = details.message ?? err.message;
+		span.setStatus({ code: SpanStatusCode.ERROR, message });
+		span.setAttribute(ATTR_ERROR_TYPE, errorType ?? (err.name || 'Error'));
+		if (details.code !== undefined) span.setAttribute('discord.error.code', details.code);
+		span.recordException(details.message ? { message, name: err.name, stack: err.stack } : err);
 	} catch {
 		// never throw from instrumentation
 	}
@@ -334,6 +350,7 @@ export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDep
 					if (span) {
 						setStatusAttribute(span, status);
 						if (status === undefined) markError(span, payload.error);
+						else if (status >= 400 && payload.error instanceof Error) markError(span, payload.error, String(status));
 						else if (status >= 400) markHttpError(span, status);
 					}
 				} catch {

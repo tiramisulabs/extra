@@ -215,8 +215,9 @@ Attributes are set only when values are available. Sensitive data is never captu
 | `http.response.status_code` | Response status when known |
 | `http.request.resend_count` | 502/503 resend count when Seyfert retries |
 | `error.type` | HTTP status or exception type for failed client operations |
+| `discord.error.code` | Discord error code when Seyfert provides a structured Discord error |
 
-**Span name:** `{METHOD} {url.template}`; unknown methods use `HTTP {url.template}`. These are outbound HTTP `CLIENT` spans from the bot to Discord's API. HTTP 4xx/5xx and thrown client failures set span status `ERROR`. Seyfert 502/503 retries stay on one logical span and update `http.request.resend_count`.
+**Span name:** `{METHOD} {url.template}`; unknown methods use `HTTP {url.template}`. These are outbound HTTP `CLIENT` spans from the bot to Discord's API. HTTP 4xx/5xx and thrown client failures set span status `ERROR`. Discord failures also record an exception event with the safe response message and error code; the response body remains excluded. Seyfert 502/503 retries stay on one logical span and update `http.request.resend_count`.
 
 ### Cache
 
