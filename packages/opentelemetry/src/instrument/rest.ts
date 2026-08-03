@@ -10,7 +10,7 @@ import {
 	ATTR_URL_FULL,
 	ATTR_URL_PATH,
 } from '@opentelemetry/semantic-conventions';
-import { SeyfertError } from 'seyfert';
+import { type RESTError, SeyfertError } from 'seyfert';
 import { type CoreMetrics, durationSecondsSince } from '../metrics';
 import type { TraceSource } from '../options';
 import { getTracer } from '../trace-api';
@@ -165,25 +165,15 @@ function recordRestMetrics(
 	}
 }
 
-function getDiscordErrorDetails(error: SeyfertError): { code?: number | string; message?: string } {
-	const response = error.metadata?.response;
-	if (!response || typeof response !== 'object') return {};
-
-	const rawCode = 'code' in response ? response.code : undefined;
-	const code = typeof rawCode === 'number' || typeof rawCode === 'string' ? rawCode : undefined;
-	const message = 'message' in response && typeof response.message === 'string' ? response.message : undefined;
-	return { code, message };
-}
-
 function markError(span: Span, error: unknown, errorType?: string): void {
 	try {
 		const err = error instanceof Error ? error : new Error(String(error));
-		const details = SeyfertError.is(err) ? getDiscordErrorDetails(err) : {};
-		const message = details.message ?? err.message;
+		const response = SeyfertError.is(err) ? (err.metadata?.response as RESTError | undefined) : undefined;
+		const message = response?.message ?? err.message;
 		span.setStatus({ code: SpanStatusCode.ERROR, message });
 		span.setAttribute(ATTR_ERROR_TYPE, errorType ?? (err.name || 'Error'));
-		if (details.code !== undefined) span.setAttribute('discord.error.code', details.code);
-		span.recordException(details.message ? { message, name: err.name, stack: err.stack } : err);
+		if (response?.code !== undefined) span.setAttribute('discord.error.code', response.code);
+		span.recordException(response?.message ? { message, name: err.name, stack: err.stack } : err);
 	} catch {
 		// never throw from instrumentation
 	}
