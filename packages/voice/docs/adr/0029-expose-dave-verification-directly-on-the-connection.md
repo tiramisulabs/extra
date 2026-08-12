@@ -1,9 +1,0 @@
-# Expose DAVE verification directly on the connection
-
-`VoiceConnection` will expose `readonly voicePrivacyCode: string | null` and `getVerificationCode(userId: string): Promise<string>`. The property contains Discord's 30-digit Voice Privacy Code for the established DAVE group and is null when no nonzero DAVE group is established, including transport-only Stage participation. The method asynchronously derives Discord's 45-digit pairwise Verification Code for the bot and another active participant.
-
-Both results use the protocol's canonical unseparated ASCII decimal representation, preserve leading zeroes, and have exact lengths of 30 and 45 characters respectively. Grouping digits in sets of five is presentation owned by the application rather than a second core representation.
-
-Verification is connection-scoped because its inputs come from that media session. The public API will not expose a `DAVESession`, MLS group, verification manager, raw epoch authenticator, raw pairwise fingerprint, participant identity key, or Cryptographic Provider value. Applications receive the two displayable protocol results without gaining control over internal DAVE lifecycle or cryptography.
-
-`getVerificationCode()` rejects malformed or self-targeting IDs with `VOICE_INVALID_ARGUMENT` and a destroyed connection with `VOICE_CONNECTION_DESTROYED`. Other unavailable conditions use `VOICE_VERIFICATION_UNAVAILABLE`, including a connection that is not ready, protocol version 0, an absent participant, a participant identity that changes while asynchronous derivation is running, or a derivation failure. Availability metadata distinguishes these reasons and a derivation failure preserves its cause. Before resolving, the method revalidates that the target remains active with the same DAVE identity; an auxiliary verification failure never destroys an otherwise operational connection.

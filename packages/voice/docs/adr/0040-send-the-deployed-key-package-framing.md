@@ -1,3 +1,0 @@
-# Send the deployed KeyPackage framing
-
-Opcode 26 sends the bare RFC 9420 `KeyPackage` encoding accepted and validated by Discord's deployed Voice Gateway. The DAVE 1.1.4 whitepaper currently describes this field as `MLSMessage key_package_message`, but live interop testing on 2026-08-12 showed that the wrapped form is silently ignored while the same KeyPackage without the wrapper is proposed and its resulting commit is announced. The DAVE MLS model retains both the typed KeyPackage and its MLSMessage representation; this compatibility decision changes only the Voice Gateway payload and should be revalidated if Discord aligns its deployment with the whitepaper.

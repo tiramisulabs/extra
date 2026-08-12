@@ -1,5 +1,0 @@
-# Own atomic self voice state updates
-
-Initial `client.voice.connect()` options will accept `selfMute` and `selfDeaf`, defaulting to `false` and `true` respectively. A live `VoiceConnection` will expose async `setSelfState({ selfMute?, selfDeaf? })`; at least one property is required, omitted properties retain their latest Discord-confirmed value, and the package sends both effective booleans in the main-Gateway `Update Voice State` payload. The promise resolves only after the current bot's `VOICE_STATE_UPDATE` confirms both values.
-
-Self-state updates participate in the same per-guild operation arbitration as connection, movement, and disconnection so two opcode 4 intents cannot race. Equivalent updates share the pending operation and conflicting operations fail. Movement preserves the confirmed self state when its connect request omits those properties and applies explicit replacements atomically with the channel intent. Discord-originated self-state changes update the public snapshot authoritatively without changing the coarse connection lifecycle status.

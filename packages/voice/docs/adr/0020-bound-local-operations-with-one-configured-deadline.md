@@ -1,5 +1,0 @@
-# Bound local operations with one configured deadline
-
-The Voice Plugin will expose `operationTimeoutMs`, a positive finite duration defaulting to 30 seconds. The same total deadline bounds initial connection, movement, explicit disconnection, and self-state updates from local request through every required Discord confirmation and, where applicable, media readiness. Equivalent callers share both the operation and its deadline. Persistent recovery after a connection has been operational remains unbounded by this setting.
-
-When the deadline expires, every caller attached to that operation rejects and the connection reconciles with the latest authoritative main-Gateway state. A late Discord event is processed as a new external observation and cannot resolve the expired operation. Operations will not accept `AbortSignal`: because equivalent calls share one intent, per-caller abort would have ambiguous ownership. `client.voice.disconnect(guildId)` is the explicit semantic cancellation for connection, movement, and recovery.

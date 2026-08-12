@@ -1,7 +1,0 @@
-# Use a hybrid cryptographic provider
-
-The DAVE Engine and DAVE MLS Profile will consume one internal Cryptographic Provider whose session and media operations are synchronous. It uses the current v2 lines of `@noble/curves` and `@noble/hashes` for P-256, SHA-256, HMAC, and HKDF; `@noble/ciphers` for XChaCha20-Poly1305; and the runtimes' `node:crypto` compatibility layer for AES-128-GCM and AES-256-GCM. The on-demand scrypt operation used for pairwise DAVE verification is asynchronous so it does not synchronously block the event loop. Dependency-specific values and errors do not cross the provider boundary.
-
-Discord requires XChaCha20-Poly1305 transport support, prefers AES-256-GCM transport when offered, and DAVE version 1 uses AES-128-GCM media encryption. WebCrypto cannot provide the required XChaCha primitive and would make the per-frame interface asynchronous. A libsodium-backed provider would add asynchronous WASM initialization and packaging behavior, while using Noble's pure-JavaScript AES would retain its documented T-table timing caveat. The hybrid keeps the hot path synchronous and avoids a package-specific bundler: Noble v2 can be loaded by CommonJS on the supported Node baseline, and representative primitive operations must remain part of the Node, Bun, and Deno compatibility suite.
-
-The provider is not a public extension point in the initial contract. Tests may replace or instrument it through internal seams, but applications cannot inject arbitrary cryptography or observe provider-specific types.
