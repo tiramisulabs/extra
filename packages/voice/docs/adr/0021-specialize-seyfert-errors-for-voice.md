@@ -1,0 +1,5 @@
+# Specialize Seyfert errors for voice
+
+Package-originated runtime and operation failures will use a public generic `VoiceError<Code>` extending Seyfert's `SeyfertError`. It preserves `code`, `metadata`, `cause`, serialization, and stack behavior and adds a voice-specific static type guard. Public code branches on exported stable `VoiceErrorCode` values rather than messages, close reasons, or internal error classes.
+
+The initial codes are `VOICE_INVALID_ARGUMENT`, `VOICE_NOT_CONNECTED`, `VOICE_MOVE_REQUIRED`, `VOICE_OPERATION_CONFLICT`, `VOICE_OPERATION_TIMEOUT`, `VOICE_CONNECTION_DESTROYED`, `VOICE_CONNECTION_FAILED`, `VOICE_PROTOCOL_ERROR`, and `VOICE_RUNTIME_UNSUPPORTED`. DAVE verification adds `VOICE_VERIFICATION_UNAVAILABLE`. Context such as guild, channel, operation, lifecycle status, Discord close code, verification target, and availability reason belongs in metadata; lower-level failures remain available as `cause`. New protocol capabilities may add codes without creating a subclass hierarchy.
