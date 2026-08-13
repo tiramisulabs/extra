@@ -70,6 +70,16 @@ describe('GuildPlayer', () => {
 		expect(trackEndReasons(harness.events)).toEqual(['finished']);
 	});
 
+	test('inserts a batch atomically at a pending queue position', async () => {
+		const harness = createHarness();
+		await harness.player.enqueue([track('current'), track('last')]);
+		const inserted = await harness.player.enqueue([track('next'), track('after-next')], { position: 0 });
+
+		expect(harness.player.current?.track.identifier).toBe('current');
+		expect(harness.player.queue.map(item => item.track.identifier)).toEqual(['next', 'after-next', 'last']);
+		expect(harness.player.queue.slice(0, 2)).toEqual(inserted);
+	});
+
 	test('fences a late playback rejection when voice becomes unavailable', async () => {
 		const harness = createHarness();
 		const first = await harness.player.enqueue(track('first'));
@@ -94,6 +104,7 @@ describe('GuildPlayer', () => {
 
 	test('skip and stop do not repeat tracks', async () => {
 		const harness = createHarness();
+		await expect(harness.player.skip()).resolves.toBeUndefined();
 		await harness.player.setRepeat('track');
 		await harness.player.enqueue([track('first'), track('second')]);
 		await harness.player.skip();
@@ -103,6 +114,28 @@ describe('GuildPlayer', () => {
 		expect(harness.player.current).toBeNull();
 		expect(harness.player.queue).toEqual([]);
 		expect(trackEndReasons(harness.events)).toEqual(['skipped', 'stopped']);
+	});
+
+	test('skips the current track and the requested number of pending items', async () => {
+		const harness = createHarness();
+		await harness.player.enqueue([track('first'), track('second'), track('third'), track('fourth')]);
+		await harness.player.skip(3);
+
+		expect(harness.player.current?.track.identifier).toBe('fourth');
+		expect(harness.player.queue).toEqual([]);
+		expect(harness.player.history.map(entry => entry.item.track.identifier)).toEqual(['first']);
+		expect(trackEndReasons(harness.events)).toEqual(['skipped']);
+	});
+
+	test('skips pending items while voice is unavailable without adding them to history', async () => {
+		const harness = createHarness(false);
+		await harness.player.enqueue([track('first'), track('second'), track('third')]);
+		await harness.player.skip(2);
+
+		expect(harness.player.current).toBeNull();
+		expect(harness.player.queue.map(item => item.track.identifier)).toEqual(['third']);
+		expect(harness.player.history).toEqual([]);
+		expect(harness.player.state).toEqual({ status: 'waiting', reason: 'voice-unavailable' });
 	});
 
 	test('keeps bounded chronological history snapshots with explicit end reasons', async () => {
@@ -127,10 +160,39 @@ describe('GuildPlayer', () => {
 		expect(Object.isFrozen(history)).toBe(true);
 		expect(Object.isFrozen(history[0])).toBe(true);
 		expect(Object.isFrozen(history[0]!.item)).toBe(true);
+		expect(harness.player.previous).toBe(history.at(-1));
 
 		await harness.player.clearHistory();
 		expect(harness.player.history).toEqual([]);
+		expect(harness.player.previous).toBeNull();
 		expect(history).toHaveLength(2);
+	});
+
+	test('reports finite position from the seek offset and transmitted Opus duration', async () => {
+		const harness = createHarness();
+		await harness.player.enqueue(track('finite'));
+		expect(harness.player.positionMs).toBe(0);
+		await flushWork();
+		harness.playbacks[0]!.advance(1_250);
+		expect(harness.player.positionMs).toBe(1_250);
+
+		await harness.player.seek(3_000);
+		expect(harness.player.positionMs).toBe(3_000);
+		await flushWork();
+		harness.playbacks[1]!.advance(250);
+		expect(harness.player.positionMs).toBe(3_250);
+
+		harness.playbacks[1]!.finish();
+		await flushWork();
+		expect(harness.player.positionMs).toBeNull();
+	});
+
+	test('does not expose a finite position for live media', async () => {
+		const harness = createHarness();
+		await harness.player.enqueue(track('radio', { kind: 'live' }));
+		await flushWork();
+		harness.playbacks[0]!.advance(5_000);
+		expect(harness.player.positionMs).toBeNull();
 	});
 
 	test('publishes terminal snapshots before track and queue end events', async () => {
@@ -373,6 +435,14 @@ describe('GuildPlayer', () => {
 			harness.player.enqueue(track('invalid-timeline', { kind: 'finite', durationMs: Number.NaN, seekable: true })),
 		).rejects.toMatchObject({ code: 'PLAYER_INVALID_ARGUMENT' });
 		const item = await harness.player.enqueue(track('queued'));
+		await expect(harness.player.enqueue(track('before'), { position: -1 })).rejects.toMatchObject({
+			code: 'PLAYER_INVALID_ARGUMENT',
+		});
+		await expect(harness.player.enqueue(track('after'), { position: 2 })).rejects.toMatchObject({
+			code: 'PLAYER_INVALID_ARGUMENT',
+		});
+		await expect(harness.player.skip(0)).rejects.toMatchObject({ code: 'PLAYER_INVALID_ARGUMENT' });
+		await expect(harness.player.skip(2)).rejects.toMatchObject({ code: 'PLAYER_INVALID_ARGUMENT' });
 		await expect(harness.player.move(item.id, 1)).rejects.toMatchObject({ code: 'PLAYER_INVALID_ARGUMENT' });
 		await expect(harness.player.setRepeat('invalid' as never)).rejects.toMatchObject({
 			code: 'PLAYER_INVALID_ARGUMENT',
@@ -466,10 +536,27 @@ class FakePlayback {
 	readonly source: VoicePlaybackSource;
 	readonly #completion = Promise.withResolvers<void>();
 	readonly stop = vi.fn(async () => this.#completion.resolve());
-	readonly playback = { done: this.#completion.promise, stop: this.stop };
+	readonly playback: {
+		readonly done: Promise<void>;
+		readonly playedDurationMs: number;
+		stop(): Promise<void>;
+	};
+	#playedDurationMs = 0;
 
 	constructor(source: VoicePlaybackSource) {
 		this.source = source;
+		const playback = this;
+		this.playback = {
+			done: this.#completion.promise,
+			get playedDurationMs() {
+				return playback.#playedDurationMs;
+			},
+			stop: this.stop,
+		};
+	}
+
+	advance(durationMs: number): void {
+		this.#playedDurationMs += durationMs;
 	}
 
 	finish(): void {

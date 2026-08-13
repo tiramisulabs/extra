@@ -60,6 +60,8 @@ await client.voice.disconnect(guildId);
 
 There is at most one live connection per guild. Calling `connect()` for another channel requires `move: true`; otherwise it rejects with `VOICE_MOVE_REQUIRED`. Equivalent in-flight requests share one promise, while conflicting operations reject instead of forming an implicit queue.
 
+`connection.channelId` is the last channel Discord confirmed for that connection, or `null` before the first confirmation. During a move it remains the previous channel until Discord confirms the destination, so it can be compared with the invoking member's voice channel without treating an in-flight target as already joined.
+
 `client.voice.connections` is a live `ReadonlyMap<string, VoiceConnection>`. Each connection exposes an immutable `state` snapshot with one of these statuses:
 
 - `connecting`
@@ -99,6 +101,8 @@ const playback = connection.play(opusPackets);
 // Later, if the owner wants to end this transmission:
 await playback.stop();
 ```
+
+`playback.playedDurationMs` reports the duration of source audio successfully sent to the voice transport. It is calculated from the Opus packet sample counts, remains stable during source underflow, and excludes the five closing silence frames.
 
 The connection owns Opus timing, RTP sequence and timestamp progression, speaking signaling, five-frame silence termination, DAVE frame encryption, and Discord transport encryption. It pauses speaking cleanly during source underflow and resumes the same playback when another packet arrives.
 

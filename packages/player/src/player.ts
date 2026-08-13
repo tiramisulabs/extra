@@ -32,6 +32,7 @@ export class GuildPlayer {
 	#destroyNotified = false;
 	#pauseOnOpen = false;
 	#currentStarted = false;
+	#positionBaseMs = 0;
 
 	private constructor(guildId: string, actions: GuildPlayerActions, voiceAvailable: boolean, historyLimit: number) {
 		this.guildId = guildId;
@@ -56,6 +57,17 @@ export class GuildPlayer {
 		return Object.freeze([...this.#historyEntries]);
 	}
 
+	/** Most recently completed history entry. */
+	get previous(): PlayerHistoryEntry | null {
+		return this.#historyEntries.at(-1) ?? null;
+	}
+
+	/** Position in finite media based on Opus audio sent to Discord, or `null` for live media and no current item. */
+	get positionMs(): number | null {
+		if (!this.#current || this.#current.track.timeline.kind === 'live') return null;
+		return this.#positionBaseMs + (this.#active?.playback.playedDurationMs ?? 0);
+	}
+
 	get repeatMode(): PlayerRepeatMode {
 		return this.#repeatMode;
 	}
@@ -75,8 +87,18 @@ export class GuildPlayer {
 					metadata: { detail: 'At least one media track is required.' },
 				});
 			}
+			const position = options.position ?? this.#items.length;
+			if (!Number.isSafeInteger(position) || position < 0 || position > this.#items.length) {
+				throw new PlayerError('PLAYER_INVALID_ARGUMENT', {
+					metadata: {
+						detail: 'A player enqueue position must be an index in the pending queue.',
+						field: 'position',
+						received: options.position,
+					},
+				});
+			}
 			const items = tracks.map(track => this.createItem(track, options.metadata));
-			this.#items.push(...items);
+			this.#items.splice(position, 0, ...items);
 			this.startNextIfPossible();
 			return many ? Object.freeze([...items]) : items[0]!;
 		});
@@ -139,10 +161,31 @@ export class GuildPlayer {
 		});
 	}
 
-	skip(): Promise<void> {
+	/** Ends the current item and bypasses additional pending items when `count` is greater than one. */
+	skip(count = 1): Promise<void> {
 		return this.mutate(async () => {
 			this.assertAlive();
+			if (!Number.isSafeInteger(count) || count < 1) {
+				throw new PlayerError('PLAYER_INVALID_ARGUMENT', {
+					metadata: { detail: 'A skip count must be a positive safe integer.', field: 'count', received: count },
+				});
+			}
+			const available = this.#items.length + Number(this.#current !== null);
+			if (available === 0 && count === 1) return;
+			if (count > available) {
+				throw new PlayerError('PLAYER_INVALID_ARGUMENT', {
+					metadata: {
+						detail: 'A skip count cannot exceed the current and pending queue.',
+						field: 'count',
+						received: count,
+						available,
+					},
+				});
+			}
+			const pendingCount = count - Number(this.#current !== null);
+			if (pendingCount > 0) this.#items.splice(0, pendingCount);
 			if (!this.#current) {
+				this.finishQueueRemoval(pendingCount);
 				this.startNextIfPossible();
 				return;
 			}
@@ -342,12 +385,14 @@ export class GuildPlayer {
 		const item = this.#items.shift()!;
 		this.#current = item;
 		this.#currentStarted = false;
+		this.#positionBaseMs = 0;
 		this.openCurrent();
 	}
 
 	private openCurrent(startAtMs?: number, paused = false): void {
 		const item = this.#current;
 		if (!item) return;
+		if (startAtMs !== undefined) this.#positionBaseMs = startAtMs;
 		const generation = ++this.#generation;
 		const abort = new AbortController();
 		this.#pauseOnOpen = paused;
@@ -570,6 +615,7 @@ interface ActivePlayback {
 
 interface PlayerPlayback {
 	readonly done: Promise<void>;
+	readonly playedDurationMs: number;
 	stop(): Promise<void>;
 }
 

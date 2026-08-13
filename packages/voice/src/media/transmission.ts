@@ -23,6 +23,7 @@ export class VoiceAudioTransmission {
 	#returnRequested = false;
 	#started = false;
 	#settled = false;
+	#playedSamples = 0;
 
 	constructor(source: VoicePlaybackSource, output: VoiceTransmissionOutput) {
 		if (!source || typeof source[Symbol.asyncIterator] !== 'function') {
@@ -33,7 +34,11 @@ export class VoiceAudioTransmission {
 		this.#done = this.run().finally(() => {
 			this.#settled = true;
 		});
-		this.playback = VoicePlayback.create(this.#done, () => this.stop());
+		this.playback = VoicePlayback.create(
+			this.#done,
+			() => this.stop(),
+			() => samplesToMilliseconds(this.#playedSamples),
+		);
 	}
 
 	stop(): Promise<void> {
@@ -70,7 +75,7 @@ export class VoiceAudioTransmission {
 			this.#output.setSpeaking(true);
 			this.#started = true;
 			let scheduledAt = this.#output.now();
-			await this.#output.sendFrame(packet, samples);
+			await this.sendMediaFrame(packet, samples);
 
 			while (true) {
 				const deadline = scheduledAt + samplesToMilliseconds(samples);
@@ -84,7 +89,7 @@ export class VoiceAudioTransmission {
 						return;
 					}
 					scheduledAt = deadline;
-					await this.#output.sendFrame(packet, samples);
+					await this.sendMediaFrame(packet, samples);
 					continue;
 				}
 
@@ -108,11 +113,16 @@ export class VoiceAudioTransmission {
 				samples = getOpusPacketSamples(packet);
 				this.#output.setSpeaking(true);
 				scheduledAt = resumeAt;
-				await this.#output.sendFrame(packet, samples);
+				await this.sendMediaFrame(packet, samples);
 			}
 		} finally {
 			if (this.#started) this.setSpeakingFalseQuietly();
 		}
+	}
+
+	private async sendMediaFrame(frame: Uint8Array, samples: number): Promise<void> {
+		await this.#output.sendFrame(frame, samples);
+		this.#playedSamples += samples;
 	}
 
 	private nextPacket(): Promise<PacketOutcome> {

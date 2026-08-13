@@ -35,7 +35,7 @@ function createVoiceConnection(state: VoiceConnectionState = readyState()) {
 	let currentState = state;
 	const play = vi.fn(() => {
 		const done = new Promise<void>(() => undefined);
-		return { done, stop: vi.fn(async () => undefined) };
+		return { done, playedDurationMs: 0, stop: vi.fn(async () => undefined) };
 	});
 	const connection = Object.create(VoiceConnection.prototype, {
 		guildId: { value: GUILD_ID, enumerable: true },
@@ -77,6 +77,7 @@ describe('PlayerManager', () => {
 
 		expect(manager.create(first.connection)).toBe(player);
 		expect(manager.get(GUILD_ID)).toBe(player);
+		expect(player.positionMs).toBeNull();
 		expect(() => (manager.players as Map<string, GuildPlayer>).clear()).toThrow();
 
 		const second = createVoiceConnection();

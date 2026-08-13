@@ -66,6 +66,8 @@ export interface PlayerResolveOptions {
 
 export interface PlayerEnqueueOptions {
 	readonly metadata?: unknown;
+	/** Zero-based insertion index in the pending queue. Defaults to the end. */
+	readonly position?: number;
 }
 
 export interface PlayerQueueItem {

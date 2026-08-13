@@ -117,19 +117,24 @@ implementations propagate unchanged, so a provider can preserve its own typed fa
 
 ```ts
 await guildPlayer.enqueue([firstTrack, secondTrack]);
+await guildPlayer.enqueue(playNextTrack, { position: 0 });
 await guildPlayer.pause();
 await guildPlayer.resume();
-await guildPlayer.skip();
+await guildPlayer.skip(2);
 await guildPlayer.seek(30_000);
 await guildPlayer.setRepeat('queue');
 await guildPlayer.stop();
 ```
+
+`position` is a zero-based index in the pending queue, so position `0` atomically inserts a track next without exposing an intermediate append-and-move state. A skip count includes the current item; bypassed pending items never enter history because they were never current.
 
 `guildPlayer.history` is an oldest-to-newest list of immutable `{ item, reason }` snapshots. It records every item that
 became current, including `finished`, `skipped`, `stopped`, `load-failed`, `connection-unavailable`, and `destroyed`
 outcomes. The default keeps the latest 100 entries; set `historyLimit: 0` to disable it, or call
 `await guildPlayer.clearHistory()` to clear it. History snapshots intentionally omit queue metadata and the private
 byte payload of `bytes()` tracks so completed items do not retain arbitrary application state or media buffers.
+
+`guildPlayer.previous` is the most recent history entry. For finite media, `guildPlayer.positionMs` combines the latest seek offset with the duration of Opus audio actually sent to Discord. It is `null` for live media or when no item is current.
 
 The public state is `idle`, `waiting`, `loading`, `playing`, `paused`, or `destroyed`. When voice becomes unavailable,
 the current item ends with `connection-unavailable` and queued items wait for a playable connection. Muting the bot,

@@ -39,7 +39,11 @@ class FakeTransport implements VoiceTransportSession {
 	readonly abortPlayback = vi.fn();
 	readonly play = vi.fn(() => {
 		const done = Promise.resolve();
-		return VoicePlayback.create(done, () => done);
+		return VoicePlayback.create(
+			done,
+			() => done,
+			() => 0,
+		);
 	});
 	readonly getVerificationCode = vi.fn(async () => '123451234512345123451234512345123451234512345');
 
@@ -214,8 +218,10 @@ describe('VoiceManager', () => {
 		const harness = createHarness();
 		const first = harness.manager.connect({ guildId: GUILD_ID, channelId: CHANNEL_ONE });
 		const equivalent = harness.manager.connect({ guildId: GUILD_ID, channelId: CHANNEL_ONE });
+		const connection = harness.manager.connections.get(GUILD_ID)!;
 
 		expect(equivalent).toBe(first);
+		expect(connection.channelId).toBeNull();
 		expect(harness.sent).toEqual([
 			{
 				op: GatewayOpcodes.VoiceStateUpdate,
@@ -244,9 +250,10 @@ describe('VoiceManager', () => {
 			endpoint: 'voice.example.test',
 		});
 		expect(harness.manager.connections.get(GUILD_ID)?.state.status).toBe('connecting');
+		expect(connection.channelId).toBe(CHANNEL_ONE);
 
 		harness.transports[0].readiness.resolve();
-		const connection = await first;
+		await expect(first).resolves.toBe(connection);
 
 		expect(connection.state.status).toBe('ready');
 		expect(Object.isFrozen(connection.state)).toBe(true);
@@ -303,9 +310,11 @@ describe('VoiceManager', () => {
 		});
 
 		const moved = harness.manager.connect({ guildId: GUILD_ID, channelId: CHANNEL_TWO, move: true });
+		expect(connection.channelId).toBe(CHANNEL_ONE);
 		harness.manager.enqueueGatewayDispatch(voiceStatePacket({ channelId: CHANNEL_TWO, sessionId: 'session-two' }), 0);
 		harness.manager.enqueueGatewayDispatch(voiceServerPacket('token-two'), 0);
 		await flushGatewayWork();
+		expect(connection.channelId).toBe(CHANNEL_TWO);
 
 		expect(firstTransport.close).toHaveBeenCalledOnce();
 		expect(harness.transports).toHaveLength(2);
@@ -313,6 +322,7 @@ describe('VoiceManager', () => {
 
 		await expect(moved).resolves.toBe(connection);
 		expect(connection.state).toMatchObject({ status: 'ready', confirmed: { channelId: CHANNEL_TWO } });
+		expect(connection.channelId).toBe(CHANNEL_TWO);
 		expect(harness.manager.connections.get(GUILD_ID)).toBe(connection);
 	});
 
@@ -443,7 +453,11 @@ describe('VoiceManager', () => {
 				ready: Promise.resolve(),
 				play: () => {
 					const done = Promise.resolve();
-					return VoicePlayback.create(done, () => done);
+					return VoicePlayback.create(
+						done,
+						() => done,
+						() => 0,
+					);
 				},
 				abortPlayback: () => {},
 				close: async () => session.close(),

@@ -38,6 +38,11 @@ export class VoiceConnection {
 		return this.#state;
 	}
 
+	/** The last voice channel Discord confirmed for this connection, or `null` before the first confirmation. */
+	get channelId(): string | null {
+		return this.#state.confirmed?.channelId ?? null;
+	}
+
 	get voicePrivacyCode(): string | null {
 		return this.#voicePrivacyCode;
 	}

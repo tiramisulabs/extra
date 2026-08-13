@@ -55,9 +55,13 @@ expectType<GuildPlayer>(guildPlayer);
 expectType<GuildPlayer | undefined>(extension.player.get(connection.guildId));
 expectType<Promise<MediaLoadResult>>(extension.player.resolve('https://example.com/audio.ogg'));
 expectType<Promise<PlayerQueueItem>>(guildPlayer.enqueue(track));
+expectType<Promise<PlayerQueueItem>>(guildPlayer.enqueue(track, { position: 0 }));
 expectType<Promise<readonly PlayerQueueItem[]>>(guildPlayer.enqueue([track]));
 expectType<readonly PlayerHistoryEntry[]>(guildPlayer.history);
+expectType<PlayerHistoryEntry | null>(guildPlayer.previous);
+expectType<number | null>(guildPlayer.positionMs);
 expectType<Promise<void>>(guildPlayer.clearHistory());
+expectType<Promise<void>>(guildPlayer.skip(2));
 
 createEvent({
 	data: { name: 'playerStateChange' },
