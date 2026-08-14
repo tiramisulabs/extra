@@ -32,7 +32,7 @@
 		"checkb": "biome check --write --no-errors-on-unmatched ./src ./test",
 		"typecheck": "tsc --noEmit --project ./test/tsconfig.json",
 		"test": "pnpm typecheck && vitest run --config ./test/vitest.config.mts ./test/",
-		"prepublish": "pnpm build"
+		"prepublishOnly": "pnpm build"
 	},
 	"dependencies": {
 		"serialize-error": "^13.0.1"
@@ -41,13 +41,13 @@
 		"@opentelemetry/api": "^1.9.1",
 		"@opentelemetry/context-async-hooks": "^2.0.1",
 		"@types/node": "^26.0.1",
-		"evlog": "^2.18.1",
+		"evlog": "^2.26.0",
 		"seyfert": "^5.0.0",
 		"typescript": "^6.0.3"
 	},
 	"peerDependencies": {
 		"@opentelemetry/api": "^1.9.1",
-		"evlog": "^2.18.1",
+		"evlog": "^2.26.0",
 		"seyfert": ">=5.0.0"
 	},
 	"peerDependenciesMeta": {
