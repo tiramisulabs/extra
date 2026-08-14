@@ -1,4 +1,4 @@
-import { VoiceConnection, type VoiceConnectionState, voice } from '@slipher/voice';
+import { VoiceConnection, type VoiceConnectionState } from '@slipher/voice';
 import { describe, expect, test, vi } from 'vitest';
 import { type GuildPlayer, PlayerManager } from '../src';
 import type { MediaLoadResult, MediaProvider, MediaTrack } from '../src/types';
@@ -71,7 +71,7 @@ async function flushWork(iterations = 16): Promise<void> {
 
 describe('PlayerManager', () => {
 	test('owns one player per live connection and exposes a runtime read-only registry', async () => {
-		const manager = PlayerManager.create({ voice: voice() });
+		const manager = PlayerManager.create();
 		const first = createVoiceConnection();
 		const player = manager.create(first.connection);
 
@@ -91,7 +91,7 @@ describe('PlayerManager', () => {
 	});
 
 	test('rejects a voice connection that was already destroyed', async () => {
-		const manager = PlayerManager.create({ voice: voice() });
+		const manager = PlayerManager.create();
 		const destroyed = createVoiceConnection(destroyedState());
 
 		expect(() => manager.create(destroyed.connection)).toThrowError(
@@ -101,17 +101,17 @@ describe('PlayerManager', () => {
 	});
 
 	test('validates the configured history bound before allocating players', () => {
-		expect(() => PlayerManager.create({ voice: voice(), historyLimit: -1 })).toThrowError(
+		expect(() => PlayerManager.create({ historyLimit: -1 })).toThrowError(
 			expect.objectContaining({ code: 'PLAYER_INVALID_ARGUMENT' }),
 		);
-		expect(() => PlayerManager.create({ voice: voice(), historyLimit: 1.5 })).toThrowError(
+		expect(() => PlayerManager.create({ historyLimit: 1.5 })).toThrowError(
 			expect.objectContaining({ code: 'PLAYER_INVALID_ARGUMENT' }),
 		);
 	});
 
 	test('rebinds a destroyed voice connection while preserving the player and queued work', async () => {
 		const { provider } = createProvider();
-		const manager = PlayerManager.create({ voice: voice(), providers: [provider] });
+		const manager = PlayerManager.create({ providers: [provider] });
 		const first = createVoiceConnection({
 			status: 'connecting',
 			confirmed: null,
@@ -135,7 +135,7 @@ describe('PlayerManager', () => {
 
 	test('fences playback from a destroyed connection when rebind wins the old state event race', async () => {
 		const { close, provider } = createProvider();
-		const manager = PlayerManager.create({ voice: voice(), providers: [provider] });
+		const manager = PlayerManager.create({ providers: [provider] });
 		const first = createVoiceConnection();
 		const guildPlayer = manager.create(first.connection);
 		await guildPlayer.enqueue([createTrack('custom', 'current'), createTrack('custom', 'next')]);
@@ -157,7 +157,7 @@ describe('PlayerManager', () => {
 
 	test('routes only the current voice connection state and treats mute or suppression as unavailable', async () => {
 		const { provider } = createProvider();
-		const manager = PlayerManager.create({ voice: voice(), providers: [provider] });
+		const manager = PlayerManager.create({ providers: [provider] });
 		const current = createVoiceConnection();
 		const player = manager.create(current.connection);
 		await player.enqueue(createTrack());
@@ -181,7 +181,7 @@ describe('PlayerManager', () => {
 		'asynchronous',
 	] as const)('isolates %s Seyfert event and logger failures from player transitions', async mode => {
 		const { provider } = createProvider();
-		const manager = PlayerManager.create({ voice: voice(), providers: [provider] });
+		const manager = PlayerManager.create({ providers: [provider] });
 		const eventError = new Error(`${mode} event failure`);
 		const loggerError = new Error(`${mode} logger failure`);
 		const emit = vi.fn(() => {
@@ -206,7 +206,7 @@ describe('PlayerManager', () => {
 		const first = createProvider('first').provider;
 		const second = createProvider('second').provider;
 		vi.mocked(first.resolve!).mockResolvedValue(null);
-		const manager = PlayerManager.create({ voice: voice(), providers: [first, second] });
+		const manager = PlayerManager.create({ providers: [first, second] });
 
 		await expect(manager.resolve('match')).resolves.toMatchObject({ kind: 'track', track: { provider: 'second' } });
 		expect(first.resolve).toHaveBeenCalledBefore(vi.mocked(second.resolve!));
@@ -214,7 +214,7 @@ describe('PlayerManager', () => {
 		await expect(manager.resolve('match', { provider: '' })).rejects.toMatchObject({ code: 'PLAYER_INVALID_ARGUMENT' });
 		await manager.close();
 
-		expect(() => PlayerManager.create({ voice: voice(), providers: [createProvider('file').provider] })).toThrowError(
+		expect(() => PlayerManager.create({ providers: [createProvider('file').provider] })).toThrowError(
 			expect.objectContaining({ code: 'PLAYER_INVALID_ARGUMENT' }),
 		);
 	});
@@ -223,7 +223,7 @@ describe('PlayerManager', () => {
 		const pending = Promise.withResolvers<MediaLoadResult | null>();
 		const provider = createProvider().provider;
 		vi.mocked(provider.resolve!).mockReturnValue(pending.promise);
-		const manager = PlayerManager.create({ voice: voice(), providers: [provider] });
+		const manager = PlayerManager.create({ providers: [provider] });
 		const abort = new AbortController();
 		const resolving = manager.resolve('match', { provider: 'custom', signal: abort.signal });
 		abort.abort(new Error('cancelled'));
@@ -248,7 +248,7 @@ describe('PlayerManager', () => {
 		const cleanupFailure = new Error('custom resource close failed');
 		const { close, provider } = createProvider();
 		close.mockRejectedValueOnce(cleanupFailure);
-		const manager = PlayerManager.create({ voice: voice(), providers: [provider] });
+		const manager = PlayerManager.create({ providers: [provider] });
 		const guildPlayer = manager.create(createVoiceConnection().connection);
 		await guildPlayer.enqueue(createTrack());
 		await flushWork();

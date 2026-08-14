@@ -176,7 +176,7 @@ export class PlayerManager {
 	}
 
 	/** @internal */
-	static create(options: PlayerPluginOptions): PlayerManager {
+	static create(options: PlayerPluginOptions = {}): PlayerManager {
 		return new PlayerManager(options);
 	}
 

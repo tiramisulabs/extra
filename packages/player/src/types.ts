@@ -1,4 +1,4 @@
-import type { VoicePlaybackSource, VoicePlugin } from '@slipher/voice';
+import type { VoicePlaybackSource } from '@slipher/voice';
 import type { GuildPlayer } from './player';
 
 export type MediaFormat = 'ogg-opus' | 'webm-opus' | 'unknown';
@@ -52,8 +52,7 @@ export interface MediaProvider {
 	open(track: MediaTrack, context: MediaProviderOpenContext): Promise<MediaResource>;
 }
 
-export interface PlayerPluginOptions<TVoice extends VoicePlugin = VoicePlugin> {
-	readonly voice: TVoice;
+export interface PlayerPluginOptions {
 	readonly ffmpegPath?: string;
 	readonly providers?: readonly MediaProvider[];
 	readonly historyLimit?: number;

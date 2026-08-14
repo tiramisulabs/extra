@@ -23,8 +23,8 @@ import {
 function expectType<T>(_value: T): void {}
 
 const voicePlugin = voice();
-const playerPlugin = player({ voice: voicePlugin });
-const plugins = definePlugins(playerPlugin);
+const playerPlugin = player();
+const plugins = definePlugins(voicePlugin, playerPlugin);
 
 declare module 'seyfert' {
 	interface SeyfertRegistry {
@@ -39,8 +39,8 @@ declare const commandContext: CommandContext;
 declare const connection: VoiceConnection;
 declare const track: MediaTrack;
 
-expectType<PlayerPlugin<typeof voicePlugin>>(playerPlugin);
-expectType<typeof voicePlugin>(playerPlugin.imports[0]);
+expectType<PlayerPlugin>(playerPlugin);
+expectType<'plugin:@slipher/voice'>(playerPlugin.requires[0]);
 expectType<VoiceManager>(extension.voice);
 expectType<PlayerManager>(extension.player);
 expectType<VoiceManager>(context.voice);

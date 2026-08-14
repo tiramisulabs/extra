@@ -13,23 +13,23 @@ function runtimeConfig() {
 }
 
 describe('player plugin', () => {
-	test('imports the exact voice plugin and contributes one manager to client and context', () => {
+	test('requires voice from the plugin registry and contributes one manager to client and context', () => {
 		const voicePlugin = voice();
-		const plugin = player({ voice: voicePlugin });
-		const client = new BaseClient({ getRC: runtimeConfig, plugins: [plugin] }) as BaseClient & {
+		const plugin = player();
+		const client = new BaseClient({ getRC: runtimeConfig, plugins: [voicePlugin, plugin] }) as BaseClient & {
 			player: typeof plugin.manager;
 			voice: VoiceManager;
 		};
 
-		expect(plugin.imports).toEqual([voicePlugin]);
+		expect(plugin.imports).toBeUndefined();
+		expect(plugin.requires).toEqual(['plugin:@slipher/voice']);
 		expect(client.plugins.map(value => value.name)).toEqual(['@slipher/voice', '@slipher/player']);
 		expect(client.player).toBe(plugin.manager);
 		expect(client.options.context?.({} as never)).toEqual({ voice: client.voice, player: client.player });
 	});
 
 	test('routes voice state events and closes the manager during teardown', async () => {
-		const voicePlugin = voice();
-		const plugin = player({ voice: voicePlugin });
+		const plugin = player();
 		const manager = plugin.manager;
 		const attach = vi.spyOn(manager, 'attach');
 		const handle = vi.spyOn(manager, 'handleVoiceStateChange');
@@ -56,8 +56,7 @@ describe('player plugin', () => {
 		expect(close).toHaveBeenCalledOnce();
 	});
 
-	test('rejects a missing or unrelated voice plugin before allocating the manager', () => {
-		expect(() => player(undefined as never)).toThrow(/requires the @slipher\/voice plugin/);
-		expect(() => player({ voice: { name: 'other' } } as never)).toThrow(/requires the @slipher\/voice plugin/);
+	test('rejects a client configuration without the required voice plugin', () => {
+		expect(() => new BaseClient({ getRC: runtimeConfig, plugins: [player()] })).toThrow(/@slipher\/voice/);
 	});
 });

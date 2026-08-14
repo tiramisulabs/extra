@@ -19,18 +19,17 @@ Node.js 22.13 or newer is the primary runtime. Bun and Deno use their Node compa
 
 ## Configure Seyfert
 
-Pass the exact voice plugin instance to `player()`. The player plugin imports it, so Seyfert installs voice first,
-preserves client and context inference, and tears the player down before closing voice.
+Register Voice before Player. Player declares Voice as a required Seyfert plugin, while the registry order ensures
+Player is torn down before Voice.
 
 ```ts
 import { Client, definePlugins } from 'seyfert';
 import { player } from '@slipher/player';
 import { voice } from '@slipher/voice';
 
-const voicePlugin = voice();
 const plugins = definePlugins(
+	voice(),
 	player({
-		voice: voicePlugin,
 		ffmpegPath: 'ffmpeg',
 		historyLimit: 100,
 	}),
@@ -45,7 +44,7 @@ declare module 'seyfert' {
 export const client = new Client({ plugins });
 ```
 
-The plugin exposes the same `PlayerManager` as `client.player` and `ctx.player`. The imported voice plugin also exposes
+The plugin exposes the same `PlayerManager` as `client.player` and `ctx.player`. The registered Voice plugin also exposes
 `client.voice` and `ctx.voice`.
 
 ## Play local media
