@@ -21,15 +21,21 @@ export interface OwnedSdk {
  */
 export function startOpenTelemetry(options: OpenTelemetryBootstrapOptions = {}): OwnedSdk | undefined {
 	const { serviceName = DEFAULT_SERVICE_NAME, contextManager, ...sdk } = options;
-	return startOwnedSdk({
+	const owned = startOwnedSdk({
 		serviceName,
 		contextManager,
 		sdk,
 		traces: { interactions: false, events: false, rest: false, cache: false },
-		metrics: { interactions: false, events: false, rest: false, cache: false },
+		metrics: { interactions: false, events: false, rest: false, cache: false, gateway: false },
 		checkIfShouldTrace: () => true,
 		cache: { skipResources: new Set() },
 	});
+
+	if (!owned) {
+		// Runs before any logger exists; a silent no-op here is hours of missing-telemetry debugging.
+		console.warn('[@slipher/opentelemetry] startOpenTelemetry() did nothing: a tracer provider is already registered.');
+	}
+	return owned;
 }
 
 type GlobalApi = Partial<Record<'context' | 'metrics' | 'propagation' | 'trace', unknown>>;

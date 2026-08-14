@@ -12,10 +12,22 @@ function withProvider(run: (exporter: InMemorySpanExporter) => Promise<void> | v
 	return Promise.resolve(run(exporter)).finally(() => shutdown());
 }
 
+type ScopeDeps = Parameters<typeof createInteractionContextScope>[0];
+
+/**
+ * The plugin duck-types the interaction context and ignores the handler's return value.
+ * Tests build partial contexts on purpose, so the fake shape is asserted here once
+ * instead of casting at every call site.
+ */
+function testScope(deps: ScopeDeps) {
+	return createInteractionContextScope(deps) as unknown as <T>(context: object, run: () => T) => T;
+}
+
 describe('interaction context scope (root spans)', () => {
 	test('creates root span named command ping', async () => {
 		await withProvider(async exporter => {
-			const scope = createInteractionContextScope({
+			const scope = testScope({
+				traceEnabled: true,
 				checkIfShouldTrace: () => true,
 				getMetrics: () => undefined,
 			});
@@ -30,7 +42,8 @@ describe('interaction context scope (root spans)', () => {
 
 	test('error path sets SpanStatusCode.ERROR', async () => {
 		await withProvider(async exporter => {
-			const scope = createInteractionContextScope({
+			const scope = testScope({
+				traceEnabled: true,
 				checkIfShouldTrace: () => true,
 				getMetrics: () => undefined,
 			});
@@ -51,7 +64,8 @@ describe('interaction context scope (root spans)', () => {
 
 	test('async rejection sets ERROR status', async () => {
 		await withProvider(async exporter => {
-			const scope = createInteractionContextScope({
+			const scope = testScope({
+				traceEnabled: true,
 				checkIfShouldTrace: () => true,
 				getMetrics: () => undefined,
 			});
@@ -73,7 +87,8 @@ describe('interaction context scope (root spans)', () => {
 
 	test('checkIfShouldTrace false → zero spans', async () => {
 		await withProvider(async exporter => {
-			const scope = createInteractionContextScope({
+			const scope = testScope({
+				traceEnabled: true,
 				checkIfShouldTrace: () => false,
 				getMetrics: () => undefined,
 			});
@@ -86,7 +101,7 @@ describe('interaction context scope (root spans)', () => {
 	test('records interaction metrics without creating a span when tracing is disabled', async () => {
 		await withProvider(async exporter => {
 			const recorded: Record<string, unknown>[] = [];
-			const scope = createInteractionContextScope({
+			const scope = testScope({
 				traceEnabled: false,
 				checkIfShouldTrace: () => true,
 				getMetrics: () => ({
@@ -111,7 +126,8 @@ describe('interaction context scope (root spans)', () => {
 
 	test('checkIfShouldTrace throw → fail open (still traces)', async () => {
 		await withProvider(async exporter => {
-			const scope = createInteractionContextScope({
+			const scope = testScope({
+				traceEnabled: true,
 				checkIfShouldTrace: () => {
 					throw new Error('filter boom');
 				},
@@ -126,7 +142,8 @@ describe('interaction context scope (root spans)', () => {
 
 	test('user result still returns when metrics throw on finish', async () => {
 		await withProvider(async exporter => {
-			const scope = createInteractionContextScope({
+			const scope = testScope({
+				traceEnabled: true,
 				checkIfShouldTrace: () => true,
 				getMetrics: () => ({
 					recordInteraction() {
@@ -148,7 +165,8 @@ describe('interaction context scope (root spans)', () => {
 	test('interaction metrics exclude high-cardinality IDs while spans retain diagnostics', async () => {
 		await withProvider(async exporter => {
 			const recorded: Record<string, unknown>[] = [];
-			const scope = createInteractionContextScope({
+			const scope = testScope({
+				traceEnabled: true,
 				checkIfShouldTrace: () => true,
 				getMetrics: () => ({
 					recordInteraction(_duration, attributes) {
@@ -187,13 +205,15 @@ describe('interaction context scope (root spans)', () => {
 
 	test('detectKind uses isModal / isComponent markers', async () => {
 		await withProvider(async exporter => {
-			const scope = createInteractionContextScope({
+			const scope = testScope({
+				traceEnabled: true,
 				checkIfShouldTrace: () => true,
 				getMetrics: () => undefined,
 			});
 			scope(
 				{
 					customId: 'btn-1',
+					command: { customId: 'btn-1' },
 					isComponent() {
 						return true;
 					},
@@ -206,6 +226,7 @@ describe('interaction context scope (root spans)', () => {
 			scope(
 				{
 					customId: 'modal-1',
+					command: { customId: 'modal-1' },
 					isModal() {
 						return true;
 					},
@@ -273,7 +294,7 @@ describe('registerInteractionInstrumentation', () => {
 
 	test('root scope closes a lifecycle child when middleware exits early', async () => {
 		await withProvider(async exporter => {
-			const hooks: Record<string, (...args: never[]) => void> = {};
+			const hooks: Record<string, (...args: never[]) => unknown> = {};
 			registerInteractionInstrumentation(
 				{
 					commands: {
@@ -286,7 +307,8 @@ describe('registerInteractionInstrumentation', () => {
 				},
 				{ checkIfShouldTrace: () => true },
 			);
-			const scope = createInteractionContextScope({
+			const scope = testScope({
+				traceEnabled: true,
 				checkIfShouldTrace: () => true,
 				getMetrics: () => undefined,
 			});
@@ -308,9 +330,9 @@ describe('registerInteractionInstrumentation', () => {
 		});
 	});
 
-	test('options validation errors annotate both child and root spans', async () => {
+	test('middleware denial names the middleware and its scope on the root span', async () => {
 		await withProvider(async exporter => {
-			const hooks: Record<string, (...args: never[]) => void> = {};
+			const hooks: Record<string, (...args: never[]) => unknown> = {};
 			registerInteractionInstrumentation(
 				{
 					commands: {
@@ -323,7 +345,204 @@ describe('registerInteractionInstrumentation', () => {
 				},
 				{ checkIfShouldTrace: () => true },
 			);
-			const scope = createInteractionContextScope({
+			const scope = testScope({
+				traceEnabled: true,
+				checkIfShouldTrace: () => true,
+				getMetrics: () => undefined,
+			});
+			const ctx = { fullCommandName: 'ban' };
+
+			scope(ctx, () => {
+				hooks.onBeforeMiddlewares?.(ctx as never);
+				hooks.onMiddlewaresError?.(
+					ctx as never,
+					'missing permissions' as never,
+					{ middleware: 'requirePermissions', scope: 'command' } as never,
+				);
+			});
+
+			const root = exporter.getFinishedSpans().find(span => span.name === 'command ban');
+			assert.ok(root);
+			assert.equal(root.attributes['seyfert.failure.phase'], 'middlewares');
+			assert.equal(root.attributes['seyfert.middleware.name'], 'requirePermissions');
+			assert.equal(root.attributes['seyfert.middleware.scope'], 'command');
+		});
+	});
+
+	test('missing or malformed denial metadata still records the phase', async () => {
+		await withProvider(async exporter => {
+			const hooks: Record<string, (...args: never[]) => unknown> = {};
+			registerInteractionInstrumentation(
+				{
+					commands: {
+						defaults(h: object) {
+							Object.assign(hooks, h);
+						},
+					},
+					components: { defaults() {} },
+					modals: { defaults() {} },
+				},
+				{ checkIfShouldTrace: () => true },
+			);
+			const scope = testScope({
+				traceEnabled: true,
+				checkIfShouldTrace: () => true,
+				getMetrics: () => undefined,
+			});
+			const ctx = { fullCommandName: 'ban' };
+
+			scope(ctx, () => {
+				hooks.onBeforeMiddlewares?.(ctx as never);
+				hooks.onMiddlewaresError?.(ctx as never, 'denied' as never, undefined as never);
+			});
+
+			const root = exporter.getFinishedSpans().find(span => span.name === 'command ban');
+			assert.ok(root);
+			assert.equal(root.attributes['seyfert.failure.phase'], 'middlewares');
+			assert.equal(root.attributes['seyfert.middleware.name'], undefined);
+		});
+	});
+
+	test('run errors record the phase and a low-cardinality error type', async () => {
+		await withProvider(async exporter => {
+			const hooks: Record<string, (...args: never[]) => unknown> = {};
+			registerInteractionInstrumentation(
+				{
+					commands: {
+						defaults(h: object) {
+							Object.assign(hooks, h);
+						},
+					},
+					components: { defaults() {} },
+					modals: { defaults() {} },
+				},
+				{ checkIfShouldTrace: () => true },
+			);
+			const scope = testScope({
+				traceEnabled: true,
+				checkIfShouldTrace: () => true,
+				getMetrics: () => undefined,
+			});
+			const ctx = { fullCommandName: 'ban' };
+
+			scope(ctx, () => {
+				hooks.onRunError?.(ctx as never, new TypeError('boom') as never);
+			});
+
+			const root = exporter.getFinishedSpans().find(span => span.name === 'command ban');
+			assert.ok(root);
+			assert.equal(root.attributes['seyfert.failure.phase'], 'run');
+			assert.equal(root.attributes['error.type'], 'TypeError');
+		});
+	});
+
+	test('failure phase reaches the duration histogram, middleware name does not', async () => {
+		await withProvider(async () => {
+			const hooks: Record<string, (...args: never[]) => unknown> = {};
+			registerInteractionInstrumentation(
+				{
+					commands: {
+						defaults(h: object) {
+							Object.assign(hooks, h);
+						},
+					},
+					components: { defaults() {} },
+					modals: { defaults() {} },
+				},
+				{ checkIfShouldTrace: () => true },
+			);
+			const recorded: Record<string, unknown>[] = [];
+			const scope = testScope({
+				traceEnabled: true,
+				checkIfShouldTrace: () => true,
+				getMetrics: () => ({
+					recordInteraction(_duration, attributes) {
+						recorded.push(attributes as Record<string, unknown>);
+					},
+					recordEvent() {},
+					recordRest() {},
+					recordCache() {},
+				}),
+			});
+			const ctx = { fullCommandName: 'ban' };
+
+			scope(ctx, () => {
+				hooks.onBeforeMiddlewares?.(ctx as never);
+				hooks.onMiddlewaresError?.(
+					ctx as never,
+					'denied' as never,
+					{ middleware: 'cooldown', scope: 'global' } as never,
+				);
+			});
+
+			assert.equal(recorded.length, 1);
+			assert.equal(recorded[0]['seyfert.failure.phase'], 'middlewares');
+			// Kept off metrics on purpose: middleware x command would multiply series.
+			assert.equal(recorded[0]['seyfert.middleware.name'], undefined);
+		});
+	});
+
+	test('a filtered-out interaction still reports its failure phase in metrics', async () => {
+		await withProvider(async exporter => {
+			const hooks: Record<string, (...args: never[]) => unknown> = {};
+			registerInteractionInstrumentation(
+				{
+					commands: {
+						defaults(h: object) {
+							Object.assign(hooks, h);
+						},
+					},
+					components: { defaults() {} },
+					modals: { defaults() {} },
+				},
+				{ checkIfShouldTrace: () => false },
+			);
+			const recorded: Record<string, unknown>[] = [];
+			const scope = testScope({
+				traceEnabled: true,
+				checkIfShouldTrace: () => false,
+				getMetrics: () => ({
+					recordInteraction(_duration, attributes) {
+						recorded.push(attributes as Record<string, unknown>);
+					},
+					recordEvent() {},
+					recordRest() {},
+					recordCache() {},
+				}),
+			});
+			const ctx = { fullCommandName: 'ban' };
+
+			scope(ctx, () => {
+				hooks.onMiddlewaresError?.(
+					ctx as never,
+					'denied' as never,
+					{ middleware: 'cooldown', scope: 'global' } as never,
+				);
+			});
+
+			assert.equal(exporter.getFinishedSpans().length, 0);
+			assert.equal(recorded.length, 1);
+			assert.equal(recorded[0]['seyfert.failure.phase'], 'middlewares');
+		});
+	});
+
+	test('options validation errors annotate both child and root spans', async () => {
+		await withProvider(async exporter => {
+			const hooks: Record<string, (...args: never[]) => unknown> = {};
+			registerInteractionInstrumentation(
+				{
+					commands: {
+						defaults(h: object) {
+							Object.assign(hooks, h);
+						},
+					},
+					components: { defaults() {} },
+					modals: { defaults() {} },
+				},
+				{ checkIfShouldTrace: () => true },
+			);
+			const scope = testScope({
+				traceEnabled: true,
 				checkIfShouldTrace: () => true,
 				getMetrics: () => undefined,
 			});
@@ -399,7 +618,7 @@ describe('registerInteractionInstrumentation', () => {
 
 	test('lifecycle hooks create Middlewares / Options / Run children under root', async () => {
 		await withProvider(async exporter => {
-			const hooks: Record<string, (...args: never[]) => void> = {};
+			const hooks: Record<string, (...args: never[]) => unknown> = {};
 			const api = {
 				commands: {
 					defaults(h: object) {
@@ -426,7 +645,8 @@ describe('registerInteractionInstrumentation', () => {
 
 			registerInteractionInstrumentation(api, { checkIfShouldTrace: () => true });
 
-			const scope = createInteractionContextScope({
+			const scope = testScope({
+				traceEnabled: true,
 				checkIfShouldTrace: () => true,
 				getMetrics: () => undefined,
 			});
@@ -465,7 +685,7 @@ describe('registerInteractionInstrumentation', () => {
 
 	test('creates one active child span per registered middleware', async () => {
 		await withProvider(async exporter => {
-			const hooks: Record<string, (...args: never[]) => void> = {};
+			const hooks: Record<string, (...args: never[]) => unknown> = {};
 			const plugin = opentelemetry({
 				traces: { interactions: true, events: false, rest: false, cache: false },
 				metrics: { interactions: false, events: false, rest: false, cache: false },
@@ -492,7 +712,8 @@ describe('registerInteractionInstrumentation', () => {
 			};
 			await plugin.setup?.(client as never, {} as never);
 
-			const scope = createInteractionContextScope({
+			const scope = testScope({
+				traceEnabled: true,
 				checkIfShouldTrace: () => true,
 				getMetrics: () => undefined,
 			});
@@ -524,7 +745,7 @@ describe('registerInteractionInstrumentation', () => {
 
 	test('wraps Run on nested subcommands', async () => {
 		await withProvider(async exporter => {
-			const hooks: Record<string, (...args: never[]) => void> = {};
+			const hooks: Record<string, (...args: never[]) => unknown> = {};
 			let transformed: { options: Array<{ run: (ctx: object) => string }> } | undefined;
 			const api = {
 				commands: {
@@ -551,7 +772,8 @@ describe('registerInteractionInstrumentation', () => {
 			registerInteractionInstrumentation(api, { checkIfShouldTrace: () => true });
 			assert.ok(transformed);
 
-			const scope = createInteractionContextScope({
+			const scope = testScope({
+				traceEnabled: true,
 				checkIfShouldTrace: () => true,
 				getMetrics: () => undefined,
 			});
@@ -569,9 +791,12 @@ describe('registerInteractionInstrumentation', () => {
 		});
 	});
 
-	test('can instrument handlers added after plugin registration', async () => {
+	// Seyfert only runs `handlers.transform` for top-level commands, so subcommands are
+	// reached by recursing into `options`; without it they never get a Run span.
+	test('wraps subcommand run methods reached through command options', async () => {
 		await withProvider(async exporter => {
-			const hooks: Record<string, (...args: never[]) => void> = {};
+			const hooks: Record<string, (...args: never[]) => unknown> = {};
+			let transformer: ((instance: object, metadata: { kind: string }) => void) | undefined;
 			const plugin = opentelemetry({
 				traces: { interactions: true, events: false, rest: false, cache: false },
 				metrics: { interactions: false, events: false, rest: false, cache: false },
@@ -584,31 +809,32 @@ describe('registerInteractionInstrumentation', () => {
 				},
 				components: { defaults() {} },
 				modals: { defaults() {} },
-				handlers: { transform() {} },
+				handlers: {
+					transform(fn: (instance: object, metadata: { kind: string }) => void) {
+						transformer = fn;
+					},
+				},
 			} as never);
 
-			const handle = plugin.client?.trace?.({} as never) as unknown as {
-				instrumentInteractions?: (handlers: Iterable<object>, kind?: string) => number;
-			};
-			assert.equal(typeof handle.instrumentInteractions, 'function');
+			assert.equal(typeof transformer, 'function');
 
-			const lateCommand = {
-				options: [
-					{
-						run: (ctx: object) => `late:${(ctx as { fullCommandName?: string }).fullCommandName}`,
-					},
-				],
+			const subcommand = {
+				run: (ctx: object) => `late:${(ctx as { fullCommandName?: string }).fullCommandName}`,
 			};
-			assert.equal(handle.instrumentInteractions?.([lateCommand], 'command'), 1);
+			const parentCommand = { options: [subcommand] };
+			const originalRun = subcommand.run;
+			transformer?.(parentCommand, { kind: 'command' });
+			assert.notEqual(subcommand.run, originalRun);
 
-			const scope = createInteractionContextScope({
+			const scope = testScope({
+				traceEnabled: true,
 				checkIfShouldTrace: () => true,
 				getMetrics: () => undefined,
 			});
 			const ctx = { fullCommandName: 'referral stats' };
 			scope(ctx, () => {
 				hooks.onBeforeMiddlewares?.(ctx as never);
-				lateCommand.options[0].run(ctx);
+				subcommand.run(ctx);
 				hooks.onAfterRun?.(ctx as never, undefined as never);
 			});
 
@@ -617,7 +843,7 @@ describe('registerInteractionInstrumentation', () => {
 	});
 
 	test('hooks never throw even when tracer/check fails', () => {
-		const hooks: Record<string, (...args: never[]) => void> = {};
+		const hooks: Record<string, (...args: never[]) => unknown> = {};
 		registerInteractionInstrumentation(
 			{
 				commands: {

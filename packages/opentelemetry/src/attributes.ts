@@ -64,6 +64,24 @@ function declaredName(handler: unknown, context: unknown): string | undefined {
 	}
 }
 
+/**
+ * Handler identity, never the runtime `customId`: a handler declaring a RegExp or a
+ * `filter` matches unboundedly many ids, and span names must stay low-cardinality.
+ */
+function handlerName(handler: unknown, context: unknown): string | undefined {
+	if (handler === null || typeof handler !== 'object') return undefined;
+
+	const declared = declaredName(handler, context);
+	if (declared) return declared;
+
+	const source = asRecord(handler);
+	const customId = getString(source.customId);
+	if (customId) return customId;
+
+	const className = getString((source.constructor as { name?: unknown } | undefined)?.name);
+	return className === 'Object' ? undefined : className;
+}
+
 export function interactionSpanName(kind: InteractionKind, context: unknown): string {
 	const source = asRecord(context);
 	if (kind === 'command') {
@@ -71,9 +89,5 @@ export function interactionSpanName(kind: InteractionKind, context: unknown): st
 		return `command ${command}`;
 	}
 
-	const declared = declaredName(source.command, context);
-	if (declared) return `${kind} ${declared}`;
-
-	const customId = getString(source.customId ?? asRecord(source.interaction).customId) ?? 'unknown';
-	return `${kind} ${customId}`;
+	return `${kind} ${handlerName(source.command, context) ?? 'unknown'}`;
 }

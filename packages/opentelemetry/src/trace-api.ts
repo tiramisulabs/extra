@@ -10,14 +10,13 @@ import {
 } from '@opentelemetry/api';
 
 export const INSTRUMENTATION_SCOPE_NAME = '@slipher/opentelemetry';
-export const INSTRUMENTATION_SCOPE_VERSION = '1.0.0';
 
 export function getTracer(): Tracer {
-	return trace.getTracer(INSTRUMENTATION_SCOPE_NAME, INSTRUMENTATION_SCOPE_VERSION);
+	return trace.getTracer(INSTRUMENTATION_SCOPE_NAME);
 }
 
 export function getMeter() {
-	return metrics.getMeter(INSTRUMENTATION_SCOPE_NAME, INSTRUMENTATION_SCOPE_VERSION);
+	return metrics.getMeter(INSTRUMENTATION_SCOPE_NAME);
 }
 
 export type ActiveSpanArgs<T> =

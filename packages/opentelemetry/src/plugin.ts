@@ -2,13 +2,10 @@ import { createPlugin } from 'seyfert';
 import { createInteractionContextScope } from './context-scope';
 import { createTraceHandle } from './handle';
 import { instrumentCache } from './instrument/cache';
+import type { InstrumentTarget } from './instrument/deps';
 import { instrumentEvents } from './instrument/events';
-import {
-	type InteractionHandlerKind,
-	type InteractionInstrumentor,
-	instrumentInteractionMiddlewares,
-	registerInteractionInstrumentation,
-} from './instrument/interactions';
+import { instrumentGateway } from './instrument/gateway';
+import { instrumentInteractionMiddlewares, registerInteractionInstrumentation } from './instrument/interactions';
 import { instrumentRest } from './instrument/rest';
 import { type CoreMetrics, createCoreMetrics } from './metrics';
 import { type OpenTelemetryPluginOptions, resolvePluginOptions } from './options';
@@ -16,11 +13,7 @@ import { type OwnedSdk, startOwnedSdk } from './sdk';
 
 export function opentelemetry(options: OpenTelemetryPluginOptions = {}) {
 	const resolved = resolvePluginOptions(options);
-	let interactionInstrumentor: InteractionInstrumentor | undefined;
-	const handle = createTraceHandle({
-		instrumentInteractions: (handlers: Iterable<object>, kind?: InteractionHandlerKind) =>
-			interactionInstrumentor?.instrument(handlers, kind) ?? 0,
-	});
+	const handle = createTraceHandle();
 	let owned: OwnedSdk | undefined;
 	let metrics: CoreMetrics | undefined;
 	const cleanups: Array<() => void> = [];
@@ -59,7 +52,7 @@ export function opentelemetry(options: OpenTelemetryPluginOptions = {}) {
 		},
 		register(api) {
 			if (!resolved.traces.interactions) return;
-			interactionInstrumentor = registerInteractionInstrumentation(api, {
+			registerInteractionInstrumentation(api, {
 				checkIfShouldTrace: resolved.checkIfShouldTrace,
 			});
 		},
@@ -76,45 +69,33 @@ export function opentelemetry(options: OpenTelemetryPluginOptions = {}) {
 			// Keep an already-owned SDK; a second start would no-op and drop the handle.
 			owned ??= startOwnedSdk(resolved);
 			metrics = createCoreMetrics(resolved.metrics);
-			if (resolved.traces.interactions) {
-				cleanups.push(
-					instrumentInteractionMiddlewares(client, {
-						checkIfShouldTrace: resolved.checkIfShouldTrace,
-					}),
-				);
-			}
 
+			const target: InstrumentTarget = { client, api };
+			const deps = (traceEnabled: boolean) => ({
+				traceEnabled,
+				checkIfShouldTrace: resolved.checkIfShouldTrace,
+				getMetrics: () => metrics,
+			});
+
+			if (resolved.traces.interactions) {
+				cleanups.push(instrumentInteractionMiddlewares(target, { checkIfShouldTrace: resolved.checkIfShouldTrace }));
+			}
 			if (resolved.traces.events || resolved.metrics.events) {
-				cleanups.push(
-					instrumentEvents(
-						client,
-						{
-							traceEnabled: resolved.traces.events,
-							checkIfShouldTrace: resolved.checkIfShouldTrace,
-							getMetrics: () => metrics,
-						},
-						api,
-					),
-				);
+				cleanups.push(instrumentEvents(target, deps(resolved.traces.events)));
 			}
 			if (resolved.traces.rest || resolved.metrics.rest) {
-				cleanups.push(
-					instrumentRest(api, {
-						traceEnabled: resolved.traces.rest,
-						checkIfShouldTrace: resolved.checkIfShouldTrace,
-						getMetrics: () => metrics,
-					}),
-				);
+				cleanups.push(instrumentRest(target, deps(resolved.traces.rest)));
 			}
 			if (resolved.traces.cache || resolved.metrics.cache) {
 				cleanups.push(
-					instrumentCache(client, {
-						traceEnabled: resolved.traces.cache,
-						checkIfShouldTrace: resolved.checkIfShouldTrace,
+					instrumentCache(target, {
+						...deps(resolved.traces.cache),
 						skipResources: resolved.cache.skipResources,
-						getMetrics: () => metrics,
 					}),
 				);
+			}
+			if (resolved.metrics.gateway) {
+				cleanups.push(instrumentGateway(target));
 			}
 		},
 		async teardown() {

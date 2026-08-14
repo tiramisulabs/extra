@@ -4,6 +4,7 @@ import {
 	ATTR_HTTP_REQUEST_METHOD,
 	ATTR_HTTP_REQUEST_METHOD_ORIGINAL,
 	ATTR_HTTP_REQUEST_RESEND_COUNT,
+	ATTR_HTTP_RESPONSE_HEADER,
 	ATTR_HTTP_RESPONSE_STATUS_CODE,
 	ATTR_SERVER_ADDRESS,
 	ATTR_SERVER_PORT,
@@ -11,15 +12,10 @@ import {
 	ATTR_URL_PATH,
 } from '@opentelemetry/semantic-conventions';
 import { type RESTError, SeyfertError } from 'seyfert';
-import { type CoreMetrics, durationSecondsSince } from '../metrics';
+import { durationSecondsSince } from '../metrics';
 import type { TraceSource } from '../options';
 import { getTracer } from '../trace-api';
-
-export interface RestInstrumentDeps {
-	traceEnabled?: boolean;
-	checkIfShouldTrace: (source: TraceSource) => boolean;
-	getMetrics: () => CoreMetrics | undefined;
-}
+import type { InstrumentDeps, InstrumentTarget } from './deps';
 
 /**
  * Minimal plugin API surface used by REST instrumentation.
@@ -28,6 +24,13 @@ export interface RestInstrumentDeps {
 export interface RestApi {
 	rest?: {
 		observe?: (observer: RestObserver, opts?: object) => () => void;
+	};
+}
+
+/** The Seyfert client owns the real `ApiHandler`; the plugin api only exposes `observe`. */
+export interface RestOptionsSource {
+	rest?: {
+		options?: { domain?: string; baseUrl?: string };
 	};
 }
 
@@ -46,8 +49,13 @@ export interface RestObserverRequestPayload {
 	readonly client?: unknown;
 }
 
+export interface RestObserverResponse {
+	readonly status: number;
+	readonly headers?: { get(name: string): string | null };
+}
+
 export interface RestObserverSuccessPayload extends RestObserverRequestPayload {
-	readonly response: { readonly status: number };
+	readonly response: RestObserverResponse;
 }
 
 export interface RestObserverFailPayload extends RestObserverRequestPayload {
@@ -56,7 +64,7 @@ export interface RestObserverFailPayload extends RestObserverRequestPayload {
 }
 
 export interface RestObserverRatelimitPayload extends RestObserverRequestPayload {
-	readonly response: { readonly status: number };
+	readonly response: RestObserverResponse;
 }
 
 interface PendingRest {
@@ -68,8 +76,31 @@ interface PendingRest {
 	template: string;
 }
 
-const DISCORD_API_BASE_URL = 'https://discord.com/api/v10';
+const DEFAULT_DISCORD_DOMAIN = 'https://discord.com';
+const DEFAULT_DISCORD_BASE_PATH = 'api/v10';
 const KNOWN_HTTP_METHODS = new Set(['CONNECT', 'DELETE', 'GET', 'HEAD', 'OPTIONS', 'PATCH', 'POST', 'PUT', 'TRACE']);
+
+/** Discord route parameters, named after the segment that introduces them. */
+const ROUTE_PARAM_NAMES: Record<string, string> = {
+	applications: 'application_id',
+	bans: 'user_id',
+	channels: 'channel_id',
+	emojis: 'emoji_id',
+	guilds: 'guild_id',
+	integrations: 'integration_id',
+	interactions: 'interaction_id',
+	members: 'user_id',
+	messages: 'message_id',
+	permissions: 'overwrite_id',
+	pins: 'message_id',
+	recipients: 'user_id',
+	roles: 'role_id',
+	'scheduled-events': 'scheduled_event_id',
+	stickers: 'sticker_id',
+	threads: 'thread_id',
+	users: 'user_id',
+	webhooks: 'webhook_id',
+};
 
 function flightKey(method: string, path: string): string {
 	return `${method}\0${path}`;
@@ -95,12 +126,19 @@ export function sanitizeRestTarget(value: string): SanitizedRestTarget {
 	}
 
 	path = path.replace(/(\/(?:interactions|webhooks)\/[^/]+)\/[^/]+/g, '$1/REDACTED');
-	const template = path
-		.split('/')
-		.map(segment => (segment === 'REDACTED' ? ':token' : /^\d+$/.test(segment) ? ':id' : segment))
-		.join('/')
-		.replace(/\/(invites|templates)\/[^/]+/g, '/$1/:code')
-		.replace(/\/reactions\/[^/]+/g, '/reactions/:emoji');
+
+	const segments = path.split('/');
+	const template = segments
+		.map((segment, index) => {
+			if (segment === 'REDACTED') return '{token}';
+			const parent = segments[index - 1];
+			if (parent === 'invites' || parent === 'templates') return '{code}';
+			if (parent === 'reactions') return '{emoji}';
+			if (!/^\d+$/.test(segment)) return segment;
+			if (segments[index - 2] === 'reactions') return '{user_id}';
+			return `{${ROUTE_PARAM_NAMES[parent] ?? 'id'}}`;
+		})
+		.join('/');
 
 	return { path, template };
 }
@@ -113,24 +151,32 @@ function normalizeHttpMethod(method: string): { method: string; original?: strin
 	return { method: '_OTHER', original: method };
 }
 
-function createSanitizedUrl(value: string, path: string): URL {
-	try {
-		if (/^[a-z][a-z\d+.-]*:\/\//i.test(value)) {
-			const url = new URL(value);
-			url.username = '';
-			url.password = '';
-			url.pathname = path;
-			url.search = '';
-			url.hash = '';
-			return url;
-		}
-	} catch {
-		// Use Discord's default API endpoint for malformed or relative observer URLs.
-	}
-	return new URL(`${DISCORD_API_BASE_URL}${path}`);
+/**
+ * Seyfert hands observers a relative route (`api.js` builds the absolute URL separately),
+ * so the real peer only exists in the api handler options.
+ */
+function resolveApiBase(client: RestOptionsSource | undefined): string {
+	const options = client?.rest?.options;
+	const domain = typeof options?.domain === 'string' && options.domain ? options.domain : DEFAULT_DISCORD_DOMAIN;
+	const basePath = typeof options?.baseUrl === 'string' ? options.baseUrl : DEFAULT_DISCORD_BASE_PATH;
+	return `${domain.replace(/\/+$/, '')}/${basePath.replace(/^\/+|\/+$/g, '')}`;
 }
 
-function shouldTrace(deps: RestInstrumentDeps, source: TraceSource): boolean {
+function createSanitizedUrl(base: string, path: string): URL | undefined {
+	try {
+		const url = new URL(`${base}${path}`);
+		url.username = '';
+		url.password = '';
+		url.search = '';
+		url.hash = '';
+		return url;
+	} catch {
+		// Omitting the peer beats asserting one we never observed.
+		return undefined;
+	}
+}
+
+function shouldTrace(deps: InstrumentDeps, source: TraceSource): boolean {
 	try {
 		return deps.checkIfShouldTrace(source);
 	} catch {
@@ -149,7 +195,7 @@ function safeEnd(span: Span | undefined): void {
 }
 
 function recordRestMetrics(
-	deps: RestInstrumentDeps,
+	deps: InstrumentDeps,
 	start: number,
 	attributes: {
 		'http.request.method': string;
@@ -169,11 +215,28 @@ function markError(span: Span, error: unknown, errorType?: string): void {
 	try {
 		const err = error instanceof Error ? error : new Error(String(error));
 		const response = SeyfertError.is(err) ? (err.metadata?.response as RESTError | undefined) : undefined;
-		const message = response?.message ?? err.message;
-		span.setStatus({ code: SpanStatusCode.ERROR, message });
+		span.setStatus({ code: SpanStatusCode.ERROR, message: response?.message ?? err.message });
 		span.setAttribute(ATTR_ERROR_TYPE, errorType ?? (err.name || 'Error'));
 		if (response?.code !== undefined) span.setAttribute('discord.error.code', response.code);
-		span.recordException(response?.message ? { message, name: err.name, stack: err.stack } : err);
+		span.recordException(err);
+	} catch {
+		// never throw from instrumentation
+	}
+}
+
+function setRatelimitAttributes(span: Span, response: RestObserverResponse | undefined, ratelimited: boolean): void {
+	try {
+		const headers = response?.headers;
+		if (typeof headers?.get !== 'function') return;
+
+		const bucket = headers.get('x-ratelimit-bucket');
+		if (bucket) span.setAttribute('discord.ratelimit.bucket', bucket);
+		if (!ratelimited) return;
+
+		const scope = headers.get('x-ratelimit-scope');
+		if (scope) span.setAttribute('discord.ratelimit.scope', scope);
+		const retryAfter = headers.get('retry-after');
+		if (retryAfter) span.setAttribute(ATTR_HTTP_RESPONSE_HEADER('retry-after'), [retryAfter]);
 	} catch {
 		// never throw from instrumentation
 	}
@@ -208,11 +271,13 @@ function setStatusAttribute(span: Span, status: number | undefined): void {
  * with `_50xRetries`; those callbacks update the original logical span instead
  * of opening an orphan attempt.
  */
-export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDeps): () => void {
-	const observe = api?.rest?.observe;
+export function instrumentRest(target: InstrumentTarget, deps: InstrumentDeps): () => void {
+	const observe = (target.api as RestApi | undefined)?.rest?.observe;
 	if (typeof observe !== 'function') {
 		return () => {};
 	}
+
+	const apiBase = resolveApiBase(target.client as RestOptionsSource | undefined);
 
 	/** In-flight requests awaiting success/fail, FIFO per method+raw path. */
 	const pending = new Map<string, PendingRest[]>();
@@ -245,11 +310,10 @@ export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDep
 				const method = String(payload.method);
 				const rawPath = String(payload.url);
 				const { path, template } = sanitizeRestTarget(rawPath);
-				const url = createSanitizedUrl(rawPath, path);
+				const url = createSanitizedUrl(apiBase, path);
 				const normalizedMethod = normalizeHttpMethod(method);
 				const source: TraceSource = { kind: 'rest', method, path };
-				const traceEnabled = deps.traceEnabled ?? true;
-				const createSpan = traceEnabled && shouldTrace(deps, source);
+				const createSpan = deps.traceEnabled && shouldTrace(deps, source);
 
 				const retryValue = payload.request?._50xRetries;
 				const resendCount =
@@ -276,9 +340,13 @@ export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDep
 								...(normalizedMethod.original
 									? { [ATTR_HTTP_REQUEST_METHOD_ORIGINAL]: normalizedMethod.original }
 									: {}),
-								[ATTR_SERVER_ADDRESS]: url.hostname,
-								[ATTR_SERVER_PORT]: url.port ? Number(url.port) : url.protocol === 'https:' ? 443 : 80,
-								[ATTR_URL_FULL]: url.href,
+								...(url
+									? {
+											[ATTR_SERVER_ADDRESS]: url.hostname,
+											[ATTR_SERVER_PORT]: url.port ? Number(url.port) : url.protocol === 'https:' ? 443 : 80,
+											[ATTR_URL_FULL]: url.href,
+										}
+									: {}),
 								[ATTR_URL_PATH]: path,
 								'url.template': template,
 								...(resendCount > 0 ? { [ATTR_HTTP_REQUEST_RESEND_COUNT]: resendCount } : {}),
@@ -305,6 +373,7 @@ export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDep
 				try {
 					if (span) {
 						setStatusAttribute(span, status);
+						setRatelimitAttributes(span, payload.response, false);
 						if (status !== undefined && status >= 400) markHttpError(span, status);
 					}
 				} catch {
@@ -372,6 +441,7 @@ export function instrumentRest(api: RestApi | undefined, deps: RestInstrumentDep
 				if (span) setStatusAttribute(span, status);
 				try {
 					span?.setAttribute('seyfert.rest.ratelimited', true);
+					if (span) setRatelimitAttributes(span, payload.response, true);
 					if (span && status !== undefined && status >= 400) markHttpError(span, status);
 				} catch {
 					// never throw from instrumentation

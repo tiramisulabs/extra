@@ -23,6 +23,7 @@ describe('signal flags', () => {
 			events: true,
 			rest: true,
 			cache: true,
+			gateway: true,
 		});
 	});
 

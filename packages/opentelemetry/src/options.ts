@@ -15,11 +15,20 @@ export interface SignalFlags {
 	cache?: boolean;
 }
 
+/** Gateway health is metrics-only: there is no gateway span. */
+export interface MetricFlags extends SignalFlags {
+	gateway?: boolean;
+}
+
 export interface ResolvedSignalFlags {
 	interactions: boolean;
 	events: boolean;
 	rest: boolean;
 	cache: boolean;
+}
+
+export interface ResolvedMetricFlags extends ResolvedSignalFlags {
+	gateway: boolean;
 }
 
 export type TraceSource =
@@ -31,7 +40,7 @@ export type TraceSource =
 export interface OpenTelemetryPluginOptions extends Partial<NodeSDKOptions> {
 	serviceName?: string;
 	traces?: SignalFlags;
-	metrics?: SignalFlags;
+	metrics?: MetricFlags;
 	checkIfShouldTrace?: (source: TraceSource) => boolean;
 	contextManager?: ContextManager;
 	cache?: {
@@ -48,7 +57,7 @@ export interface OpenTelemetryBootstrapOptions extends Partial<NodeSDKOptions> {
 export interface ResolvedOpenTelemetryOptions {
 	serviceName: string;
 	traces: ResolvedSignalFlags;
-	metrics: ResolvedSignalFlags;
+	metrics: ResolvedMetricFlags;
 	checkIfShouldTrace: (source: TraceSource) => boolean;
 	contextManager?: ContextManager;
 	cache: { skipResources: ReadonlySet<string> };
@@ -69,8 +78,8 @@ export function resolveTraceFlags(flags: SignalFlags = {}): ResolvedSignalFlags 
 	return resolveSignalFlags(flags, false);
 }
 
-export function resolveMetricFlags(flags: SignalFlags = {}): ResolvedSignalFlags {
-	return resolveSignalFlags(flags, true);
+export function resolveMetricFlags(flags: MetricFlags = {}): ResolvedMetricFlags {
+	return { ...resolveSignalFlags(flags, true), gateway: flags.gateway ?? true };
 }
 
 export function resolvePluginOptions(options: OpenTelemetryPluginOptions = {}): ResolvedOpenTelemetryOptions {

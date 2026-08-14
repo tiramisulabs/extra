@@ -1,6 +1,7 @@
 import { context as otelContext, trace as otelTrace, type Span, SpanStatusCode } from '@opentelemetry/api';
 import type { TraceSource } from '../options';
 import { getCurrentSpan, getTracer } from '../trace-api';
+import type { InstrumentTarget } from './deps';
 
 export interface InteractionInstrumentDeps {
 	checkIfShouldTrace: (source: TraceSource) => boolean;
@@ -31,8 +32,54 @@ export interface InteractionApi {
 /** Open lifecycle child spans, keyed by interaction context. */
 const openChildren = new WeakMap<object, Span>();
 
+export type InteractionFailurePhase = 'options' | 'middlewares' | 'run';
+
+export interface InteractionFailure {
+	phase: InteractionFailurePhase;
+	errorType?: string;
+	middleware?: string;
+	middlewareScope?: string;
+}
+
+/** Failure detail captured by lifecycle hooks, consumed once when the root scope closes. */
+const failures = new WeakMap<object, InteractionFailure>();
+
 function asContextKey(context: unknown): object | undefined {
 	return context !== null && typeof context === 'object' ? context : undefined;
+}
+
+/** Prefer a Seyfert error code over the class name; both are low cardinality. */
+function errorTypeOf(error: unknown): string | undefined {
+	if (!(error instanceof Error)) return undefined;
+	const code = (error as { code?: unknown }).code;
+	if (typeof code === 'string' && code.length > 0) return code;
+	return error.name || 'Error';
+}
+
+/**
+ * Recorded before any `checkIfShouldTrace` filtering: a caller who opts out of spans
+ * still gets the failure phase on the duration histogram.
+ */
+function recordFailure(context: unknown, failure: InteractionFailure): void {
+	const key = asContextKey(context);
+	if (!key) return;
+	failures.set(key, failure);
+}
+
+export function takeInteractionFailure(context: unknown): InteractionFailure | undefined {
+	const key = asContextKey(context);
+	if (!key) return undefined;
+	const failure = failures.get(key);
+	if (failure) failures.delete(key);
+	return failure;
+}
+
+/** Seyfert denial metadata: which middleware rejected the interaction, and at which scope. */
+function middlewareFailure(error: unknown, metadata: unknown): InteractionFailure {
+	const source = metadata !== null && typeof metadata === 'object' ? (metadata as Record<string, unknown>) : {};
+	const middleware = typeof source.middleware === 'string' ? source.middleware : undefined;
+	const scope = source.scope === 'global' || source.scope === 'command' ? source.scope : undefined;
+	return { phase: 'middlewares', errorType: errorTypeOf(error), middleware, middlewareScope: scope };
 }
 
 function endChild(context: unknown): void {
@@ -139,19 +186,22 @@ function createCommandHooks(deps: InteractionInstrumentDeps) {
 			if (error !== undefined && error !== null) annotateRootError(error);
 		}),
 		onRunError: safeHook((context: unknown, error: unknown) => {
+			recordFailure(context, { phase: 'run', errorType: errorTypeOf(error) });
 			if (!shouldTrace(deps, 'command', context)) return;
 			failChild(context, error);
 			annotateRootError(error);
 		}),
-		onMiddlewaresError: safeHook((context: unknown, error: unknown) => {
+		onMiddlewaresError: safeHook((context: unknown, error: unknown, metadata: unknown) => {
+			recordFailure(context, middlewareFailure(error, metadata));
 			if (!shouldTrace(deps, 'command', context)) return;
 			failChild(context, error);
 			endChild(context);
 			annotateRootError(error);
 		}),
 		onOptionsError: safeHook((context: unknown) => {
-			if (!shouldTrace(deps, 'command', context)) return;
 			const error = new Error('options validation failed');
+			recordFailure(context, { phase: 'options', errorType: errorTypeOf(error) });
+			if (!shouldTrace(deps, 'command', context)) return;
 			failChild(context, error);
 			endChild(context);
 			annotateRootError(error);
@@ -178,11 +228,13 @@ function createComponentHooks(kind: 'component' | 'modal', deps: InteractionInst
 			if (error !== undefined && error !== null) annotateRootError(error);
 		}),
 		onRunError: safeHook((context: unknown, error: unknown) => {
+			recordFailure(context, { phase: 'run', errorType: errorTypeOf(error) });
 			if (!shouldTrace(deps, kind, context)) return;
 			failChild(context, error);
 			annotateRootError(error);
 		}),
-		onMiddlewaresError: safeHook((context: unknown, error: unknown) => {
+		onMiddlewaresError: safeHook((context: unknown, error: unknown, metadata: unknown) => {
+			recordFailure(context, middlewareFailure(error, metadata));
 			if (!shouldTrace(deps, kind, context)) return;
 			failChild(context, error);
 			endChild(context);
@@ -201,7 +253,7 @@ type RunnableInstance = {
 
 export type InteractionHandlerKind = 'command' | 'component' | 'modal';
 
-export interface InteractionInstrumentor {
+interface InteractionInstrumentor {
 	instrument(handlers: Iterable<object>, kind?: InteractionHandlerKind): number;
 }
 
@@ -259,9 +311,23 @@ function detectMiddlewareKind(context: unknown): InteractionHandlerKind {
 	return 'command';
 }
 
-/** Wrap registered Seyfert middleware functions with individually named spans. */
-export function instrumentInteractionMiddlewares(client: unknown, deps: InteractionInstrumentDeps): () => void {
-	const middlewareClient = client as MiddlewareClient;
+/**
+ * Wrap registered Seyfert middleware functions with individually named spans.
+ *
+ * Known limitation — plugin setup runs at `BaseClient.start()` before
+ * `installPluginMiddlewares` reassigns `client.middlewares` to a fresh object:
+ * - middlewares registered via `setServices` before `start()` are wrapped, and the
+ *   wrapped functions survive because the reassignment spreads them forward;
+ * - middlewares contributed by plugins are installed afterwards and stay untraced;
+ * - cleanup targets the original object, so teardown does not unwrap the live registry.
+ *
+ * Moving this to the `plugins:setupComplete` hook would fix all three.
+ */
+export function instrumentInteractionMiddlewares(
+	target: InstrumentTarget,
+	deps: InteractionInstrumentDeps,
+): () => void {
+	const middlewareClient = target.client as MiddlewareClient;
 	const registry = middlewareClient.middlewares;
 	if (!registry) return () => undefined;
 
@@ -386,14 +452,9 @@ function installRunWrappers(api: InteractionApi, instrumentor: InteractionInstru
  * - commands: onBeforeOptions, onBeforeMiddlewares, onAfterRun, onRunError, …
  * - components/modals: onBeforeMiddlewares, onAfterRun, onRunError, …
  */
-export function registerInteractionInstrumentation(
-	api: InteractionApi,
-	deps: InteractionInstrumentDeps,
-): InteractionInstrumentor {
-	const instrumentor = createInteractionInstrumentor(deps);
+export function registerInteractionInstrumentation(api: InteractionApi, deps: InteractionInstrumentDeps): void {
 	api.commands.defaults(createCommandHooks(deps));
 	api.components.defaults(createComponentHooks('component', deps));
 	api.modals.defaults(createComponentHooks('modal', deps));
-	installRunWrappers(api, instrumentor);
-	return instrumentor;
+	installRunWrappers(api, createInteractionInstrumentor(deps));
 }

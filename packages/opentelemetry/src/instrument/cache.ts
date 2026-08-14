@@ -1,13 +1,11 @@
 import { type Span, SpanKind, SpanStatusCode } from '@opentelemetry/api';
-import { type CoreMetrics, durationSecondsSince } from '../metrics';
+import { durationSecondsSince } from '../metrics';
 import type { TraceSource } from '../options';
 import { getTracer } from '../trace-api';
+import type { InstrumentDeps, InstrumentTarget } from './deps';
 
-export interface CacheInstrumentDeps {
-	traceEnabled?: boolean;
-	checkIfShouldTrace: (source: TraceSource) => boolean;
+export interface CacheInstrumentDeps extends InstrumentDeps {
 	skipResources: ReadonlySet<string>;
-	getMetrics: () => CoreMetrics | undefined;
 }
 
 /**
@@ -140,8 +138,8 @@ function recordCacheMetrics(
  * Mechanism: replace methods on `client.cache.adapter` at setup; disposer
  * restores the original function references.
  */
-export function instrumentCache(client: CacheClient | unknown, deps: CacheInstrumentDeps): () => void {
-	const adapter = (client as CacheClient | null | undefined)?.cache?.adapter;
+export function instrumentCache(target: InstrumentTarget, deps: CacheInstrumentDeps): () => void {
+	const adapter = (target.client as CacheClient | null | undefined)?.cache?.adapter;
 	if (!adapter || typeof adapter !== 'object') {
 		return () => {};
 	}
@@ -175,10 +173,9 @@ export function instrumentCache(client: CacheClient | unknown, deps: CacheInstru
 					? { 'seyfert.cache.hit': value !== undefined && value !== null }
 					: {}),
 			});
-			const traceEnabled = deps.traceEnabled ?? true;
 			const source: TraceSource = { kind: 'cache', op: method, resource };
 
-			if (!traceEnabled || !shouldTrace(deps, source)) {
+			if (!deps.traceEnabled || !shouldTrace(deps, source)) {
 				try {
 					const result = original(...args);
 					if (isThenable(result)) {

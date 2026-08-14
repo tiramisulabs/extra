@@ -1,16 +1,12 @@
-import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
+import { type Span, SpanKind, SpanStatusCode } from '@opentelemetry/api';
+import { ATTR_ERROR_TYPE } from '@opentelemetry/semantic-conventions';
 import type { ContextScope } from 'seyfert';
 import { extractInteractionAttributes, type InteractionKind, interactionSpanName } from './attributes';
-import { finishInteractionLifecycle } from './instrument/interactions';
-import { type CoreMetrics, durationSecondsSince } from './metrics';
+import type { InstrumentDeps } from './instrument/deps';
+import { finishInteractionLifecycle, type InteractionFailure, takeInteractionFailure } from './instrument/interactions';
+import { durationSecondsSince } from './metrics';
 import type { TraceSource } from './options';
 import { getTracer } from './trace-api';
-
-export interface InteractionScopeDeps {
-	traceEnabled?: boolean;
-	checkIfShouldTrace: (source: TraceSource) => boolean;
-	getMetrics: () => CoreMetrics | undefined;
-}
 
 type ContextMarkers = {
 	isModal?: () => boolean;
@@ -74,7 +70,7 @@ function detectKind(context: unknown): InteractionKind {
  * Fail-open: a throwing `checkIfShouldTrace` still traces. Finish/metrics errors never
  * escape into user code — only the user's own throw/reject is rethrown.
  */
-export function createInteractionContextScope(deps: InteractionScopeDeps): ContextScope {
+export function createInteractionContextScope(deps: InstrumentDeps): ContextScope {
 	return (context, run) => {
 		const kind = detectKind(context);
 		const source: TraceSource = { kind, context };
@@ -82,7 +78,7 @@ export function createInteractionContextScope(deps: InteractionScopeDeps): Conte
 		const attributes = extractInteractionAttributes(kind, context);
 		const start = performance.now();
 
-		const recordMetrics = (error?: unknown) => {
+		const recordMetrics = (error?: unknown, failure?: InteractionFailure) => {
 			try {
 				deps.getMetrics()?.recordInteraction(durationSecondsSince(start), {
 					'seyfert.interaction.kind': kind,
@@ -93,9 +89,24 @@ export function createInteractionContextScope(deps: InteractionScopeDeps): Conte
 						? { 'seyfert.shard_id': attributes['seyfert.shard_id'] }
 						: {}),
 					'seyfert.error': error !== undefined,
+					// Phase only: bounded to four values. The middleware name stays span-only.
+					...(failure ? { 'seyfert.failure.phase': failure.phase } : {}),
 				});
 			} catch {
 				// metrics must not break handlers
+			}
+		};
+
+		const annotateFailure = (span: Span, failure: InteractionFailure) => {
+			try {
+				span.setAttributes({
+					'seyfert.failure.phase': failure.phase,
+					...(failure.errorType ? { [ATTR_ERROR_TYPE]: failure.errorType } : {}),
+					...(failure.middleware ? { 'seyfert.middleware.name': failure.middleware } : {}),
+					...(failure.middlewareScope ? { 'seyfert.middleware.scope': failure.middlewareScope } : {}),
+				});
+			} catch {
+				// never throw instrumentation errors into user code
 			}
 		};
 
@@ -122,7 +133,7 @@ export function createInteractionContextScope(deps: InteractionScopeDeps): Conte
 			}
 		};
 
-		let shouldTrace = deps.traceEnabled ?? true;
+		let shouldTrace = deps.traceEnabled;
 		if (shouldTrace) {
 			try {
 				shouldTrace = deps.checkIfShouldTrace(source);
@@ -131,13 +142,15 @@ export function createInteractionContextScope(deps: InteractionScopeDeps): Conte
 				shouldTrace = true;
 			}
 		}
-		if (!shouldTrace) return execute(recordMetrics);
+		if (!shouldTrace) return execute(error => recordMetrics(error, takeInteractionFailure(context)));
 
 		const tracer = getTracer();
 
-		return tracer.startActiveSpan(name, { kind: SpanKind.INTERNAL, attributes }, span => {
+		return tracer.startActiveSpan(name, { kind: SpanKind.CONSUMER, attributes }, span => {
 			const finish = (error?: unknown) => {
 				finishInteractionLifecycle(context, error);
+				const failure = takeInteractionFailure(context);
+				if (failure) annotateFailure(span, failure);
 				if (error !== undefined) {
 					try {
 						const err = error instanceof Error ? error : new Error(String(error));
@@ -147,7 +160,7 @@ export function createInteractionContextScope(deps: InteractionScopeDeps): Conte
 						// never throw instrumentation errors into user code
 					}
 				}
-				recordMetrics(error);
+				recordMetrics(error, failure);
 				try {
 					span.end();
 				} catch {

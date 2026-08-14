@@ -125,11 +125,15 @@ describe('instrumentCache (adapter wraps)', () => {
 			const { adapter } = fakeAdapter();
 			const originals = new Map(methods.map(method => [method, adapter[method]]));
 			const originalStart = adapter.start;
-			const cleanup = instrumentCache(fakeClient(adapter), {
-				checkIfShouldTrace: () => true,
-				skipResources: new Set(),
-				getMetrics: () => undefined,
-			});
+			const cleanup = instrumentCache(
+				{ client: fakeClient(adapter), api: undefined },
+				{
+					traceEnabled: true,
+					checkIfShouldTrace: () => true,
+					skipResources: new Set(),
+					getMetrics: () => undefined,
+				},
+			);
 
 			for (const method of methods) {
 				assert.notEqual(adapter[method], originals.get(method), `${method} was not instrumented`);
@@ -148,11 +152,15 @@ describe('instrumentCache (adapter wraps)', () => {
 			const { adapter, store } = fakeAdapter();
 			store.set('user.1', { id: '1', username: 'a' });
 			const client = fakeClient(adapter);
-			const cleanup = instrumentCache(client, {
-				checkIfShouldTrace: () => true,
-				skipResources: new Set(),
-				getMetrics: () => undefined,
-			});
+			const cleanup = instrumentCache(
+				{ client, api: undefined },
+				{
+					traceEnabled: true,
+					checkIfShouldTrace: () => true,
+					skipResources: new Set(),
+					getMetrics: () => undefined,
+				},
+			);
 
 			const value = (adapter.get as (k: string) => unknown)('user.1');
 			assert.deepEqual(value, { id: '1', username: 'a' });
@@ -174,11 +182,15 @@ describe('instrumentCache (adapter wraps)', () => {
 		await withProvider(async exporter => {
 			const { adapter } = fakeAdapter();
 			const client = fakeClient(adapter);
-			const cleanup = instrumentCache(client, {
-				checkIfShouldTrace: () => true,
-				skipResources: new Set(),
-				getMetrics: () => undefined,
-			});
+			const cleanup = instrumentCache(
+				{ client, api: undefined },
+				{
+					traceEnabled: true,
+					checkIfShouldTrace: () => true,
+					skipResources: new Set(),
+					getMetrics: () => undefined,
+				},
+			);
 
 			const value = (adapter.get as (k: string) => unknown)('user.missing');
 			assert.equal(value, null);
@@ -197,11 +209,15 @@ describe('instrumentCache (adapter wraps)', () => {
 			const { adapter, store } = fakeAdapter();
 			store.set('presence.1', { status: 'online' });
 			const client = fakeClient(adapter);
-			const cleanup = instrumentCache(client, {
-				checkIfShouldTrace: () => true,
-				skipResources: new Set(['presence', 'voice_state']),
-				getMetrics: () => undefined,
-			});
+			const cleanup = instrumentCache(
+				{ client, api: undefined },
+				{
+					traceEnabled: true,
+					checkIfShouldTrace: () => true,
+					skipResources: new Set(['presence', 'voice_state']),
+					getMetrics: () => undefined,
+				},
+			);
 
 			const value = (adapter.get as (k: string) => unknown)('presence.1');
 			assert.deepEqual(value, { status: 'online' });
@@ -225,11 +241,15 @@ describe('instrumentCache (adapter wraps)', () => {
 			const { adapter } = fakeAdapter();
 			const originalGet = adapter.get;
 			const client = fakeClient(adapter);
-			const cleanup = instrumentCache(client, {
-				checkIfShouldTrace: () => true,
-				skipResources: new Set(),
-				getMetrics: () => undefined,
-			});
+			const cleanup = instrumentCache(
+				{ client, api: undefined },
+				{
+					traceEnabled: true,
+					checkIfShouldTrace: () => true,
+					skipResources: new Set(),
+					getMetrics: () => undefined,
+				},
+			);
 
 			assert.notEqual(adapter.get, originalGet);
 			(adapter.get as (k: string) => unknown)('user.1');
@@ -250,11 +270,15 @@ describe('instrumentCache (adapter wraps)', () => {
 				throw new Error('adapter boom');
 			};
 			const client = fakeClient(adapter);
-			const cleanup = instrumentCache(client, {
-				checkIfShouldTrace: () => true,
-				skipResources: new Set(),
-				getMetrics: () => undefined,
-			});
+			const cleanup = instrumentCache(
+				{ client, api: undefined },
+				{
+					traceEnabled: true,
+					checkIfShouldTrace: () => true,
+					skipResources: new Set(),
+					getMetrics: () => undefined,
+				},
+			);
 
 			assert.throws(() => (adapter.get as (k: string) => unknown)('user.1'), /adapter boom/);
 
@@ -274,11 +298,15 @@ describe('instrumentCache (adapter wraps)', () => {
 				throw new Error('async boom');
 			};
 			const client = fakeClient(adapter);
-			const cleanup = instrumentCache(client, {
-				checkIfShouldTrace: () => true,
-				skipResources: new Set(),
-				getMetrics: () => undefined,
-			});
+			const cleanup = instrumentCache(
+				{ client, api: undefined },
+				{
+					traceEnabled: true,
+					checkIfShouldTrace: () => true,
+					skipResources: new Set(),
+					getMetrics: () => undefined,
+				},
+			);
 
 			let thrown: unknown;
 			try {
@@ -303,14 +331,18 @@ describe('instrumentCache (adapter wraps)', () => {
 			const { adapter } = fakeAdapter();
 			const sources: unknown[] = [];
 			const client = fakeClient(adapter);
-			const cleanup = instrumentCache(client, {
-				checkIfShouldTrace: source => {
-					sources.push(source);
-					return false;
+			const cleanup = instrumentCache(
+				{ client, api: undefined },
+				{
+					traceEnabled: true,
+					checkIfShouldTrace: source => {
+						sources.push(source);
+						return false;
+					},
+					skipResources: new Set(),
+					getMetrics: () => undefined,
 				},
-				skipResources: new Set(),
-				getMetrics: () => undefined,
-			});
+			);
 
 			(adapter.set as (k: string, v: unknown) => void)('guild.1', { id: '1' });
 			assert.equal(exporter.getFinishedSpans().length, 0);
@@ -323,8 +355,9 @@ describe('instrumentCache (adapter wraps)', () => {
 	test('missing cache.adapter → no-op disposer', async () => {
 		await withProvider(async exporter => {
 			const cleanup = instrumentCache(
-				{},
+				{ client: {}, api: undefined },
 				{
+					traceEnabled: true,
 					checkIfShouldTrace: () => true,
 					skipResources: new Set(),
 					getMetrics: () => undefined,
@@ -342,21 +375,25 @@ describe('instrumentCache (adapter wraps)', () => {
 			const { adapter, store } = fakeAdapter();
 			store.set('role.1', { id: '1' });
 			const client = fakeClient(adapter);
-			const cleanup = instrumentCache(client, {
-				checkIfShouldTrace: () => true,
-				skipResources: new Set(),
-				getMetrics: () => ({
-					recordInteraction() {},
-					recordEvent() {},
-					recordRest() {},
-					recordCache(durationSeconds, attributes) {
-						recorded.push({
-							duration: durationSeconds,
-							attrs: attributes as Record<string, unknown>,
-						});
-					},
-				}),
-			});
+			const cleanup = instrumentCache(
+				{ client, api: undefined },
+				{
+					traceEnabled: true,
+					checkIfShouldTrace: () => true,
+					skipResources: new Set(),
+					getMetrics: () => ({
+						recordInteraction() {},
+						recordEvent() {},
+						recordRest() {},
+						recordCache(durationSeconds, attributes) {
+							recorded.push({
+								duration: durationSeconds,
+								attrs: attributes as Record<string, unknown>,
+							});
+						},
+					}),
+				},
+			);
 
 			(adapter.get as (k: string) => unknown)('role.1');
 
@@ -390,7 +427,7 @@ describe('instrumentCache (adapter wraps)', () => {
 					},
 				}),
 			};
-			const cleanup = instrumentCache(fakeClient(adapter), dependencies);
+			const cleanup = instrumentCache({ client: fakeClient(adapter), api: undefined }, dependencies);
 
 			(adapter.get as (key: string) => unknown)('role.1');
 
@@ -406,11 +443,15 @@ describe('instrumentCache (adapter wraps)', () => {
 			const { adapter, store } = fakeAdapter();
 			store.set('emoji.1', { id: '1' });
 			const client = fakeClient(adapter);
-			const cleanup = instrumentCache(client, {
-				checkIfShouldTrace: () => true,
-				skipResources: new Set(),
-				getMetrics: () => undefined,
-			});
+			const cleanup = instrumentCache(
+				{ client, api: undefined },
+				{
+					traceEnabled: true,
+					checkIfShouldTrace: () => true,
+					skipResources: new Set(),
+					getMetrics: () => undefined,
+				},
+			);
 
 			const values = (adapter.bulkGet as (keys: string[]) => unknown[])(['emoji.1']);
 			assert.deepEqual(values, [{ id: '1' }]);

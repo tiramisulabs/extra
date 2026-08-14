@@ -49,7 +49,7 @@ describe('createCoreMetrics', () => {
 			const { resourceMetrics } = await reader.collect();
 			const scopeMetrics = resourceMetrics.scopeMetrics[0];
 			assert.equal(scopeMetrics.scope.name, '@slipher/opentelemetry');
-			assert.equal(scopeMetrics.scope.version, '1.0.0');
+			assert.ok(!scopeMetrics.scope.version);
 
 			const interaction = scopeMetrics.metrics.find(
 				metric => metric.descriptor.name === 'seyfert.interaction.duration',

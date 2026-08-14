@@ -77,7 +77,7 @@ describe('getTracer', () => {
 			await record('scope check', () => undefined);
 			const span = exporter.getFinishedSpans()[0];
 			assert.equal(span.instrumentationScope.name, '@slipher/opentelemetry');
-			assert.equal(span.instrumentationScope.version, '1.0.0');
+			assert.equal(span.instrumentationScope.version, undefined);
 		});
 	});
 });
