@@ -1,4 +1,4 @@
-import type { ErrorObject } from 'serialize-error';
+import { type ErrorLike, isErrorLike } from 'serialize-error';
 import type { LogEntry, LoggerAdapter, WritableLogLevel } from './core';
 import { getString, stripUndefined } from './utils';
 
@@ -83,10 +83,14 @@ function formatConsolePayload(entry: LogEntry): string {
 	const tag = getString(fields._source) ?? getString(fields.name);
 	for (const key of ['level', 'message', 'time', '_source', 'name']) delete fields[key];
 
-	const error = entry.data.error as ErrorObject | undefined;
-	if (error !== undefined) {
-		delete fields.error;
+	const errors: ErrorLike[] = [];
+	for (const key of Object.keys(fields)) {
+		const value = fields[key];
+		if (!isErrorLike(value)) continue;
+		errors.push(value);
+		delete fields[key];
 	}
+
 	const head = [
 		paint(formatConsoleTime(entry.time), COLOR.time, enabled),
 		paint(levelText.toUpperCase().padEnd(5), levelAnsiColor(entry.level), enabled),
@@ -105,7 +109,7 @@ function formatConsolePayload(entry: LogEntry): string {
 			lines.push(`    ${paint(key, COLOR.key, enabled)}${gap}${formatConsoleFieldValue(key, fields[key])}`);
 		}
 	}
-	if (error) lines.push(formatConsoleError(error, enabled));
+	for (const error of errors) lines.push(formatConsoleError(error, enabled));
 
 	return lines.join('\n');
 }
@@ -135,9 +139,8 @@ function formatConsoleValue(value: unknown): string {
 	return JSON.stringify(value);
 }
 
-function formatConsoleError(error: ErrorObject, enabled: boolean): string {
-	const stack = error.stack ?? `${error.name ?? 'Error'}: ${error.message ?? ''}`;
-	return stack
+function formatConsoleError(error: ErrorLike, enabled: boolean): string {
+	return error.stack
 		.split('\n')
 		.map(line => {
 			// Header (`Name: message`) in red; `at` frames in the default foreground, same as field values.

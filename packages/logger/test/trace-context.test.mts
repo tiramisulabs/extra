@@ -46,6 +46,27 @@ describe('OpenTelemetry log correlation', () => {
 		assert.deepEqual(transport.entries[0]?.data, expectedData);
 	});
 
+	test('lets an explicit trace context win over the active span', async () => {
+		const renderer = new RecordingAdapter();
+		const logger = createLogger({ renderer });
+		const span = trace.wrapSpanContext({
+			traceId: '0af7651916cd43dd8448eb211c80319c',
+			spanId: 'b7ad6b7169203331',
+			traceFlags: TraceFlags.SAMPLED,
+		});
+		const upstreamTraceId = 'ffffffffffffffffffffffffffffffff';
+
+		await context.with(trace.setSpan(context.active(), span), () =>
+			logger.info({ jobId: 'job-3', trace_id: upstreamTraceId }, 'relaying upstream work'),
+		);
+
+		assert.deepEqual(renderer.entries[0]?.data, {
+			jobId: 'job-3',
+			span_id: 'b7ad6b7169203331',
+			trace_id: upstreamTraceId,
+		});
+	});
+
 	test('does not correlate an invalid active span context', async () => {
 		const renderer = new RecordingAdapter();
 		const logger = createLogger({ renderer });

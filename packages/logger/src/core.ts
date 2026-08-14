@@ -16,6 +16,8 @@ export interface LogEntry {
 	bindings: LogBindings;
 	data: LogData;
 	message?: string;
+	/** How the entry was produced. Absent is treated as `immediate`. */
+	shape?: 'immediate' | 'wide';
 }
 
 export interface LoggerAdapter {
@@ -105,7 +107,7 @@ export class RootLogger {
 		pendingWrites = new Set<Promise<void>>(),
 	) {
 		this.level = options.level ?? 'info';
-		this.bindings = stripUndefined({ name: options.name, ...(options.bindings ?? {}) });
+		this.bindings = normalizeErrorFields(stripUndefined({ name: options.name, ...(options.bindings ?? {}) }));
 		this.adapters = adapters ?? resolveAdapters(options);
 		this.now = options.now ?? (() => new Date());
 		this.pendingWrites = pendingWrites;
@@ -199,6 +201,7 @@ export class RootLogger {
 			bindings: this.bindings,
 			data: normalized.data,
 			message: normalized.message,
+			shape: 'immediate',
 		});
 	}
 }
@@ -305,6 +308,7 @@ export class WideEventLogger {
 			bindings: this.bindings,
 			data,
 			message: options.message ?? defaultWideEventMessage(kind, outcome),
+			shape: 'wide',
 		});
 	}
 
@@ -320,9 +324,9 @@ function withActiveTraceContext(entry: LogEntry): LogEntry {
 	return {
 		...entry,
 		data: {
-			...entry.data,
 			trace_id: spanContext.traceId,
 			span_id: spanContext.spanId,
+			...entry.data,
 		},
 	};
 }
@@ -344,13 +348,20 @@ function loadOpenTelemetryApi(): typeof import('@opentelemetry/api') | undefined
 }
 
 function normalizeLogEntry(entry: LogEntry): LogEntry {
-	let data: LogData | undefined;
-	for (const [key, value] of Object.entries(entry.data)) {
+	const data = normalizeErrorFields(entry.data);
+	return data === entry.data ? entry : { ...entry, data };
+}
+
+// Bindings are normalized once per logger in the constructor, data on every entry, so no
+// adapter ever receives an `Error` instance under either.
+function normalizeErrorFields(fields: LogData): LogData {
+	let normalized: LogData | undefined;
+	for (const [key, value] of Object.entries(fields)) {
 		if (!(value instanceof Error)) continue;
-		data ??= { ...entry.data };
-		data[key] = serializeError(value, { maxDepth: 5, useToJSON: false });
+		normalized ??= { ...fields };
+		normalized[key] = serializeError(value, { useToJSON: false });
 	}
-	return data ? { ...entry, data } : entry;
+	return normalized ?? fields;
 }
 
 export function createLogger(options: LoggerOptions = {}): RootLogger {

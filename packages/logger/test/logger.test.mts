@@ -632,6 +632,45 @@ describe('logger adapters', () => {
 		assert.equal(output.includes('error\x1b[0m'), false, 'error not rendered as a field');
 	});
 
+	test('serializes errors held in bindings, not only in data', async () => {
+		const adapter = new RecordingAdapter();
+		const root = createLogger({ bindings: { bootError: new Error('boot failed') }, renderer: adapter });
+
+		await root.child({ shardError: new Error('shard lost') }).info('probe');
+
+		const entry = adapter.entries[0]!;
+		assert.equal(entry.bindings.bootError instanceof Error, false);
+		assert.equal(entry.bindings.shardError instanceof Error, false);
+		assert.equal((entry.bindings.bootError as { message: string }).message, 'boot failed');
+		assert.match(JSON.stringify(entry.bindings), /boot failed/);
+	});
+
+	test('default console renders serialized errors held under any field name', async () => {
+		const calls: unknown[][] = [];
+		const originalNoColor = process.env.NO_COLOR;
+		const originalError = console.error;
+		process.env.NO_COLOR = '1';
+		console.error = (...args: unknown[]) => {
+			calls.push(args);
+		};
+
+		try {
+			await createLogger({ now: () => new Date('2026-05-29T10:00:00.000Z') }).error(
+				{ cause: new Error('socket closed'), command: 'ban' },
+				'command failed',
+			);
+		} finally {
+			if (originalNoColor === undefined) delete process.env.NO_COLOR;
+			else process.env.NO_COLOR = originalNoColor;
+			console.error = originalError;
+		}
+
+		const output = calls[0][0] as string;
+		assert.ok(output.includes('    Error: socket closed'), 'stack rendered even though the key is not `error`');
+		assert.equal(/cause\s+\{/.test(output), false, 'not rendered as a JSON field');
+		assert.match(output, /command\s+ban/);
+	});
+
 	test('ConsoleLoggerAdapter keeps name/message business objects as ordinary fields', () => {
 		const calls: unknown[][] = [];
 		const originalInfo = console.info;
@@ -817,6 +856,7 @@ describe('logger adapters', () => {
 			},
 			level: 'warn',
 			message: 'command permission denied',
+			shape: 'wide',
 			time: new Date('2026-05-29T10:00:00.000Z'),
 		});
 		await flushEvlogDrain();
@@ -892,6 +932,7 @@ describe('logger adapters', () => {
 			},
 			level: 'info',
 			message: 'BOT_READY completed',
+			shape: 'wide',
 			time: new Date('2026-05-29T10:00:00.000Z'),
 		});
 		await adapter.write({
@@ -906,12 +947,100 @@ describe('logger adapters', () => {
 		assert.equal(events.length, 2);
 		for (const event of events) {
 			assert.equal(event.service, 'bot-service');
-			assert.equal(event.tag, 'seyfert:Seyfert');
+			assert.equal(event.source, 'seyfert:Seyfert');
 			assert.equal(event.traceId, traceId);
 			assert.equal(event.spanId, spanId);
 			assert.equal('trace_id' in event, false);
 			assert.equal('span_id' in event, false);
 		}
+	});
+
+	test('evlogTransport treats an entry without a shape as immediate', async () => {
+		const events: Array<Record<string, unknown>> = [];
+		initLogger({
+			_suppressDrainWarning: true,
+			silent: true,
+			drain(context) {
+				events.push(context.event as Record<string, unknown>);
+			},
+		});
+		const adapter = evlogTransport();
+
+		await adapter.write({
+			bindings: {},
+			data: { durationMs: 12, kind: 'command', outcome: 'success' },
+			level: 'info',
+			message: 'looks wide but is not declared',
+			time: new Date('2026-05-29T10:00:00.000Z'),
+		});
+		await flushEvlogDrain();
+
+		assert.equal(events[0]!.source, 'app');
+		assert.equal(events[0]!.message, 'looks wide but is not declared');
+	});
+
+	test('evlogTransport keeps the derived source when a caller logs a field of the same name', async () => {
+		const events: Array<Record<string, unknown>> = [];
+		initLogger({
+			_suppressDrainWarning: true,
+			silent: true,
+			drain(context) {
+				events.push(context.event as Record<string, unknown>);
+			},
+		});
+		const adapter = evlogTransport();
+
+		await adapter.write({
+			bindings: { name: 'bot-service' },
+			data: { _source: 'seyfert:Gateway', source: 'webhook' },
+			level: 'info',
+			message: 'ready',
+			time: new Date('2026-05-29T10:00:00.000Z'),
+		});
+		await adapter.write({
+			bindings: { name: 'bot-service' },
+			data: { _source: 'seyfert:Gateway', durationMs: 3, kind: 'event', outcome: 'success', source: 'webhook' },
+			level: 'info',
+			message: 'BOT_READY completed',
+			shape: 'wide',
+			time: new Date('2026-05-29T10:00:01.000Z'),
+		});
+		await flushEvlogDrain();
+
+		assert.equal(events.length, 2);
+		for (const event of events) assert.equal(event.source, 'seyfert:Gateway');
+	});
+
+	test('evlogTransport leaves a caller-supplied traceId untouched', async () => {
+		const events: Array<Record<string, unknown>> = [];
+		initLogger({
+			_suppressDrainWarning: true,
+			silent: true,
+			drain(context) {
+				events.push(context.event as Record<string, unknown>);
+			},
+		});
+		const adapter = evlogTransport();
+
+		await adapter.write({
+			bindings: { name: 'bot-service' },
+			data: {
+				span_id: 'b7ad6b7169203331',
+				spanId: 'aaaaaaaaaaaaaaaa',
+				trace_id: '0af7651916cd43dd8448eb211c80319c',
+				traceId: 'ffffffffffffffffffffffffffffffff',
+			},
+			level: 'info',
+			message: 'relaying upstream work',
+			time: new Date('2026-05-29T10:00:00.000Z'),
+		});
+		await flushEvlogDrain();
+
+		const event = events[0]!;
+		assert.equal(event.traceId, 'ffffffffffffffffffffffffffffffff');
+		assert.equal(event.spanId, 'aaaaaaaaaaaaaaaa');
+		assert.equal('trace_id' in event, false);
+		assert.equal('span_id' in event, false);
 	});
 
 	test('evlogTransport uses the tagged form for simple entries, folding name into the tag', async () => {
