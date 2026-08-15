@@ -1,7 +1,9 @@
-import { type Span, SpanKind, SpanStatusCode } from '@opentelemetry/api';
+import { randomUUID } from 'node:crypto';
+import { ROOT_CONTEXT, type Span, SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
 import { ATTR_ERROR_TYPE } from '@opentelemetry/semantic-conventions';
 import type { ContextScope } from 'seyfert';
 import { extractInteractionAttributes, type InteractionKind, interactionSpanName } from './attributes';
+import { type InteractionFlowCarrier, withInteractionFlow } from './flow';
 import type { InstrumentDeps } from './instrument/deps';
 import { finishInteractionLifecycle, type InteractionFailure, takeInteractionFailure } from './instrument/interactions';
 import { durationSecondsSince } from './metrics';
@@ -70,12 +72,24 @@ function detectKind(context: unknown): InteractionKind {
  * Fail-open: a throwing `checkIfShouldTrace` still traces. Finish/metrics errors never
  * escape into user code — only the user's own throw/reject is rethrown.
  */
-export function createInteractionContextScope(deps: InstrumentDeps): ContextScope {
-	return (context, run) => {
-		const kind = detectKind(context);
+export interface InteractionScopeOptions {
+	kind?: InteractionKind;
+	spanName?: string;
+	parent?: InteractionFlowCarrier;
+}
+
+export interface InteractionContextScope extends ContextScope {
+	<T>(context: unknown, run: () => T, options?: InteractionScopeOptions): T;
+}
+
+export function createInteractionContextScope(deps: InstrumentDeps): InteractionContextScope {
+	return ((context: unknown, run: () => unknown, options?: InteractionScopeOptions) => {
+		const kind = options?.kind ?? detectKind(context);
 		const source: TraceSource = { kind, context };
-		const name = interactionSpanName(kind, context);
+		const name = options?.spanName ?? interactionSpanName(kind, context);
 		const attributes = extractInteractionAttributes(kind, context);
+		const flowId = options?.parent?.flowId ?? randomUUID();
+		attributes['seyfert.flow_id'] = flowId;
 		const start = performance.now();
 
 		const recordMetrics = (error?: unknown, failure?: InteractionFailure) => {
@@ -142,11 +156,20 @@ export function createInteractionContextScope(deps: InstrumentDeps): ContextScop
 				shouldTrace = true;
 			}
 		}
-		if (!shouldTrace) return execute(error => recordMetrics(error, takeInteractionFailure(context)));
+		if (!shouldTrace) {
+			return withInteractionFlow(
+				{ flowId, spanContext: options?.parent?.spanContext, interactionStartedAt: start },
+				() => execute(error => recordMetrics(error, takeInteractionFailure(context))),
+			);
+		}
 
 		const tracer = getTracer();
 
-		return tracer.startActiveSpan(name, { kind: SpanKind.CONSUMER, attributes }, span => {
+		const parentContext = options?.parent?.spanContext
+			? trace.setSpanContext(ROOT_CONTEXT, options.parent.spanContext)
+			: ROOT_CONTEXT;
+
+		return tracer.startActiveSpan(name, { kind: SpanKind.CONSUMER, attributes }, parentContext, span => {
 			const finish = (error?: unknown) => {
 				finishInteractionLifecycle(context, error);
 				const failure = takeInteractionFailure(context);
@@ -168,7 +191,9 @@ export function createInteractionContextScope(deps: InstrumentDeps): ContextScop
 				}
 			};
 
-			return execute(finish);
+			return withInteractionFlow({ flowId, spanContext: span.spanContext(), interactionStartedAt: start }, () =>
+				execute(finish),
+			);
 		});
-	};
+	}) as InteractionContextScope;
 }

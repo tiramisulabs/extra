@@ -1,11 +1,16 @@
-import { createPlugin } from 'seyfert';
+import { type ContextScope, createPlugin } from 'seyfert';
 import { createInteractionContextScope } from './context-scope';
 import { createTraceHandle } from './handle';
 import { instrumentCache } from './instrument/cache';
 import type { InstrumentTarget } from './instrument/deps';
 import { instrumentEvents } from './instrument/events';
 import { instrumentGateway } from './instrument/gateway';
-import { instrumentInteractionMiddlewares, registerInteractionInstrumentation } from './instrument/interactions';
+import {
+	instrumentInteractionCollectors,
+	instrumentInteractionMiddlewares,
+	instrumentInteractionPresentations,
+	registerInteractionInstrumentation,
+} from './instrument/interactions';
 import { instrumentRest } from './instrument/rest';
 import { type CoreMetrics, createCoreMetrics } from './metrics';
 import { type OpenTelemetryPluginOptions, resolvePluginOptions } from './options';
@@ -19,6 +24,11 @@ export function opentelemetry(options: OpenTelemetryPluginOptions = {}) {
 	const cleanups: Array<() => void> = [];
 	let setupActive = false;
 	let tornDown = false;
+	const interactionScope = createInteractionContextScope({
+		traceEnabled: resolved.traces.interactions,
+		checkIfShouldTrace: resolved.checkIfShouldTrace,
+		getMetrics: () => metrics,
+	});
 
 	const runCleanups = () => {
 		for (const cleanup of cleanups.splice(0).reverse()) {
@@ -41,13 +51,7 @@ export function opentelemetry(options: OpenTelemetryPluginOptions = {}) {
 		options() {
 			if (!resolved.traces.interactions && !resolved.metrics.interactions) return {};
 			return {
-				contextScopes: [
-					createInteractionContextScope({
-						traceEnabled: resolved.traces.interactions,
-						checkIfShouldTrace: resolved.checkIfShouldTrace,
-						getMetrics: () => metrics,
-					}),
-				],
+				contextScopes: [interactionScope as ContextScope],
 			};
 		},
 		register(api) {
@@ -79,6 +83,12 @@ export function opentelemetry(options: OpenTelemetryPluginOptions = {}) {
 
 			if (resolved.traces.interactions) {
 				cleanups.push(instrumentInteractionMiddlewares(target, { checkIfShouldTrace: resolved.checkIfShouldTrace }));
+			}
+			if (resolved.traces.interactions || resolved.metrics.interactions) {
+				cleanups.push(instrumentInteractionCollectors(target, interactionScope));
+			}
+			if (resolved.traces.interactions) {
+				cleanups.push(instrumentInteractionPresentations(target));
 			}
 			if (resolved.traces.events || resolved.metrics.events) {
 				cleanups.push(instrumentEvents(target, deps(resolved.traces.events)));

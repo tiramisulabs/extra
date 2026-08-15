@@ -1,4 +1,13 @@
-import { context as otelContext, trace as otelTrace, type Span, SpanStatusCode } from '@opentelemetry/api';
+import {
+	context as otelContext,
+	trace as otelTrace,
+	ROOT_CONTEXT,
+	type Span,
+	SpanKind,
+	SpanStatusCode,
+} from '@opentelemetry/api';
+import type { InteractionContextScope } from '../context-scope';
+import { currentInteractionFlow, type InteractionFlowCarrier, withInteractionFlow } from '../flow';
 import type { TraceSource } from '../options';
 import { getCurrentSpan, getTracer } from '../trace-api';
 import type { InstrumentTarget } from './deps';
@@ -370,6 +379,438 @@ export function instrumentInteractionMiddlewares(
 		registry[name] = wrapped;
 		restorations.push(() => {
 			if (registry[name] === wrapped) registry[name] = original;
+		});
+	}
+
+	return () => {
+		for (const restore of restorations.reverse()) restore();
+	};
+}
+
+type CollectorRow = object;
+
+type CollectorRegistry = {
+	values?: Map<unknown, CollectorRow>;
+	modals?: {
+		get(key: unknown): unknown;
+		set(key: unknown, value: unknown): unknown;
+		delete(key: unknown): unknown;
+	};
+	createComponentCollector?: (messageId: unknown, ...args: unknown[]) => unknown;
+	onComponent?: (messageId: unknown, interaction: unknown) => unknown;
+	onModalSubmit?: (interaction: unknown) => unknown;
+};
+
+type CollectorClient = { components?: CollectorRegistry };
+
+type PresentationObserverPayload = {
+	request?: Readonly<Record<string, unknown>>;
+};
+
+type PresentationApi = {
+	rest?: {
+		observe?: (
+			observer: { onSuccess?: (payload: PresentationObserverPayload) => unknown },
+			opts?: object,
+		) => () => void;
+	};
+};
+
+function recordOf(value: unknown): Record<string, unknown> {
+	return value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+}
+
+function buttonCustomIds(value: unknown): string[] {
+	const ids: string[] = [];
+	const visit = (candidate: unknown) => {
+		if (!Array.isArray(candidate)) return;
+		for (const entry of candidate) {
+			const component = recordOf(entry);
+			if (component.type === 2 && typeof component.custom_id === 'string') ids.push(component.custom_id);
+			visit(component.components);
+		}
+	};
+	visit(value);
+	return ids;
+}
+
+/** Record Discord UI semantics only after the response that presents them succeeds. */
+export function instrumentInteractionPresentations(target: InstrumentTarget): () => void {
+	const observe = (target.api as PresentationApi | undefined)?.rest?.observe;
+	if (typeof observe !== 'function') return () => undefined;
+	const acknowledged = new WeakSet<object>();
+
+	return observe({
+		onSuccess(payload) {
+			try {
+				const span = getCurrentSpan();
+				if (!span) return;
+				const body = recordOf(payload.request?.body);
+				const data = recordOf(body.data);
+				const flow = currentInteractionFlow();
+				const flowId = flow?.flowId;
+				const responseType =
+					body.type === 4
+						? 'reply'
+						: body.type === 5 || body.type === 6
+							? 'defer'
+							: body.type === 7
+								? 'update'
+								: undefined;
+				if (responseType && !acknowledged.has(span)) {
+					acknowledged.add(span);
+					const latency =
+						flow?.interactionStartedAt === undefined ? undefined : performance.now() - flow.interactionStartedAt;
+					span.setAttributes({
+						'seyfert.interaction.response_type': responseType,
+						...(latency === undefined ? {} : { 'seyfert.interaction.ack_latency_ms': latency }),
+					});
+					span.addEvent('seyfert.interaction.acknowledged', {
+						'seyfert.interaction.response_type': responseType,
+						...(latency === undefined ? {} : { 'seyfert.interaction.ack_latency_ms': latency }),
+					});
+				}
+				if (body.type === 9 && typeof data.custom_id === 'string') {
+					span.addEvent('seyfert.modal.opened', {
+						'seyfert.custom_id': data.custom_id,
+						...(flowId ? { 'seyfert.flow_id': flowId } : {}),
+					});
+				}
+
+				for (const customId of buttonCustomIds(data.components ?? body.components)) {
+					span.addEvent('seyfert.button.presented', {
+						'seyfert.custom_id': customId,
+						...(flowId ? { 'seyfert.flow_id': flowId } : {}),
+					});
+				}
+			} catch {
+				// never throw presentation instrumentation into the request path
+			}
+		},
+	});
+}
+
+function interactionUserId(interaction: unknown): unknown {
+	if (interaction === null || typeof interaction !== 'object') return undefined;
+	const user = (interaction as { user?: unknown }).user;
+	return user !== null && typeof user === 'object' ? (user as { id?: unknown }).id : undefined;
+}
+
+function collectorFlow(): InteractionFlowCarrier | undefined {
+	const flow = currentInteractionFlow();
+	if (!flow) return undefined;
+	return {
+		flowId: flow.flowId,
+		spanContext: getCurrentSpan()?.spanContext() ?? flow.spanContext,
+		interactionStartedAt: flow.interactionStartedAt,
+	};
+}
+
+type CollectorRegistration = {
+	flow: InteractionFlowCarrier;
+	registeredAt: number;
+	timeoutMs?: number;
+};
+
+function matcherLabel(matcher: unknown): string | undefined {
+	if (typeof matcher === 'string') return matcher;
+	if (matcher instanceof RegExp) return matcher.toString();
+	if (Array.isArray(matcher)) return matcher.filter(value => typeof value === 'string').join(',');
+	return undefined;
+}
+
+function registrationAttributes(type: 'component' | 'modal', matcher?: unknown, timeoutMs?: number) {
+	const matcherValue = matcherLabel(matcher);
+	return {
+		'seyfert.collector.type': type,
+		...(matcherValue ? { 'seyfert.collector.matcher': matcherValue } : {}),
+		...(timeoutMs === undefined ? {} : { 'seyfert.collector.timeout_ms': timeoutMs }),
+	};
+}
+
+function recordCollectorRegistration(type: 'component' | 'modal', matcher?: unknown, timeoutMs?: number): void {
+	try {
+		getCurrentSpan()?.addEvent('seyfert.collector.registered', registrationAttributes(type, matcher, timeoutMs));
+	} catch {
+		// never throw collector instrumentation into user code
+	}
+}
+
+function annotateCollectorCallback(
+	span: Span | undefined,
+	registration: CollectorRegistration,
+	type: 'component' | 'modal',
+	interaction: unknown,
+): void {
+	if (!span) return;
+	const customId = recordOf(interaction).customId;
+	span.setAttributes({
+		...registrationAttributes(type, undefined, registration.timeoutMs),
+		'seyfert.collector.wait_duration_ms': performance.now() - registration.registeredAt,
+	});
+	span.addEvent(type === 'component' ? 'seyfert.button.clicked' : 'seyfert.modal.submitted', {
+		...(typeof customId === 'string' ? { 'seyfert.custom_id': customId } : {}),
+	});
+}
+
+function setCollectorResult(span: Span | undefined, result: 'completed' | 'error'): void {
+	try {
+		span?.setAttribute('seyfert.collector.result', result);
+	} catch {
+		// never throw collector instrumentation into user code
+	}
+}
+
+function collectorOutcome(registration: CollectorRegistration, reason: unknown, run: () => unknown): unknown {
+	const result = reason === 'timeout' || reason === 'idle' ? 'timeout' : 'stopped';
+	const parentContext = registration.flow.spanContext
+		? otelTrace.setSpanContext(ROOT_CONTEXT, registration.flow.spanContext)
+		: ROOT_CONTEXT;
+	return getTracer().startActiveSpan(
+		`component collector ${result}`,
+		{
+			kind: SpanKind.CONSUMER,
+			attributes: {
+				'seyfert.flow_id': registration.flow.flowId,
+				'seyfert.collector.type': 'component',
+				'seyfert.collector.result': result,
+				'seyfert.collector.wait_duration_ms': performance.now() - registration.registeredAt,
+				...(registration.timeoutMs === undefined ? {} : { 'seyfert.collector.timeout_ms': registration.timeoutMs }),
+				...(typeof reason === 'string' ? { 'seyfert.collector.stop_reason': reason } : {}),
+			},
+		},
+		parentContext,
+		span =>
+			withInteractionFlow(
+				{ ...registration.flow, spanContext: span.spanContext(), interactionStartedAt: performance.now() },
+				() => {
+					try {
+						const outcome = run();
+						if (!isPromiseLike(outcome)) {
+							span.end();
+							return outcome;
+						}
+						return Promise.resolve(outcome).then(
+							value => {
+								span.end();
+								return value;
+							},
+							error => {
+								span.setAttribute('seyfert.collector.result', 'error');
+								markSpanError(span, error);
+								span.end();
+								throw error;
+							},
+						);
+					} catch (error) {
+						span.setAttribute('seyfert.collector.result', 'error');
+						markSpanError(span, error);
+						span.end();
+						throw error;
+					}
+				},
+			),
+	);
+}
+
+function collectorSpanName(kind: 'component' | 'modal', interaction: unknown): string {
+	const source = recordOf(interaction);
+	const nested = recordOf(source.interaction);
+	const customId = source.customId ?? nested.customId;
+	const family = typeof customId === 'string' ? customId.split(':', 1)[0] : undefined;
+	return family ? `${kind} collector ${family}` : `${kind} collector`;
+}
+
+/** Collector callbacks bypass Seyfert contextScopes, so route their dispatchers through the same interaction scope. */
+export function instrumentInteractionCollectors(target: InstrumentTarget, scope: InteractionContextScope): () => void {
+	const components = (target.client as CollectorClient | undefined)?.components;
+	if (!components) return () => undefined;
+
+	const rowFlows = new WeakMap<CollectorRow, CollectorRegistration>();
+	const modalFlows = new Map<unknown, CollectorRegistration>();
+	const callbackErrors = new WeakSet<object>();
+	const restorations: Array<() => void> = [];
+
+	const originalCreate = components.createComponentCollector;
+	if (typeof originalCreate === 'function') {
+		const wrapped = function otelCreateCollector(this: CollectorRegistry, messageId: unknown, ...args: unknown[]) {
+			const flow = collectorFlow();
+			const options = recordOf(args[2]);
+			const timeoutMs = typeof options.timeout === 'number' && options.timeout > 0 ? options.timeout : undefined;
+			const registration = flow ? { flow, registeredAt: performance.now(), timeoutMs } : undefined;
+			if (registration) {
+				const onStop = typeof options.onStop === 'function' ? options.onStop : undefined;
+				args[2] = {
+					...options,
+					onStop(this: unknown, reason: unknown, ...stopArgs: unknown[]) {
+						return collectorOutcome(registration, reason, () => onStop?.call(this, reason, ...stopArgs));
+					},
+				};
+			}
+			const result = originalCreate.call(this, messageId, ...args);
+			const row = this.values?.get(messageId);
+			if (registration && row) rowFlows.set(row, registration);
+			if (registration && result !== null && typeof result === 'object') {
+				const collector = result as { run?: (...args: unknown[]) => unknown };
+				const originalRun = collector.run;
+				if (typeof originalRun === 'function') {
+					collector.run = function otelCollectorRun(this: unknown, matcher: unknown, callback: unknown, ...runArgs) {
+						recordCollectorRegistration('component', matcher, timeoutMs);
+						const wrappedCallback =
+							typeof callback === 'function'
+								? function otelCollectorCallback(this: unknown, interaction: unknown, ...callbackArgs: unknown[]) {
+										try {
+											const span = getCurrentSpan();
+											const label = matcherLabel(matcher);
+											if (label) span?.setAttribute('seyfert.collector.matcher', label);
+											const callbackResult = callback.call(this, interaction, ...callbackArgs);
+											if (!isPromiseLike(callbackResult)) return callbackResult;
+											return Promise.resolve(callbackResult).catch(error => {
+												const key = asContextKey(interaction);
+												if (key) callbackErrors.add(key);
+												if (span) markSpanError(span, error);
+												throw error;
+											});
+										} catch (error) {
+											const key = asContextKey(interaction);
+											if (key) callbackErrors.add(key);
+											const span = getCurrentSpan();
+											if (span) markSpanError(span, error);
+											throw error;
+										}
+									}
+								: callback;
+						return originalRun.call(this, matcher, wrappedCallback, ...runArgs);
+					};
+				}
+			}
+			return result;
+		};
+		components.createComponentCollector = wrapped;
+		restorations.push(() => {
+			if (components.createComponentCollector === wrapped) components.createComponentCollector = originalCreate;
+		});
+	}
+
+	const originalComponent = components.onComponent;
+	if (typeof originalComponent === 'function') {
+		const wrapped = function otelCollectedComponent(this: CollectorRegistry, messageId: unknown, interaction: unknown) {
+			const row = this.values?.get(messageId);
+			const registration = row ? rowFlows.get(row) : undefined;
+			if (!registration) return originalComponent.call(this, messageId, interaction);
+			return scope(
+				interaction,
+				() => {
+					const span = getCurrentSpan();
+					annotateCollectorCallback(span, registration, 'component', interaction);
+					const complete = () => {
+						const key = asContextKey(interaction);
+						const failed = key ? callbackErrors.has(key) : false;
+						setCollectorResult(span, failed ? 'error' : 'completed');
+						if (failed && key) callbackErrors.delete(key);
+					};
+					try {
+						const result = originalComponent.call(this, messageId, interaction);
+						if (!isPromiseLike(result)) {
+							complete();
+							return result;
+						}
+						return Promise.resolve(result).then(
+							value => {
+								complete();
+								return value;
+							},
+							error => {
+								setCollectorResult(span, 'error');
+								throw error;
+							},
+						);
+					} catch (error) {
+						setCollectorResult(span, 'error');
+						throw error;
+					}
+				},
+				{
+					kind: 'component',
+					spanName: collectorSpanName('component', interaction),
+					parent: registration.flow,
+				},
+			);
+		};
+		components.onComponent = wrapped;
+		restorations.push(() => {
+			if (components.onComponent === wrapped) components.onComponent = originalComponent;
+		});
+	}
+
+	const modals = components.modals;
+	if (modals) {
+		const originalSet = modals.set;
+		const wrappedSet = function otelModalSet(this: typeof modals, key: unknown, value: unknown) {
+			const flow = collectorFlow();
+			if (flow) {
+				modalFlows.set(key, { flow, registeredAt: performance.now() });
+				recordCollectorRegistration('modal');
+			}
+			return originalSet.call(this, key, value);
+		};
+		modals.set = wrappedSet;
+		restorations.push(() => {
+			if (modals.set === wrappedSet) modals.set = originalSet;
+		});
+
+		const originalDelete = modals.delete;
+		const wrappedDelete = function otelModalDelete(this: typeof modals, key: unknown) {
+			modalFlows.delete(key);
+			return originalDelete.call(this, key);
+		};
+		modals.delete = wrappedDelete;
+		restorations.push(() => {
+			if (modals.delete === wrappedDelete) modals.delete = originalDelete;
+		});
+	}
+
+	const originalModal = components.onModalSubmit;
+	if (typeof originalModal === 'function') {
+		const wrapped = function otelCollectedModal(this: CollectorRegistry, interaction: unknown) {
+			const registration = modalFlows.get(interactionUserId(interaction));
+			if (!registration) return originalModal.call(this, interaction);
+			return scope(
+				interaction,
+				() => {
+					const span = getCurrentSpan();
+					annotateCollectorCallback(span, registration, 'modal', interaction);
+					try {
+						const result = originalModal.call(this, interaction);
+						if (!isPromiseLike(result)) {
+							setCollectorResult(span, 'completed');
+							return result;
+						}
+						return Promise.resolve(result).then(
+							value => {
+								setCollectorResult(span, 'completed');
+								return value;
+							},
+							error => {
+								setCollectorResult(span, 'error');
+								throw error;
+							},
+						);
+					} catch (error) {
+						setCollectorResult(span, 'error');
+						throw error;
+					}
+				},
+				{
+					kind: 'modal',
+					spanName: collectorSpanName('modal', interaction),
+					parent: registration.flow,
+				},
+			);
+		};
+		components.onModalSubmit = wrapped;
+		restorations.push(() => {
+			if (components.onModalSubmit === wrapped) components.onModalSubmit = originalModal;
 		});
 	}
 

@@ -242,6 +242,292 @@ describe('interaction context scope (root spans)', () => {
 	});
 });
 
+describe('collector flows', () => {
+	test('a collector click continues the command trace after the command span ends', async () => {
+		await withProvider(async exporter => {
+			const values = new Map<string, { callback?: (interaction: object) => unknown }>();
+			const components = {
+				values,
+				modals: new Map<string, (interaction: object) => unknown>(),
+				createComponentCollector(messageId: string) {
+					const row: { callback?: (interaction: object) => unknown } = {};
+					values.set(messageId, row);
+					return {
+						run(_customId: string, callback: (interaction: object) => unknown) {
+							row.callback = callback;
+						},
+					};
+				},
+				async onComponent(messageId: string, interaction: object) {
+					try {
+						return await values.get(messageId)?.callback?.(interaction);
+					} catch {
+						// Seyfert reports collector errors and does not rethrow them.
+						return undefined;
+					}
+				},
+				onModalSubmit(interaction: object) {
+					const userId = (interaction as { user: { id: string } }).user.id;
+					const callback = this.modals.get(userId);
+					this.modals.delete(userId);
+					return callback?.(interaction);
+				},
+			};
+			const plugin = opentelemetry({
+				traces: { interactions: true, events: false, rest: false, cache: false },
+				metrics: { interactions: false, events: false, rest: false, cache: false },
+			});
+			const scope = plugin.options?.({} as never)?.contextScopes?.[0] as unknown as (
+				context: object,
+				run: () => unknown,
+			) => unknown;
+			await plugin.setup?.({ components } as never, {} as never);
+
+			scope({ fullCommandName: 'setup' }, () => {
+				getTracer().startActiveSpan('Run', runSpan => {
+					components.createComponentCollector('message-1').run('continue', () => {
+						getTracer().startSpan('collector work').end();
+					});
+					components.createComponentCollector('message-error').run('fail', () => {
+						throw new Error('collector failed');
+					});
+					runSpan.end();
+				});
+			});
+			await components.onComponent('message-1', {
+				type: 3,
+				customId: 'continue',
+				id: 'interaction-2',
+				user: { id: 'user-1' },
+			});
+			await components.onComponent('message-error', {
+				type: 3,
+				customId: 'fail',
+				id: 'interaction-3',
+				user: { id: 'user-1' },
+			});
+			await plugin.teardown?.({} as never);
+
+			const spans = exporter.getFinishedSpans();
+			const command = spans.find(span => span.name === 'command setup');
+			const run = spans.find(span => span.name === 'Run');
+			const click = spans.find(span => span.name === 'component collector continue');
+			const work = spans.find(span => span.name === 'collector work');
+			const failed = spans.find(span => span.name === 'component collector fail');
+			assert.ok(command);
+			assert.ok(run);
+			assert.ok(click);
+			assert.ok(work);
+			assert.ok(failed);
+			assert.equal(click.spanContext().traceId, command.spanContext().traceId);
+			assert.equal(click.parentSpanContext?.spanId, run.spanContext().spanId);
+			assert.equal(click.attributes['seyfert.flow_id'], command.attributes['seyfert.flow_id']);
+			assert.equal(click.attributes['seyfert.collector.result'], 'completed');
+			assert.equal(typeof click.attributes['seyfert.collector.wait_duration_ms'], 'number');
+			assert.ok(click.events.some(event => event.name === 'seyfert.button.clicked'));
+			const registered = run.events.find(event => event.name === 'seyfert.collector.registered');
+			assert.equal(registered?.attributes?.['seyfert.collector.type'], 'component');
+			assert.equal(registered?.attributes?.['seyfert.collector.matcher'], 'continue');
+			assert.equal(work.parentSpanContext?.spanId, click.spanContext().spanId);
+			assert.equal(failed.attributes['seyfert.collector.result'], 'error');
+			assert.equal(failed.status.code, SpanStatusCode.ERROR);
+		});
+	});
+
+	test('a modal submit continues the trace that recorded the modal opening', async () => {
+		await withProvider(async exporter => {
+			let restObserver: { onSuccess?: (payload: object) => unknown } | undefined;
+			const values = new Map<string, { callback?: (interaction: object) => unknown }>();
+			const components = {
+				values,
+				modals: new Map<string, (interaction: object) => unknown>(),
+				createComponentCollector(messageId: string) {
+					const row: { callback?: (interaction: object) => unknown } = {};
+					values.set(messageId, row);
+					return {
+						run(_customId: string, callback: (interaction: object) => unknown) {
+							row.callback = callback;
+						},
+					};
+				},
+				onComponent(messageId: string, interaction: object) {
+					return values.get(messageId)?.callback?.(interaction);
+				},
+				onModalSubmit(interaction: object) {
+					const userId = (interaction as { user: { id: string } }).user.id;
+					const callback = this.modals.get(userId);
+					this.modals.delete(userId);
+					return callback?.(interaction);
+				},
+			};
+			const plugin = opentelemetry({
+				traces: { interactions: true, events: false, rest: false, cache: false },
+				metrics: { interactions: false, events: false, rest: false, cache: false },
+			});
+			const scope = plugin.options?.({} as never)?.contextScopes?.[0] as unknown as (
+				context: object,
+				run: () => unknown,
+			) => unknown;
+			await plugin.setup?.(
+				{ components } as never,
+				{
+					rest: {
+						observe(observer: { onSuccess?: (payload: object) => unknown }) {
+							restObserver = observer;
+							return () => {
+								restObserver = undefined;
+							};
+						},
+					},
+				} as never,
+			);
+
+			scope({ fullCommandName: 'setup' }, () => {
+				getTracer().startActiveSpan('Run', runSpan => {
+					components.modals.set('user-1', () => {
+						getTracer().startSpan('submit work').end();
+						components.createComponentCollector('message-2').run('continue', () => {
+							getTracer().startSpan('button work').end();
+						});
+						restObserver?.onSuccess?.({
+							method: 'POST',
+							url: '/interactions/2/token/callback',
+							request: {
+								body: {
+									type: 4,
+									data: {
+										components: [{ type: 1, components: [{ type: 2, custom_id: 'continue' }] }],
+									},
+								},
+							},
+							response: { status: 204 },
+						});
+					});
+					restObserver?.onSuccess?.({
+						method: 'POST',
+						url: '/interactions/1/token/callback',
+						request: {
+							body: {
+								type: 9,
+								data: { custom_id: 'setup-modal', title: 'Setup', components: [] },
+							},
+						},
+						response: { status: 204 },
+					});
+					runSpan.end();
+				});
+			});
+			await components.onModalSubmit({
+				type: 5,
+				customId: 'setup-modal',
+				id: 'interaction-2',
+				user: { id: 'user-1' },
+			});
+			await components.onComponent('message-2', {
+				type: 3,
+				customId: 'continue',
+				id: 'interaction-3',
+				user: { id: 'user-1' },
+			});
+			await plugin.teardown?.({} as never);
+
+			const spans = exporter.getFinishedSpans();
+			const command = spans.find(span => span.name === 'command setup');
+			const run = spans.find(span => span.name === 'Run');
+			const submit = spans.find(span => span.name === 'modal collector setup-modal');
+			const work = spans.find(span => span.name === 'submit work');
+			const click = spans.find(span => span.name === 'component collector continue');
+			const buttonWork = spans.find(span => span.name === 'button work');
+			assert.ok(command);
+			assert.ok(run);
+			assert.ok(submit);
+			assert.ok(work);
+			assert.ok(click);
+			assert.ok(buttonWork);
+			assert.ok(run.events.some(event => event.name === 'seyfert.modal.opened'));
+			assert.ok(
+				run.events.some(
+					event =>
+						event.name === 'seyfert.collector.registered' && event.attributes?.['seyfert.collector.type'] === 'modal',
+				),
+			);
+			assert.ok(submit.events.some(event => event.name === 'seyfert.modal.submitted'));
+			assert.ok(submit.events.some(event => event.name === 'seyfert.button.presented'));
+			assert.equal(submit.attributes['seyfert.collector.result'], 'completed');
+			assert.equal(typeof submit.attributes['seyfert.collector.wait_duration_ms'], 'number');
+			assert.equal(submit.attributes['seyfert.interaction.response_type'], 'reply');
+			assert.equal(typeof submit.attributes['seyfert.interaction.ack_latency_ms'], 'number');
+			assert.ok(submit.events.some(event => event.name === 'seyfert.interaction.acknowledged'));
+			assert.equal(submit.spanContext().traceId, command.spanContext().traceId);
+			assert.equal(submit.parentSpanContext?.spanId, run.spanContext().spanId);
+			assert.equal(submit.attributes['seyfert.flow_id'], command.attributes['seyfert.flow_id']);
+			assert.equal(work.parentSpanContext?.spanId, submit.spanContext().spanId);
+			assert.equal(click.spanContext().traceId, command.spanContext().traceId);
+			assert.equal(click.parentSpanContext?.spanId, submit.spanContext().spanId);
+			assert.equal(click.attributes['seyfert.flow_id'], command.attributes['seyfert.flow_id']);
+			assert.equal(buttonWork.parentSpanContext?.spanId, click.spanContext().spanId);
+		});
+	});
+
+	test('records collector timeout and manual stop without a long-lived span', async () => {
+		await withProvider(async exporter => {
+			type StopOptions = { timeout?: number; onStop?: (reason: string, restart: () => void) => unknown };
+			const values = new Map<string, object>();
+			const components = {
+				values,
+				modals: new Map<string, (interaction: object) => unknown>(),
+				createComponentCollector(messageId: string, _channelId?: string, _guildId?: string, options: StopOptions = {}) {
+					values.set(messageId, {});
+					return {
+						run() {},
+						stop(reason: string) {
+							return options.onStop?.(reason, () => undefined);
+						},
+					};
+				},
+				onComponent() {},
+				onModalSubmit() {},
+			};
+			const plugin = opentelemetry({
+				traces: { interactions: true, events: false, rest: false, cache: false },
+				metrics: { interactions: false, events: false, rest: false, cache: false },
+			});
+			const scope = plugin.options?.({} as never)?.contextScopes?.[0] as unknown as (
+				context: object,
+				run: () => unknown,
+			) => unknown;
+			await plugin.setup?.({ components } as never, {} as never);
+
+			let timeoutCollector: { stop(reason: string): unknown } | undefined;
+			let stoppedCollector: { stop(reason: string): unknown } | undefined;
+			scope({ fullCommandName: 'setup' }, () => {
+				getTracer().startActiveSpan('Run', runSpan => {
+					timeoutCollector = components.createComponentCollector('timeout', undefined, undefined, {
+						timeout: 60_000,
+					});
+					stoppedCollector = components.createComponentCollector('stopped');
+					runSpan.end();
+				});
+			});
+			timeoutCollector?.stop('timeout');
+			stoppedCollector?.stop('cancelled');
+			await plugin.teardown?.({} as never);
+
+			const run = exporter.getFinishedSpans().find(span => span.name === 'Run');
+			const timeout = exporter.getFinishedSpans().find(span => span.name === 'component collector timeout');
+			const stopped = exporter.getFinishedSpans().find(span => span.name === 'component collector stopped');
+			assert.ok(run);
+			assert.ok(timeout);
+			assert.ok(stopped);
+			assert.equal(timeout.parentSpanContext?.spanId, run.spanContext().spanId);
+			assert.equal(timeout.attributes['seyfert.collector.result'], 'timeout');
+			assert.equal(timeout.attributes['seyfert.collector.timeout_ms'], 60_000);
+			assert.equal(stopped.attributes['seyfert.collector.result'], 'stopped');
+			assert.equal(stopped.attributes['seyfert.collector.stop_reason'], 'cancelled');
+		});
+	});
+});
+
 describe('registerInteractionInstrumentation', () => {
 	test('installs defaults on commands, components, and modals', () => {
 		const calls: Array<{ target: string; hooks: Record<string, unknown> }> = [];

@@ -107,6 +107,21 @@ await ctx.trace.record('load-settings', async () => {
 
 Component and modal spans are named after the handler: its `customId` when that's a plain string, otherwise the class name. The runtime `custom_id` is a span attribute, never part of the name — a handler matching `/^vote:\d+$/` would otherwise produce a new span name per click.
 
+Collector buttons and awaited modal submits are included too. They continue the trace that created the collector/modal while keeping a separate, short span per Discord interaction; no span stays open while waiting. Every span in that UI flow also carries the same `seyfert.flow_id`.
+
+| Collector telemetry | Recorded on |
+| --- | --- |
+| `seyfert.collector.registered` with type, matcher and timeout | The `Run` span that registers it |
+| `seyfert.button.presented` / `seyfert.modal.opened` | The span whose successful Discord response presents the UI |
+| `seyfert.button.clicked` / `seyfert.modal.submitted` | The collector interaction span |
+| `seyfert.collector.wait_duration_ms` | The collector interaction or terminal span |
+| `seyfert.collector.result` | `completed`, `timeout`, `stopped` or `error` |
+| `seyfert.interaction.ack_latency_ms` and `seyfert.interaction.response_type` | The interaction span after a successful `reply`, `defer` or `update` |
+
+Collector callbacks execute with their interaction span active, so database, REST and application spans created inside the callback become its children. Timeout and manual-stop results use short terminal spans parented to the registration span.
+
+Standalone `ComponentCommand` handlers remain independent traces by design: Discord does not propagate trace context between interactions, and a persistent component may represent a new flow. A collector or awaited modal created inside that component does continue the component's trace.
+
 To name one yourself:
 
 ```ts
