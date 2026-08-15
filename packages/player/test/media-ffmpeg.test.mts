@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -174,8 +175,7 @@ describe('FFmpeg media backend', () => {
 				await vi.advanceTimersByTimeAsync(5_000);
 
 				await expect(waitForSettlement(pending)).rejects.toMatchObject({ code: 'PLAYER_MEDIA_FAILED' });
-				expect(processIsAlive(wrapperPid)).toBe(false);
-				expect(processIsAlive(grandchildPid)).toBe(false);
+				await Promise.all([waitForProcessToStop(wrapperPid), waitForProcessToStop(grandchildPid)]);
 				treeClosed = true;
 				await backend.close();
 			} finally {
@@ -240,9 +240,28 @@ async function waitForSettlement<T>(promise: Promise<T>): Promise<T> {
 	return outcome.value;
 }
 
-function processIsAlive(pid: number): boolean {
+async function waitForProcessToStop(pid: number): Promise<void> {
+	const deadline = performance.now() + 2_000;
+	while (processIsRunning(pid) && performance.now() < deadline) {
+		await new Promise<void>(resolve => setImmediate(resolve));
+	}
+	if (processIsRunning(pid)) throw new Error(`Timed out waiting for process ${pid} to stop.`);
+}
+
+function processIsRunning(pid: number): boolean {
 	try {
 		process.kill(pid, 0);
+		/*
+		 * Sending SIGKILL and observing the process exit are not atomic. On Linux, kill(pid, 0) also succeeds for a
+		 * zombie because its PID remains in the process table until its parent reaps it, even though it can no longer
+		 * execute or hold the inherited FFmpeg pipes open. Treat that state as stopped so this test verifies resource
+		 * termination instead of depending on when the runner's init process reaps orphaned grandchildren.
+		 */
+		if (process.platform === 'linux') {
+			const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+			const stateOffset = stat.lastIndexOf(') ') + 2;
+			return stat[stateOffset] !== 'Z';
+		}
 		return true;
 	} catch {
 		return false;
