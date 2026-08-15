@@ -63,6 +63,10 @@ The plugin attaches a `WideEventLogger` to every command, component, and modal c
 
 The result is one canonical entry per interaction.
 
+Collectors and awaited modal callbacks bypass Seyfert's normal component lifecycle, so the plugin scopes them separately. Their wide events include `collector: true`, the originating `command` and `parentInteractionId`, the current interaction identifiers, `waitDurationMs`, and `collectorResult` (`completed` or `error`). Component collectors also include `collectorMatch`.
+
+When OpenTelemetry is active, the collector event receives the collector interaction's native `trace_id` and `span_id`, not the already-ended command span. Calls to `useLogger().add()` inside the callback enrich that same collector event.
+
 ### Carry context through middlewares
 
 `ctx.logger.add()` enriches the final wide event. Level methods (`info`, `warn`, …) emit immediately. That split keeps normal logging predictable while still producing a single wide event per interaction.

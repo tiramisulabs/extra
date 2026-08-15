@@ -69,6 +69,7 @@ interface LoggerInstallation {
 	client: object;
 	rootLogger: RootLogger;
 	properties: InstalledLoggerProperty[];
+	restoreCollectors: () => void;
 	restoreInternalLogger: () => void;
 }
 
@@ -173,7 +174,7 @@ export function logger(options: LoggerPluginOptions = {}) {
 		setup: (client, api) => {
 			const existing = installations.get(client);
 			disposeLoggerInstallation(existing);
-			const installation = installSeyfertLoggerForPlugin(client, root);
+			const installation = installSeyfertLoggerForPlugin(client, root, contextConfig);
 			installations.set(client, installation);
 
 			const instrumentCommands = () => instrumentLoadedCommands(client, root, contextConfig, instrumentedHandlers);
@@ -243,6 +244,7 @@ function resolveRootLogger(owner?: object): RootLogger {
 function installSeyfertLoggerForPlugin<TClient extends SeyfertClientLike>(
 	client: TClient,
 	rootLogger: RootLogger,
+	contextConfig: Record<AutoContextField, boolean>,
 ): LoggerInstallation {
 	const properties: InstalledLoggerProperty[] = [];
 	setLoggerOn(client.commands, rootLogger, properties);
@@ -255,6 +257,7 @@ function installSeyfertLoggerForPlugin<TClient extends SeyfertClientLike>(
 		client,
 		rootLogger,
 		properties,
+		restoreCollectors: instrumentCollectorCallbacks(client, rootLogger, contextConfig),
 		restoreInternalLogger: installSeyfertInternalLogger(rootLogger),
 	};
 	loggerInstallations.set(client, installation);
@@ -278,8 +281,149 @@ function restoreSeyfertLogger(installation: LoggerInstallation | undefined): voi
 }
 
 function disposeLoggerInstallation(installation: LoggerInstallation | undefined): void {
+	installation?.restoreCollectors();
 	installation?.restoreInternalLogger();
 	restoreSeyfertLogger(installation);
+}
+
+type CollectorCallback = (...args: unknown[]) => unknown;
+type CollectorMatch = string | readonly string[] | RegExp;
+type CollectorResult = {
+	run?: (match: CollectorMatch, callback: CollectorCallback, ...args: unknown[]) => unknown;
+};
+type CollectorRegistry = {
+	createComponentCollector?: (...args: unknown[]) => unknown;
+	modals?: {
+		set(key: unknown, callback: unknown): unknown;
+	};
+};
+
+function collectorOrigin(): LogData {
+	const current = loggerScope.getStore()?.currentContext;
+	return stripUndefined({
+		command: getString(current?.command),
+		parentInteractionId: getString(current?.interactionId),
+	});
+}
+
+function collectorMatchLabel(match: CollectorMatch): string {
+	if (typeof match === 'string') return match;
+	if (match instanceof RegExp) return match.toString();
+	return match.join(',');
+}
+
+async function runCollectorCallback(
+	root: RootLogger,
+	kind: 'component' | 'modal',
+	contextConfig: Record<AutoContextField, boolean>,
+	origin: LogData,
+	registeredAt: number,
+	interaction: unknown,
+	run: () => unknown,
+	extra: LogData = {},
+): Promise<unknown> {
+	const event = root.event({
+		kind,
+		collector: true,
+		waitDurationMs: performance.now() - registeredAt,
+		...origin,
+		...extra,
+		...extractSeyfertLogContext(interaction, contextConfig),
+	});
+	return loggerScope.run(event, async () => {
+		try {
+			const result = await run();
+			await event.emit({
+				outcome: 'success',
+				message: `${kind} collector completed`,
+				data: { collectorResult: 'completed' },
+			});
+			return result;
+		} catch (error) {
+			await event.emit({
+				outcome: 'error',
+				message: `${kind} collector failed`,
+				data: { collectorResult: 'error' },
+				error,
+			});
+			throw error;
+		}
+	});
+}
+
+function instrumentCollectorCallbacks(
+	client: SeyfertClientLike,
+	root: RootLogger,
+	contextConfig: Record<AutoContextField, boolean>,
+): () => void {
+	const components = client.components as CollectorRegistry | undefined;
+	if (!components) return () => undefined;
+	const restorations: Array<() => void> = [];
+
+	const originalCreate = components.createComponentCollector;
+	if (typeof originalCreate === 'function') {
+		const wrappedCreate = function loggerCreateCollector(this: CollectorRegistry, ...args: unknown[]) {
+			const result = originalCreate.apply(this, args) as CollectorResult | undefined;
+			if (!result) return result;
+			const originalRun = result.run;
+			if (typeof originalRun !== 'function') return result;
+
+			result.run = function loggerCollectorRun(
+				this: CollectorResult,
+				match: CollectorMatch,
+				callback: CollectorCallback,
+				...runArgs: unknown[]
+			) {
+				if (typeof callback !== 'function') return originalRun.call(this, match, callback, ...runArgs);
+				const origin = collectorOrigin();
+				const registeredAt = performance.now();
+				return originalRun.call(
+					this,
+					match,
+					(interaction, ...callbackArgs) =>
+						runCollectorCallback(
+							root,
+							'component',
+							contextConfig,
+							origin,
+							registeredAt,
+							interaction,
+							() => callback(interaction, ...callbackArgs),
+							{ collectorMatch: collectorMatchLabel(match) },
+						),
+					...runArgs,
+				);
+			};
+			return result;
+		};
+		components.createComponentCollector = wrappedCreate;
+		restorations.push(() => {
+			if (components.createComponentCollector === wrappedCreate) components.createComponentCollector = originalCreate;
+		});
+	}
+
+	const modals = components.modals;
+	if (modals) {
+		const originalSet = modals.set;
+		const wrappedSet = function loggerModalSet(this: typeof modals, key: unknown, callback: unknown) {
+			if (typeof callback !== 'function') return originalSet.call(this, key, callback);
+			const origin = collectorOrigin();
+			const registeredAt = performance.now();
+			return originalSet.call(this, key, (interaction: unknown, ...args: unknown[]) =>
+				runCollectorCallback(root, 'modal', contextConfig, origin, registeredAt, interaction, () =>
+					callback(interaction, ...args),
+				),
+			);
+		};
+		modals.set = wrappedSet;
+		restorations.push(() => {
+			if (modals.set === wrappedSet) modals.set = originalSet;
+		});
+	}
+
+	return () => {
+		for (const restore of restorations.reverse()) restore();
+	};
 }
 
 export function extractSeyfertLogContext(context: unknown, config: AutoContextConfig = {}): SeyfertLogContext {

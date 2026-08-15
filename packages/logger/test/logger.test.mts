@@ -104,6 +104,100 @@ function getLoggerContext(plugin: LoggerPlugin, source: unknown): { logger: Wide
 }
 
 describe('logger plugin', () => {
+	test('emits wide events for component and modal collector callbacks', async () => {
+		const adapter = new RecordingAdapter();
+		const plugin = logger({ renderer: adapter });
+		const componentRows = new Map<string, { callback?: (interaction: object) => unknown }>();
+		const components = {
+			values: componentRows,
+			modals: new Map<string, (interaction: object) => unknown>(),
+			createComponentCollector(messageId: string) {
+				const row: { callback?: (interaction: object) => unknown } = {};
+				componentRows.set(messageId, row);
+				return {
+					run(_match: string | RegExp, callback: (interaction: object) => unknown) {
+						row.callback = callback;
+					},
+				};
+			},
+			onComponent(messageId: string, interaction: object) {
+				return componentRows.get(messageId)?.callback?.(interaction);
+			},
+			onModalSubmit(interaction: object) {
+				const userId = (interaction as { user: { id: string } }).user.id;
+				const callback = this.modals.get(userId);
+				this.modals.delete(userId);
+				return callback?.(interaction);
+			},
+		};
+		const client = { components };
+		await plugin.setup?.(client as never, undefined as never);
+
+		const options = getLoggerPluginOptions(plugin);
+		const scope = options.contextScopes?.[0] as unknown as (context: object, run: () => unknown) => unknown;
+		await scope(
+			{
+				fullCommandName: 'submission-history',
+				interaction: { id: 'command-interaction' },
+				author: { id: 'user-1' },
+			},
+			() => {
+				components.createComponentCollector('message-1').run(/^submission-history:/, () => {
+					useLogger().add({ page: 2 });
+				});
+				components.modals.set('user-1', () => {
+					useLogger().add({ valid: false });
+				});
+			},
+		);
+
+		await components.onComponent('message-1', {
+			customId: 'submission-history:next',
+			guildId: 'guild-1',
+			channelId: 'channel-1',
+			id: 'component-interaction',
+			user: { id: 'user-1' },
+		});
+		await components.onModalSubmit({
+			customId: 'dashboard-invite:test',
+			guildId: 'guild-1',
+			channelId: 'channel-1',
+			id: 'modal-interaction',
+			user: { id: 'user-1' },
+		});
+		await plugin.teardown?.(client as never);
+
+		const collectorEntries = adapter.entries.filter(entry => entry.data.collector === true);
+		assert.equal(collectorEntries.length, 2);
+		assert.deepEqual(collectorEntries[0].data, {
+			channelId: 'channel-1',
+			collector: true,
+			collectorMatch: '/^submission-history:/',
+			collectorResult: 'completed',
+			command: 'submission-history',
+			customId: 'submission-history:next',
+			durationMs: collectorEntries[0].data.durationMs,
+			guildId: 'guild-1',
+			interactionId: 'component-interaction',
+			kind: 'component',
+			parentInteractionId: 'command-interaction',
+			outcome: 'success',
+			page: 2,
+			userId: 'user-1',
+			waitDurationMs: collectorEntries[0].data.waitDurationMs,
+		});
+		assert.equal(typeof collectorEntries[0].data.waitDurationMs, 'number');
+		assert.equal(collectorEntries[0].message, 'component collector completed');
+		assert.equal(collectorEntries[1].data.kind, 'modal');
+		assert.equal(collectorEntries[1].data.command, 'submission-history');
+		assert.equal(collectorEntries[1].data.customId, 'dashboard-invite:test');
+		assert.equal(collectorEntries[1].data.parentInteractionId, 'command-interaction');
+		assert.equal(collectorEntries[1].data.collectorResult, 'completed');
+		assert.equal(typeof collectorEntries[1].data.waitDurationMs, 'number');
+		assert.equal(collectorEntries[1].data.valid, false);
+		assert.equal(collectorEntries[1].message, 'modal collector completed');
+	});
+
 	test('returns a Seyfert plugin with lifecycle observers and instrumentation', () => {
 		const plugin: LoggerPlugin = logger({ renderer: new RecordingAdapter() });
 		const options = getLoggerPluginOptions(plugin);
