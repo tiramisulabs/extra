@@ -218,7 +218,7 @@ export class PlayerManager {
 	private updateVoiceAvailability(record: PlayerRecord, available: boolean): void {
 		void record.controller
 			.setVoiceAvailable(available)
-			.catch(error => this.warn('@slipher/player voice availability', error));
+			.catch(error => this.log('warn', '@slipher/player voice availability', error));
 	}
 
 	private removePlayer(player: GuildPlayer): void {
@@ -232,18 +232,21 @@ export class PlayerManager {
 		event: Event,
 		...args: Parameters<PlayerCustomEvents[Event]>
 	): void {
+		if (event === 'playerTrackError') {
+			this.log('error', '@slipher/player failed to play a media track', args.at(-1));
+		}
 		try {
 			void Promise.resolve(this.#client?.events?.emit(event, ...args)).catch(error =>
-				this.warn(`@slipher/player ${event}`, error),
+				this.log('warn', `@slipher/player ${event}`, error),
 			);
 		} catch (error) {
-			this.warn(`@slipher/player ${event}`, error);
+			this.log('warn', `@slipher/player ${event}`, error);
 		}
 	}
 
-	private warn(message: string, error: unknown): void {
+	private log(level: keyof PlayerManagerLogger, message: string, error: unknown): void {
 		try {
-			void Promise.resolve(this.#client?.logger?.warn(message, error)).catch(() => undefined);
+			void Promise.resolve(this.#client?.logger?.[level]?.(message, error)).catch(() => undefined);
 		} catch {
 			return;
 		}
@@ -276,7 +279,8 @@ interface PlayerManagerEvents {
 }
 
 interface PlayerManagerLogger {
-	warn(...args: readonly unknown[]): unknown;
+	error?(...args: readonly unknown[]): unknown;
+	warn?(...args: readonly unknown[]): unknown;
 }
 
 interface PlayerManagerClient {

@@ -99,7 +99,10 @@ describe('FFmpeg media backend', () => {
 			),
 		).rejects.toMatchObject({
 			code: 'PLAYER_MEDIA_FAILED',
-			metadata: { detail: 'FFmpeg could not be started.' },
+			metadata: {
+				detail: 'FFmpeg could not be started.',
+				ffmpegPath: join(fixtureDirectory, 'missing-ffmpeg'),
+			},
 		});
 		await backend.close();
 	});

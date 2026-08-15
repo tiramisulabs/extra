@@ -202,6 +202,25 @@ describe('PlayerManager', () => {
 		await manager.close();
 	});
 
+	test('logs and emits media failures that happen after enqueue resolves', async () => {
+		const { provider } = createProvider();
+		const failure = new Error('FFmpeg could not be started.');
+		vi.mocked(provider.open).mockRejectedValueOnce(failure);
+		const manager = PlayerManager.create({ providers: [provider] });
+		const emit = vi.fn();
+		const error = vi.fn();
+		manager.attach({ events: { emit }, logger: { error, warn: vi.fn() } });
+		const guildPlayer = manager.create(createVoiceConnection().connection);
+
+		await expect(guildPlayer.enqueue(createTrack())).resolves.toMatchObject({ track: { identifier: 'track' } });
+		await flushWork();
+
+		expect(error).toHaveBeenCalledWith('@slipher/player failed to play a media track', failure);
+		expect(emit).toHaveBeenCalledWith('playerTrackError', guildPlayer, expect.anything(), failure);
+		expect(guildPlayer.history.at(-1)?.reason).toBe('load-failed');
+		await manager.close();
+	});
+
 	test('resolves in provider order, supports explicit routing, and rejects duplicate provider names', async () => {
 		const first = createProvider('first').provider;
 		const second = createProvider('second').provider;

@@ -40,7 +40,7 @@ export async function openFfmpegMediaSource(
 		const stderr = await stderrPromise;
 		detachAbort();
 		controller.signal.removeEventListener('abort', beginProcessClose);
-		throw createFfmpegError(outcome, stderr, cause);
+		throw createFfmpegError(outcome, stderr, ffmpegPath, cause);
 	}
 
 	const inputPromise = writeProcessInput(child, source.kind === 'bytes' ? source.data : undefined);
@@ -71,7 +71,7 @@ export async function openFfmpegMediaSource(
 				const outcome = await outcomePromise;
 				await inputPromise;
 				if (outcome.error || outcome.code !== 0) {
-					throw createFfmpegError(outcome, await stderrPromise);
+					throw createFfmpegError(outcome, await stderrPromise, ffmpegPath);
 				}
 			} catch (error) {
 				controller.abort();
@@ -80,7 +80,7 @@ export async function openFfmpegMediaSource(
 				if (options.signal.aborted) throw options.signal.reason;
 				if (closing) return;
 				if (PlayerError.is(error, 'PLAYER_MEDIA_FAILED')) throw error;
-				throw createFfmpegError(outcome, stderr, error);
+				throw createFfmpegError(outcome, stderr, ffmpegPath, error);
 			} finally {
 				await close();
 			}
@@ -308,7 +308,7 @@ async function closeFfmpegProcess(
 	}
 }
 
-function createFfmpegError(outcome: ProcessOutcome, stderr: string, cause?: unknown): PlayerError {
+function createFfmpegError(outcome: ProcessOutcome, stderr: string, ffmpegPath: string, cause?: unknown): PlayerError {
 	return new PlayerError('PLAYER_MEDIA_FAILED', {
 		cause: cause ?? outcome.error,
 		metadata: {
@@ -316,6 +316,7 @@ function createFfmpegError(outcome: ProcessOutcome, stderr: string, cause?: unkn
 			exitCode: outcome.code,
 			signal: outcome.signal,
 			stderr,
+			ffmpegPath,
 		},
 	});
 }

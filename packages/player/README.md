@@ -14,6 +14,27 @@ pnpm add @slipher/player @slipher/voice seyfert
 [FFmpeg](https://ffmpeg.org/) must be available for media that is not already compatible Ogg Opus or WebM Opus.
 Configure another executable path with `ffmpegPath`. Direct Opus playback does not start FFmpeg.
 
+Installing [`ffmpeg-static`](https://www.npmjs.com/package/ffmpeg-static) does not add its binary to `PATH`. Pass the
+path exported by the package explicitly:
+
+```sh
+pnpm add ffmpeg-static
+```
+
+```ts
+import { player } from '@slipher/player';
+import { voice } from '@slipher/voice';
+import ffmpegPath from 'ffmpeg-static';
+import { definePlugins } from 'seyfert';
+
+if (!ffmpegPath) throw new Error('ffmpeg-static does not support this platform.');
+
+const plugins = definePlugins(
+	voice(),
+	player({ ffmpegPath }),
+);
+```
+
 Node.js 22.13 or newer is the primary runtime. Bun and Deno use their Node compatibility layers. For Deno, grant
 `--allow-read` for local files, `--allow-net` for URLs and radio, and `--allow-run` when FFmpeg is needed.
 
@@ -149,6 +170,10 @@ Player lifecycle is also observable through typed Seyfert events:
 - `playerTrackEnd`
 - `playerTrackError`
 - `playerQueueEnd`
+
+`enqueue()` resolves when an item enters the queue; the media source can open later. A background open or playback
+failure is logged through the Seyfert client logger and emitted as `playerTrackError`. FFmpeg failures include the
+executable path, exit status, signal, and a bounded stderr tail in the `PlayerError` metadata.
 
 ## Boundary
 
