@@ -9,7 +9,7 @@ import { describe, expect, test } from 'vitest';
 const tsc = createRequire(join(process.cwd(), 'package.json')).resolve('typescript/bin/tsc');
 
 describe('emitted declaration surface', () => {
-	test('MockBot.world is present in the package declarations', () => {
+	test('MockBot.world is present in the package declarations', { timeout: 30_000 }, () => {
 		const outDir = join(process.cwd(), 'test/.generated/declarations');
 		rmSync(outDir, { recursive: true, force: true });
 		execFileSync(
