@@ -221,6 +221,53 @@ export class ExpirableRedisAdapter extends RedisAdapter {
 		else this.cacheValue(id, value, ttl, observedAt);
 	}
 
+	private relationshipKey(to: string, id: string) {
+		return `${this.buildKey(to)}.uset.${id}`;
+	}
+
+	private relationshipIndexKey(to: string) {
+		return `${this.buildKey(to)}:set`;
+	}
+
+	private relationshipIndexMarkerKey(to: string) {
+		return `${this.relationshipIndexKey(to)}:indexed`;
+	}
+
+	private async ensureRelationshipIndex(to: string) {
+		const markerKey = this.relationshipIndexMarkerKey(to);
+		if (await this.client.exists(markerKey)) return;
+
+		// Older releases only stored the expiring `.uset.*` keys. Migrate them once per relationship.
+		const relationshipPrefix = `${this.buildKey(to)}.uset.`;
+		const legacyKeys = await this.__scanString(`${to}.uset.*`, true);
+		const relationshipIds = legacyKeys.map(key => key.slice(relationshipPrefix.length));
+		const transaction = this.client.multi();
+		const expire = this.getResourceOptions(to).expire;
+
+		if (relationshipIds.length) {
+			const indexKey = this.relationshipIndexKey(to);
+			transaction.sAdd(indexKey, relationshipIds);
+			if (expire !== undefined && expire > 0) {
+				transaction.pExpire(indexKey, expire);
+			} else {
+				transaction.persist(indexKey);
+			}
+		}
+		if (expire !== undefined && expire > 0) transaction.set(markerKey, '1', { PX: expire });
+		else transaction.set(markerKey, '1');
+		await transaction.exec();
+	}
+
+	private async getRelationshipIds(to: string) {
+		const relationshipIds = await this.client.sMembers(this.relationshipIndexKey(to));
+		if (relationshipIds.length || (await this.client.exists(this.relationshipIndexMarkerKey(to)))) {
+			return relationshipIds;
+		}
+
+		await this.ensureRelationshipIndex(to);
+		return this.client.sMembers(this.relationshipIndexKey(to));
+	}
+
 	async __scanString(query: string, returnKeys?: false): Promise<any[]>;
 	async __scanString(query: string, returnKeys: true): Promise<string[]>;
 	async __scanString(query: string, returnKeys = false) {
@@ -238,26 +285,45 @@ export class ExpirableRedisAdapter extends RedisAdapter {
 	}
 
 	async getToRelationship(to: string): Promise<string[]> {
-		const keys = await this.__scanString(`${to}.uset.*`, true);
-		return keys.map(x => x.replace(`${this.namespace}:${to}.uset.`, ''));
+		const relationshipIds = await this.getRelationshipIds(to);
+		if (!relationshipIds.length) return [];
+
+		const relationships = await this.client.mGet(relationshipIds.map(id => this.relationshipKey(to, id)));
+		const activeIds: string[] = [];
+
+		for (const [index, id] of relationshipIds.entries()) {
+			if (relationships[index] !== null) activeIds.push(id);
+		}
+
+		return activeIds;
 	}
 
 	async bulkAddToRelationShip(data: Record<string, string[]>): Promise<void> {
-		const promises: Promise<unknown>[] = [];
+		const transaction = this.client.multi();
+		let hasOperations = false;
 
 		for (const [key, values] of Object.entries(data)) {
+			if (!values.length) continue;
+
 			const expire = this.getResourceOptions(key).expire;
+			const indexKey = this.relationshipIndexKey(key);
+			transaction.sAdd(indexKey, values);
 			for (const value of values) {
-				const relationshipKey = `${this.buildKey(key)}.uset.${value}`;
-				promises.push(
-					expire !== undefined && expire > 0
-						? this.client.set(relationshipKey, 's', { PX: expire })
-						: this.client.set(relationshipKey, 's'),
-				);
+				const relationshipKey = this.relationshipKey(key, value);
+				if (expire !== undefined && expire > 0) transaction.set(relationshipKey, 's', { PX: expire });
+				else transaction.set(relationshipKey, 's');
 			}
+			if (expire !== undefined && expire > 0) {
+				transaction.set(this.relationshipIndexMarkerKey(key), '1', { PX: expire });
+				transaction.pExpire(indexKey, expire);
+			} else {
+				transaction.set(this.relationshipIndexMarkerKey(key), '1');
+				transaction.persist(indexKey);
+			}
+			hasOperations = true;
 		}
 
-		await Promise.all(promises);
+		if (hasOperations) await transaction.exec();
 	}
 
 	async addToRelationship(to: string, keys: string | string[]): Promise<void> {
@@ -267,32 +333,34 @@ export class ExpirableRedisAdapter extends RedisAdapter {
 	}
 
 	async removeToRelationship(to: string, keys: string | string[]): Promise<void> {
-		const promises: Promise<unknown>[] = [];
+		const relationshipIds = Array.isArray(keys) ? keys : [keys];
+		if (!relationshipIds.length) return;
 
-		for (const i of Array.isArray(keys) ? keys : [keys]) {
-			promises.push(this.client.del(`${this.buildKey(to)}.uset.${i}`));
+		const transaction = this.client.multi();
+
+		for (const id of relationshipIds) {
+			transaction.del(this.relationshipKey(to, id));
 		}
-
-		await Promise.all(promises);
+		transaction.sRem(this.relationshipIndexKey(to), relationshipIds);
+		await transaction.exec();
 	}
 
 	async removeRelationship(to: string | string[]): Promise<void> {
-		const promisesScan: Promise<string[]>[] = [];
-
-		for (const i of Array.isArray(to) ? to : [to]) {
-			promisesScan.push(this.__scanString(`${this.buildKey(i)}.uset.*`, true));
-		}
-
-		if (promisesScan.length) {
-			const keys = (await Promise.all(promisesScan)).flat();
-			if (keys.length) {
-				await this.client.del(keys);
-			}
-		}
+		await Promise.all(
+			(Array.isArray(to) ? to : [to]).map(async relationship => {
+				const indexKey = this.relationshipIndexKey(relationship);
+				const relationshipIds = await this.getRelationshipIds(relationship);
+				await this.client.del([
+					indexKey,
+					this.relationshipIndexMarkerKey(relationship),
+					...relationshipIds.map(id => this.relationshipKey(relationship, id)),
+				]);
+			}),
+		);
 	}
 
 	async count(to: string): Promise<number> {
-		return (await this.keys(to)).length;
+		return (await this.getToRelationship(to)).length;
 	}
 
 	async contains(to: string, key: string): Promise<boolean> {
@@ -303,6 +371,7 @@ export class ExpirableRedisAdapter extends RedisAdapter {
 		this.clearOndemandCache();
 		const keys = await Promise.all([
 			this.scan(this.buildKey('*'), true),
+			this.__scanSets(this.buildKey('*'), true),
 			this.__scanString(this.buildKey('*'), true),
 		]).then(x => x.flat());
 		if (!keys.length) return;

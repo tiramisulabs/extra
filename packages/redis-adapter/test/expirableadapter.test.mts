@@ -1,4 +1,5 @@
-import { afterAll, assert, beforeAll, describe, expect, test } from 'vitest';
+import { Cache, CacheFrom, RoleFlags } from 'seyfert';
+import { afterAll, assert, beforeAll, describe, expect, test, vi } from 'vitest';
 import { ExpirableRedisAdapter, type ExpirableRedisAdapterOptions } from '../src';
 
 const redisUrl = process.env.SLIPHER_REDIS_URL ?? 'redis://127.0.0.1:6379';
@@ -190,11 +191,20 @@ describe('ExpirableRedisAdapter', () => {
 		assert.equal(await local.count('role.guild'), 0);
 	});
 
-	test('stores each relationship key separately with its resource TTL', async () => {
+	test('indexes relationships while preserving each resource TTL', async () => {
 		const { adapter: local, namespace } = await createAdapter({ member: { expire: 500 } });
+		const scanIterator = vi.spyOn(local.client, 'scanIterator');
 		await local.addToRelationship('member.guild', ['one', 'two']);
 
 		assert.deepEqual((await local.getToRelationship('member.guild')).sort(), ['one', 'two']);
+		expect(scanIterator).not.toHaveBeenCalled();
+		assert.deepEqual((await local.client.sMembers(`${namespace}:member.guild:set`)).sort(), ['one', 'two']);
+		assert.equal(await local.client.exists(`${namespace}:member.guild:set:indexed`), 1);
+		for (const key of [`${namespace}:member.guild:set`, `${namespace}:member.guild:set:indexed`]) {
+			const ttl = await local.client.pTTL(key);
+			assert.isAbove(ttl, 0);
+			assert.isAtMost(ttl, 500);
+		}
 		assert.equal(await local.count('member.guild'), 2);
 		assert.equal(await local.contains('member.guild', 'one'), true);
 		assert.equal(await local.contains('member.guild', 'missing'), false);
@@ -204,12 +214,88 @@ describe('ExpirableRedisAdapter', () => {
 			assert.isAtMost(ttl, 500);
 		}
 
-		await local.removeToRelationship('member.guild', 'one');
-		assert.equal(await local.contains('member.guild', 'one'), false);
-		assert.equal(await local.count('member.guild'), 1);
-		await local.removeRelationship('member.guild');
+		await local.client.del(`${namespace}:member.guild.uset.one`);
+		assert.deepEqual(await local.getToRelationship('member.guild'), ['two']);
+		assert.equal(await local.client.sIsMember(`${namespace}:member.guild:set`, 'one'), 1);
+
+		await local.removeToRelationship('member.guild', 'two');
 		assert.equal(await local.contains('member.guild', 'two'), false);
 		assert.equal(await local.count('member.guild'), 0);
+		assert.equal(await local.contains('member.guild', 'one'), false);
+		await local.removeRelationship('member.guild');
+		assert.equal(await local.client.exists(`${namespace}:member.guild:set`), 0);
+		assert.equal(await local.client.exists(`${namespace}:member.guild:set:indexed`), 0);
+		assert.equal(await local.count('member.guild'), 0);
+	});
+
+	test('migrates legacy relationships with one keyspace scan', async () => {
+		const { adapter: local, namespace } = await createAdapter({ member: { expire: 500 } });
+		await Promise.all(
+			['one', 'two'].map(id => local.client.set(`${namespace}:member.guild.uset.${id}`, 's', { PX: 500 })),
+		);
+		const scanIterator = vi.spyOn(local.client, 'scanIterator');
+
+		assert.deepEqual((await local.getToRelationship('member.guild')).sort(), ['one', 'two']);
+		expect(scanIterator).toHaveBeenCalledTimes(1);
+		assert.deepEqual((await local.client.sMembers(`${namespace}:member.guild:set`)).sort(), ['one', 'two']);
+		assert.equal(await local.client.exists(`${namespace}:member.guild:set:indexed`), 1);
+		assert.isAbove(await local.client.pTTL(`${namespace}:member.guild:set`), 0);
+		assert.isAbove(await local.client.pTTL(`${namespace}:member.guild:set:indexed`), 0);
+
+		assert.deepEqual((await local.getToRelationship('member.guild')).sort(), ['one', 'two']);
+		expect(scanIterator).toHaveBeenCalledTimes(1);
+	});
+
+	test('expires an empty legacy relationship marker with its resource policy', async () => {
+		const { adapter: local, namespace } = await createAdapter({ member: { expire: 500 } });
+		const scanIterator = vi.spyOn(local.client, 'scanIterator');
+
+		assert.deepEqual(await local.getToRelationship('member.guild'), []);
+		expect(scanIterator).toHaveBeenCalledTimes(1);
+		const ttl = await local.client.pTTL(`${namespace}:member.guild:set:indexed`);
+		assert.isAbove(ttl, 0);
+		assert.isAtMost(ttl, 500);
+
+		assert.deepEqual(await local.getToRelationship('member.guild'), []);
+		expect(scanIterator).toHaveBeenCalledTimes(1);
+	});
+
+	test('keeps indexes persistent for relationships without expiration', async () => {
+		const { adapter: local, namespace } = await createAdapter();
+		await local.addToRelationship('role.guild', ['one', 'two']);
+		await local.removeToRelationship('role.guild', []);
+
+		assert.deepEqual((await local.getToRelationship('role.guild')).sort(), ['one', 'two']);
+		assert.equal(await local.client.pTTL(`${namespace}:role.guild:set`), -1);
+		assert.equal(await local.client.pTTL(`${namespace}:role.guild:set:indexed`), -1);
+	});
+
+	test('serves Seyfert role lists without scanning the Redis keyspace', async () => {
+		const { adapter: local } = await createAdapter();
+		const cache = new Cache(0, local, {}, {} as never);
+		await cache.roles?.set(CacheFrom.Test, 'one', 'guild', {
+			color: 0,
+			colors: {
+				primary_color: 0,
+				secondary_color: null,
+				tertiary_color: null,
+			},
+			flags: RoleFlags.InPrompt,
+			hoist: false,
+			id: 'one',
+			managed: false,
+			mentionable: false,
+			name: 'Role One',
+			permissions: '0',
+			position: 1,
+		});
+		const scanIterator = vi.spyOn(local.client, 'scanIterator');
+		const roles = await cache.roles?.valuesRaw('guild');
+
+		assert.equal(roles?.length, 1);
+		assert.equal(roles?.[0]?.id, 'one');
+		assert.equal((roles?.[0] as { guild_id: string } | undefined)?.guild_id, 'guild');
+		expect(scanIterator).not.toHaveBeenCalled();
 	});
 
 	test('rejects ambiguous TTL and limit values at construction', () => {
