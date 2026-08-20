@@ -23,6 +23,7 @@ describe('RedisAdapter', () => {
 		assert.equal(adapter.namespace, namespace);
 		assert.equal(await adapter.get('missing'), undefined);
 
+		await adapter.set('test_key', { stale: true, value: 'oldValue' });
 		await adapter.set('test_key', { value: 'testValue' });
 		await adapter.bulkSet([
 			['key1', { value: 'value1' }],
@@ -43,5 +44,10 @@ describe('RedisAdapter', () => {
 			{ newValue: 'updatedValue2', value: 'value2' },
 		]);
 		assert.equal((await adapter.scan('*')).length, 3);
+
+		const collidingKey = `${namespace}_other:key`;
+		await adapter.set(collidingKey, { value: 'namespaced' });
+		assert.equal(await adapter.client.exists(collidingKey), 0);
+		assert.equal(await adapter.client.exists(`${namespace}:${collidingKey}`), 1);
 	});
 });
