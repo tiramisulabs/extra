@@ -11,6 +11,7 @@ const resource = {
 const options = {
 	default: resource,
 	message: { expire: 500, limit: 0 },
+	migrateLegacyRelationships: true,
 	user: { native: true },
 } satisfies ExpirableRedisAdapterOptions;
 

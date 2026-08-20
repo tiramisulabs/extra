@@ -2,6 +2,9 @@
 
 Redis-backed cache adapters for Seyfert.
 
+Redis 8.0 or newer is required. `ExpirableRedisAdapter` uses hash-field expiration so relationship list, count,
+and membership operations share one Redis key and one expiration authority.
+
 ## Basic adapter
 
 ```ts
@@ -61,6 +64,11 @@ Resource overrides inherit every omitted value from `default`.
 | `native` | Disables the adapter-local cache for that resource. Use this when the supplied node-redis client already has RESP3 `clientSideCache` configured. This option does not enable node-redis caching itself. |
 
 The adapter-local cache uses Redis' remaining `PTTL`, so it never intentionally outlives the Redis key. It is process-local and does not receive cross-process invalidations. For data changed by multiple processes, prefer node-redis client-side caching with RESP3 or keep `ondemand` disabled.
+
+Legacy relationship migration is disabled by default. During an upgrade, set `migrateLegacyRelationships: true` in
+the second constructor argument to migrate `.uset.*` strings and `:set` indexes into Redis 8 hashes while preserving
+each live member's expiration. Disable the option after the migration is complete. Normal relationship reads do not
+scan the keyspace.
 
 Both adapters own clients they construct. Close the client during shutdown:
 
