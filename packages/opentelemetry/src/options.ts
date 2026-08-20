@@ -1,25 +1,34 @@
 import type { ContextManager } from '@opentelemetry/api';
 import { NodeSDK } from '@opentelemetry/sdk-node';
 
-type NodeSDKOptions = NonNullable<ConstructorParameters<typeof NodeSDK>[0]>;
+export type NodeSDKOptions = NonNullable<ConstructorParameters<typeof NodeSDK>[0]>;
 
 export const DEFAULT_SERVICE_NAME = 'seyfert';
 
 /** High-churn cache resources skipped by default (Seyfert key namespaces). */
 export const DEFAULT_CACHE_SKIP_RESOURCES = ['presence', 'voice_state'] as const;
 
-export interface InstrumentFlags {
+export interface SignalFlags {
 	interactions?: boolean;
 	events?: boolean;
 	rest?: boolean;
 	cache?: boolean;
 }
 
-export interface ResolvedInstrumentFlags {
+/** Gateway health is metrics-only: there is no gateway span. */
+export interface MetricFlags extends SignalFlags {
+	gateway?: boolean;
+}
+
+export interface ResolvedSignalFlags {
 	interactions: boolean;
 	events: boolean;
 	rest: boolean;
 	cache: boolean;
+}
+
+export interface ResolvedMetricFlags extends ResolvedSignalFlags {
+	gateway: boolean;
 }
 
 export type TraceSource =
@@ -30,7 +39,8 @@ export type TraceSource =
 
 export interface OpenTelemetryPluginOptions extends Partial<NodeSDKOptions> {
 	serviceName?: string;
-	instrument?: InstrumentFlags;
+	traces?: SignalFlags;
+	metrics?: MetricFlags;
 	checkIfShouldTrace?: (source: TraceSource) => boolean;
 	contextManager?: ContextManager;
 	cache?: {
@@ -38,9 +48,16 @@ export interface OpenTelemetryPluginOptions extends Partial<NodeSDKOptions> {
 	};
 }
 
+/** Options for starting OpenTelemetry before application modules are loaded. */
+export interface OpenTelemetryBootstrapOptions extends Partial<NodeSDKOptions> {
+	serviceName?: string;
+	contextManager?: ContextManager;
+}
+
 export interface ResolvedOpenTelemetryOptions {
 	serviceName: string;
-	instrument: ResolvedInstrumentFlags;
+	traces: ResolvedSignalFlags;
+	metrics: ResolvedMetricFlags;
 	checkIfShouldTrace: (source: TraceSource) => boolean;
 	contextManager?: ContextManager;
 	cache: { skipResources: ReadonlySet<string> };
@@ -48,19 +65,28 @@ export interface ResolvedOpenTelemetryOptions {
 	sdk: Partial<NodeSDKOptions>;
 }
 
-export function resolveInstrumentFlags(flags: InstrumentFlags = {}): ResolvedInstrumentFlags {
+function resolveSignalFlags(flags: SignalFlags, cacheDefault: boolean): ResolvedSignalFlags {
 	return {
 		interactions: flags.interactions ?? true,
 		events: flags.events ?? true,
 		rest: flags.rest ?? true,
-		cache: flags.cache ?? true,
+		cache: flags.cache ?? cacheDefault,
 	};
+}
+
+export function resolveTraceFlags(flags: SignalFlags = {}): ResolvedSignalFlags {
+	return resolveSignalFlags(flags, false);
+}
+
+export function resolveMetricFlags(flags: MetricFlags = {}): ResolvedMetricFlags {
+	return { ...resolveSignalFlags(flags, true), gateway: flags.gateway ?? true };
 }
 
 export function resolvePluginOptions(options: OpenTelemetryPluginOptions = {}): ResolvedOpenTelemetryOptions {
 	const {
 		serviceName = DEFAULT_SERVICE_NAME,
-		instrument,
+		traces,
+		metrics,
 		checkIfShouldTrace = () => true,
 		contextManager,
 		cache,
@@ -71,7 +97,8 @@ export function resolvePluginOptions(options: OpenTelemetryPluginOptions = {}): 
 
 	return {
 		serviceName,
-		instrument: resolveInstrumentFlags(instrument),
+		traces: resolveTraceFlags(traces),
+		metrics: resolveMetricFlags(metrics),
 		checkIfShouldTrace,
 		contextManager,
 		cache: { skipResources: new Set(skip) },

@@ -1,6 +1,6 @@
 import { context, metrics, ProxyTracerProvider, propagation, type TracerProvider, trace } from '@opentelemetry/api';
 import { NodeSDK } from '@opentelemetry/sdk-node';
-import type { ResolvedOpenTelemetryOptions } from './options';
+import { DEFAULT_SERVICE_NAME, type OpenTelemetryBootstrapOptions, type ResolvedOpenTelemetryOptions } from './options';
 
 /**
  * Whether this process still has only the API proxy provider (no real SDK).
@@ -13,6 +13,29 @@ export function shouldStartNodeSDK(provider: TracerProvider): boolean {
 export interface OwnedSdk {
 	sdk: NodeSDK;
 	shutdown(): Promise<void>;
+}
+
+/**
+ * Start OpenTelemetry early, before application modules import instrumented libraries.
+ * Returns `undefined` when the host has already registered a real tracer provider.
+ */
+export function startOpenTelemetry(options: OpenTelemetryBootstrapOptions = {}): OwnedSdk | undefined {
+	const { serviceName = DEFAULT_SERVICE_NAME, contextManager, ...sdk } = options;
+	const owned = startOwnedSdk({
+		serviceName,
+		contextManager,
+		sdk,
+		traces: { interactions: false, events: false, rest: false, cache: false },
+		metrics: { interactions: false, events: false, rest: false, cache: false, gateway: false },
+		checkIfShouldTrace: () => true,
+		cache: { skipResources: new Set() },
+	});
+
+	if (!owned) {
+		// Runs before any logger exists; a silent no-op here is hours of missing-telemetry debugging.
+		console.warn('[@slipher/opentelemetry] startOpenTelemetry() did nothing: a tracer provider is already registered.');
+	}
+	return owned;
 }
 
 type GlobalApi = Partial<Record<'context' | 'metrics' | 'propagation' | 'trace', unknown>>;

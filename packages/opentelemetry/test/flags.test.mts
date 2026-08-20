@@ -1,11 +1,10 @@
 import type { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import { assert, describe, test } from 'vitest';
 import { opentelemetry } from '../src';
-import type { InstrumentFlags } from '../src/options';
-import { setTraceServiceName } from '../src/trace-api';
+import type { SignalFlags } from '../src/options';
 import { installTestTracer } from './helpers/otel-test-provider.mts';
 
-const ALL_OFF: Required<InstrumentFlags> = {
+const ALL_OFF: Required<SignalFlags> = {
 	interactions: false,
 	events: false,
 	rest: false,
@@ -14,7 +13,6 @@ const ALL_OFF: Required<InstrumentFlags> = {
 
 function withProvider(run: (exporter: InMemorySpanExporter) => Promise<void> | void) {
 	const { exporter, shutdown } = installTestTracer();
-	setTraceServiceName('flags-test');
 	return Promise.resolve(run(exporter)).finally(() => shutdown());
 }
 
@@ -91,15 +89,16 @@ function fakeClient() {
 	};
 }
 
-describe('instrument flags', () => {
-	test('all instruments false: setup does not wrap any surface', async () => {
+describe('signal flags', () => {
+	test('all signals false: setup does not wrap any surface', async () => {
 		await withProvider(async exporter => {
 			const { client, originalRunEvent, originalGet, adapter, eventCalls } = fakeClient();
 			const { api, defaultsCalls, getObserveCalls } = fakeApi();
 
 			const plugin = opentelemetry({
 				serviceName: 'flags-all-off',
-				instrument: { ...ALL_OFF },
+				traces: { ...ALL_OFF },
+				metrics: { ...ALL_OFF },
 			});
 
 			// interactions surfaces
@@ -131,7 +130,8 @@ describe('instrument flags', () => {
 	test('interactions:false → options has no contextScopes; register skips defaults', () => {
 		const { api, defaultsCalls } = fakeApi();
 		const plugin = opentelemetry({
-			instrument: { ...ALL_OFF, interactions: false },
+			traces: { ...ALL_OFF, interactions: false },
+			metrics: { ...ALL_OFF },
 		});
 
 		const fragment = plugin.options?.({} as never);
@@ -145,7 +145,8 @@ describe('instrument flags', () => {
 	test('interactions:true only → options installs contextScopes; register calls defaults', () => {
 		const { api, defaultsCalls } = fakeApi();
 		const plugin = opentelemetry({
-			instrument: { ...ALL_OFF, interactions: true },
+			traces: { ...ALL_OFF, interactions: true },
+			metrics: { ...ALL_OFF },
 		});
 
 		const fragment = plugin.options?.({} as never);
@@ -163,7 +164,8 @@ describe('instrument flags', () => {
 			const { api, getObserveCalls } = fakeApi();
 			const plugin = opentelemetry({
 				serviceName: 'flags-events-off',
-				instrument: { ...ALL_OFF, events: false },
+				traces: { ...ALL_OFF, events: false },
+				metrics: { ...ALL_OFF },
 			});
 
 			await plugin.setup?.(client as never, api as never);
@@ -185,7 +187,8 @@ describe('instrument flags', () => {
 			const { api, getObserveCalls } = fakeApi();
 			const plugin = opentelemetry({
 				serviceName: 'flags-events-on',
-				instrument: { ...ALL_OFF, events: true },
+				traces: { ...ALL_OFF, events: true },
+				metrics: { ...ALL_OFF },
 			});
 
 			await plugin.setup?.(client as never, api as never);
@@ -210,7 +213,8 @@ describe('instrument flags', () => {
 			const { api, getObserveCalls, getRestObserver } = fakeApi();
 			const plugin = opentelemetry({
 				serviceName: 'flags-rest-off',
-				instrument: { ...ALL_OFF, rest: false },
+				traces: { ...ALL_OFF, rest: false },
+				metrics: { ...ALL_OFF },
 			});
 
 			await plugin.setup?.(client as never, api as never);
@@ -228,7 +232,8 @@ describe('instrument flags', () => {
 			const { api, getObserveCalls, getRestObserver } = fakeApi();
 			const plugin = opentelemetry({
 				serviceName: 'flags-rest-on',
-				instrument: { ...ALL_OFF, rest: true },
+				traces: { ...ALL_OFF, rest: true },
+				metrics: { ...ALL_OFF },
 			});
 
 			await plugin.setup?.(client as never, api as never);
@@ -248,7 +253,8 @@ describe('instrument flags', () => {
 			const { api } = fakeApi();
 			const plugin = opentelemetry({
 				serviceName: 'flags-cache-off',
-				instrument: { ...ALL_OFF, cache: false },
+				traces: { ...ALL_OFF, cache: false },
+				metrics: { ...ALL_OFF },
 			});
 
 			await plugin.setup?.(client as never, api as never);
@@ -267,7 +273,8 @@ describe('instrument flags', () => {
 			const { api, getObserveCalls } = fakeApi();
 			const plugin = opentelemetry({
 				serviceName: 'flags-cache-on',
-				instrument: { ...ALL_OFF, cache: true },
+				traces: { ...ALL_OFF, cache: true },
+				metrics: { ...ALL_OFF },
 			});
 
 			await plugin.setup?.(client as never, api as never);
@@ -283,6 +290,25 @@ describe('instrument flags', () => {
 
 			await plugin.teardown?.(client as never);
 			// teardown restores original method
+			assert.equal(adapter.get, originalGet);
+		});
+	});
+
+	test('cache metrics can wrap the adapter without producing cache spans', async () => {
+		await withProvider(async exporter => {
+			const { client, originalGet, adapter } = fakeClient();
+			const { api } = fakeApi();
+			const plugin = opentelemetry({
+				traces: { ...ALL_OFF },
+				metrics: { ...ALL_OFF, cache: true },
+			});
+
+			await plugin.setup?.(client as never, api as never);
+			assert.notEqual(adapter.get, originalGet);
+			assert.deepEqual(adapter.get('user.1'), { id: '1' });
+			assert.equal(exporter.getFinishedSpans().length, 0);
+
+			await plugin.teardown?.(client as never);
 			assert.equal(adapter.get, originalGet);
 		});
 	});

@@ -9,19 +9,14 @@ import {
 	trace,
 } from '@opentelemetry/api';
 
-let activeServiceName = 'seyfert';
-
-/** Package-internal: set by plugin setup so helpers scope to the plugin service name. */
-export function setTraceServiceName(name: string): void {
-	activeServiceName = name;
-}
+export const INSTRUMENTATION_SCOPE_NAME = '@slipher/opentelemetry';
 
 export function getTracer(): Tracer {
-	return trace.getTracer(activeServiceName);
+	return trace.getTracer(INSTRUMENTATION_SCOPE_NAME);
 }
 
 export function getMeter() {
-	return metrics.getMeter(activeServiceName);
+	return metrics.getMeter(INSTRUMENTATION_SCOPE_NAME);
 }
 
 export type ActiveSpanArgs<T> =
