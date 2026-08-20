@@ -14,7 +14,7 @@ So the plugin gives every command, component, and modal one wide event as `ctx.l
 pnpm add @slipher/logger
 ```
 
-Requires Seyfert v5.
+Requires Node.js 22.13 or newer and Seyfert v5.
 
 ## Use with Seyfert
 
@@ -62,6 +62,10 @@ The plugin attaches a `WideEventLogger` to every command, component, and modal c
 - A successful run emits **one** wide event with `outcome: 'success'` and `durationMs` when the command returns.
 
 The result is one canonical entry per interaction.
+
+Collectors and awaited modal callbacks bypass Seyfert's normal component lifecycle, so the plugin scopes them separately. Their wide events include `collector: true`, the originating `command` and `parentInteractionId`, the current interaction identifiers, `waitDurationMs`, and `collectorResult` (`completed` or `error`). Component collectors also include `collectorMatch`.
+
+When OpenTelemetry is active, the collector event receives the collector interaction's native `trace_id` and `span_id`, not the already-ended command span. Calls to `useLogger().add()` inside the callback enrich that same collector event.
 
 ### Carry context through middlewares
 
@@ -217,7 +221,28 @@ Factories: `prettyRenderer()` (slipher's own console), `silentRenderer()` (no ou
 
 evlog and pino are optional peer dependencies, imported only by their factories. Install the one you use (`pnpm add evlog` or `pnpm add pino`). On field collisions, data from `add()` and level methods wins over bindings.
 
-> **Redaction belongs to the sink.** `prettyRenderer()` does **not** redact. Configure it in your collector, your Pino instance, or evlog's config. evlog's built-in patterns (`creditCard`, `email`, `jwt`, …) do **not** cover Discord bot tokens — add a pattern for those.
+### OpenTelemetry trace correlation
+
+When an OpenTelemetry span is active, the logger automatically adds its `trace_id` and `span_id` to every entry before sending it to the renderer and transports. Invalid or missing span contexts are ignored, so applications that do not configure tracing keep the same output.
+
+`@opentelemetry/api` is an optional peer dependency. Installing `@slipher/logger` alone does not install or initialize OpenTelemetry. The logger resolves the API once at startup when it is available; register `@slipher/opentelemetry` in the application to create the active spans used for correlation.
+
+The evlog adapter translates those fields to evlog's native `traceId` and `spanId` properties. OTLP drains can therefore populate the native log correlation fields used to navigate between logs and traces in backends such as SigNoz.
+
+This works automatically with `@slipher/opentelemetry`; no logger option is required:
+
+```ts
+{
+	level: 'info',
+	message: 'deployment queued',
+	trace_id: '0af7651916cd43dd8448eb211c80319c',
+	span_id: 'b7ad6b7169203331',
+}
+```
+
+Before fan-out, the core uses `serialize-error` on every top-level field containing an `Error` instance. Adapters receive plain objects containing the error details, including nested causes and custom enumerable fields. The original prototypes and object identities are intentionally not preserved.
+
+> **Redaction belongs to the sink.** Error properties become plain fields and can include SDK request/response metadata. `prettyRenderer()` and custom adapters do **not** redact. Configure paths such as `error.config.headers.authorization`, `error.cookie`, and `error.apiKey` in your collector, Pino instance, or evlog config. evlog's built-in patterns (`creditCard`, `email`, `jwt`, …) do **not** cover Discord bot tokens — add a pattern for those.
 
 ### Console (default)
 

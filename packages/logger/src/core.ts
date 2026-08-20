@@ -1,3 +1,5 @@
+import { createRequire } from 'node:module';
+import { serializeError } from 'serialize-error';
 import { ConsoleLoggerAdapter } from './console';
 import { getString, isLogData, stripUndefined } from './utils';
 
@@ -14,6 +16,8 @@ export interface LogEntry {
 	bindings: LogBindings;
 	data: LogData;
 	message?: string;
+	/** How the entry was produced. Absent is treated as `immediate`. */
+	shape?: 'immediate' | 'wide';
 }
 
 export interface LoggerAdapter {
@@ -33,6 +37,8 @@ export interface LoggerOptions {
 	/** @internal */
 	now?: () => Date;
 }
+
+const openTelemetryApi = loadOpenTelemetryApi();
 
 function resolveAdapters(options: LoggerOptions): readonly LoggerAdapter[] {
 	return [options.renderer ?? new ConsoleLoggerAdapter(), ...(options.transports ?? [])];
@@ -101,7 +107,7 @@ export class RootLogger {
 		pendingWrites = new Set<Promise<void>>(),
 	) {
 		this.level = options.level ?? 'info';
-		this.bindings = stripUndefined({ name: options.name, ...(options.bindings ?? {}) });
+		this.bindings = normalizeErrorFields(stripUndefined({ name: options.name, ...(options.bindings ?? {}) }));
 		this.adapters = adapters ?? resolveAdapters(options);
 		this.now = options.now ?? (() => new Date());
 		this.pendingWrites = pendingWrites;
@@ -166,10 +172,11 @@ export class RootLogger {
 	async writeEntry(entry: LogEntry): Promise<void> {
 		if (!this.isEnabled(entry.level)) return;
 
+		const normalizedEntry = normalizeLogEntry(withActiveTraceContext(entry));
 		const write = Promise.all(
 			this.adapters.map(async adapter => {
 				try {
-					await adapter.write(entry);
+					await adapter.write(normalizedEntry);
 				} catch (error) {
 					console.error('[logger] adapter.write failed:', error);
 				}
@@ -194,6 +201,7 @@ export class RootLogger {
 			bindings: this.bindings,
 			data: normalized.data,
 			message: normalized.message,
+			shape: 'immediate',
 		});
 	}
 }
@@ -300,12 +308,60 @@ export class WideEventLogger {
 			bindings: this.bindings,
 			data,
 			message: options.message ?? defaultWideEventMessage(kind, outcome),
+			shape: 'wide',
 		});
 	}
 
 	private writeImmediate(level: WritableLogLevel, args: readonly unknown[]): Awaitable<void> {
 		return this.root.writeLevel(level, args);
 	}
+}
+
+function withActiveTraceContext(entry: LogEntry): LogEntry {
+	const spanContext = openTelemetryApi?.trace.getActiveSpan()?.spanContext();
+	if (!spanContext || !openTelemetryApi?.isSpanContextValid(spanContext)) return entry;
+
+	return {
+		...entry,
+		data: {
+			trace_id: spanContext.traceId,
+			span_id: spanContext.spanId,
+			...entry.data,
+		},
+	};
+}
+
+function loadOpenTelemetryApi(): typeof import('@opentelemetry/api') | undefined {
+	try {
+		return createRequire(__filename)('@opentelemetry/api') as typeof import('@opentelemetry/api');
+	} catch (error) {
+		if (
+			error instanceof Error &&
+			'code' in error &&
+			error.code === 'MODULE_NOT_FOUND' &&
+			error.message.includes("'@opentelemetry/api'")
+		) {
+			return;
+		}
+		throw error;
+	}
+}
+
+function normalizeLogEntry(entry: LogEntry): LogEntry {
+	const data = normalizeErrorFields(entry.data);
+	return data === entry.data ? entry : { ...entry, data };
+}
+
+// Bindings are normalized once per logger in the constructor, data on every entry, so no
+// adapter ever receives an `Error` instance under either.
+function normalizeErrorFields(fields: LogData): LogData {
+	let normalized: LogData | undefined;
+	for (const [key, value] of Object.entries(fields)) {
+		if (!(value instanceof Error)) continue;
+		normalized ??= { ...fields };
+		normalized[key] = serializeError(value, { useToJSON: false });
+	}
+	return normalized ?? fields;
 }
 
 export function createLogger(options: LoggerOptions = {}): RootLogger {

@@ -104,6 +104,100 @@ function getLoggerContext(plugin: LoggerPlugin, source: unknown): { logger: Wide
 }
 
 describe('logger plugin', () => {
+	test('emits wide events for component and modal collector callbacks', async () => {
+		const adapter = new RecordingAdapter();
+		const plugin = logger({ renderer: adapter });
+		const componentRows = new Map<string, { callback?: (interaction: object) => unknown }>();
+		const components = {
+			values: componentRows,
+			modals: new Map<string, (interaction: object) => unknown>(),
+			createComponentCollector(messageId: string) {
+				const row: { callback?: (interaction: object) => unknown } = {};
+				componentRows.set(messageId, row);
+				return {
+					run(_match: string | RegExp, callback: (interaction: object) => unknown) {
+						row.callback = callback;
+					},
+				};
+			},
+			onComponent(messageId: string, interaction: object) {
+				return componentRows.get(messageId)?.callback?.(interaction);
+			},
+			onModalSubmit(interaction: object) {
+				const userId = (interaction as { user: { id: string } }).user.id;
+				const callback = this.modals.get(userId);
+				this.modals.delete(userId);
+				return callback?.(interaction);
+			},
+		};
+		const client = { components };
+		await plugin.setup?.(client as never, undefined as never);
+
+		const options = getLoggerPluginOptions(plugin);
+		const scope = options.contextScopes?.[0] as unknown as (context: object, run: () => unknown) => unknown;
+		await scope(
+			{
+				fullCommandName: 'submission-history',
+				interaction: { id: 'command-interaction' },
+				author: { id: 'user-1' },
+			},
+			() => {
+				components.createComponentCollector('message-1').run(/^submission-history:/, () => {
+					useLogger().add({ page: 2 });
+				});
+				components.modals.set('user-1', () => {
+					useLogger().add({ valid: false });
+				});
+			},
+		);
+
+		await components.onComponent('message-1', {
+			customId: 'submission-history:next',
+			guildId: 'guild-1',
+			channelId: 'channel-1',
+			id: 'component-interaction',
+			user: { id: 'user-1' },
+		});
+		await components.onModalSubmit({
+			customId: 'dashboard-invite:test',
+			guildId: 'guild-1',
+			channelId: 'channel-1',
+			id: 'modal-interaction',
+			user: { id: 'user-1' },
+		});
+		await plugin.teardown?.(client as never);
+
+		const collectorEntries = adapter.entries.filter(entry => entry.data.collector === true);
+		assert.equal(collectorEntries.length, 2);
+		assert.deepEqual(collectorEntries[0].data, {
+			channelId: 'channel-1',
+			collector: true,
+			collectorMatch: '/^submission-history:/',
+			collectorResult: 'completed',
+			command: 'submission-history',
+			customId: 'submission-history:next',
+			durationMs: collectorEntries[0].data.durationMs,
+			guildId: 'guild-1',
+			interactionId: 'component-interaction',
+			kind: 'component',
+			parentInteractionId: 'command-interaction',
+			outcome: 'success',
+			page: 2,
+			userId: 'user-1',
+			waitDurationMs: collectorEntries[0].data.waitDurationMs,
+		});
+		assert.equal(typeof collectorEntries[0].data.waitDurationMs, 'number');
+		assert.equal(collectorEntries[0].message, 'component collector completed');
+		assert.equal(collectorEntries[1].data.kind, 'modal');
+		assert.equal(collectorEntries[1].data.command, 'submission-history');
+		assert.equal(collectorEntries[1].data.customId, 'dashboard-invite:test');
+		assert.equal(collectorEntries[1].data.parentInteractionId, 'command-interaction');
+		assert.equal(collectorEntries[1].data.collectorResult, 'completed');
+		assert.equal(typeof collectorEntries[1].data.waitDurationMs, 'number');
+		assert.equal(collectorEntries[1].data.valid, false);
+		assert.equal(collectorEntries[1].message, 'modal collector completed');
+	});
+
 	test('returns a Seyfert plugin with lifecycle observers and instrumentation', () => {
 		const plugin: LoggerPlugin = logger({ renderer: new RecordingAdapter() });
 		const options = getLoggerPluginOptions(plugin);
@@ -280,7 +374,10 @@ describe('logger plugin', () => {
 		assert.equal(adapter.entries[0].level, 'error');
 		assert.equal(adapter.entries[0].message, 'command failed');
 		assert.equal(adapter.entries[0].data.outcome, 'error');
-		assert.equal(adapter.entries[0].data.error, error);
+		assert.notEqual(adapter.entries[0].data.error, error);
+		const serializedError = adapter.entries[0].data.error as Record<string, unknown>;
+		assert.equal(serializedError.message, 'boom');
+		assert.match(serializedError.stack as string, /boom/);
 		assert.equal(adapter.entries[0].data.command, 'admin ban');
 	});
 
@@ -458,7 +555,8 @@ describe('logger plugin', () => {
 		assert.equal(thrown, boom);
 		assert.equal(adapter.entries.length, 1);
 		assert.equal(adapter.entries[0].data.outcome, 'error');
-		assert.equal(adapter.entries[0].data.error, boom);
+		assert.notEqual(adapter.entries[0].data.error, boom);
+		assert.equal((adapter.entries[0].data.error as Record<string, unknown>).message, 'boom');
 
 		await plugin.teardown?.(client);
 	});
@@ -493,7 +591,7 @@ describe('logger plugin', () => {
 		assert.equal(adapter.entries[1].level, 'error');
 		assert.equal(adapter.entries[1].message, 'lost shard');
 		assert.equal(adapter.entries[1].data._source, 'seyfert:Gateway');
-		assert.instanceOf(adapter.entries[1].data.err, Error);
+		assert.equal((adapter.entries[1].data.err as Record<string, unknown>).message, 'socket closed');
 		assert.equal(chained.length, 2);
 		assert.deepEqual(chained[0], ['[API]', LogLevels.Info, ['identify', { requestId: 'req-1' }]]);
 		assert.equal(chained[1]?.[0], '[Gateway]');
@@ -593,7 +691,7 @@ describe('logger adapters', () => {
 		assert.equal(calls[0][0], '10:00:00.000 CRITICAL [bot] override\n    shardId   1\n    guildId   guild-1');
 	});
 
-	test('ConsoleLoggerAdapter colorizes by level and appends error stacks when color is enabled', () => {
+	test('default console colorizes by level and appends serialized error stacks', async () => {
 		const calls: unknown[][] = [];
 		const originalNoColor = process.env.NO_COLOR;
 		const originalForceColor = process.env.FORCE_COLOR;
@@ -606,13 +704,11 @@ describe('logger adapters', () => {
 		const error = new Error('socket closed');
 
 		try {
-			new ConsoleLoggerAdapter().write({
-				bindings: {},
-				data: { command: 'ban', err: error },
-				level: 'error',
-				message: 'command failed',
-				time: new Date('2026-05-29T10:00:00.000Z'),
-			});
+			await createLogger({ now: () => new Date('2026-05-29T10:00:00.000Z') }).error(
+				{ command: 'ban' },
+				'command failed',
+				error,
+			);
 		} finally {
 			if (originalNoColor === undefined) delete process.env.NO_COLOR;
 			else process.env.NO_COLOR = originalNoColor;
@@ -627,7 +723,72 @@ describe('logger adapters', () => {
 		assert.ok(output.includes('command failed'), 'message rendered');
 		assert.ok(output.includes('command\x1b[0m'), 'field key colorized in its own column');
 		assert.ok(output.includes('    Error: socket closed'), 'error stack indented on following lines');
-		assert.equal(output.includes('err\x1b[0m'), false, 'error not rendered as a field');
+		assert.equal(output.includes('error\x1b[0m'), false, 'error not rendered as a field');
+	});
+
+	test('serializes errors held in bindings, not only in data', async () => {
+		const adapter = new RecordingAdapter();
+		const root = createLogger({ bindings: { bootError: new Error('boot failed') }, renderer: adapter });
+
+		await root.child({ shardError: new Error('shard lost') }).info('probe');
+
+		const entry = adapter.entries[0]!;
+		assert.equal(entry.bindings.bootError instanceof Error, false);
+		assert.equal(entry.bindings.shardError instanceof Error, false);
+		assert.equal((entry.bindings.bootError as { message: string }).message, 'boot failed');
+		assert.match(JSON.stringify(entry.bindings), /boot failed/);
+	});
+
+	test('default console renders serialized errors held under any field name', async () => {
+		const calls: unknown[][] = [];
+		const originalNoColor = process.env.NO_COLOR;
+		const originalError = console.error;
+		process.env.NO_COLOR = '1';
+		console.error = (...args: unknown[]) => {
+			calls.push(args);
+		};
+
+		try {
+			await createLogger({ now: () => new Date('2026-05-29T10:00:00.000Z') }).error(
+				{ cause: new Error('socket closed'), command: 'ban' },
+				'command failed',
+			);
+		} finally {
+			if (originalNoColor === undefined) delete process.env.NO_COLOR;
+			else process.env.NO_COLOR = originalNoColor;
+			console.error = originalError;
+		}
+
+		const output = calls[0][0] as string;
+		assert.ok(output.includes('    Error: socket closed'), 'stack rendered even though the key is not `error`');
+		assert.equal(/cause\s+\{/.test(output), false, 'not rendered as a JSON field');
+		assert.match(output, /command\s+ban/);
+	});
+
+	test('ConsoleLoggerAdapter keeps name/message business objects as ordinary fields', () => {
+		const calls: unknown[][] = [];
+		const originalInfo = console.info;
+		const originalNoColor = process.env.NO_COLOR;
+		process.env.NO_COLOR = '1';
+		console.info = (...args: unknown[]) => calls.push(args);
+
+		try {
+			new ConsoleLoggerAdapter().write({
+				bindings: {},
+				data: { notification: { name: 'welcome', message: 'hello' } },
+				level: 'info',
+				message: 'received',
+				time: new Date('2026-05-29T10:00:00.000Z'),
+			});
+		} finally {
+			if (originalNoColor === undefined) delete process.env.NO_COLOR;
+			else process.env.NO_COLOR = originalNoColor;
+			console.info = originalInfo;
+		}
+
+		const output = calls[0][0] as string;
+		assert.match(output, /notification\s+\{"name":"welcome","message":"hello"\}/);
+		assert.equal(output.includes('welcome: hello'), false);
 	});
 
 	test('ConsoleLoggerAdapter writes JSON in production', () => {
@@ -719,6 +880,22 @@ describe('logger adapters', () => {
 		assert.deepEqual(calls, [[{ cluster: 'use1', region: 'runtime', guildId: 'guild-1' }, 'ready']]);
 	});
 
+	test('core sends serialized errors to pino', async () => {
+		const calls: unknown[][] = [];
+		const root = createLogger({
+			renderer: new RecordingAdapter(),
+			transports: [pinoAdapter({ error: (...args: unknown[]) => calls.push(args) })],
+		});
+
+		await root.error({ operation: 'sync' }, 'request failed', new Error('connection closed'));
+
+		const payload = calls[0][0] as Record<string, unknown>;
+		const error = payload.error as Record<string, unknown>;
+		assert.equal(error.message, 'connection closed');
+		assert.match(error.stack as string, /connection closed/);
+		assert.equal(calls[0][1], 'request failed');
+	});
+
 	test('evlogTransport routes entries through the evlog global pipeline', async () => {
 		const events: Array<Record<string, unknown>> = [];
 		initLogger({
@@ -773,6 +950,7 @@ describe('logger adapters', () => {
 			},
 			level: 'warn',
 			message: 'command permission denied',
+			shape: 'wide',
 			time: new Date('2026-05-29T10:00:00.000Z'),
 		});
 		await flushEvlogDrain();
@@ -780,6 +958,183 @@ describe('logger adapters', () => {
 		assert.equal(events.length, 1);
 		assert.equal('status' in events[0]!, false);
 		assert.equal('method' in events[0]!, false);
+	});
+
+	test('evlogTransport preserves native errors and correlation fields through JSON serialization', async () => {
+		const events: Array<Record<string, unknown>> = [];
+		initLogger({
+			_suppressDrainWarning: true,
+			silent: true,
+			drain(context) {
+				events.push(context.event as Record<string, unknown>);
+			},
+		});
+		const root = createLogger({
+			name: 'service',
+			renderer: new RecordingAdapter(),
+			transports: [evlogTransport()],
+		});
+		const cause = new TypeError('database unavailable');
+		const error = Object.assign(new Error('request failed', { cause }), {
+			code: 'E_REQUEST_FAILED',
+		});
+
+		await root
+			.event({
+				operation: 'sync',
+				requestId: 'request-1',
+			})
+			.emit({ error, message: 'request failed' });
+		await flushEvlogDrain();
+
+		const serialized = JSON.parse(JSON.stringify(events[0])) as Record<string, unknown>;
+		const serializedError = serialized.error as Record<string, unknown>;
+		const serializedCause = serializedError.cause as Record<string, unknown>;
+
+		assert.equal(serialized.requestId, 'request-1');
+		assert.equal(serializedError.name, 'Error');
+		assert.equal(serializedError.message, 'request failed');
+		assert.equal(serializedError.code, 'E_REQUEST_FAILED');
+		assert.match(serializedError.stack as string, /request failed/);
+		assert.equal(serializedCause.name, 'TypeError');
+		assert.equal(serializedCause.message, 'database unavailable');
+	});
+
+	test('evlogTransport preserves the application service when mapping trace correlation fields', async () => {
+		const events: Array<Record<string, unknown>> = [];
+		initLogger({
+			_suppressDrainWarning: true,
+			env: { service: 'bot-service' },
+			silent: true,
+			drain(context) {
+				events.push(context.event as Record<string, unknown>);
+			},
+		});
+		const adapter = evlogTransport();
+		const traceId = '0af7651916cd43dd8448eb211c80319c';
+		const spanId = 'b7ad6b7169203331';
+
+		await adapter.write({
+			bindings: { name: 'bot-service' },
+			data: {
+				_source: 'seyfert:Seyfert',
+				durationMs: 12,
+				kind: 'event',
+				outcome: 'success',
+				span_id: spanId,
+				trace_id: traceId,
+			},
+			level: 'info',
+			message: 'BOT_READY completed',
+			shape: 'wide',
+			time: new Date('2026-05-29T10:00:00.000Z'),
+		});
+		await adapter.write({
+			bindings: { name: 'bot-service' },
+			data: { _source: 'seyfert:Seyfert', span_id: spanId, trace_id: traceId },
+			level: 'info',
+			message: 'ready',
+			time: new Date('2026-05-29T10:00:01.000Z'),
+		});
+		await flushEvlogDrain();
+
+		assert.equal(events.length, 2);
+		for (const event of events) {
+			assert.equal(event.service, 'bot-service');
+			assert.equal(event.source, 'seyfert:Seyfert');
+			assert.equal(event.traceId, traceId);
+			assert.equal(event.spanId, spanId);
+			assert.equal('trace_id' in event, false);
+			assert.equal('span_id' in event, false);
+		}
+	});
+
+	test('evlogTransport treats an entry without a shape as immediate', async () => {
+		const events: Array<Record<string, unknown>> = [];
+		initLogger({
+			_suppressDrainWarning: true,
+			silent: true,
+			drain(context) {
+				events.push(context.event as Record<string, unknown>);
+			},
+		});
+		const adapter = evlogTransport();
+
+		await adapter.write({
+			bindings: {},
+			data: { durationMs: 12, kind: 'command', outcome: 'success' },
+			level: 'info',
+			message: 'looks wide but is not declared',
+			time: new Date('2026-05-29T10:00:00.000Z'),
+		});
+		await flushEvlogDrain();
+
+		assert.equal(events[0]!.source, 'app');
+		assert.equal(events[0]!.message, 'looks wide but is not declared');
+	});
+
+	test('evlogTransport keeps the derived source when a caller logs a field of the same name', async () => {
+		const events: Array<Record<string, unknown>> = [];
+		initLogger({
+			_suppressDrainWarning: true,
+			silent: true,
+			drain(context) {
+				events.push(context.event as Record<string, unknown>);
+			},
+		});
+		const adapter = evlogTransport();
+
+		await adapter.write({
+			bindings: { name: 'bot-service' },
+			data: { _source: 'seyfert:Gateway', source: 'webhook' },
+			level: 'info',
+			message: 'ready',
+			time: new Date('2026-05-29T10:00:00.000Z'),
+		});
+		await adapter.write({
+			bindings: { name: 'bot-service' },
+			data: { _source: 'seyfert:Gateway', durationMs: 3, kind: 'event', outcome: 'success', source: 'webhook' },
+			level: 'info',
+			message: 'BOT_READY completed',
+			shape: 'wide',
+			time: new Date('2026-05-29T10:00:01.000Z'),
+		});
+		await flushEvlogDrain();
+
+		assert.equal(events.length, 2);
+		for (const event of events) assert.equal(event.source, 'seyfert:Gateway');
+	});
+
+	test('evlogTransport leaves a caller-supplied traceId untouched', async () => {
+		const events: Array<Record<string, unknown>> = [];
+		initLogger({
+			_suppressDrainWarning: true,
+			silent: true,
+			drain(context) {
+				events.push(context.event as Record<string, unknown>);
+			},
+		});
+		const adapter = evlogTransport();
+
+		await adapter.write({
+			bindings: { name: 'bot-service' },
+			data: {
+				span_id: 'b7ad6b7169203331',
+				spanId: 'aaaaaaaaaaaaaaaa',
+				trace_id: '0af7651916cd43dd8448eb211c80319c',
+				traceId: 'ffffffffffffffffffffffffffffffff',
+			},
+			level: 'info',
+			message: 'relaying upstream work',
+			time: new Date('2026-05-29T10:00:00.000Z'),
+		});
+		await flushEvlogDrain();
+
+		const event = events[0]!;
+		assert.equal(event.traceId, 'ffffffffffffffffffffffffffffffff');
+		assert.equal(event.spanId, 'aaaaaaaaaaaaaaaa');
+		assert.equal('trace_id' in event, false);
+		assert.equal('span_id' in event, false);
 	});
 
 	test('evlogTransport uses the tagged form for simple entries, folding name into the tag', async () => {
@@ -832,6 +1187,20 @@ describe('logger adapters', () => {
 });
 
 describe('createLogger', () => {
+	test('serializes Error values regardless of their field name', async () => {
+		const adapter = new RecordingAdapter();
+		const root = createLogger({ renderer: adapter });
+		const error = new Error('connection closed');
+		const metadata = { message: 'not an error', name: 'metadata' };
+
+		await root.error({ arbitraryField: error, metadata }, 'request failed');
+
+		const serialized = adapter.entries[0].data.arbitraryField as Record<string, unknown>;
+		assert.notEqual(serialized, error);
+		assert.equal(serialized.message, 'connection closed');
+		assert.equal(adapter.entries[0].data.metadata, metadata);
+	});
+
 	test('writes immediate root logs and supports child bindings', async () => {
 		const adapter = new RecordingAdapter();
 		const root = createLogger({ renderer: adapter, bindings: { app: 'bot' } }).child({ shardId: 1 });
@@ -841,7 +1210,9 @@ describe('createLogger', () => {
 
 		assert.equal(adapter.entries.length, 1);
 		assert.deepEqual(adapter.entries[0].bindings, { app: 'bot', shardId: 1 });
-		assert.deepEqual(adapter.entries[0].data, { route: '/sync', error });
+		assert.equal(adapter.entries[0].data.route, '/sync');
+		assert.notEqual(adapter.entries[0].data.error, error);
+		assert.equal((adapter.entries[0].data.error as Record<string, unknown>).message, 'boom');
 		assert.equal(adapter.entries[0].message, 'sync failed');
 		assert.equal('levelValue' in adapter.entries[0], false);
 	});
