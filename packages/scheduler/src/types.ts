@@ -1,4 +1,4 @@
-import type { SeyfertPlugin } from 'seyfert';
+import type { SeyfertPlugin, UsingClient } from 'seyfert';
 import type { SchedulerRegistry } from './manager';
 import type { ScheduledTask } from './task';
 
@@ -12,7 +12,10 @@ export type SchedulerOverlapPolicy = 'allow' | 'skip';
 
 export type ScheduledTaskStatus = 'scheduled' | 'running' | 'paused' | 'completed' | 'failed' | 'removed';
 
-export type SchedulerRunner = (task: ScheduledTask) => Awaitable<unknown>;
+export type SchedulerRunner<TClient extends SchedulerClientLike | undefined = SchedulerClientLike | undefined> = (
+	task: ScheduledTask,
+	client: TClient,
+) => Awaitable<unknown>;
 
 export type PersistentSchedulerResource = 'queue' | 'queue-events' | 'worker';
 
@@ -90,7 +93,7 @@ export interface ScheduledTaskDefinition extends CronScheduledTaskOptions {
 	kind: ScheduleKind;
 	expression?: string;
 	intervalMs?: number;
-	runner: SchedulerRunner;
+	runner: (task: ScheduledTask) => Awaitable<unknown>;
 	source?: string;
 }
 
@@ -116,10 +119,9 @@ export interface CronSchedulerDecoratorOptions extends SchedulerDecoratorOptions
 }
 
 export interface SchedulerPlugin
-	extends SeyfertPlugin<{ scheduler: SchedulerRegistry }, { scheduler: SchedulerRegistry }> {
+	extends SeyfertPlugin<{ scheduler: SchedulerRegistry<UsingClient> }, { scheduler: SchedulerRegistry<UsingClient> }> {
 	name: '@slipher/scheduler';
-	registry: SchedulerRegistry;
-	setup(client: SchedulerClientLike): Awaitable<void>;
+	registry: SchedulerRegistry<UsingClient>;
 	teardown(client: SchedulerClientLike): Awaitable<void>;
 }
 

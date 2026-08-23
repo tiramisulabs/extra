@@ -27,13 +27,13 @@ pnpm add bullmq@^5.23.0
 Pick the driver explicitly:
 
 ```ts
-import { Client, definePlugins } from 'seyfert';
-import { Interval, memory, scheduler } from '@slipher/scheduler';
+import { Client, definePlugins, type UsingClient } from 'seyfert';
+import { Interval, memory, scheduler, type ScheduledTask } from '@slipher/scheduler';
 
 class MaintenanceTasks {
 	@Interval('5m', { id: 'heartbeat' })
-	heartbeat() {
-		// run work
+	heartbeat(_task: ScheduledTask, client: UsingClient) {
+		client.logger.info('heartbeat');
 	}
 }
 
@@ -55,7 +55,7 @@ export const client = new Client({
 });
 ```
 
-The plugin exposes `ctx.scheduler` and `client.scheduler`.
+The plugin exposes `ctx.scheduler` and `client.scheduler`. Task callbacks receive the scheduled task and the active Seyfert client, so task modules do not need to import the client from the application entrypoint.
 
 ```ts
 import { Command, Declare, type CommandContext } from 'seyfert';
@@ -66,8 +66,8 @@ import { Command, Declare, type CommandContext } from 'seyfert';
 })
 export default class RefreshCacheCommand extends Command {
 	async run(ctx: CommandContext) {
-		ctx.scheduler.interval('refresh-cache', '30s', async task => {
-			void task.id;
+		ctx.scheduler.interval('refresh-cache', '30s', async (task, client) => {
+			client.logger.info(`Running ${task.id}`);
 		});
 
 		await ctx.write({ content: 'Cache refresh scheduled.' });
@@ -119,11 +119,12 @@ registry.add('poller', '10s', async task => {
 await registry.setup();
 ```
 
-When you use the registry without the Seyfert plugin, call `registry.setup()` after registering tasks. The `memory()` driver creates Croner jobs paused and resumes them during setup. With the plugin, driver resources are prepared during plugin setup so connection failures reject `client.start()`, then tasks activate from Seyfert's `plugins:ready` hook after every plugin has finished setup.
+When you use the registry without the Seyfert plugin, call `registry.setup()` after registering tasks. The second callback argument is `undefined` unless you pass a compatible client to `setup(client)`. The `memory()` driver creates Croner jobs paused and resumes them during setup. With the plugin, driver resources are prepared during plugin setup so connection failures reject `client.start()`, then tasks activate from Seyfert's `plugins:ready` hook after every plugin has finished setup.
 
 ## Decorators
 
 ```ts
+import { type UsingClient } from 'seyfert';
 import { Cron, Interval, type ScheduledTask } from '@slipher/scheduler';
 
 class Tasks {
@@ -132,7 +133,8 @@ class Tasks {
 		overlap: 'skip',
 		timezone: 'America/Santo_Domingo',
 	})
-	report(task: ScheduledTask) {
+	report(task: ScheduledTask, client: UsingClient) {
+		client.logger.info('running morning report');
 		return task.id;
 	}
 

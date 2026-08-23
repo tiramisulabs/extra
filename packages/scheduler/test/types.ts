@@ -42,6 +42,18 @@ expectType<SchedulerRegistry | undefined>(httpClient.scheduler);
 expectType<SchedulerRegistry | undefined>(workerClient.scheduler);
 expectType<SchedulerRegistry | undefined>(usingClient.scheduler);
 expectType<SchedulerRegistry>(pluginClient.scheduler);
+schedulerPlugin.registry.interval('client-access', '1m', (_task, taskClient) => {
+	expectType<UsingClient>(taskClient);
+});
+context.scheduler.interval('context-client-access', '1m', (_task, taskClient) => {
+	expectType<UsingClient>(taskClient);
+});
+
+// @ts-expect-error plugin registries require the registered Seyfert client
+schedulerPlugin.registry.setup();
+
+// @ts-expect-error plugin setup requires a Seyfert client
+schedulerPlugin.setup?.({ initialized: true });
 
 createScheduler({ driver: memory() });
 scheduler({ driver: memory() });
