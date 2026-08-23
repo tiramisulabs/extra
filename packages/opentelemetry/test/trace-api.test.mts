@@ -71,4 +71,13 @@ describe('getTracer', () => {
 			assert.equal(typeof tracer.startSpan, 'function');
 		});
 	});
+
+	test('uses the package identity as instrumentation scope', async () => {
+		await withProvider(async exporter => {
+			await record('scope check', () => undefined);
+			const span = exporter.getFinishedSpans()[0];
+			assert.equal(span.instrumentationScope.name, '@slipher/opentelemetry');
+			assert.equal(span.instrumentationScope.version, undefined);
+		});
+	});
 });

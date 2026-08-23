@@ -1,12 +1,11 @@
 import { type Span, SpanKind, SpanStatusCode } from '@opentelemetry/api';
-import { type CoreMetrics, durationSecondsSince } from '../metrics';
+import { durationSecondsSince } from '../metrics';
 import type { TraceSource } from '../options';
 import { getTracer } from '../trace-api';
+import type { InstrumentDeps, InstrumentTarget } from './deps';
 
-export interface CacheInstrumentDeps {
-	checkIfShouldTrace: (source: TraceSource) => boolean;
+export interface CacheInstrumentDeps extends InstrumentDeps {
 	skipResources: ReadonlySet<string>;
-	getMetrics: () => CoreMetrics | undefined;
 }
 
 /**
@@ -139,8 +138,8 @@ function recordCacheMetrics(
  * Mechanism: replace methods on `client.cache.adapter` at setup; disposer
  * restores the original function references.
  */
-export function instrumentCache(client: CacheClient | unknown, deps: CacheInstrumentDeps): () => void {
-	const adapter = (client as CacheClient | null | undefined)?.cache?.adapter;
+export function instrumentCache(target: InstrumentTarget, deps: CacheInstrumentDeps): () => void {
+	const adapter = (target.client as CacheClient | null | undefined)?.cache?.adapter;
 	if (!adapter || typeof adapter !== 'object') {
 		return () => {};
 	}
@@ -161,15 +160,43 @@ export function instrumentCache(client: CacheClient | unknown, deps: CacheInstru
 				if (deps.skipResources.has(resource)) {
 					return original(...args);
 				}
-				const source: TraceSource = { kind: 'cache', op: method, resource };
-				if (!shouldTrace(deps, source)) {
-					return original(...args);
-				}
 			} catch {
 				return original(...args);
 			}
 
 			const start = performance.now();
+			const metricAttributes = (value: unknown, error?: unknown) => ({
+				'seyfert.cache.op': method,
+				'seyfert.cache.resource': resource,
+				'seyfert.error': error !== undefined,
+				...(method === 'get' && error === undefined
+					? { 'seyfert.cache.hit': value !== undefined && value !== null }
+					: {}),
+			});
+			const source: TraceSource = { kind: 'cache', op: method, resource };
+
+			if (!deps.traceEnabled || !shouldTrace(deps, source)) {
+				try {
+					const result = original(...args);
+					if (isThenable(result)) {
+						return Promise.resolve(result).then(
+							value => {
+								recordCacheMetrics(deps, start, metricAttributes(value));
+								return value;
+							},
+							error => {
+								recordCacheMetrics(deps, start, metricAttributes(undefined, error));
+								throw error;
+							},
+						);
+					}
+					recordCacheMetrics(deps, start, metricAttributes(result));
+					return result;
+				} catch (error) {
+					recordCacheMetrics(deps, start, metricAttributes(undefined, error));
+					throw error;
+				}
+			}
 
 			// User errors from `original` must propagate; only instrumentation
 			// setup failures fall back to an untraced call.
@@ -199,20 +226,7 @@ export function instrumentCache(client: CacheClient | unknown, deps: CacheInstru
 								markError(span, error);
 							}
 
-							const metricAttrs: {
-								'seyfert.cache.op': string;
-								'seyfert.cache.resource': string;
-								'seyfert.error': boolean;
-								'seyfert.cache.hit'?: boolean;
-							} = {
-								'seyfert.cache.op': method,
-								'seyfert.cache.resource': resource,
-								'seyfert.error': isError,
-							};
-							if (method === 'get' && !isError) {
-								metricAttrs['seyfert.cache.hit'] = value !== undefined && value !== null;
-							}
-							recordCacheMetrics(deps, start, metricAttrs);
+							recordCacheMetrics(deps, start, metricAttributes(value, error));
 							safeEnd(span);
 						};
 

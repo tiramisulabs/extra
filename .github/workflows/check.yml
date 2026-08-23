@@ -8,7 +8,7 @@ jobs:
 
     services:
       redis:
-        image: redis:latest
+        image: redis:8.0-alpine
         ports:
           - 6379:6379
 

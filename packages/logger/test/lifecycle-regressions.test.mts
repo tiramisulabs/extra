@@ -469,7 +469,8 @@ describe('logger lifecycle regressions', () => {
 
 			assert.equal(adapter.entries.length, 1);
 			assert.equal(adapter.entries[0].data.outcome, 'error');
-			assert.equal(adapter.entries[0].data.error, error);
+			assert.notEqual(adapter.entries[0].data.error, error);
+			assert.equal((adapter.entries[0].data.error as Record<string, unknown>).message, `${kind} exploded`);
 			assert.equal(adapter.entries[0].data.customId, `${kind}:confirm`);
 			assert.equal(adapter.entries[0].message, `${kind === 'components' ? 'component' : 'modal'} internal error`);
 		}
