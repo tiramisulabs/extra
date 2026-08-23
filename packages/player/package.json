@@ -1,0 +1,66 @@
+{
+	"name": "@slipher/player",
+	"version": "0.1.0",
+	"description": "Media playback and queues for @slipher/voice",
+	"private": false,
+	"type": "commonjs",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/tiramisulabs/extra.git",
+		"directory": "packages/player"
+	},
+	"homepage": "https://github.com/tiramisulabs/extra/tree/main/packages/player",
+	"bugs": {
+		"url": "https://github.com/tiramisulabs/extra/issues"
+	},
+	"keywords": [
+		"discord",
+		"seyfert",
+		"voice",
+		"audio",
+		"media",
+		"player"
+	],
+	"engines": {
+		"node": ">=22.13"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"files": [
+		"lib/**"
+	],
+	"main": "./lib/index.js",
+	"types": "./lib/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./lib/index.d.ts",
+			"import": "./lib/index.js",
+			"require": "./lib/index.js",
+			"default": "./lib/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"scripts": {
+		"dev": "tsc --watch",
+		"build": "node -e \"require('node:fs').rmSync('lib', { recursive: true, force: true })\" && tsc",
+		"lint": "biome lint --write ./src ./test",
+		"format": "biome format --write ./src ./test",
+		"checkb": "biome check --write --no-errors-on-unmatched ./src ./test",
+		"typecheck": "tsc --noEmit --project ./test/tsconfig.json",
+		"test": "pnpm typecheck && vitest run --config ./test/vitest.config.mts ./test/",
+		"prepublishOnly": "pnpm build"
+	},
+	"peerDependencies": {
+		"@slipher/voice": ">=0.1.0",
+		"seyfert": ">=5.0.0"
+	},
+	"devDependencies": {
+		"@slipher/voice": "workspace:*",
+		"@types/node": "^26.0.1",
+		"seyfert": "^5.0.0",
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.9"
+	}
+}
