@@ -1,6 +1,8 @@
 import { createClient, type RedisClientOptions, type RedisClientType } from '@redis/client';
 import type { Adapter } from 'seyfert/lib/cache';
 
+const BULK_BATCH_SIZE = 100;
+
 export interface RedisAdapterOptions {
 	namespace?: string;
 }
@@ -20,34 +22,59 @@ export class RedisAdapter implements Adapter {
 		await this.client.connect();
 	}
 
-	async __scanSets(query: string, returnKeys?: false): Promise<any[]>;
-	async __scanSets(query: string, returnKeys: true): Promise<string[]>;
-	async __scanSets(query: string, returnKeys = false) {
+	protected async *scanKeyBatches(query: string, type: 'hash' | 'set' | 'string') {
 		const match = this.buildKey(query);
-		const keys: any[] = [];
 
-		for await (const i of this.client.scanIterator({
+		for await (const keys of this.client.scanIterator({
 			MATCH: match,
-			TYPE: 'set',
+			TYPE: type,
 		})) {
-			keys.push(...i);
+			yield keys;
 		}
-		return returnKeys ? keys.map(x => this.buildKey(x)) : this.bulkGet(keys);
+	}
+
+	protected async scanKeys(query: string, type: 'hash' | 'set' | 'string') {
+		const keys: string[] = [];
+		for await (const batch of this.scanKeyBatches(query, type)) {
+			keys.push(...batch);
+		}
+
+		return keys;
+	}
+
+	protected async removeScannedKeys(
+		query: string,
+		type: 'hash' | 'set' | 'string',
+		filter: (key: string) => boolean = () => true,
+	) {
+		let removed: number;
+		do {
+			removed = 0;
+			for await (const batch of this.scanKeyBatches(query, type)) {
+				const keys = batch.filter(filter);
+				if (!keys.length) continue;
+				await this.deleteRedisKeys(keys);
+				removed += keys.length;
+			}
+		} while (removed > 0);
+	}
+
+	protected async runInBatches<T>(items: T[], operation: (batch: T[]) => Promise<unknown>) {
+		for (let offset = 0; offset < items.length; offset += BULK_BATCH_SIZE) {
+			await operation(items.slice(offset, offset + BULK_BATCH_SIZE));
+		}
+	}
+
+	protected async deleteRedisKeys(keys: string[]) {
+		if (!keys.length) return;
+		await this.runInBatches(keys, batch => this.client.del(batch));
 	}
 
 	async scan(query: string, returnKeys?: false): Promise<any[]>;
 	async scan(query: string, returnKeys: true): Promise<string[]>;
 	async scan(query: string, returnKeys = false) {
-		const match = this.buildKey(query);
-		const values: string[] = [];
-		for await (const i of this.client.scanIterator({
-			MATCH: match,
-			TYPE: 'hash',
-		})) {
-			values.push(...i);
-		}
-
-		return returnKeys ? values : this.bulkGet(values);
+		const keys = await this.scanKeys(query, 'hash');
+		return returnKeys ? keys : this.bulkGet(keys);
 	}
 
 	async bulkGet(keys: string[]) {
@@ -72,30 +99,23 @@ export class RedisAdapter implements Adapter {
 	}
 
 	async bulkSet(data: [string, any][]) {
-		const promises: Promise<any>[] = [];
-
-		for (const [k, v] of data) {
-			promises.push(this.client.hSet(this.buildKey(k), toDb(v)));
-		}
-
-		await Promise.all(promises);
+		await this.runInBatches(data, batch => Promise.all(batch.map(([key, value]) => this.set(key, value))));
 	}
 
 	async set(id: string, data: any) {
-		await this.client.hSet(this.buildKey(id), toDb(data));
+		const key = this.buildKey(id);
+		await this.client.multi().del(key).hSet(key, toDb(data)).exec();
 	}
 
 	async bulkPatch(data: [string, any][]) {
-		const promises: Promise<any>[] = [];
-
-		for (const [k, v] of data) {
-			promises.push(this.patch(k, v));
-		}
-
-		await Promise.all(promises);
+		await this.runInBatches(data, batch => Promise.all(batch.map(([key, value]) => this.patch(key, value))));
 	}
 
 	async patch(id: string, data: any): Promise<void> {
+		if (Array.isArray(data)) {
+			await this.set(id, data);
+			return;
+		}
 		await this.client.hSet(this.buildKey(id), toDb(data));
 	}
 
@@ -124,8 +144,7 @@ export class RedisAdapter implements Adapter {
 	}
 
 	async bulkRemove(keys: string[]) {
-		if (!keys.length) return;
-		await this.client.del(keys.map(x => this.buildKey(x)));
+		await this.deleteRedisKeys(keys.map(key => this.buildKey(key)));
 	}
 
 	async remove(keys: string): Promise<void> {
@@ -133,12 +152,7 @@ export class RedisAdapter implements Adapter {
 	}
 
 	async flush(): Promise<void> {
-		const keys = await Promise.all([
-			this.scan(this.buildKey('*'), true),
-			this.__scanSets(this.buildKey('*'), true),
-		]).then(x => x.flat());
-		if (!keys.length) return;
-		await this.bulkRemove(keys);
+		await Promise.all([this.removeScannedKeys('*', 'hash'), this.removeScannedKeys('*:set', 'set')]);
 	}
 
 	async contains(to: string, keys: string): Promise<boolean> {
@@ -150,13 +164,9 @@ export class RedisAdapter implements Adapter {
 	}
 
 	async bulkAddToRelationShip(data: Record<string, string[]>): Promise<void> {
-		const promises: Promise<unknown>[] = [];
-
-		for (const [key, value] of Object.entries(data)) {
-			promises.push(this.client.sAdd(`${this.buildKey(key)}:set`, value));
-		}
-
-		await Promise.all(promises);
+		await this.runInBatches(Object.entries(data), batch =>
+			Promise.all(batch.map(([key, value]) => this.client.sAdd(`${this.buildKey(key)}:set`, value))),
+		);
 	}
 
 	async addToRelationship(to: string, keys: string | string[]): Promise<void> {
@@ -168,11 +178,13 @@ export class RedisAdapter implements Adapter {
 	}
 
 	async removeRelationship(to: string | string[]): Promise<void> {
-		await this.client.del(Array.isArray(to) ? to.map(x => `${this.buildKey(x)}:set`) : [`${this.buildKey(to)}:set`]);
+		await this.runInBatches(Array.isArray(to) ? to : [to], batch =>
+			this.client.del(batch.map(relationship => `${this.buildKey(relationship)}:set`)),
+		);
 	}
 
 	protected buildKey(key: string) {
-		return key.startsWith(this.namespace) ? key : `${this.namespace}:${key}`;
+		return key.startsWith(`${this.namespace}:`) ? key : `${this.namespace}:${key}`;
 	}
 }
 
