@@ -29,12 +29,20 @@ export class ScheduledTask {
 		return this.definition.intervalMs;
 	}
 
+	get overlap() {
+		return this.definition.overlap ?? 'allow';
+	}
+
 	get runner() {
 		return this.definition.runner;
 	}
 
 	get runImmediately() {
 		return this.definition.runImmediately === true;
+	}
+
+	get timezone() {
+		return this.definition.timezone;
 	}
 
 	snapshot(): ScheduledTaskSnapshot {
@@ -44,6 +52,8 @@ export class ScheduledTask {
 			status: this.status,
 			expression: this.expression,
 			intervalMs: this.intervalMs,
+			overlap: this.overlap,
+			timezone: this.timezone,
 			runCount: this.runCount,
 			createdAt: this.createdAt,
 			lastRunAt: this.lastRunAt,

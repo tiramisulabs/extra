@@ -5,6 +5,7 @@ export { createScheduler, SchedulerRegistry, scheduler } from './manager';
 export { ScheduledTask } from './task';
 export type {
 	Awaitable,
+	BullMQConnection,
 	BullMQJob,
 	BullMQModule,
 	BullMQQueue,
@@ -12,7 +13,10 @@ export type {
 	BullMQWorker,
 	CreateSchedulerOptions,
 	CronerFactory,
+	CronerFactoryOptions,
 	CronerJob,
+	CronScheduledTaskOptions,
+	CronSchedulerDecoratorOptions,
 	DurationInput,
 	MemorySchedulerOptions,
 	PersistentSchedulerOptions,
@@ -30,6 +34,7 @@ export type {
 	SchedulerHost,
 	SchedulerListener,
 	SchedulerLogger,
+	SchedulerOverlapPolicy,
 	SchedulerPlugin,
 	SchedulerRunner,
 	SchedulerTaskConstructor,

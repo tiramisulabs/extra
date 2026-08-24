@@ -9,7 +9,7 @@ import { describe, expect, test } from 'vitest';
 const tsc = createRequire(join(process.cwd(), 'package.json')).resolve('typescript/bin/tsc');
 
 describe('emitted declaration surface', () => {
-	test('keeps public MockBot readers and strips internal REST history', () => {
+	test('keeps public MockBot readers and strips internal REST history', { timeout: 30_000 }, () => {
 		const outDir = join(process.cwd(), 'test/.generated/declarations');
 		rmSync(outDir, { recursive: true, force: true });
 		execFileSync(

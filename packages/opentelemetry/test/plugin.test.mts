@@ -10,7 +10,8 @@ describe('opentelemetry plugin wiring', () => {
 
 	test('setup + teardown with all instruments false does not throw', async () => {
 		const plugin = opentelemetry({
-			instrument: { interactions: false, events: false, rest: false, cache: false },
+			traces: { interactions: false, events: false, rest: false, cache: false },
+			metrics: { interactions: false, events: false, rest: false, cache: false },
 		});
 		assert.equal(plugin.name, '@slipher/opentelemetry');
 		await plugin.setup?.({} as never);
@@ -27,7 +28,8 @@ describe('opentelemetry plugin wiring', () => {
 
 	test('setup after teardown fails explicitly instead of silently using a stopped SDK', async () => {
 		const plugin = opentelemetry({
-			instrument: { interactions: false, events: false, rest: false, cache: false },
+			traces: { interactions: false, events: false, rest: false, cache: false },
+			metrics: { interactions: false, events: false, rest: false, cache: false },
 		});
 		await plugin.setup?.({} as never);
 		await plugin.teardown?.({} as never);
@@ -44,7 +46,8 @@ describe('opentelemetry plugin wiring', () => {
 		const client = { cache: { adapter }, events: {} };
 		const plugin = opentelemetry({
 			serviceName: 'plugin-idempotent-test',
-			instrument: { interactions: false, events: false, rest: false, cache: true },
+			traces: { interactions: false, events: false, rest: false, cache: true },
+			metrics: { interactions: false, events: false, rest: false, cache: false },
 		});
 		await plugin.setup?.(client as never);
 		const wrappedOnce = adapter.get;
@@ -62,7 +65,8 @@ describe('opentelemetry plugin wiring', () => {
 		try {
 			const plugin = opentelemetry({
 				serviceName: 'plugin-inmemory-test',
-				instrument: { interactions: false, events: false, rest: false, cache: false },
+				traces: { interactions: false, events: false, rest: false, cache: false },
+				metrics: { interactions: false, events: false, rest: false, cache: false },
 			});
 			await plugin.setup?.({} as never);
 			await plugin.teardown?.({} as never);
@@ -75,7 +79,8 @@ describe('opentelemetry plugin wiring', () => {
 
 	test('options() installs contextScopes when interactions are on', () => {
 		const plugin = opentelemetry({
-			instrument: { interactions: true, events: false, rest: false, cache: false },
+			traces: { interactions: true, events: false, rest: false, cache: false },
+			metrics: { interactions: false, events: false, rest: false, cache: false },
 		});
 		const fragment = plugin.options?.({} as never);
 		assert.ok(fragment?.contextScopes);
@@ -85,7 +90,8 @@ describe('opentelemetry plugin wiring', () => {
 
 	test('options() omits contextScopes when interactions are off', () => {
 		const plugin = opentelemetry({
-			instrument: { interactions: false, events: false, rest: false, cache: false },
+			traces: { interactions: false, events: false, rest: false, cache: false },
+			metrics: { interactions: false, events: false, rest: false, cache: false },
 		});
 		const fragment = plugin.options?.({} as never);
 		assert.deepEqual(fragment, {});
@@ -93,7 +99,8 @@ describe('opentelemetry plugin wiring', () => {
 
 	test('client.trace and ctx.trace factories return a TraceHandle', () => {
 		const plugin = opentelemetry({
-			instrument: { interactions: false, events: false, rest: false, cache: false },
+			traces: { interactions: false, events: false, rest: false, cache: false },
+			metrics: { interactions: false, events: false, rest: false, cache: false },
 		});
 		const clientHandle = plugin.client?.trace?.({} as never);
 		const ctxHandle = plugin.ctx?.trace?.({} as never, {} as never);

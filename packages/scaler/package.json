@@ -1,0 +1,65 @@
+{
+	"name": "@slipher/scaler",
+	"version": "0.0.1",
+	"description": "Multi-host process placement for vanilla Seyfert workers",
+	"license": "MIT",
+	"publishConfig": {
+		"access": "public"
+	},
+	"engines": {
+		"node": ">=22.13"
+	},
+	"files": [
+		"lib/**"
+	],
+	"main": "./lib/index.js",
+	"module": "./lib/index.js",
+	"types": "./lib/index.d.ts",
+	"typesVersions": {
+		"*": {
+			"agent": ["./lib/agent-entry.d.ts"],
+			"master": ["./lib/master-entry.d.ts"]
+		}
+	},
+	"exports": {
+		".": {
+			"types": "./lib/index.d.ts",
+			"import": "./lib/index.js",
+			"require": "./lib/index.js"
+		},
+		"./agent": {
+			"types": "./lib/agent-entry.d.ts",
+			"import": "./lib/agent-entry.js",
+			"require": "./lib/agent-entry.js"
+		},
+		"./master": {
+			"types": "./lib/master-entry.d.ts",
+			"import": "./lib/master-entry.js",
+			"require": "./lib/master-entry.js"
+		}
+	},
+	"scripts": {
+		"dev": "tsc --watch",
+		"build": "node -e \"require('node:fs').rmSync('lib', { recursive: true, force: true })\" && tsc",
+		"lint": "biome lint --write ./src ./test",
+		"format": "biome format --write ./src ./test",
+		"checkb": "biome check --write --no-errors-on-unmatched ./src ./test",
+		"test:types": "tsc -p tsconfig.test.json",
+		"test": "vitest run ./test/ --exclude ./test/e2e.test.mts",
+		"test:integration": "vitest run ./test/e2e.test.mts",
+		"prepublishOnly": "pnpm run build"
+	},
+	"dependencies": {
+		"ws": "^8.21.0"
+	},
+	"peerDependencies": {
+		"seyfert": "^5.0.0"
+	},
+	"devDependencies": {
+		"@types/node": "^26.0.1",
+		"@types/ws": "^8.18.1",
+		"seyfert": "^5.0.0",
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.9"
+	}
+}

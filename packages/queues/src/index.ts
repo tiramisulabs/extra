@@ -1,4 +1,4 @@
-import { createPlugin } from 'seyfert';
+import { createPlugin, type SeyfertPluginClient, type UsingClient } from 'seyfert';
 import {
 	type Awaitable,
 	type CreateQueuesOptions,
@@ -41,9 +41,23 @@ interface EventMetadata {
 	scope: 'queue' | 'worker';
 }
 
+interface PreparedProcessor {
+	events: readonly {
+		event: EventMetadata;
+		handler: (...args: readonly unknown[]) => unknown;
+	}[];
+	handler: (...args: readonly unknown[]) => unknown;
+	instance: object;
+	metadata: ProcessorMetadata;
+}
+
 const processorMetadata = new WeakMap<Function, ProcessorMetadata>();
 const processMetadata = new WeakMap<object, QueueMethod[]>();
 const eventMetadata = new WeakMap<object, EventMetadata[]>();
+
+type QueuesLifecycleArgs<TClient extends QueuesClientLike | undefined> = undefined extends TClient
+	? [client?: TClient]
+	: [client: TClient];
 
 interface QueueWorkerEventSource<TData, TResult> {
 	onWorker<TEvent extends keyof QueueWorkerEventMap<TData, TResult>>(
@@ -59,19 +73,35 @@ interface QueueWorkerEventSource<TData, TResult> {
 		listener: QueueListener<QueueWorkerEventMap<TData, TResult>[TEvent]>,
 	): void;
 }
-export class QueuesRegistry {
+export class QueuesRegistry<TClient extends QueuesClientLike | undefined = QueuesClientLike | undefined> {
 	private readonly queues = new Map<string, Queue<unknown, unknown>>();
 	private readonly queueOptions = new Map<string, QueueOptions<never, never>>();
+	private readonly pendingProcessors: PreparedProcessor[] = [];
+	private client: TClient | undefined;
 	private closed = false;
 	private closePromise?: Promise<void>;
+	private processorsReady: boolean;
 
-	constructor(private readonly options: CreateQueuesOptions) {
+	constructor(options: CreateQueuesOptions);
+	/** @internal */
+	constructor(options: CreateQueuesOptions, waitForSetup: boolean);
+	constructor(
+		private readonly options: CreateQueuesOptions,
+		waitForSetup = false,
+	) {
+		this.processorsReady = !waitForSetup;
 		if (options.processors?.length) this.register({ processors: options.processors });
 	}
 
 	register(options: QueuesRegisterOptions): Awaitable<this> {
 		if (this.closed) throw new Error('@slipher/queues registry is closed.');
-		const registrations = (options.processors ?? []).map(processor => this.registerProcessor(processor));
+		const processors = (options.processors ?? []).map(processor => this.prepareProcessor(processor));
+		if (!this.processorsReady) {
+			this.pendingProcessors.push(...processors);
+			return this;
+		}
+
+		const registrations = processors.map(processor => this.attachProcessor(processor));
 		const pending = registrations.filter(isPromiseLike);
 		return pending.length ? Promise.all(pending).then(() => this) : this;
 	}
@@ -95,6 +125,7 @@ export class QueuesRegistry {
 					if (errors.length) throw new AggregateError(errors, 'Failed to close queue registry.');
 				}
 			} finally {
+				this.pendingProcessors.length = 0;
 				this.queues.clear();
 				this.queueOptions.clear();
 			}
@@ -103,9 +134,16 @@ export class QueuesRegistry {
 		return close;
 	}
 
-	async setup(client?: QueuesClientLike): Promise<void> {
+	async setup(...[client]: QueuesLifecycleArgs<TClient>): Promise<void> {
 		if (this.closed) throw new Error('@slipher/queues registry is closed.');
+		if (client !== undefined) this.client = client;
 		try {
+			if (!this.processorsReady) {
+				this.processorsReady = true;
+				const processors = this.pendingProcessors.splice(0);
+				await Promise.all(processors.map(processor => this.attachProcessor(processor)));
+			}
+			if (this.closed) throw new Error('@slipher/queues registry is closed.');
 			await this.options.driver.setup?.(client);
 		} catch (setupError) {
 			try {
@@ -117,7 +155,7 @@ export class QueuesRegistry {
 		}
 	}
 
-	private registerProcessor(processor: QueueConstructor): Awaitable<void> {
+	private prepareProcessor(processor: QueueConstructor): PreparedProcessor {
 		const metadata = processorMetadata.get(processor);
 		if (!metadata) throw new RangeError(`Queue processor metadata missing for ${processor.name}.`);
 
@@ -128,15 +166,22 @@ export class QueuesRegistry {
 			throw new RangeError(`Queue processor "${metadata.name}" must declare exactly one @Process() handler.`);
 		}
 
-		const handler = this.getMethod(instance, processes[0]);
-		const handlers = (eventMetadata.get(prototype) ?? []).map(event => ({
-			event,
-			handler: this.getMethod(instance, event.method),
-		}));
+		return {
+			events: (eventMetadata.get(prototype) ?? []).map(event => ({
+				event,
+				handler: this.getMethod(instance, event.method),
+			})),
+			handler: this.getMethod(instance, processes[0]),
+			instance,
+			metadata,
+		};
+	}
+
+	private attachProcessor({ events, handler, instance, metadata }: PreparedProcessor): Awaitable<void> {
 		const queue = this.getOrCreateQueue(metadata.name, metadata.options);
 		const disposers: (() => void)[] = [];
 
-		for (const { event, handler: eventHandler } of handlers) {
+		for (const { event, handler: eventHandler } of events) {
 			const listener = (payload: unknown) => eventHandler.call(instance, payload) as Awaitable<void>;
 
 			if (event.scope === 'worker') {
@@ -150,7 +195,9 @@ export class QueuesRegistry {
 		}
 
 		try {
-			const registration = queue.process(job => handler.call(instance, job as QueueJob<unknown, unknown>));
+			const registration = queue.process(job =>
+				handler.call(instance, job as QueueJob<unknown, unknown>, this.client as TClient),
+			);
 			if (isPromiseLike(registration)) {
 				return Promise.resolve(registration).then(undefined, error => {
 					for (const dispose of disposers) dispose();
@@ -197,12 +244,17 @@ export class QueuesRegistry {
 	}
 }
 
-export function createQueues(options: CreateQueuesOptions): QueuesRegistry {
-	return new QueuesRegistry(options);
+export function createQueues<TClient extends QueuesClientLike | undefined = QueuesClientLike | undefined>(
+	options: CreateQueuesOptions,
+): QueuesRegistry<TClient> {
+	return new QueuesRegistry<TClient>(options);
 }
 
 export function queues(options: QueuesPluginOptions): QueuesPlugin {
-	const registry = createQueues(options);
+	// Processor classes resolve while the plugin graph is built, but attaching them here would let the memory driver consume
+	// jobs before Seyfert provides its client. The lifecycle registry delays only that attachment until setup binds the client.
+	const lifecycleRegistry = new QueuesRegistry<SeyfertPluginClient>(options, true);
+	const registry = lifecycleRegistry as unknown as QueuesRegistry<UsingClient>;
 
 	return createPlugin({
 		name: '@slipher/queues',
@@ -213,9 +265,9 @@ export function queues(options: QueuesPluginOptions): QueuesPlugin {
 		ctx: {
 			queues: () => registry,
 		},
-		setup: client => registry.setup(client),
+		setup: client => lifecycleRegistry.setup(client),
 		teardown: () => registry.close(),
-	});
+	}) as QueuesPlugin;
 }
 
 export function memory(options: QueueOptions = {}): QueueDriver {
