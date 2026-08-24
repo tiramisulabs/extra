@@ -169,7 +169,7 @@ Avoid importing the exported `client` from processors or services that are loade
 
 `@OnWorkerEvent(event)` is local to the process that ran the job. Use it for local cache updates or process-local instrumentation. It accepts `active`, `completed`, `failed`, `retrying`, and `idle`.
 
-`@OnQueueEvent(event)` is the queue/global channel and accepts `added`, `completed`, and `failed`. With `memory()` both decorators observe the same single-process queue. With `persistent()`, queue-level events come from BullMQ `QueueEvents` and use one extra Redis connection per queue per replica. Global payloads always include `jobId`; `job` can be `undefined` when BullMQ has already removed the job through `removeOnComplete` or `removeOnFail`.
+`@OnQueueEvent(event)` is the queue/global channel and accepts `added`, `completed`, and `failed`. With `memory()` both decorators observe the same single-process queue. With `persistent()`, queue-level events come from BullMQ `QueueEvents` and use one extra Redis connection per queue per replica. Persistent queue-wide payloads always include `jobId` and currently leave `job` undefined; use worker events when you need the hydrated job in the process that handled it.
 
 All listeners receive one object payload, matching `@slipher/scheduler`: `{ job }`, `{ job, result }`, `{ job, error }`, `{ job, error, delay }`, or `{}` for `idle`. Direct queue instances support both `on()` and `once()`.
 
