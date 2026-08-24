@@ -30,7 +30,7 @@ pnpm add bullmq
 Declare queues with `RegisteredQueues`. Named jobs use a `job` discriminant; that field is type-only and becomes BullMQ's native job name.
 
 ```ts
-import { Client, definePlugins } from 'seyfert';
+import { Client, definePlugins, type UsingClient } from 'seyfert';
 import {
 	OnQueueEvent,
 	OnWorkerEvent,
@@ -57,7 +57,8 @@ declare module '@slipher/queues' {
 @Processor('audio')
 class AudioProcessor {
 	@Process()
-	async handle(job: QueueJobOf<'audio'>) {
+	async handle(job: QueueJobOf<'audio'>, client: UsingClient) {
+		client.logger.debug(`Processing ${job.name} from ${job.queueName}`);
 		switch (job.name) {
 			case 'transcode':
 				return transcode(job.data.fileId, job.data.format);
@@ -129,6 +130,14 @@ await ctx.queues.get('welcome').add({ userId: ctx.author.id });
 `queue.add(name, payload, options)` uses the third argument to disambiguate named jobs. A call like `queue.add('send', { delay: '5s' })` is ambiguous because it can mean a string payload plus job options or a named job whose payload happens to look like job options. Slipher throws a descriptive `TypeError` instead of guessing; use `queue.add('send', { delay: '5s' }, {})` to force `name = 'send'`, or pass non-string data to `add(data, options)`.
 
 Each `@Processor()` class has exactly one `@Process()` handler. Switch on `job.name` for named-job queues. There is no framework-level per-name dispatch, so typos are caught by the typed producer surface instead of becoming `"Queue process not found"` retries at runtime.
+
+Decorated `@Process()` handlers receive the active Seyfert client as their second argument. Processor classes are still resolved eagerly, but the plugin does not attach them to the queue until setup binds that client. With `memory()`, jobs queued during startup remain waiting. With `persistent()`, existing Redis jobs are not consumed before setup, while new `add()` calls reject until the driver is active. Registries created directly with `createQueues()` remain framework-independent and pass `undefined` when no client was supplied to `registry.setup(client)`.
+
+The imperative `queue.process(job => ...)` API stays driver-level and receives only the job. Code using it already owns the surrounding scope, so capture the client explicitly when needed instead of coupling queue drivers to Seyfert:
+
+```ts
+await queue.process(job => processMedia(job, client));
+```
 
 ## Accessing The Plugin Without `ctx`
 

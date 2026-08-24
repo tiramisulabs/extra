@@ -1,4 +1,4 @@
-import type { SeyfertPlugin } from 'seyfert';
+import type { SeyfertPlugin, UsingClient } from 'seyfert';
 import type { DurationInput } from './helpers';
 import type { QueuesRegistry } from './index';
 
@@ -186,9 +186,10 @@ export interface QueuesRegisterOptions {
 
 export interface QueuesPluginOptions extends CreateQueuesOptions {}
 
-export interface QueuesPlugin extends SeyfertPlugin<{ queues: QueuesRegistry }, { queues: QueuesRegistry }> {
+export interface QueuesPlugin
+	extends SeyfertPlugin<{ queues: QueuesRegistry<UsingClient> }, { queues: QueuesRegistry<UsingClient> }> {
 	name: '@slipher/queues';
-	registry: QueuesRegistry;
+	registry: QueuesRegistry<UsingClient>;
 }
 
 export type QueuesClientLike = object;

@@ -62,7 +62,14 @@ expectType<QueuesRegistry | undefined>(concreteClient.queues);
 expectType<QueuesRegistry | undefined>(httpClient.queues);
 expectType<QueuesRegistry | undefined>(workerClient.queues);
 expectType<QueuesRegistry | undefined>(client.queues);
-expectType<QueuesRegistry>(pluginClient.queues);
+expectType<QueuesRegistry<UsingClient>>(pluginClient.queues);
+expectType<QueuesRegistry<UsingClient>>(queuesPlugin.registry);
+
+registry.setup();
+registry.setup(client);
+queuesPlugin.registry.setup(client);
+// @ts-expect-error plugin registries require the active Seyfert client during setup
+queuesPlugin.registry.setup();
 
 const welcomeQueue = registry.get('welcome');
 expectType<QueueOf<'welcome'>>(welcomeQueue);
