@@ -4,6 +4,7 @@ import {
 	definePlugins,
 	type HttpClient,
 	type PluginUsingClient,
+	type SeyfertPluginClient,
 	type SeyfertRegistry,
 	type UsingClient,
 	type WorkerClient,
@@ -22,6 +23,7 @@ declare function expectType<T>(value: T): void;
 declare const context: CommandContext;
 declare const client: Client;
 declare const httpClient: HttpClient;
+declare const barePluginClient: SeyfertPluginClient;
 declare const workerClient: WorkerClient;
 declare const usingClient: UsingClient;
 declare const pluginClient: PluginUsingClient<typeof plugins>;
@@ -42,15 +44,21 @@ expectType<SchedulerRegistry | undefined>(httpClient.scheduler);
 expectType<SchedulerRegistry | undefined>(workerClient.scheduler);
 expectType<SchedulerRegistry | undefined>(usingClient.scheduler);
 expectType<SchedulerRegistry>(pluginClient.scheduler);
+expectType<SchedulerRegistry<UsingClient>>(schedulerPlugin.registry);
 schedulerPlugin.registry.interval('client-access', '1m', (_task, taskClient) => {
 	expectType<UsingClient>(taskClient);
+	expectType<SchedulerRegistry>(taskClient.scheduler);
 });
 context.scheduler.interval('context-client-access', '1m', (_task, taskClient) => {
 	expectType<UsingClient>(taskClient);
+	expectType<SchedulerRegistry>(taskClient.scheduler);
 });
 
 // @ts-expect-error plugin registries require the registered Seyfert client
 schedulerPlugin.registry.setup();
+
+// @ts-expect-error plugin registries cannot bind a client without registered extensions
+schedulerPlugin.registry.setup(barePluginClient);
 
 // @ts-expect-error plugin setup requires a Seyfert client
 schedulerPlugin.setup?.({ initialized: true });
@@ -67,6 +75,9 @@ createScheduler({});
 
 // @ts-expect-error scheduler plugin driver is required
 scheduler({});
+
+// @ts-expect-error scheduler tasks must be task objects or constructors
+scheduler({ driver: memory(), tasks: [1] });
 
 // @ts-expect-error orphan purging belongs to persistent driver options
 createScheduler({ driver: memory(), purgeOrphansOnStartup: true });

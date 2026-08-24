@@ -1,4 +1,4 @@
-import { createPlugin, type UsingClient } from 'seyfert';
+import { createPlugin, type SeyfertPluginClient, type UsingClient } from 'seyfert';
 import { type DurationInput, InvalidDurationError, parseDuration } from './duration';
 import { SchedulerEmitter } from './events';
 import { getTaskMetadata, instantiateTaskSource } from './metadata';
@@ -251,8 +251,18 @@ export function createScheduler<TClient extends SchedulerClientLike | undefined 
 	return new SchedulerRegistry<TClient>(options);
 }
 
+/**
+ * Captures task sources before TypeScript contextually checks their methods. A task may name UsingClient in its runner,
+ * and resolving that type while the registered plugin tuple is still being inferred would make the tuple depend on itself.
+ */
+export function scheduler<const TTasks extends SchedulerTaskSource[]>(
+	options: Omit<CreateSchedulerOptions, 'tasks'> & { tasks?: TTasks },
+): SchedulerPlugin;
 export function scheduler(options: CreateSchedulerOptions): SchedulerPlugin {
-	const registry = new SchedulerRegistry<UsingClient>(options);
+	// Lifecycle hooks expose a stable client type while TypeScript is still inferring the plugin tuple. Tasks only run after
+	// that lifecycle binds the fully registered client, so the public registry keeps its original UsingClient contract.
+	const lifecycleRegistry = new SchedulerRegistry<SeyfertPluginClient>(options);
+	const registry = lifecycleRegistry as unknown as SchedulerRegistry<UsingClient>;
 
 	return createPlugin({
 		name: '@slipher/scheduler',
@@ -264,7 +274,7 @@ export function scheduler(options: CreateSchedulerOptions): SchedulerPlugin {
 			scheduler: () => registry,
 		},
 		register(api) {
-			api.hooks.on('plugins:ready', client => registry.activate(client as UsingClient));
+			api.hooks.on('plugins:ready', client => lifecycleRegistry.activate(client));
 		},
 		async setup(client) {
 			if (!client.scheduler) client.scheduler = registry;
@@ -273,7 +283,7 @@ export function scheduler(options: CreateSchedulerOptions): SchedulerPlugin {
 				registry.setLogger(client.logger);
 			}
 
-			await registry.prepare(client as UsingClient);
+			await lifecycleRegistry.prepare(client);
 		},
 		async teardown() {
 			await registry.close();
