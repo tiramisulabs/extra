@@ -168,10 +168,11 @@ export function createFakeBullMQ() {
 	return {
 		module: {
 			Job: {
-				fromId: async (_queue: unknown, id: string) => {
+				async fromId(_queue: unknown, id: string) {
 					await state.jobLookupGate;
-					return state.jobs.get(id) ?? null;
+					return this.lookup(id);
 				},
+				lookup: (id: string) => state.jobs.get(id) ?? null,
 			},
 			Queue: FakeQueue,
 			QueueEvents: FakeQueueEvents,

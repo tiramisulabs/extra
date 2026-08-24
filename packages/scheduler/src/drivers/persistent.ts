@@ -54,7 +54,7 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 	constructor(options: PersistentSchedulerOptions) {
 		this.bullmq = options.bullmq ?? loadBullMQ();
 		this.fallbackLogger = options.logger;
-		this.queueName = options.queueName ?? 'slipher:scheduler';
+		this.queueName = options.queueName ?? 'slipher-scheduler';
 		this.queueOptions = createBullMQOptions(options);
 		this.host = options.logger ? { emit: () => undefined, logger: options.logger } : undefined;
 		this.immediateRunDeduplicationMs = options.immediateRunDeduplicationMs ?? 60_000;
@@ -644,9 +644,9 @@ class PersistentSchedulerDriver implements SchedulerDriver {
 
 	private async jobFromId(jobId: string) {
 		const queue = this.queue;
-		const fromId = this.bullmq.Job?.fromId;
-		if (!queue || !fromId) return undefined;
-		return fromId(queue, jobId);
+		const Job = this.bullmq.Job;
+		if (!queue || !Job?.fromId) return undefined;
+		return Job.fromId(queue, jobId);
 	}
 
 	private taskIdFromJob(job: BullMQJob | null | undefined) {

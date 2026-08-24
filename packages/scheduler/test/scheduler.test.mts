@@ -510,6 +510,21 @@ describe('scheduler', () => {
 		assert.equal(bullmq.state.workers[0]!.closed, true);
 	});
 
+	test('uses a BullMQ-compatible default queue name', async () => {
+		const bullmq = createFakeBullMQ();
+		const registry = createScheduler({
+			driver: persistent({ bullmq: bullmq.module }),
+		});
+		registry.interval('heartbeat', '30s', () => undefined);
+
+		await registry.setup({ initialized: true });
+
+		assert.equal(bullmq.state.queues[0]!.name, 'slipher-scheduler');
+		assert.equal(bullmq.state.workers[0]!.name, 'slipher-scheduler');
+		assert.equal(bullmq.state.queueEvents[0]!.name, 'slipher-scheduler');
+		await registry.close();
+	});
+
 	test('rejects unsupported persistent overlap skipping without creating a partial task', () => {
 		const bullmq = createFakeBullMQ();
 		const registry = createScheduler({ driver: persistent({ bullmq: bullmq.module }) });

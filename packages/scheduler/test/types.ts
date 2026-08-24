@@ -1,3 +1,5 @@
+import type IORedis from 'ioredis';
+import type { RedisOptions } from 'ioredis';
 import {
 	type Client,
 	type CommandContext,
@@ -11,6 +13,7 @@ import {
 } from 'seyfert';
 import {
 	type Awaitable,
+	type BullMQConnection,
 	type CronerFactory,
 	createScheduler,
 	memory,
@@ -24,6 +27,8 @@ declare const context: CommandContext;
 declare const client: Client;
 declare const httpClient: HttpClient;
 declare const barePluginClient: SeyfertPluginClient;
+declare const redisConnection: IORedis;
+declare const redisConnectionOptions: RedisOptions;
 declare const workerClient: WorkerClient;
 declare const usingClient: UsingClient;
 declare const pluginClient: PluginUsingClient<typeof plugins>;
@@ -83,6 +88,21 @@ scheduler({ driver: memory(), tasks: [1] });
 createScheduler({ driver: memory(), purgeOrphansOnStartup: true });
 
 createScheduler({ driver: persistent({ purgeOrphansOnStartup: true }) });
+
+const connectionOptions = {
+	host: '127.0.0.1',
+	maxRetriesPerRequest: null,
+	port: 6379,
+} satisfies BullMQConnection;
+expectType<BullMQConnection>(connectionOptions);
+expectType<BullMQConnection>(redisConnection);
+expectType<BullMQConnection>(redisConnectionOptions);
+persistent({ connection: connectionOptions });
+persistent({ connection: redisConnection });
+persistent({ connection: redisConnectionOptions });
+
+// @ts-expect-error BullMQ connections must be options or a compatible client
+persistent({ connection: 'redis://127.0.0.1:6379' });
 
 const customCroner: CronerFactory = (expression, options, runner) => {
 	expectType<string>(expression);

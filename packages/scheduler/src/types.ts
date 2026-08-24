@@ -161,13 +161,44 @@ export type CronerFactory = (
 
 export interface PersistentSchedulerOptions {
 	bullmq?: BullMQModule;
-	connection?: unknown;
+	connection?: BullMQConnection;
 	immediateRunDeduplicationMs?: number;
 	prefix?: string;
 	purgeOrphansOnStartup?: boolean;
 	queueName?: string;
 	logger?: SchedulerLogger;
 }
+
+/**
+ * BullMQ keeps Redis options open so client-specific settings can cross this optional peer boundary
+ * without making either Redis client a dependency of the scheduler package.
+ */
+interface BullMQConnectionOptions {
+	connectionName?: string;
+	db?: number;
+	enableOfflineQueue?: boolean;
+	family?: number;
+	host?: string;
+	lazyConnect?: boolean;
+	maxRetriesPerRequest?: number | null;
+	password?: string;
+	path?: string;
+	port?: number;
+	retryStrategy?: (times: number) => number | null | undefined | void;
+	skipVersionCheck?: boolean;
+	tls?: unknown;
+	url?: string;
+	username?: string;
+	[option: string]: any;
+}
+
+interface BullMQConnectionClient {
+	connect(...args: any[]): unknown;
+	duplicate(...args: any[]): unknown;
+}
+
+/** Connection settings or an existing Redis client forwarded to BullMQ. */
+export type BullMQConnection = BullMQConnectionClient | BullMQConnectionOptions;
 
 export interface BullMQModule {
 	Job?: {

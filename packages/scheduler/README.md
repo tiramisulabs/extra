@@ -195,6 +195,28 @@ const registry = createScheduler({
 });
 ```
 
+The default queue name is `slipher-scheduler`. The persistent driver supports BullMQ 5.23+ and 6.x.
+
+You can also pass an existing ioredis instance. Workers and `QueueEvents` duplicate it for their blocking connections, so
+configure `maxRetriesPerRequest: null` and close the connection after the scheduler:
+
+```ts
+import IORedis from 'ioredis';
+import { createScheduler, persistent } from '@slipher/scheduler';
+
+const connection = new IORedis(process.env.REDIS_URL!, {
+	maxRetriesPerRequest: null,
+});
+const registry = createScheduler({
+	driver: persistent({ connection }),
+});
+
+// Register tasks and call registry.setup().
+
+await registry.close();
+await connection.quit();
+```
+
 For a Seyfert bot, create the plugin, register it on the client, and start the client so plugin setup opens Redis/BullMQ resources:
 
 ```ts
@@ -222,7 +244,8 @@ const client = new Client({
 await client.start();
 ```
 
-`client.close()` tears the schedules down and releases the Redis/BullMQ resources; wire it to your process signals:
+`client.close()` tears the schedules down and releases the BullMQ resources owned by the plugin. If you passed an existing
+Redis connection, close it afterwards as shown above. Wire cleanup to your process signals:
 
 ```ts
 process.on('SIGTERM', () => {

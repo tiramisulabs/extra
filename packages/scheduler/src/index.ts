@@ -5,6 +5,7 @@ export { createScheduler, SchedulerRegistry, scheduler } from './manager';
 export { ScheduledTask } from './task';
 export type {
 	Awaitable,
+	BullMQConnection,
 	BullMQJob,
 	BullMQModule,
 	BullMQQueue,
