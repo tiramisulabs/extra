@@ -2,7 +2,10 @@ import { AttachmentBuilder, Command, type CommandContext, Declare } from 'seyfer
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { apiUser } from '../../src/bot/payloads';
+import { DiscordErrors } from '../../src/bot/rest';
+import { normalizeFile } from '../../src/bot/state';
 import { mockWorld } from '../../src/bot/world';
+import { expectDiscordError } from './_setup';
 
 describe('message attachments', () => {
 	test('a command attaching a file lands the attachment metadata in the message view', async () => {
@@ -73,7 +76,9 @@ describe('message attachments', () => {
 		}
 
 		const bot = await createMockBot({ commands: [EditRef], world });
-		await expect(bot.slash({ name: 'edit-ref', guildId: guild.id, channel, user: actor.user })).rejects.toThrow(
+		await expectDiscordError(
+			bot.slash({ name: 'edit-ref', guildId: guild.id, channel, user: actor.user }),
+			DiscordErrors.InvalidFormBody,
 			/references attachment:\/\/missing\.png/,
 		);
 		await bot.close();
@@ -119,7 +124,11 @@ describe('message attachments', () => {
 		}
 
 		const bot = await createMockBot({ commands: [OriginalRef] });
-		await expect(bot.slash({ name: 'original-ref' })).rejects.toThrow(/references attachment:\/\/missing\.png/);
+		await expectDiscordError(
+			bot.slash({ name: 'original-ref' }),
+			DiscordErrors.InvalidFormBody,
+			/references attachment:\/\/missing\.png/,
+		);
 		await bot.close();
 	});
 
@@ -201,14 +210,16 @@ describe('message references (replies and forwards)', () => {
 		const channel = world.registerChannel(guild.id, { id: 'missing-ref-chan' });
 		const bot = await createMockBot({ world });
 
-		await expect(
+		await expectDiscordError(
 			bot.rest.request('POST', `/channels/${channel.id}/messages`, {
 				body: {
 					content: 'bad ref',
 					message_reference: { message_id: 'ghost-msg', channel_id: channel.id },
 				},
 			}),
-		).rejects.toThrow(/referenced message does not exist/);
+			DiscordErrors.InvalidFormBody,
+			/referenced message does not exist/,
+		);
 
 		await expect(
 			bot.rest.request('POST', `/channels/${channel.id}/messages`, {
@@ -219,5 +230,42 @@ describe('message references (replies and forwards)', () => {
 			}),
 		).resolves.toBeDefined();
 		await bot.close();
+	});
+});
+
+describe('outgoing files are readable without a cast', () => {
+	test('fileViews parses what the command handed to write()', async () => {
+		@Declare({ name: 'export-csv', description: 'replies with a generated file' })
+		class ExportCsv extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.write({
+					content: 'here you go',
+					files: [new AttachmentBuilder().setName('report.csv').setFile('buffer', Buffer.from('id,name\n1,ada'))],
+				});
+			}
+		}
+
+		await using bot = await createMockBot({ commands: [ExportCsv] });
+		const result = await bot.slash({ name: 'export-csv' });
+
+		expect(result.fileViews).toHaveLength(1);
+		const [file] = result.fileViews;
+		expect(file?.filename).toBe('report.csv');
+		expect(file?.size).toBe(Buffer.byteLength('id,name\n1,ada'));
+		expect(String(file?.data)).toBe('id,name\n1,ada');
+		// the raw entry is still there, unchanged, for anything the view does not model
+		expect(result.files).toHaveLength(1);
+	});
+
+	test('a url-backed file reports no size, since a url length is not a file size', () => {
+		// Unit-level on purpose: seyfert resolves a url-backed AttachmentBuilder by actually fetching it when the
+		// message is sent, so driving this end-to-end would make a real network call.
+		const view = normalizeFile(
+			new AttachmentBuilder().setName('remote.png').setFile('url', 'https://cdn.example.com/a.png'),
+		);
+
+		expect(view.filename).toBe('remote.png');
+		expect(view.size).toBeUndefined();
+		expect(view.data).toBe('https://cdn.example.com/a.png');
 	});
 });

@@ -2,7 +2,9 @@ import { Command, type CommandContext, Declare, PollBuilder } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { apiPoll, apiUser } from '../../src/bot/payloads';
+import { DiscordErrors } from '../../src/bot/rest';
 import { mockWorld } from '../../src/bot/world';
+import { expectDiscordError } from './_setup';
 
 describe('polls', () => {
 	test('a command writing a poll persists it on the message view', async () => {
@@ -141,13 +143,19 @@ describe('polls', () => {
 		world.registerMessage(channel.id, { id: 'guard-poll-msg', poll: apiPoll({ question: 'Q', answers: ['A'] }) });
 
 		const bot = await createMockBot({ world });
-		await expect(bot.rest.request('POST', `/channels/${channel.id}/polls/plain-msg/expire`)).rejects.toThrow(
+		await expectDiscordError(
+			bot.rest.request('POST', `/channels/${channel.id}/polls/plain-msg/expire`),
+			DiscordErrors.InvalidFormBody,
 			/message has no poll/,
 		);
-		await expect(bot.rest.request('GET', `/channels/${channel.id}/polls/plain-msg/answers/1`)).rejects.toThrow(
+		await expectDiscordError(
+			bot.rest.request('GET', `/channels/${channel.id}/polls/plain-msg/answers/1`),
+			DiscordErrors.InvalidFormBody,
 			/message has no poll/,
 		);
-		await expect(bot.rest.request('GET', `/channels/${channel.id}/polls/guard-poll-msg/answers/2`)).rejects.toThrow(
+		await expectDiscordError(
+			bot.rest.request('GET', `/channels/${channel.id}/polls/guard-poll-msg/answers/2`),
+			DiscordErrors.InvalidFormBody,
 			/unknown poll answer/,
 		);
 		await bot.close();

@@ -2,6 +2,7 @@ import { Command, type CommandContext, Declare } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { apiMember, apiMessage } from '../../src/bot/payloads';
+import { mockId, mockTimestamp, resetMockIds, timestampFrom } from '../../src/id';
 
 const DISCORD_EPOCH = 1420070400000n;
 
@@ -39,6 +40,20 @@ describe('timestamped snowflake ids', () => {
 		expect(new Date(message.timestamp).getUTCFullYear()).toBeGreaterThanOrEqual(2020);
 		expect(member.joined_at).not.toBe(new Date(0).toISOString());
 		expect(new Date(member.joined_at).getUTCFullYear()).toBeGreaterThanOrEqual(2020);
+	});
+
+	test('mockTimestamp() and timestampFrom(mockId()) name the same tick, not two', () => {
+		resetMockIds();
+
+		const id = mockId();
+		expect(mockTimestamp()).toBe(new Date(timestampFrom(id)).toISOString());
+	});
+
+	test("a member's joined_at matches its own user id, since both come from one tick", () => {
+		resetMockIds();
+
+		const member = apiMember();
+		expect(member.joined_at).toBe(new Date(timestampFrom(member.user.id)).toISOString());
 	});
 
 	test('consecutive mock ids strictly increase and decode in order', async () => {

@@ -6,6 +6,8 @@ const STEP_MS = 1n;
 const defaultStart = 0n;
 
 let sequence = defaultStart;
+// Where this run's counter began, so mockTimestamp() can tell "no id minted yet" from "one behind".
+let sequenceStart = defaultStart;
 // Time-pinned ids (`mockId({ at | age })`) get their own counter so plain mockId()
 // output stays byte-identical and reproducible — the package's whole point.
 let pinnedSequence = 0n;
@@ -65,12 +67,20 @@ function toEpochMs(at: Date | number | string): number {
 	return ms;
 }
 
+/**
+ * The mock clock's "now": the instant encoded in the most recently minted `mockId()`.
+ *
+ * Reads `sequence - 1` because `mockId()` post-increments — reading the counter bare returned the
+ * timestamp of the *next* id, so `apiMember`'s `joined_at` never matched `timestampFrom(member.user.id)`
+ * even though both came from the same tick. Before the first id, "now" is the epoch the clock starts at.
+ */
 export function mockTimestamp(): string {
-	return new Date(Number(BASE_MS + sequence * STEP_MS)).toISOString();
+	const tick = sequence > sequenceStart ? sequence - 1n : sequenceStart;
+	return new Date(Number(BASE_MS + tick * STEP_MS)).toISOString();
 }
 
 export function resetMockIds(start: bigint | string | number = defaultStart) {
-	sequence = parseMockIdStart(start);
+	sequence = sequenceStart = parseMockIdStart(start);
 	pinnedSequence = 0n;
 }
 

@@ -2,7 +2,10 @@ import { Command, type CommandContext, Declare } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
 import { apiUser } from '../../src/bot/payloads';
+import { DiscordErrors } from '../../src/bot/rest';
+import { Routes } from '../../src/bot/routes';
 import { mockWorld } from '../../src/bot/world';
+import { expectDiscordError } from './_setup';
 
 describe('stickers', () => {
 	test('edit and delete a seeded sticker via the client', async () => {
@@ -79,6 +82,55 @@ describe('scheduled events, stage, soundboard and audit logs (seedable reads)', 
 		expect(bot.world.all.soundboardSound({ guildId: guild.id }).map(sound => sound.name)).toContain('airhorn');
 		expect(bot.world.all.auditLogEntry({ guildId: guild.id })).toHaveLength(1);
 		expect(bot.world.all.auditLogEntry({ guildId: guild.id })[0]).toMatchObject({ action_type: 20, reason: 'cleanup' });
+		await bot.close();
+	});
+
+	test('PATCH a scheduled event: the world keeps the fields the body left alone', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'se-edit-guild' });
+		const botRole = world.registerRole(guild.id, { id: 'se-bot-role', permissions: '8' });
+		world.registerBotMember(guild.id, { roles: [botRole.id] });
+		world.registerScheduledEvent(guild.id, { id: 'event-9', name: 'launch', status: 2, entityType: 3 });
+
+		const bot = await createMockBot({ world });
+		await bot.rest.request('PATCH', `/guilds/${guild.id}/scheduled-events/event-9`, { body: { name: 'relaunch' } });
+
+		const event = bot.world.query.scheduledEvent({ guildId: guild.id, id: 'event-9' });
+		// a PATCH of one field is a merge, not a rebuild: status and entity_type were not in the body
+		expect(event).toMatchObject({ name: 'relaunch', status: 2, entity_type: 3 });
+		expect(bot.restCalls(Routes.editScheduledEvent)).toHaveLength(1);
+		await bot.close();
+	});
+
+	test('PATCH a stage instance: the topic changes, the channel binding does not', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'stage-edit-guild' });
+		const botRole = world.registerRole(guild.id, { id: 'stage-bot-role', permissions: '8' });
+		world.registerBotMember(guild.id, { roles: [botRole.id] });
+		const channel = world.registerChannel(guild.id, { id: 'stage-edit-chan', type: 13 });
+		world.registerStageInstance(channel.id, { topic: 'town hall' });
+
+		const bot = await createMockBot({ world });
+		await bot.rest.request('PATCH', `/stage-instances/${channel.id}`, { body: { topic: 'office hours' } });
+
+		expect(bot.world.query.stageInstance({ channelId: channel.id })).toMatchObject({
+			topic: 'office hours',
+			channel_id: channel.id,
+		});
+		await bot.close();
+	});
+
+	test('PATCH an absent scheduled event answers 404, as create/fetch/delete already do', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'se-404-guild' });
+		const botRole = world.registerRole(guild.id, { id: 'se-404-role', permissions: '8' });
+		world.registerBotMember(guild.id, { roles: [botRole.id] });
+
+		const bot = await createMockBot({ world });
+		await expectDiscordError(
+			bot.rest.request('PATCH', `/guilds/${guild.id}/scheduled-events/ghost`, { body: { name: 'x' } }),
+			DiscordErrors.UnknownScheduledEvent,
+		);
 		await bot.close();
 	});
 });

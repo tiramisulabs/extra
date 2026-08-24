@@ -14,6 +14,7 @@ import {
 	apiThread,
 	apiUser,
 	apiVoiceState,
+	type PlainPayload,
 } from './payload-entities';
 
 function opt<K extends string, V>(key: K, value: V | undefined): { [P in K]?: V } {
@@ -252,7 +253,7 @@ export interface ApiMessageOptions {
 	flags?: number;
 }
 
-export interface ApiMessage {
+export interface ApiMessage extends PlainPayload {
 	id: string;
 	channel_id: string;
 	guild_id?: string;
@@ -375,7 +376,11 @@ export interface ApiAttachmentOptions {
 export interface ApiAttachment {
 	id: string;
 	filename: string;
-	content_type: string;
+	/**
+	 * Optional, as Discord declares it — "an attachment with no content type" is exactly the input
+	 * content-type validation exists to reject, so it has to be expressible without a cast.
+	 */
+	content_type?: string;
 	size: number;
 	url: string;
 	proxy_url: string;
@@ -388,7 +393,9 @@ export function apiAttachment(options: ApiAttachmentOptions = {}): ApiAttachment
 	return {
 		id,
 		filename,
-		content_type: options.contentType ?? 'image/png',
+		// Default only when the key is absent: `apiAttachment({ contentType: undefined })` is how you say
+		// "this attachment has none", and defaulting it back would make that unsayable.
+		...('contentType' in options ? opt('content_type', options.contentType) : { content_type: 'image/png' }),
 		size: options.size ?? 1024,
 		url,
 		proxy_url: url,

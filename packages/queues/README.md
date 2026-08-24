@@ -10,13 +10,13 @@ Typed background job queues for Seyfert, backed by the current process or BullMQ
 pnpm add @slipher/queues
 ```
 
-Requires Seyfert v5. Install `bullmq` only when using the persistent driver.
+Requires Seyfert v5. Install `bullmq@^5` only when using the persistent driver.
 
 ## Quick start
 
 ```ts
 import { memory, Process, Processor, queues, type QueueJobOf, type QueueRegistration } from '@slipher/queues';
-import { Client, definePlugins } from 'seyfert';
+import { Client, definePlugins, type UsingClient } from 'seyfert';
 
 declare module '@slipher/queues' {
 	interface RegisteredQueues {
@@ -27,7 +27,8 @@ declare module '@slipher/queues' {
 @Processor('email')
 class EmailProcessor {
 	@Process()
-	send(job: QueueJobOf<'email'>) {
+	send(job: QueueJobOf<'email'>, client: UsingClient) {
+		client.logger.debug(`Sending welcome email for ${job.data.userId}`);
 		return sendWelcomeEmail(job.data.userId);
 	}
 }

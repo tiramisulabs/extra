@@ -1,5 +1,7 @@
+import { DataPointType } from '@opentelemetry/sdk-metrics';
 import { assert, describe, test } from 'vitest';
 import { createCoreMetrics, durationSecondsSince } from '../src/metrics';
+import { installTestMeter } from './helpers/otel-test-provider.mts';
 
 const allOff = {
 	interactions: false,
@@ -17,7 +19,7 @@ const allOn = {
 
 describe('createCoreMetrics', () => {
 	test('record methods do not throw when all instruments are disabled', () => {
-		const core = createCoreMetrics('test', allOff);
+		const core = createCoreMetrics(allOff);
 		assert.doesNotThrow(() => {
 			core.recordInteraction(0.01, {});
 			core.recordEvent(0.02, { 'seyfert.event.name': 'ready' });
@@ -29,12 +31,40 @@ describe('createCoreMetrics', () => {
 	test('creates histograms when instruments are enabled without throw', () => {
 		// Meter provider is optional — NoopMeter accepts createHistogram.
 		assert.doesNotThrow(() => {
-			const core = createCoreMetrics('test', allOn);
+			const core = createCoreMetrics(allOn);
 			core.recordInteraction(0.01, { 'seyfert.interaction.kind': 'command' });
 			core.recordEvent(0.02, {});
 			core.recordRest(0.03, {});
 			core.recordCache(0.04, {});
 		});
+	});
+
+	test('uses package scope and cache-specific sub-millisecond buckets', async () => {
+		const { provider, reader } = installTestMeter();
+		try {
+			const core = createCoreMetrics(allOn);
+			core.recordInteraction(0.01, { 'seyfert.interaction.kind': 'command' });
+			core.recordCache(0.000_02, { 'seyfert.cache.op': 'get' });
+
+			const { resourceMetrics } = await reader.collect();
+			const scopeMetrics = resourceMetrics.scopeMetrics[0];
+			assert.equal(scopeMetrics.scope.name, '@slipher/opentelemetry');
+			assert.ok(!scopeMetrics.scope.version);
+
+			const interaction = scopeMetrics.metrics.find(
+				metric => metric.descriptor.name === 'seyfert.interaction.duration',
+			);
+			const cache = scopeMetrics.metrics.find(metric => metric.descriptor.name === 'seyfert.cache.operation.duration');
+			assert.equal(interaction?.dataPointType, DataPointType.HISTOGRAM);
+			assert.equal(cache?.dataPointType, DataPointType.HISTOGRAM);
+			if (interaction?.dataPointType !== DataPointType.HISTOGRAM || cache?.dataPointType !== DataPointType.HISTOGRAM) {
+				throw new Error('Expected histogram metric data');
+			}
+			assert.equal(interaction.dataPoints[0].value.buckets.boundaries[0], 0.005);
+			assert.ok(cache.dataPoints[0].value.buckets.boundaries[0] < 0.005);
+		} finally {
+			await provider.shutdown();
+		}
 	});
 });
 

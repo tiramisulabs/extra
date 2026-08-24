@@ -3,11 +3,14 @@ import { isEphemeral } from './message-flags';
 import { type ApiMessage, type ApiVoiceState, apiMessage, type RawMessage } from './payloads';
 import { WorldStateQueryCore } from './state-query';
 import type {
+	AuditLogEntrySnapshot,
 	AutoModRuleSnapshot,
 	BanSnapshot,
 	ChannelSnapshot,
 	ChannelView,
 	EmojiSnapshot,
+	GuildSnapshot,
+	GuildTemplateSnapshot,
 	GuildView,
 	InviteSnapshot,
 	MemberSnapshot,
@@ -20,6 +23,8 @@ import type {
 	RoleSnapshot,
 	RoleView,
 	ScheduledEventSnapshot,
+	SoundboardSoundSnapshot,
+	StageInstanceSnapshot,
 	StickerSnapshot,
 	ThreadMemberSnapshot,
 	VoiceStateSnapshot,
@@ -83,8 +88,8 @@ export abstract class WorldStateReadCore extends WorldStateQueryCore {
 			position: entry.role.position,
 			...(entry.role.color === undefined ? {} : { color: entry.role.color }),
 		}));
-		const bans: BanSnapshot[] = [...this.bansByGuild].flatMap(([guildId, userIds]) =>
-			[...userIds].map(userId => ({ guildId, userId })),
+		const bans: BanSnapshot[] = [...this.bansByGuild].flatMap(([guildId, entries]) =>
+			[...entries].map(([userId, reason]) => ({ guildId, userId, ...(reason === undefined ? {} : { reason }) })),
 		);
 		const emojis: EmojiSnapshot[] = (this.world.guildEmojis ?? []).map(entry => ({
 			guildId: entry.guildId,
@@ -147,6 +152,35 @@ export abstract class WorldStateReadCore extends WorldStateQueryCore {
 				[...userIds].map(userId => ({ channelId, messageId, answerId, userId })),
 			);
 		});
+		const guilds: GuildSnapshot[] = this.world.guilds.map(guild => ({
+			id: guild.id,
+			name: guild.name,
+			ownerId: guild.owner_id,
+		}));
+		const auditLogEntries: AuditLogEntrySnapshot[] = (this.world.auditLogEntries ?? []).map(entry => ({
+			guildId: entry.guildId,
+			id: entry.entry.id,
+			actionType: entry.entry.action_type,
+			targetId: entry.entry.target_id,
+			userId: entry.entry.user_id,
+			...(entry.entry.reason === undefined ? {} : { reason: entry.entry.reason }),
+		}));
+		const stageInstances: StageInstanceSnapshot[] = (this.world.stageInstances ?? []).map(stage => ({
+			channelId: stage.channel_id,
+			...(stage.guild_id === undefined ? {} : { guildId: stage.guild_id }),
+			topic: stage.topic,
+			privacyLevel: stage.privacy_level,
+		}));
+		const guildTemplates: GuildTemplateSnapshot[] = (this.world.guildTemplates ?? []).map(entry => ({
+			guildId: entry.guildId,
+			code: entry.template.code,
+			name: entry.template.name,
+		}));
+		const soundboardSounds: SoundboardSoundSnapshot[] = (this.world.soundboardSounds ?? []).map(entry => ({
+			guildId: entry.guildId,
+			id: entry.sound.sound_id,
+			name: entry.sound.name,
+		}));
 		return deepFreeze({
 			members,
 			channels,
@@ -164,6 +198,11 @@ export abstract class WorldStateReadCore extends WorldStateQueryCore {
 			voiceStates,
 			threadMembers,
 			pollVoters,
+			guilds,
+			auditLogEntries,
+			stageInstances,
+			guildTemplates,
+			soundboardSounds,
 		});
 	}
 
@@ -207,6 +246,19 @@ export abstract class WorldStateReadCore extends WorldStateQueryCore {
 				after.pollVoters,
 				entity => `${entity.channelId}:${entity.messageId}:${entity.answerId}:${entity.userId}`,
 			),
+			guilds: diffEntities(before.guilds, after.guilds, entity => entity.id),
+			auditLogEntries: diffEntities(
+				before.auditLogEntries,
+				after.auditLogEntries,
+				entity => `${entity.guildId}:${entity.id}`,
+			),
+			stageInstances: diffEntities(before.stageInstances, after.stageInstances, entity => entity.channelId),
+			guildTemplates: diffEntities(before.guildTemplates, after.guildTemplates, entity => entity.code),
+			soundboardSounds: diffEntities(
+				before.soundboardSounds,
+				after.soundboardSounds,
+				entity => `${entity.guildId}:${entity.id}`,
+			),
 		};
 	}
 
@@ -224,7 +276,7 @@ export abstract class WorldStateReadCore extends WorldStateQueryCore {
 		const roles = this.world.roles
 			.filter(entry => entry.guildId === guild.id)
 			.map(entry => roleView(entry.guildId, entry.role));
-		const bans = [...(this.bansByGuild.get(guild.id) ?? new Set<string>())];
+		const bans = [...(this.bansByGuild.get(guild.id) ?? new Map<string, string | undefined>()).keys()];
 		const guildEmojis = (this.world.guildEmojis ?? [])
 			.filter(entry => entry.guildId === guild.id)
 			.map(entry => entry.emoji);

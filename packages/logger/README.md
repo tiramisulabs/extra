@@ -10,7 +10,7 @@ Request-scoped wide-event logging for Seyfert, with immediate level logs and plu
 pnpm add @slipher/logger
 ```
 
-Requires Seyfert v5. Install `pino` or `evlog` only when using its adapter.
+Requires Node.js 22.13 or newer and Seyfert v5. Install `pino` or `evlog` only when using its adapter.
 
 ## Quick start
 

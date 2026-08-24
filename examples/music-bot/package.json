@@ -1,0 +1,26 @@
+{
+	"name": "seyfert-music-bot",
+	"version": "1.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"start": "tsx src/index.ts",
+		"build": "tsc --noEmit",
+		"lint": "biome lint --write ./src ./seyfert.config.ts",
+		"format": "biome format --write ./src ./seyfert.config.ts",
+		"checkb": "biome check --write --no-errors-on-unmatched ./src ./seyfert.config.ts"
+	},
+	"dependencies": {
+		"@slipher/player": "workspace:*",
+		"@slipher/voice": "workspace:*",
+		"dotenv": "^17.4.2",
+		"seyfert": "^5.0.0",
+		"youtube-dl-exec": "^3.1.12"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.1",
+		"@types/node": "26.1.1",
+		"tsx": "^4.20.6",
+		"typescript": "^6.0.3"
+	}
+}

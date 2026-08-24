@@ -1,5 +1,5 @@
 import { assert, describe, test } from 'vitest';
-import { extractInteractionAttributes, interactionSpanName, truncate } from '../src/attributes';
+import { extractInteractionAttributes, interactionSpanName } from '../src/attributes';
 
 describe('extractInteractionAttributes', () => {
 	test('pulls command fields', () => {
@@ -24,15 +24,59 @@ describe('interactionSpanName', () => {
 		assert.equal(interactionSpanName('command', { fullCommandName: 'ping' }), 'command ping');
 	});
 
-	test('truncates long customId', () => {
-		const id = 'x'.repeat(200);
-		const name = interactionSpanName('component', { customId: id });
-		assert.equal(name, `component ${'x'.repeat(63)}…`);
+	test('prefers a name declared by the handler', () => {
+		const context = { customId: 'open-settings:a1b2c3', command: { spanName: 'open-settings' } };
+		assert.equal(interactionSpanName('component', context), 'component open-settings');
 	});
 
-	test('truncate honors the full limit and does not split Unicode code points', () => {
-		assert.equal(truncate('abcdef', 4), 'abc…');
-		assert.equal(Array.from(truncate('😀'.repeat(100), 64)).length, 64);
-		assert.ok(truncate('😀'.repeat(100), 64).endsWith('…'));
+	test('resolves a declared name function against the context', () => {
+		const context = {
+			customId: 'menu:profile',
+			command: {
+				spanName: (ctx: unknown) => `menu:${String((ctx as { customId: string }).customId).split(':')[1]}`,
+			},
+		};
+		assert.equal(interactionSpanName('component', context), 'component menu:profile');
+	});
+
+	test('ignores a throwing declared name and falls back to the declared custom id', () => {
+		const context = {
+			customId: 'btn-1',
+			command: {
+				customId: 'vote',
+				spanName: () => {
+					throw new Error('boom');
+				},
+			},
+		};
+		assert.equal(interactionSpanName('component', context), 'component vote');
+	});
+
+	test('uses the custom id declared by the handler, which matches by equality', () => {
+		const context = { customId: 'vote', command: { customId: 'vote' } };
+		assert.equal(interactionSpanName('component', context), 'component vote');
+	});
+
+	test('uses the handler class name when it matches by regexp', () => {
+		class VoteButton {
+			customId = /^vote:\d+$/;
+		}
+		const context = { customId: 'vote:849201', command: new VoteButton() };
+		assert.equal(interactionSpanName('component', context), 'component VoteButton');
+	});
+
+	test('uses the handler class name when it matches by filter only', () => {
+		class ConfirmModal {
+			filter() {
+				return true;
+			}
+		}
+		const context = { customId: 'confirm:849201', command: new ConfirmModal() };
+		assert.equal(interactionSpanName('modal', context), 'modal ConfirmModal');
+	});
+
+	// The runtime custom id carries per-interaction state; it must never reach a span name.
+	test('never falls back to the runtime custom id', () => {
+		assert.equal(interactionSpanName('component', { customId: 'vote:849201:yes' }), 'component unknown');
 	});
 });

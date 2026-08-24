@@ -1,7 +1,9 @@
 import { type Client, type CommandContext, definePlugins } from 'seyfert';
-import { opentelemetry, record } from '../src';
+import { opentelemetry, record, type SignalFlags } from '../src';
 
-const plugins = definePlugins(opentelemetry({ serviceName: 'types-check' }));
+const traces: SignalFlags = { cache: false, rest: true };
+const metrics: SignalFlags = { cache: true, rest: true };
+const plugins = definePlugins(opentelemetry({ serviceName: 'types-check', traces, metrics }));
 
 declare module 'seyfert' {
 	interface SeyfertRegistry {

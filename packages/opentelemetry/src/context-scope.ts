@@ -1,16 +1,14 @@
-import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
+import { randomUUID } from 'node:crypto';
+import { ROOT_CONTEXT, type Span, SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
+import { ATTR_ERROR_TYPE } from '@opentelemetry/semantic-conventions';
 import type { ContextScope } from 'seyfert';
 import { extractInteractionAttributes, type InteractionKind, interactionSpanName } from './attributes';
-import { finishInteractionLifecycle } from './instrument/interactions';
-import { type CoreMetrics, durationSecondsSince } from './metrics';
+import { type InteractionFlowCarrier, withInteractionFlow } from './flow';
+import type { InstrumentDeps } from './instrument/deps';
+import { finishInteractionLifecycle, type InteractionFailure, takeInteractionFailure } from './instrument/interactions';
+import { durationSecondsSince } from './metrics';
 import type { TraceSource } from './options';
 import { getTracer } from './trace-api';
-
-export interface InteractionScopeDeps {
-	serviceName: string;
-	checkIfShouldTrace: (source: TraceSource) => boolean;
-	getMetrics: () => CoreMetrics | undefined;
-}
 
 type ContextMarkers = {
 	isModal?: () => boolean;
@@ -74,61 +72,59 @@ function detectKind(context: unknown): InteractionKind {
  * Fail-open: a throwing `checkIfShouldTrace` still traces. Finish/metrics errors never
  * escape into user code — only the user's own throw/reject is rethrown.
  */
-export function createInteractionContextScope(deps: InteractionScopeDeps): ContextScope {
-	return (context, run) => {
-		const kind = detectKind(context);
+export interface InteractionScopeOptions {
+	kind?: InteractionKind;
+	spanName?: string;
+	parent?: InteractionFlowCarrier;
+}
+
+export interface InteractionContextScope extends ContextScope {
+	<T>(context: unknown, run: () => T, options?: InteractionScopeOptions): T;
+}
+
+export function createInteractionContextScope(deps: InstrumentDeps): InteractionContextScope {
+	return ((context: unknown, run: () => unknown, options?: InteractionScopeOptions) => {
+		const kind = options?.kind ?? detectKind(context);
 		const source: TraceSource = { kind, context };
-
-		let shouldTrace = true;
-		try {
-			shouldTrace = deps.checkIfShouldTrace(source);
-		} catch {
-			// Fail open: prefer a span over silently dropping telemetry.
-			shouldTrace = true;
-		}
-		if (!shouldTrace) return run();
-
-		const tracer = getTracer();
-		const name = interactionSpanName(kind, context);
+		const name = options?.spanName ?? interactionSpanName(kind, context);
 		const attributes = extractInteractionAttributes(kind, context);
+		const flowId = options?.parent?.flowId ?? randomUUID();
+		attributes['seyfert.flow_id'] = flowId;
 		const start = performance.now();
 
-		return tracer.startActiveSpan(name, { kind: SpanKind.INTERNAL, attributes }, span => {
-			const finish = (error?: unknown) => {
-				finishInteractionLifecycle(context, error);
-				if (error !== undefined) {
-					try {
-						const err = error instanceof Error ? error : new Error(String(error));
-						span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
-						span.recordException(err);
-					} catch {
-						// never throw instrumentation errors into user code
-					}
-				}
-				try {
-					deps.getMetrics()?.recordInteraction(durationSecondsSince(start), {
-						'seyfert.interaction.kind': kind,
-						...(typeof attributes['seyfert.command'] === 'string'
-							? { 'seyfert.command': attributes['seyfert.command'] }
-							: {}),
-						...(typeof attributes['seyfert.custom_id'] === 'string'
-							? { 'seyfert.custom_id': attributes['seyfert.custom_id'] }
-							: {}),
-						...(typeof attributes['seyfert.shard_id'] === 'number'
-							? { 'seyfert.shard_id': attributes['seyfert.shard_id'] }
-							: {}),
-						'seyfert.error': error !== undefined,
-					});
-				} catch {
-					// metrics must not break handlers
-				}
-				try {
-					span.end();
-				} catch {
-					// never throw instrumentation errors into user code
-				}
-			};
+		const recordMetrics = (error?: unknown, failure?: InteractionFailure) => {
+			try {
+				deps.getMetrics()?.recordInteraction(durationSecondsSince(start), {
+					'seyfert.interaction.kind': kind,
+					...(typeof attributes['seyfert.command'] === 'string'
+						? { 'seyfert.command': attributes['seyfert.command'] }
+						: {}),
+					...(typeof attributes['seyfert.shard_id'] === 'number'
+						? { 'seyfert.shard_id': attributes['seyfert.shard_id'] }
+						: {}),
+					'seyfert.error': error !== undefined,
+					// Phase only: bounded to four values. The middleware name stays span-only.
+					...(failure ? { 'seyfert.failure.phase': failure.phase } : {}),
+				});
+			} catch {
+				// metrics must not break handlers
+			}
+		};
 
+		const annotateFailure = (span: Span, failure: InteractionFailure) => {
+			try {
+				span.setAttributes({
+					'seyfert.failure.phase': failure.phase,
+					...(failure.errorType ? { [ATTR_ERROR_TYPE]: failure.errorType } : {}),
+					...(failure.middleware ? { 'seyfert.middleware.name': failure.middleware } : {}),
+					...(failure.middlewareScope ? { 'seyfert.middleware.scope': failure.middlewareScope } : {}),
+				});
+			} catch {
+				// never throw instrumentation errors into user code
+			}
+		};
+
+		const execute = (finish: (error?: unknown) => void) => {
 			try {
 				const result = run();
 				if (result !== null && typeof result === 'object' && typeof (result as Promise<unknown>).then === 'function') {
@@ -149,6 +145,55 @@ export function createInteractionContextScope(deps: InteractionScopeDeps): Conte
 				finish(error);
 				throw error;
 			}
+		};
+
+		let shouldTrace = deps.traceEnabled;
+		if (shouldTrace) {
+			try {
+				shouldTrace = deps.checkIfShouldTrace(source);
+			} catch {
+				// Fail open: prefer a span over silently dropping telemetry.
+				shouldTrace = true;
+			}
+		}
+		if (!shouldTrace) {
+			return withInteractionFlow(
+				{ flowId, spanContext: options?.parent?.spanContext, interactionStartedAt: start },
+				() => execute(error => recordMetrics(error, takeInteractionFailure(context))),
+			);
+		}
+
+		const tracer = getTracer();
+
+		const parentContext = options?.parent?.spanContext
+			? trace.setSpanContext(ROOT_CONTEXT, options.parent.spanContext)
+			: ROOT_CONTEXT;
+
+		return tracer.startActiveSpan(name, { kind: SpanKind.CONSUMER, attributes }, parentContext, span => {
+			const finish = (error?: unknown) => {
+				finishInteractionLifecycle(context, error);
+				const failure = takeInteractionFailure(context);
+				if (failure) annotateFailure(span, failure);
+				if (error !== undefined) {
+					try {
+						const err = error instanceof Error ? error : new Error(String(error));
+						span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+						span.recordException(err);
+					} catch {
+						// never throw instrumentation errors into user code
+					}
+				}
+				recordMetrics(error, failure);
+				try {
+					span.end();
+				} catch {
+					// never throw instrumentation errors into user code
+				}
+			};
+
+			return withInteractionFlow({ flowId, spanContext: span.spanContext(), interactionStartedAt: start }, () =>
+				execute(finish),
+			);
 		});
-	};
+	}) as InteractionContextScope;
 }

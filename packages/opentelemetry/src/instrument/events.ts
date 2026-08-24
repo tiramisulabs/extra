@@ -1,13 +1,9 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { type Attributes, type Span, SpanKind, SpanStatusCode } from '@opentelemetry/api';
-import { type CoreMetrics, durationSecondsSince } from '../metrics';
+import { durationSecondsSince } from '../metrics';
 import type { TraceSource } from '../options';
 import { getTracer } from '../trace-api';
-
-export interface EventsInstrumentDeps {
-	checkIfShouldTrace: (source: TraceSource) => boolean;
-	getMetrics: () => CoreMetrics | undefined;
-}
+import type { InstrumentDeps, InstrumentTarget } from './deps';
 
 /**
  * Minimal client surface used by gateway event instrumentation.
@@ -32,14 +28,11 @@ export interface EventsApi {
 type RunEvent = (name: string, ...args: unknown[]) => unknown;
 
 interface ActiveEvent {
-	attributes: Attributes;
 	error?: unknown;
 	name: string;
-	span: Span;
-	start: number;
 }
 
-function shouldTrace(deps: EventsInstrumentDeps, source: TraceSource): boolean {
+function shouldTrace(deps: InstrumentDeps, source: TraceSource): boolean {
 	try {
 		return deps.checkIfShouldTrace(source);
 	} catch {
@@ -81,12 +74,9 @@ function markError(span: Span, error: unknown): void {
  * `runEvent` is the single path Seyfert uses for gateway event invocation
  * (user files + plugin listeners + BOT_READY / RAW / …). Cleanup restores the original.
  */
-export function instrumentEvents(
-	client: EventsClient | unknown,
-	deps: EventsInstrumentDeps,
-	api?: EventsApi,
-): () => void {
-	const events = (client as EventsClient | null | undefined)?.events;
+export function instrumentEvents(target: InstrumentTarget, deps: InstrumentDeps): () => void {
+	const api = target.api as EventsApi | undefined;
+	const events = (target.client as EventsClient | null | undefined)?.events;
 	if (!events || typeof events.runEvent !== 'function') {
 		return () => {};
 	}
@@ -104,18 +94,14 @@ export function instrumentEvents(
 
 	events.runEvent = function instrumentedRunEvent(name: string, ...args: unknown[]): unknown {
 		const source: TraceSource = { kind: 'event', name, args };
-		if (!shouldTrace(deps, source)) {
-			return original.call(events, name, ...args);
-		}
-
 		const attributes = eventAttributes(name, args);
 		const start = performance.now();
 
-		return getTracer().startActiveSpan(`event ${name}`, { kind: SpanKind.INTERNAL, attributes }, span => {
-			const active: ActiveEvent = { attributes, name, span, start };
+		const run = (span?: Span) => {
+			const active: ActiveEvent = { name };
 			const finish = (error?: unknown) => {
 				const finalError = error ?? active.error;
-				if (finalError !== undefined) {
+				if (span && finalError !== undefined) {
 					markError(span, finalError);
 				}
 				try {
@@ -127,7 +113,7 @@ export function instrumentEvents(
 					// metrics must not break handlers
 				}
 				try {
-					span.end();
+					span?.end();
 				} catch {
 					// never throw from instrumentation
 				}
@@ -159,7 +145,12 @@ export function instrumentEvents(
 					throw error;
 				}
 			});
-		});
+		};
+
+		if (!deps.traceEnabled || !shouldTrace(deps, source)) {
+			return run();
+		}
+		return getTracer().startActiveSpan(`event ${name}`, { kind: SpanKind.CONSUMER, attributes }, run);
 	};
 
 	return () => {

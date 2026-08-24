@@ -60,6 +60,20 @@ export interface AttachmentView {
 	url?: string;
 }
 
+/**
+ * A file on its way out, as the command handed it to `write`/`editOrReply`. Distinct from
+ * {@link AttachmentView}, which describes an attachment Discord already stored — that one has an id and a url.
+ */
+export interface FileView {
+	filename: string;
+	description?: string;
+	contentType?: string;
+	/** Byte length for a binary payload; absent for a url or path, whose string length is not a file size. */
+	size?: number;
+	/** The payload exactly as given: a Buffer, a url, or a path. */
+	data: unknown;
+}
+
 export interface MessageReferenceView {
 	messageId?: string;
 	channelId?: string;
@@ -223,6 +237,11 @@ export interface RoleSnapshot {
 export interface BanSnapshot {
 	guildId: string;
 	userId: string;
+	/**
+	 * The `X-Audit-Log-Reason` the ban carried, when it carried one. Here so "why was X banned" is world state,
+	 * like "is X banned" already is, instead of something only the REST journal remembers.
+	 */
+	reason?: string;
 }
 
 /** One emoji captured in a {@link WorldSnapshot}, identified by `guildId` + `id`. */
@@ -302,6 +321,50 @@ export interface WorldSnapshot {
 	voiceStates: VoiceStateSnapshot[];
 	threadMembers: ThreadMemberSnapshot[];
 	pollVoters: PollVoterSnapshot[];
+	guilds: GuildSnapshot[];
+	auditLogEntries: AuditLogEntrySnapshot[];
+	stageInstances: StageInstanceSnapshot[];
+	guildTemplates: GuildTemplateSnapshot[];
+	soundboardSounds: SoundboardSoundSnapshot[];
+}
+
+/** One guild captured in a {@link WorldSnapshot}, identified by `id`. */
+export interface GuildSnapshot {
+	id: string;
+	name: string;
+	ownerId: string;
+}
+
+/** One audit log entry captured in a {@link WorldSnapshot}, identified by `guildId` + `id`. */
+export interface AuditLogEntrySnapshot {
+	guildId: string;
+	id: string;
+	actionType: number;
+	targetId: string | null;
+	userId: string | null;
+	reason?: string;
+}
+
+/** One stage instance captured in a {@link WorldSnapshot}, identified by `channelId`. */
+export interface StageInstanceSnapshot {
+	channelId: string;
+	guildId?: string;
+	topic: string;
+	privacyLevel: number;
+}
+
+/** One guild template captured in a {@link WorldSnapshot}, identified by `code`. */
+export interface GuildTemplateSnapshot {
+	guildId: string;
+	code: string;
+	name: string;
+}
+
+/** One soundboard sound captured in a {@link WorldSnapshot}, identified by `guildId` + `id`. */
+export interface SoundboardSoundSnapshot {
+	guildId: string;
+	id: string;
+	name: string;
 }
 
 /** A single entity that changed between two snapshots, with the names of the differing fields. */
@@ -340,6 +403,11 @@ export interface WorldDiff {
 	voiceStates: EntityDiff<VoiceStateSnapshot>;
 	threadMembers: EntityDiff<ThreadMemberSnapshot>;
 	pollVoters: EntityDiff<PollVoterSnapshot>;
+	guilds: EntityDiff<GuildSnapshot>;
+	auditLogEntries: EntityDiff<AuditLogEntrySnapshot>;
+	stageInstances: EntityDiff<StageInstanceSnapshot>;
+	guildTemplates: EntityDiff<GuildTemplateSnapshot>;
+	soundboardSounds: EntityDiff<SoundboardSoundSnapshot>;
 }
 
 export interface WorldStateOptions {

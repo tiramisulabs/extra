@@ -10,8 +10,9 @@ import {
 import { MeterProvider } from '@opentelemetry/sdk-metrics';
 import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-base';
 import { assert, describe, test } from 'vitest';
+import * as publicApi from '../src';
 import { resolvePluginOptions } from '../src/options';
-import { shouldStartNodeSDK, startOwnedSdk } from '../src/sdk';
+import { shouldStartNodeSDK, startOpenTelemetry, startOwnedSdk } from '../src/sdk';
 
 class CountingContextManager implements ContextManager {
 	disableCalls = 0;
@@ -52,6 +53,38 @@ class CountingContextManager implements ContextManager {
 		return this;
 	}
 }
+
+describe('public SDK bootstrap', () => {
+	test('exports an early bootstrap entrypoint', () => {
+		const exports = publicApi as unknown as Record<string, unknown>;
+		assert.equal(typeof exports.startOpenTelemetry, 'function');
+	});
+
+	test('warns instead of failing silently when a provider is already registered', () => {
+		const warnings: unknown[] = [];
+		const originalWarn = console.warn;
+		try {
+			const globalProvider = trace.getTracerProvider();
+			if (globalProvider instanceof ProxyTracerProvider) {
+				globalProvider.setDelegate(new BasicTracerProvider());
+			} else {
+				trace.setGlobalTracerProvider(new BasicTracerProvider());
+			}
+
+			console.warn = (...args: unknown[]) => {
+				warnings.push(args[0]);
+			};
+			assert.equal(startOpenTelemetry(), undefined);
+		} finally {
+			console.warn = originalWarn;
+			// Other cases in this file need a bare proxy provider again.
+			trace.disable();
+		}
+
+		assert.equal(warnings.length, 1);
+		assert.match(String(warnings[0]), /startOpenTelemetry\(\) did nothing/);
+	});
+});
 
 describe('shouldStartNodeSDK', () => {
 	test('true for ProxyTracerProvider without a real delegate', () => {

@@ -442,11 +442,14 @@ describe('persistent queues', () => {
 
 	test('keeps worker handlers separate from QueueEvents lifecycle events', async () => {
 		const fake = createFakeBullMQ();
+		const client = { initialized: true };
 		const queueEvents: string[] = [];
 		const workerEvents: string[] = [];
+		let receivedClient: object | undefined;
 
 		class MailProcessor {
-			handle(job: QueueJobOf<'mail'>) {
+			handle(job: QueueJobOf<'mail'>, activeClient: object) {
+				receivedClient = activeClient;
 				return `worker:${job.name}:${job.data.email}`;
 			}
 
@@ -469,7 +472,7 @@ describe('persistent queues', () => {
 			processors: [MailProcessor],
 		});
 
-		await registry.setup({ initialized: true });
+		await registry.setup(client);
 		const bullJob = {
 			data: { email: 'hi@example.com' },
 			id: 'job-1',
@@ -480,6 +483,7 @@ describe('persistent queues', () => {
 
 		assert.deepEqual(queueEvents, []);
 		assert.deepEqual(workerEvents, ['worker:send:hi@example.com']);
+		assert.equal(receivedClient, client);
 
 		fake.queueEvents[0].emit('completed', {
 			jobId: 'job-1',

@@ -2,8 +2,15 @@ import { mockId, mockTimestamp } from '../id';
 import { type ApiAttachment, type ApiPoll, apiAttachment, apiPoll, type ThreadMetadata } from './payloads';
 import type { ChannelOverwriteLike } from './permissions';
 import { type RecordedAction } from './rest';
-import type { EmbedView, EntityDiff, InteractiveComponentView, RoleView, WorldStateCandidate } from './state-contracts';
-import type { MockWorld } from './world';
+import type {
+	EmbedView,
+	EntityDiff,
+	FileView,
+	InteractiveComponentView,
+	RoleView,
+	WorldStateCandidate,
+} from './state-contracts';
+import type { WorldData } from './world';
 
 export class WorldStateError extends Error {
 	readonly name = 'WorldStateError';
@@ -39,7 +46,7 @@ export function formatCandidate(candidate: WorldStateCandidate): string {
 	return candidate.summary ? `${candidate.path} (${candidate.summary})` : candidate.path;
 }
 
-export const EMPTY_WORLD = (): MockWorld => ({
+export const EMPTY_WORLD = (): WorldData => ({
 	guilds: [],
 	channels: [],
 	users: [],
@@ -135,6 +142,10 @@ export function removeByGuild<W extends { guildId: string }, E extends { id: str
 ): W[] {
 	return (list ?? []).filter(entry => entry.guildId !== guildId || pick(entry).id !== id);
 }
+/** The fields a PATCH body actually sets. An absent key means "leave it", so `undefined` must not overwrite. */
+export function patchFields(raw: Record<string, unknown>): Record<string, unknown> {
+	return Object.fromEntries(Object.entries(raw).filter(([, value]) => value !== undefined));
+}
 
 export function normalizeOverwrites(value: unknown): ChannelOverwriteLike[] {
 	return arrayValue(value).map(overwrite => {
@@ -196,6 +207,38 @@ export function roleView(
 		position: role.position,
 		permissions: role.permissions,
 		color: role.color,
+	};
+}
+
+/** Byte length for a binary payload. A url/path string has a length, but that length is not a file size. */
+function fileByteLength(payload: unknown): number | undefined {
+	if (typeof payload !== 'object' || payload === null) return undefined;
+	const { byteLength } = payload as { byteLength?: unknown };
+	return typeof byteLength === 'number' ? byteLength : undefined;
+}
+
+/**
+ * Normalize one outgoing file to a typed view, so assertions read fields instead of casting `unknown`.
+ *
+ * Two shapes reach here: seyfert's `AttachmentBuilder`, which keeps `filename`/`resolvable` under `.data`, and
+ * a plain `RawFile`, which carries `filename`/`data` at the top level. `data` is the payload exactly as given —
+ * a Buffer, a url, or a path — so an export test can assert on what it actually wrote.
+ */
+export function normalizeFile(value: unknown): FileView {
+	const raw = asRecord(value);
+	const nested = asRecord(raw.data);
+	const fromBuilder = typeof nested.filename === 'string';
+	const source = fromBuilder ? nested : raw;
+	const payload = fromBuilder ? source.resolvable : raw.data;
+	const description = stringValue(source.description);
+	const contentType = stringValue(source.contentType);
+	const size = fileByteLength(payload);
+	return {
+		filename: stringValue(source.filename) ?? '',
+		...(description === undefined ? {} : { description }),
+		...(contentType === undefined ? {} : { contentType }),
+		...(size === undefined ? {} : { size }),
+		data: payload,
 	};
 }
 

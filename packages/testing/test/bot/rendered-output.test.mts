@@ -1,7 +1,10 @@
 import {
+	ActionRow,
+	Button,
 	Command,
 	type CommandContext,
 	Declare,
+	Embed,
 	FileUpload,
 	Label,
 	Modal,
@@ -23,6 +26,67 @@ function catchRenderedOutputError(run: () => unknown): RenderedOutputError {
 	throw new Error('Expected RenderedOutputError.');
 }
 
+describe('rendered subject guards', () => {
+	test('a primitive subject is named instead of normalizing into an empty scope', () => {
+		expect(() => rendered(42 as never)).toThrow(/expected a MockBot, Actor, DispatchResult.*got the number 42/s);
+		expect(() => rendered(null as never)).toThrow(/got null/);
+		expect(() => rendered('Ready' as never)).toThrow(/got the string "Ready"/);
+	});
+
+	test('a bare component or embed builder says so instead of answering "found 0"', () => {
+		const row = new ActionRow<Button>().addComponents(new Button().setCustomId('go').setLabel('Go'));
+		const embed = new Embed().setTitle('T');
+
+		expect(() => rendered(row)).toThrow(/bare component builder.*components: \[row\]/s);
+		expect(() => rendered(embed)).toThrow(/bare embed builder.*embeds: \[embed\]/s);
+
+		// wrapped the way a handler sends them, both read normally
+		expect(rendered({ content: 'hi', components: [row] }).all.button()).toHaveLength(1);
+		expect(rendered({ embeds: [embed] }).all.embed()).toHaveLength(1);
+	});
+
+	test('an un-awaited dispatch says so rather than reporting zero output', async () => {
+		const pending = Promise.resolve({ content: 'Ready' });
+
+		expect(() => rendered(pending)).toThrow(/got a promise, not rendered output.*await the dispatch first/s);
+		await pending;
+	});
+});
+
+describe('rendered miss diagnostics', () => {
+	test('a miss distinguishes "nothing rendered" from "nothing matched"', () => {
+		const ui = rendered([{ content: 'Hi', embeds: [{ title: 'Actual Title' }, { title: 'Second Embed' }] }]);
+		const error = catchRenderedOutputError(() => ui.get.embed({ title: /Nonexistent/ }));
+
+		expect(error.message).toContain('matched none of 2 embeds');
+		expect(error.message).toContain('title="Actual Title"');
+		expect(error.message).toContain('title="Second Embed"');
+	});
+
+	test('asking for the wrong kind falls back to the whole scope', () => {
+		const ui = rendered([{ content: 'Banned spammer' }]);
+		const error = catchRenderedOutputError(() => ui.get.embed({ contains: /Banned/ }));
+
+		expect(error.message).toContain('matched none of 0 embeds');
+		expect(error.message).toContain('Nothing of kind "embed" was rendered.');
+		expect(error.message).toContain('content="Banned spammer"');
+	});
+
+	test('a subject that rendered nothing at all says that instead of dumping an empty list', () => {
+		const error = catchRenderedOutputError(() => rendered({ responses: [] }).get.message());
+
+		expect(error.message).toContain('The subject rendered no output at all.');
+	});
+
+	test('the candidate list is printed once, not reprinted as unscored "near misses"', () => {
+		const ui = rendered([{ content: 'Hi', embeds: [{ title: 'Actual Title' }] }]);
+		const error = catchRenderedOutputError(() => ui.get.embed({ title: /Nonexistent/ }));
+
+		expect(error.message).not.toContain('Near misses');
+		expect(error.message.match(/Actual Title/g)).toHaveLength(1);
+	});
+});
+
 describe('rendered reader', () => {
 	test('get/query/all apply cardinality and message scopes resolve duplicate controls', () => {
 		const ui = rendered([
@@ -37,7 +101,9 @@ describe('rendered reader', () => {
 		]);
 
 		expect(ui.query.button('missing')).toBeUndefined();
-		expect(ui.query.button('edit')?.label).toBe('Edit');
+		// query is "at most one": zero is fine, two is a question this query did not answer. Returning the
+		// first would let an assertion about "the edit button" pass while there were two of them.
+		expect(() => ui.query.button('edit')).toThrow(/found 2 buttons/);
 		expect(ui.all.button('edit')).toHaveLength(2);
 		expect(() => ui.get.button('edit')).toThrow(RenderedOutputError);
 		expect(() => ui.get.button('edit')).toThrow(/found 2 buttons/);
@@ -52,7 +118,7 @@ describe('rendered reader', () => {
 		const ui = rendered({ content: 'Ready' });
 		const error = catchRenderedOutputError(() => ui.get.message({ content: /invalid-number/ }));
 
-		expect(error.message).toContain('found 0 messages');
+		expect(error.message).toContain('matched none of 1 messages');
 		expect(error.message).not.toContain('For Components V2 panels');
 		expect(error.message).not.toContain('get.container({ content: /.../ })');
 	});
@@ -64,7 +130,7 @@ describe('rendered reader', () => {
 		});
 		const error = catchRenderedOutputError(() => ui.get.embed({ title: /Missing/ }));
 
-		expect(error.message).toContain('found 0 embeds');
+		expect(error.message).toContain('matched none of 0 embeds');
 		expect(error.message).not.toContain('For Components V2 panels');
 		expect(error.message).not.toContain('get.container({ content: /.../ })');
 	});
@@ -249,15 +315,11 @@ describe('rendered reader', () => {
 
 		const bot = await createMockBot({ commands: [UnrelatedOutput, RejectFlow] });
 		await bot.slash({ name: 'unrelated-rendered' });
-		const flow = bot.slash({ name: 'reject-flow' });
-		await flow.untilModal();
+		await bot.slash({ name: 'reject-flow' });
 
-		const flowActions = rendered(flow).raw.actions();
-		expect(flowActions).toHaveLength(1);
-		expect(flowActions.every(action => action.dispatchId === flow.dispatchId)).toBe(true);
-		expect(rendered(bot).raw.actions().length).toBeGreaterThan(flowActions.length);
+		expect(rendered(bot).query.message({ content: 'unrelated' })).toBeUndefined();
 
-		const ui = rendered(flow);
+		const ui = rendered(bot);
 		const modal = ui.get.modal('reject-request');
 		expect(modal.title).toBe('Reject request');
 		expect(modal.get.select('reason').label).toBe('Reason');
@@ -268,7 +330,17 @@ describe('rendered reader', () => {
 		expect(() => modal.get.input('missing')).toThrow(/Fields in modal "reject-request"/);
 		expect(() => modal.get.input('missing')).toThrow(/input#notes label="Notes"/);
 
-		await flow.timeoutModal();
 		await bot.close();
+	});
+});
+
+describe('the three readers share one cardinality contract', () => {
+	test('query allows zero and refuses ambiguity, on every reader', () => {
+		const ui = rendered([{ content: 'Hi', embeds: [{ title: 'One' }, { title: 'Two' }] }]);
+
+		expect(ui.query.embed({ title: 'Nope' })).toBeUndefined();
+		expect(ui.query.embed({ title: 'One' })?.title).toBe('One');
+		expect(() => ui.query.embed()).toThrow(RenderedOutputError);
+		expect(ui.all.embed()).toHaveLength(2);
 	});
 });

@@ -6,6 +6,36 @@ function opt<K extends string, V>(key: K, value: V | undefined): { [P in K]?: V 
 	return (value === undefined ? {} : { [key]: value }) as { [P in K]?: V };
 }
 
+/**
+ * What every `api*` entity payload is: plain wire data, and specifically not a `rich*` behavioural fixture.
+ *
+ * The two families describe the same entities, so a fixture satisfied a payload type structurally —
+ * `registerMember({ user: richUser() })` compiled, then died at seed time, because the fixtures carry methods
+ * (`toString`, `avatarURL`) and `structuredClone` refuses functions. Every `rich*` entity is built on
+ * `SnowflakeDerived`, the `createdAt`/`createdTimestamp` pair computed from the snowflake, and no wire payload
+ * has ever carried either — Discord sends neither, and every `api*` factory omits both. Declaring them absent
+ * therefore rejects a fixture where a payload belongs, at the call site.
+ *
+ * It costs raw payload construction nothing: `const user: ApiUser = { id, username, ... }` still compiles,
+ * and so does spreading a factory result. The obvious alternative — declaring `toString` absent, since
+ * carrying functions is the actual defect — cannot work: every object type inherits `Object.prototype.toString`,
+ * so it would reject plain literals just as hard as fixtures.
+ */
+export interface PlainPayload {
+	createdAt?: never;
+	createdTimestamp?: never;
+}
+
+/**
+ * An entity payload's wire fields, without the {@link PlainPayload} marker — so a `rich*` fixture satisfies it.
+ *
+ * The marker exists because a seeded world is `structuredClone`d. Encoding an entity into an interaction
+ * payload clones nothing, and the `rich*` fixtures carry the snake_case wire fields precisely so they can be
+ * dropped into resolved option data (see `RichUser`). Entry points that only encode take this; entry points
+ * that seed keep the payload type itself.
+ */
+export type WireFields<T> = Omit<T, keyof PlainPayload>;
+
 export interface ApiUserOptions {
 	id?: string;
 	username?: string;
@@ -14,7 +44,7 @@ export interface ApiUserOptions {
 	avatar?: string | null;
 }
 
-export interface ApiUser {
+export interface ApiUser extends PlainPayload {
 	id: string;
 	username: string;
 	global_name: string | null;
@@ -41,7 +71,7 @@ export interface ApiGuildOptions {
 	preferredLocale?: string;
 }
 
-export interface ApiGuild {
+export interface ApiGuild extends PlainPayload {
 	id: string;
 	name: string;
 	icon: null;
@@ -78,7 +108,7 @@ export interface ApiRoleOptions {
 	position?: number;
 }
 
-export interface ApiRole {
+export interface ApiRole extends PlainPayload {
 	id: string;
 	name: string;
 	permissions: string;
@@ -114,7 +144,7 @@ export interface ApiEmojiOptions {
 	roles?: string[];
 }
 
-export interface ApiEmoji {
+export interface ApiEmoji extends PlainPayload {
 	id: string;
 	name: string;
 	guild_id?: string;
@@ -148,7 +178,7 @@ export interface ApiInviteOptions {
 	inviter?: ApiUser;
 }
 
-export interface ApiInvite {
+export interface ApiInvite extends PlainPayload {
 	code: string;
 	channel_id: string;
 	guild_id?: string;
@@ -198,7 +228,7 @@ export interface ApiAutoModRuleOptions {
 	actions?: AutoModAction[];
 }
 
-export interface ApiAutoModRule {
+export interface ApiAutoModRule extends PlainPayload {
 	id: string;
 	guild_id: string;
 	name: string;
@@ -260,7 +290,7 @@ export interface ApiWebhookOptions {
 	applicationId?: string | null;
 }
 
-export interface ApiWebhook {
+export interface ApiWebhook extends PlainPayload {
 	id: string;
 	type: number;
 	channel_id: string;
@@ -293,7 +323,7 @@ export interface ApiStickerOptions {
 	formatType?: number;
 }
 
-export interface ApiSticker {
+export interface ApiSticker extends PlainPayload {
 	id: string;
 	name: string;
 	description: string | null;
@@ -327,7 +357,7 @@ export interface ApiScheduledEventOptions {
 	entityType?: number;
 }
 
-export interface ApiScheduledEvent {
+export interface ApiScheduledEvent extends PlainPayload {
 	id: string;
 	guild_id: string;
 	channel_id: string | null;
@@ -360,7 +390,7 @@ export interface ApiGuildTemplateOptions {
 	description?: string | null;
 }
 
-export interface ApiGuildTemplate {
+export interface ApiGuildTemplate extends PlainPayload {
 	code: string;
 	name: string;
 	description: string | null;
@@ -390,7 +420,7 @@ export interface ApiSoundboardSoundOptions {
 	emojiName?: string | null;
 }
 
-export interface ApiSoundboardSound {
+export interface ApiSoundboardSound extends PlainPayload {
 	sound_id: string;
 	name: string;
 	volume: number;
@@ -420,7 +450,7 @@ export interface ApiStageInstanceOptions {
 	privacyLevel?: number;
 }
 
-export interface ApiStageInstance {
+export interface ApiStageInstance extends PlainPayload {
 	id: string;
 	guild_id: string;
 	channel_id: string;
@@ -446,7 +476,7 @@ export interface ApiAuditLogEntryOptions {
 	reason?: string;
 }
 
-export interface ApiAuditLogEntry {
+export interface ApiAuditLogEntry extends PlainPayload {
 	id: string;
 	action_type: number;
 	user_id: string | null;
@@ -483,7 +513,7 @@ export interface ApiChannelOptions {
 	threadMetadata?: ThreadMetadata;
 }
 
-export interface ApiChannel {
+export interface ApiChannel extends PlainPayload {
 	id: string;
 	type: number;
 	name: string;
@@ -555,7 +585,7 @@ export interface ApiMemberOptions {
 	communicationDisabledUntil?: string | null;
 }
 
-export interface ApiMember {
+export interface ApiMember extends PlainPayload {
 	user: ApiUser;
 	nick: string | null;
 	roles: string[];
@@ -626,7 +656,7 @@ export interface ApiVoiceStateOptions {
 	suppress?: boolean;
 }
 
-export interface ApiVoiceState {
+export interface ApiVoiceState extends PlainPayload {
 	guild_id?: string;
 	channel_id: string | null;
 	user_id: string;

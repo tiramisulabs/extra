@@ -37,8 +37,8 @@ describe('message (prefix) commands', () => {
 
 	test('non-matching prefix does nothing', async () => {
 		const bot = await createMockBot({ commands: [EchoCommand], prefixes: ['!'] });
-		await bot.say('?echo -text hello');
-		expect(bot.findActions(Routes.createMessage)).toHaveLength(0);
+		const result = await bot.say('?echo -text hello');
+		expect(result.actions.filter(action => bot.rest.matches(Routes.createMessage, action))).toHaveLength(0);
 		await bot.close();
 	});
 
@@ -54,10 +54,11 @@ describe('message (prefix) commands', () => {
 		}
 
 		const bot = await createMockBot({ commands: [GuildEchoCommand], prefixes: ['!'] });
-		const result = await bot.say('!guild-echo -text hello', { guildId });
-		expect(result.content).toBe('guild: hello');
-		await bot.say('!guild-echo -text nope', { guildId: 'other-guild' });
-		expect(bot.findActions(Routes.createMessage)).toHaveLength(1);
+		const accepted = await bot.say('!guild-echo -text hello', { guildId });
+		expect(accepted.content).toBe('guild: hello');
+		const ignored = await bot.say('!guild-echo -text nope', { guildId: 'other-guild' });
+		expect(accepted.actions.filter(action => bot.rest.matches(Routes.createMessage, action))).toHaveLength(1);
+		expect(ignored.actions.filter(action => bot.rest.matches(Routes.createMessage, action))).toHaveLength(0);
 		await bot.close();
 	});
 

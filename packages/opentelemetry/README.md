@@ -1,6 +1,6 @@
 # @slipher/opentelemetry
 
-OpenTelemetry traces and duration metrics for Seyfert interactions, events, REST, and cache operations.
+OpenTelemetry traces and duration metrics for Seyfert interactions, events, REST, cache operations, and gateway health.
 
 **[Read the complete OpenTelemetry guide on seyfert.dev](https://seyfert.dev/docs/plugins/official/opentelemetry).**
 

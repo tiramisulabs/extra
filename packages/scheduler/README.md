@@ -10,18 +10,18 @@ Cron and interval scheduling for Seyfert, in the current process or on BullMQ/Re
 pnpm add @slipher/scheduler
 ```
 
-Requires Seyfert v5. The persistent driver additionally requires `bullmq@^5.23.0`.
+Requires Seyfert v5. The persistent driver additionally requires `bullmq@^5.23.0 || ^6.0.0`.
 
 ## Quick start
 
 ```ts
-import { Interval, memory, scheduler } from '@slipher/scheduler';
-import { Client, definePlugins } from 'seyfert';
+import { Interval, memory, scheduler, type ScheduledTask } from '@slipher/scheduler';
+import { Client, definePlugins, type UsingClient } from 'seyfert';
 
 class MaintenanceTasks {
 	@Interval('5m', { id: 'heartbeat' })
-	heartbeat() {
-		// run work
+	heartbeat(task: ScheduledTask, client: UsingClient) {
+		client.logger.debug(`Running ${task.id}`);
 	}
 }
 

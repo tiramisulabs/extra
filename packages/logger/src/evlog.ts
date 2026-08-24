@@ -55,7 +55,7 @@ function createEvlogAdapter(silent: boolean, config?: EvlogConfig): LoggerAdapte
 				resolved.initLogger(buildInitConfig(silent, config, entry));
 			}
 
-			if (isEvlogLifecycleEntry(entry)) {
+			if (entry.shape === 'wide') {
 				writeEvlogWideEvent(entry, resolved);
 				return;
 			}
@@ -82,30 +82,28 @@ function buildInitConfig(silent: boolean, config: EvlogConfig, entry: LogEntry):
 	};
 }
 
-function isEvlogLifecycleEntry(entry: LogEntry): boolean {
-	return Number.isFinite(entry.data.durationMs) && typeof entry.data.outcome === 'string';
-}
-
 function writeEvlogImmediateEntry(entry: LogEntry, core: EvlogCoreModule): void {
 	const level = toEvlogLevel(entry.level);
-	const tag = getEvlogTag(entry);
-	const message = entry.message ?? completedMessage(tag);
+	const source = getEntrySource(entry);
+	const message = entry.message ?? completedMessage(source);
 
-	// `name`/`source` become the evlog tag (the `[bracket]`), never plain fields. The
+	// `name`/`_source` carry the entry's source, never plain fields under those keys. The
 	// remaining fields decide between evlog's clean tagged form and its object form.
-	const extra = stripUndefined({ ...entry.bindings, ...entry.data });
+	let extra = stripUndefined({ ...entry.bindings, ...entry.data });
 	delete extra.name;
 	delete extra._source;
 	if (entry.level !== level) extra.level = entry.level;
+	extra = translateTraceContextForEvlog(extra);
 
 	if (Object.keys(extra).length === 0) {
-		core.log[level](tag, message);
+		core.log[level](source, message);
 		return;
 	}
 
-	// Object form renders its `[bracket]` from the event's `service`; set it to the
-	// derived tag so the bracket matches the tagged form instead of evlog's default.
-	core.log[level]({ service: tag, message, ...extra });
+	// Leaving `service` unset lets evlog apply its application-level service envelope
+	// instead of creating one OTLP resource per Seyfert logger source. `source` is
+	// written last so a caller field of the same name cannot shadow the entry's origin.
+	core.log[level]({ message, ...extra, source });
 }
 
 function writeEvlogWideEvent(entry: LogEntry, core: EvlogCoreModule): void {
@@ -114,22 +112,44 @@ function writeEvlogWideEvent(entry: LogEntry, core: EvlogCoreModule): void {
 
 	// Emit via the object form (not createLogger) so evlog does not stamp its own
 	// createLogger -> emit stopwatch as `duration` ("in 0ms"); our real elapsed time is
-	// already in the `durationMs` field. The `[bracket]` comes from `service`, set to the
-	// derived tag (source ?? name ?? 'app') — same ordering as the console adapter and the
-	// immediate path — and consumed here so it is not also a plain field.
-	const fields = stripUndefined({ ...entry.bindings, ...entry.data });
+	// already in the `durationMs` field. The entry's origin travels as `source` while
+	// evlog supplies the application service from its global envelope.
+	let fields = stripUndefined({ ...entry.bindings, ...entry.data });
 	delete fields.name;
 	delete fields._source;
+	fields = translateTraceContextForEvlog(fields);
 	const payload: LogData = stripUndefined({
-		service: getEvlogTag(entry),
 		...fields,
+		source: getEntrySource(entry),
 		message,
 		level: entry.level === level ? undefined : entry.level,
 	});
 	core.log[level](payload);
 }
 
-function getEvlogTag(entry: LogEntry): string {
+function translateTraceContextForEvlog(fields: LogData): LogData {
+	const traceId = getString(fields.trace_id);
+	const spanId = getString(fields.span_id);
+	if (!(traceId || spanId)) return fields;
+
+	// evlog reads camelCase off the top-level event, so the snake_case pair never reaches
+	// it; a caller that already set `traceId`/`spanId` keeps their own value.
+	const translated = { ...fields };
+	if (traceId) {
+		delete translated.trace_id;
+		translated.traceId ??= traceId;
+	}
+	if (spanId) {
+		delete translated.span_id;
+		translated.spanId ??= spanId;
+	}
+	return translated;
+}
+
+// `service` is the deployed application (evlog's envelope, one per bot process); `source`
+// is the Seyfert surface an entry came from, many per service; `name` is a logger
+// instance's own label, defaulting to the service.
+function getEntrySource(entry: LogEntry): string {
 	return getString(entry.data._source) ?? getString(entry.bindings.name) ?? 'app';
 }
 

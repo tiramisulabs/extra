@@ -5,6 +5,7 @@
 		"rootDir": ".."
 	},
 	"include": [
+		"./client-cycle/*.ts",
 		"./types.ts",
 		"./fake-bullmq.ts",
 		"./scheduler.test.mts",

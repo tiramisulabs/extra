@@ -1,0 +1,23 @@
+{
+	"compilerOptions": {
+		"target": "ESNext",
+		"module": "CommonJS",
+		"moduleResolution": "Node",
+		"ignoreDeprecations": "6.0",
+		"types": ["node"],
+		"baseUrl": ".",
+		"paths": {
+			"@slipher/scaler/agent": ["../../lib/agent-entry.d.ts"],
+			"@slipher/scaler/master": ["../../lib/master-entry.d.ts"]
+		},
+		"strict": true,
+		"esModuleInterop": true,
+		"experimentalDecorators": true,
+		"emitDecoratorMetadata": true,
+		"rootDir": ".",
+		"outDir": "dist",
+		"skipLibCheck": true
+	},
+	"include": ["**/*.ts"],
+	"exclude": ["dist"]
+}

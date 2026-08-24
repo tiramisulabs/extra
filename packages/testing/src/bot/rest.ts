@@ -3,9 +3,9 @@ import { dispatchStore } from './dispatch-context';
 import { apiMessage } from './payloads';
 import { CHANNEL_MESSAGE_POST, WEBHOOK_EXECUTE_POST } from './routes';
 
-// Capture the real setTimeout/clearTimeout at module load so the internal waitForAction/gate control timeout
-// runs on the wall clock even when a test fakes global timers (vi.useFakeTimers replaces globalThis.setTimeout).
-// Otherwise the deadline would freeze (until()/waitForAction hang) or be tripped spuriously by advanceTime().
+// Capture the real setTimeout/clearTimeout at module load so internal action/gate control timeouts run on the
+// wall clock even when a test fakes global timers (vi.useFakeTimers replaces globalThis.setTimeout). Otherwise
+// the deadline would freeze (until() hangs) or be tripped spuriously by advanceTime().
 const realSetTimeout = setTimeout.bind(globalThis);
 const realClearTimeout = clearTimeout.bind(globalThis);
 
@@ -13,6 +13,8 @@ export interface RecordedAction {
 	seq: number;
 	/** Dispatch that produced this action, for per-dispatch attribution under concurrency. */
 	dispatchId?: number;
+	/** Stateful actor/session that produced this action. Absent for raw and out-of-band REST. */
+	sessionKey?: string;
 	method: HttpMethods;
 	route: string;
 	body?: Record<string, unknown>;
@@ -36,13 +38,20 @@ export function isOutgoingMessagePost(action: RecordedAction): boolean {
 	);
 }
 
+/**
+ * Internal carrier for a Discord failure raised where no route is in hand: the world guards call
+ * {@link apiError} from deep inside a responder, and a {@link DiscordErrorInit} is all they know.
+ *
+ * This is **not** the error a test catches. {@link MockApiHandler.request} translates it at the seam where the
+ * method and route are still known, so what leaves the package is the `SeyfertError` the real
+ * `ApiHandler.parseError` builds from a genuine Discord response — one error model, whether the failure came
+ * from a seeded world or from {@link MockApiHandler.fail}. Assert on it with {@link isDiscordError}.
+ *
+ * @internal
+ */
 export class MockApiError extends Error {
-	constructor(
-		readonly status: number,
-		readonly code: number,
-		message: string,
-	) {
-		super(message);
+	constructor(readonly discord: DiscordErrorInit) {
+		super(discord.message ?? STATUS_TEXT[discord.status] ?? 'Unknown Error');
 		this.name = 'MockApiError';
 	}
 }
@@ -70,34 +79,63 @@ interface ApiObserverNotifier {
 	): Promise<void>;
 }
 
-/** Named Discord JSON error codes used by the mock's fail-loud guards, so no call site spells a bare number. */
-export const ErrorCode = {
-	UnknownChannel: 10003,
-	UnknownGuild: 10004,
-	UnknownUser: 10013,
-	UnknownMember: 10007,
-	UnknownMessage: 10008,
-	UnknownWebhook: 10015,
-	UnknownBan: 10026,
-	UnknownInvite: 10006,
-	UnknownGuildTemplate: 10057,
-	UnknownRole: 10011,
-	UnknownEmoji: 10014,
-	UnknownSticker: 10060,
-	UnknownStageInstance: 10067,
-	UnknownScheduledEvent: 180000,
-	MaxPinnedMessages: 30003,
-	CannotEditAnotherUsersMessage: 50005,
-	CannotSendEmptyMessage: 50006,
-	MissingPermissions: 50013,
-	CannotExecuteOnChannelType: 50024,
-	InvalidFormBody: 50035,
-	ThreadArchived: 50083,
-	AlreadyAcknowledged: 40060,
-} as const;
+/**
+ * Fail the request being answered, naming the error from the one catalog. Call it from inside an
+ * {@link MockApiHandler.intercept} responder; the caller receives the same `SeyfertError`
+ * {@link MockApiHandler.fail} produces, built by seyfert's own `parseError`.
+ *
+ * Takes a {@link DiscordErrors} entry rather than a loose status/code/message triple, because a triple has to
+ * be restated at every call site and there were a hundred of them — one wrong copy and the code no longer
+ * matches the message. `message` overrides the catalog's copy for the errors whose text is per-call, like
+ * Invalid Form Body naming the offending field; it lands on `error.metadata.response.message`, where the
+ * descriptive text survives.
+ */
+export function apiError(error: DiscordErrorInit, message?: string): never {
+	throw new MockApiError(message === undefined ? error : { ...error, message });
+}
 
-export function apiError(status: number, code: number, message: string): never {
-	throw new MockApiError(status, code, message);
+/**
+ * Narrow an unknown caught value to a Discord REST error, by the fields Discord actually sends.
+ *
+ * `error.message` is not one of them: seyfert's `parseError` names the error `API_<statusText>_<code>` and
+ * uses that as the message, so a Missing Permissions failure reads `Api Forbidden 50013`. The status and the
+ * code are the contract — the descriptive copy stays on `error.metadata.response.message` for the handful of
+ * errors whose text carries per-call detail (Invalid Form Body naming the offending field).
+ *
+ * ```ts
+ * catch (error) {
+ *   if (isDiscordError(error, { code: DiscordErrors.UnknownMessage.code })) return;
+ *   throw error;
+ * }
+ * ```
+ */
+export function isDiscordError(value: unknown, match: { status?: number; code?: number } = {}): boolean {
+	if (typeof value !== 'object' || value === null) return false;
+	const status = statusOf(value);
+	const code = codeOf(value);
+	if (status === undefined && code === undefined) return false;
+	if (match.status !== undefined && match.status !== status) return false;
+	if (match.code !== undefined && match.code !== code) return false;
+	return true;
+}
+
+function statusOf(value: object): number | undefined {
+	const direct = (value as { status?: unknown }).status;
+	if (typeof direct === 'number') return direct;
+	// parseError files the HTTP status on the metadata it builds, beside — not inside — the body it parsed.
+	// `metadata.response` is Discord's `{ code, message }`, which carries no status of its own.
+	const metadata = (value as { metadata?: { status?: unknown } }).metadata;
+	return typeof metadata?.status === 'number' ? metadata.status : undefined;
+}
+
+function codeOf(value: object): number | undefined {
+	const direct = (value as { code?: unknown }).code;
+	if (typeof direct === 'number') return direct;
+	// seyfert stringifies the code into `API_<statusText>_<code>`; the body it parsed still holds the number.
+	const body = (value as { metadata?: { response?: { code?: unknown } } }).metadata?.response;
+	if (typeof body?.code === 'number') return body.code;
+	const match = typeof direct === 'string' ? /_(\d+)$/.exec(direct) : undefined;
+	return match ? Number(match[1]) : undefined;
 }
 
 export interface DiscordErrorInit {
@@ -145,7 +183,16 @@ export const DiscordErrors = {
 		message: 'Cannot edit a message authored by another user',
 	},
 	RateLimited: { status: 429, code: 0, message: 'You are being rate limited.' },
+	MaxPinnedMessages: { status: 400, code: 30003, message: 'Maximum number of pinned messages reached (50)' },
+	CannotSendEmptyMessage: { status: 400, code: 50006, message: 'Cannot send an empty message' },
+	CannotExecuteOnChannelType: { status: 400, code: 50024, message: 'Cannot execute action on this channel type' },
+	InvalidFormBody: { status: 400, code: 50035, message: 'Invalid Form Body' },
+	ThreadArchived: { status: 400, code: 50083, message: 'Thread is archived' },
+	AlreadyAcknowledged: { status: 400, code: 40060, message: 'Interaction has already been acknowledged.' },
 } as const satisfies Record<string, DiscordErrorInit>;
+
+/** Returned by an interceptor that declines this call, so `resolveResponse` keeps looking. Never observable. */
+const PASS_TO_NEXT = Symbol('slipher.testing.passToNext');
 
 export function gate(): { open: Promise<void>; release: () => void } {
 	let release!: () => void;
@@ -169,46 +216,40 @@ export type RouteParams<TRoute extends string> = [RouteParamNames<TRoute>] exten
 	? Record<string, never>
 	: Record<RouteParamNames<TRoute>, string>;
 
-export interface RouteMatcher<TRoute extends string = string> {
+declare const routeContract: unique symbol;
+
+export interface RouteMatcher<TRoute extends string = string, TBody = unknown, TResponse = unknown> {
 	method: HttpMethods;
 	route: TRoute;
+	/** Type-only request/response carrier; route descriptors have no corresponding runtime field. */
+	readonly [routeContract]?: {
+		body: TBody;
+		response: TResponse;
+	};
 }
 
-/** A recorded action enriched with the route params its matcher captured. */
-export type MatchedAction<TParams extends Record<string, string> = Record<string, string>> = RecordedAction & {
-	params: TParams;
-};
-
-/**
- * {@link MatchedAction} with caller-supplied types for the request `body` and `response`, so assertions
- * off a matched call don't need a cast. The generics are erased at runtime; the library casts internally.
- */
-export type TypedMatchedAction<
+/** A read-only REST snapshot, enriched with params captured from the supplied route descriptor. */
+export type RestCall<
+	TParams extends Record<string, string | undefined> = Record<string, undefined>,
 	TBody = Record<string, unknown>,
 	TResponse = unknown,
-	TParams extends Record<string, string> = Record<string, string>,
-> = Omit<MatchedAction<TParams>, 'body' | 'response'> & { body?: TBody; response: TResponse };
+> = Readonly<
+	Omit<RecordedAction, 'body' | 'response'> & {
+		params: TParams;
+		body?: TBody;
+		response: TResponse | undefined;
+	}
+>;
 
-export type ActionPredicate = (action: RecordedAction) => boolean;
-export type ValuePredicate<T> = (value: T, action: RecordedAction) => boolean;
-
-export interface ActionFilter<TParams extends Record<string, string> = Record<string, string>> {
-	method?: HttpMethods;
-	route?: string | RegExp | ValuePredicate<string>;
-	params?: Partial<TParams>;
-	body?: Record<string, unknown> | ValuePredicate<Record<string, unknown> | undefined>;
-	query?: Record<string, unknown> | ValuePredicate<Record<string, unknown> | undefined>;
-	files?: unknown[] | ValuePredicate<unknown[] | undefined>;
-	reason?: string | ValuePredicate<string | undefined>;
-	response?: string | number | boolean | null | Record<string, unknown> | unknown[] | ValuePredicate<unknown>;
-	error?: Error | string | ValuePredicate<unknown>;
+/** Read the bot's or actor's complete REST history, optionally narrowed by one route descriptor. */
+export interface RestCalls {
+	(): readonly RestCall[];
+	<TRoute extends string, TBody, TResponse>(
+		matcher: RouteMatcher<TRoute, TBody, TResponse>,
+	): readonly RestCall<RouteParams<TRoute>, TBody, TResponse>[];
 }
 
-export type RouteActionFilter<TParams extends Record<string, string> = Record<string, string>> = Omit<
-	ActionFilter<TParams>,
-	'method' | 'route'
->;
-export type ActionMatcher = RouteMatcher | ActionFilter | ActionPredicate;
+export type ActionPredicate = (action: RecordedAction) => boolean;
 
 interface Interceptor {
 	method: HttpMethods;
@@ -248,6 +289,48 @@ function compileRoute(route: string): { pattern: RegExp; names: string[] } {
 	return { pattern: new RegExp(`^/${source}$`), names };
 }
 
+/**
+ * Compiled patterns keyed by route template. Module-scoped rather than per-handler: templates are static
+ * strings from route descriptors, so the set is finite and shared safely across bots and standalone matching.
+ */
+const routeCache = new Map<string, { pattern: RegExp; names: string[] }>();
+
+function compiledRoute(route: string): { pattern: RegExp; names: string[] } {
+	let compiled = routeCache.get(route);
+	if (!compiled) {
+		compiled = compileRoute(route);
+		routeCache.set(route, compiled);
+	}
+	return compiled;
+}
+
+/**
+ * Extract a route descriptor's params from a recorded call, or `undefined` when the call does not match it.
+ *
+ * The matcher is domain-neutral — an HTTP method plus a `:param` path template — so this is the piece needed
+ * to reuse `defineRoute`/`RestCall`/`RestCalls` for an API the package does not own, without constructing a
+ * bot just to borrow `MockApiHandler`'s copy.
+ *
+ * Templates are **path-only and query-free**, mirroring {@link RecordedAction}, which keeps `route` and
+ * `query` apart. An origin inside `route` breaks in three inconsistent ways: `RouteParamNames` reads `:` as a
+ * param marker (`https://…` yields an empty name, a `:8080` port yields `8080`), `compileRoute` collapses the
+ * `//` and finds no params, and `routeUrl` demands the port as one. Keep the origin on the caller's side.
+ */
+export function matchRoute<TRoute extends string>(
+	matcher: RouteMatcher<TRoute>,
+	call: Pick<RecordedAction, 'method' | 'route'>,
+): RouteParams<TRoute> | undefined {
+	if (matcher.method !== call.method) return undefined;
+	const { pattern, names } = compiledRoute(matcher.route);
+	const match = pattern.exec(call.route);
+	if (!match) return undefined;
+	const params: Record<string, string> = {};
+	names.forEach((name, index) => {
+		params[name] = match[index + 1];
+	});
+	return params as RouteParams<TRoute>;
+}
+
 export function routeUrl<TRoute extends string>(
 	matcher: RouteMatcher<TRoute>,
 	params: RouteParams<TRoute>,
@@ -260,6 +343,17 @@ export function routeUrl<TRoute extends string>(
 		return encodeURIComponent(value);
 	});
 	return route as `/${string}`;
+}
+
+const REDACTED_ROUTE_TOKEN = ':token';
+const WEBHOOK_TOKEN_SEGMENT = /(\/webhooks\/[^/?#]+\/)[^/?#]+/g;
+const INTERACTION_CALLBACK_TOKEN_SEGMENT = /(\/interactions\/[^/?#]+\/)[^/?#]+(?=\/callback(?:[/?#]|$))/g;
+
+/** Redact Discord credential-bearing path segments while preserving a useful diagnostic route shape. */
+export function redactRouteTokens(route: string): string {
+	return route
+		.replace(WEBHOOK_TOKEN_SEGMENT, `$1${REDACTED_ROUTE_TOKEN}`)
+		.replace(INTERACTION_CALLBACK_TOKEN_SEGMENT, `$1${REDACTED_ROUTE_TOKEN}`);
 }
 
 /**
@@ -282,40 +376,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function matchesSubset(actual: unknown, expected: unknown): boolean {
-	if (typeof expected === 'function') return false;
-	if (Array.isArray(expected)) {
-		if (!Array.isArray(actual)) return false;
-		return expected.every((value, index) => matchesSubset(actual[index], value));
-	}
-	if (isRecord(expected)) {
-		if (!isRecord(actual)) return false;
-		return Object.entries(expected).every(([key, value]) => matchesSubset(actual[key], value));
-	}
-	return Object.is(actual, expected);
-}
-
-function matchesValue<T>(
-	actual: T,
-	expected: unknown | ValuePredicate<T> | undefined,
-	action: RecordedAction,
-): boolean {
-	if (expected === undefined) return true;
-	if (typeof expected === 'function') return (expected as ValuePredicate<T>)(actual, action);
-	return matchesSubset(actual, expected);
-}
-
-function matchesError(actual: unknown, expected: ActionFilter['error'], action: RecordedAction): boolean {
-	if (expected === undefined) return true;
-	if (typeof expected === 'function') return expected(actual, action);
-	if (typeof expected === 'string')
-		return actual instanceof Error ? actual.message === expected : Object.is(actual, expected);
-	if (expected instanceof Error) {
-		return actual instanceof Error && actual.name === expected.name && actual.message === expected.message;
-	}
-	return matchesSubset(actual, expected);
-}
-
 function compact(value: unknown): string {
 	if (value instanceof Error) return `${value.name}: ${value.message}`;
 	try {
@@ -327,52 +387,17 @@ function compact(value: unknown): string {
 	}
 }
 
-/** Single source for the route-filter keys; `satisfies` makes a new RouteActionFilter field a compile error until listed. */
-const ROUTE_FILTER_KEYS = {
-	params: true,
-	body: true,
-	query: true,
-	files: true,
-	reason: true,
-	response: true,
-	error: true,
-} satisfies Record<keyof RouteActionFilter, true>;
-
-function hasRouteFilterKeys(value: Record<string, unknown>): boolean {
-	return Object.keys(ROUTE_FILTER_KEYS).some(key => key in value);
-}
-
-function isRouteMatcherOnly(value: ActionMatcher): value is RouteMatcher {
-	return (
-		typeof value === 'object' &&
-		value !== null &&
-		'method' in value &&
-		'route' in value &&
-		typeof value.route === 'string' &&
-		!hasRouteFilterKeys(value as Record<string, unknown>)
-	);
-}
-
-function normalizeRouteActionFilter(
-	paramsOrFilter?: Partial<Record<string, string>> | RouteActionFilter,
-): RouteActionFilter {
-	if (!paramsOrFilter) return {};
-	return hasRouteFilterKeys(paramsOrFilter as Record<string, unknown>)
-		? (paramsOrFilter as RouteActionFilter)
-		: { params: paramsOrFilter as Record<string, string> };
-}
-
 export class MockApiHandler extends ApiHandler {
+	/** @internal */
 	readonly actions: RecordedAction[] = [];
 	private listeners: ActionListener[] = [];
 	private interceptors: Interceptor[] = [];
 	private defaultInterceptors: Interceptor[] = [];
 	private gates: RequestGate[] = [];
 	private seq = 0;
-	/** In-flight request counts keyed by dispatchId (0 = no active dispatch). */
-	private readonly inFlight = new Map<number, number>();
+	/** Exact in-flight actions; dispatchId 0 denotes a request made outside an active dispatch. */
+	private readonly inFlight = new Set<RecordedAction>();
 	private readonly unhandled: 'warn' | 'error' | 'silent';
-	private readonly routeCache = new Map<string, { pattern: RegExp; names: string[] }>();
 	private readonly warnedRoutes = new Set<string>();
 	/** Response objects a responder fabricated; used to stamp RecordedAction.synthetic. */
 	private readonly syntheticResponses = new WeakSet<object>();
@@ -436,22 +461,38 @@ export class MockApiHandler extends ApiHandler {
 	}
 
 	/**
-	 * Make a route reject with a Discord-faithful {@link SeyfertError} (built via the same
-	 * parseError the real ApiHandler uses), so a command's own error handling runs. Persistent
-	 * until the returned disposer or reset() clears it; pass { times } to fail the first N matching
-	 * calls then fall through to normal handling. For sequential or request-conditional failures,
-	 * use intercept() with a closure counter.
+	 * Make a route reject with a Discord-faithful `SeyfertError` (built via the same parseError the real
+	 * ApiHandler uses), so a command's own error handling runs. Persistent until the returned disposer or
+	 * reset() clears it; pass { times } to fail the first N matching calls then fall through to normal
+	 * handling. For sequential or request-conditional failures, use intercept() with a closure counter.
 	 */
-	fail(matcher: RouteMatcher, error: DiscordErrorInit, opts?: { times?: number }): () => void {
+	fail(
+		matcher: RouteMatcher,
+		error: DiscordErrorInit,
+		opts?: {
+			/** Fail the first N matching calls, then fall through to normal handling. */
+			times?: number;
+			/**
+			 * Fail only the calls this answers true for — the Nth, the ones whose body matches, the ones for
+			 * one guild. `times` alone could only express "the first N", so anything else meant reaching for
+			 * `intercept()` with a closure counter and restating the condition by hand.
+			 */
+			when?: (action: PendingAction, params: Record<string, string>) => boolean;
+		},
+	): () => void {
 		let n = 0;
-		const off = this.intercept(matcher, () => {
+		const off = this.intercept(matcher, (action, params) => {
+			if (opts?.when && !opts.when(action, params)) return PASS_TO_NEXT;
 			if (opts?.times !== undefined && ++n >= opts.times) off();
-			throw this.discordError(matcher.method, matcher.route, error);
+			// Deliberately the same throw a world guard makes: request() builds the faithful error for both, off
+			// the concrete route, so an injected failure and a seeded one are indistinguishable to the command.
+			throw new MockApiError(error);
 		});
 		return off;
 	}
 
-	private discordError(method: HttpMethods, route: string, error: DiscordErrorInit): unknown {
+	/** Build the error seyfert's own `parseError` builds for this response — the only Discord error that leaves. */
+	private discordError(method: HttpMethods, route: string, error: DiscordErrorInit): Error {
 		const statusText = error.statusText ?? STATUS_TEXT[error.status] ?? '';
 		const body: Record<string, unknown> = { code: error.code ?? 0, message: error.message ?? statusText };
 		if (error.retryAfter !== undefined) body.retry_after = error.retryAfter;
@@ -490,163 +531,32 @@ export class MockApiHandler extends ApiHandler {
 	releasePending(): void {
 		for (const listener of this.listeners) {
 			realClearTimeout(listener.timer);
-			listener.reject(new Error('MockApiHandler released pending waitForAction listeners during close().'));
+			listener.reject(new Error('MockApiHandler released pending action listeners during close().'));
 		}
 		this.listeners = [];
 		for (const entry of this.gates) entry.release();
 		this.gates = [];
 	}
 
+	/** @internal One-line delegation kept for the dispatcher's own route reads; tests use `matchRoute`. */
 	matchRouteParams<TRoute extends string>(
 		matcher: RouteMatcher<TRoute>,
 		action: Pick<RecordedAction, 'method' | 'route'>,
 	): RouteParams<TRoute> | undefined {
-		if (matcher.method !== action.method) return undefined;
-		let compiled = this.routeCache.get(matcher.route);
-		if (!compiled) {
-			compiled = compileRoute(matcher.route);
-			this.routeCache.set(matcher.route, compiled);
-		}
-		const { pattern, names } = compiled;
-		const match = pattern.exec(action.route);
-		if (!match) return undefined;
-		const params: Record<string, string> = {};
-		names.forEach((name, index) => {
-			params[name] = match[index + 1];
-		});
-		return params as RouteParams<TRoute>;
+		return matchRoute(matcher, action);
 	}
 
+	/** @internal One-line delegation kept for the journal filters below; tests use `matchRoute`. */
 	matches(matcher: RouteMatcher, action: Pick<RecordedAction, 'method' | 'route'>): boolean {
-		return this.matchRouteParams(matcher, action) !== undefined;
+		return matchRoute(matcher, action) !== undefined;
 	}
 
-	private filterMatches(action: RecordedAction, filter: ActionFilter, params: Record<string, string>): boolean {
-		if (filter.method && filter.method !== action.method) return false;
-		const capturedRouteParams = this.filterParams(action, filter);
-		const routeParams = { ...params, ...capturedRouteParams };
-		if (filter.route !== undefined) {
-			if (typeof filter.route === 'string') {
-				if (filter.route.includes(':') && Object.keys(capturedRouteParams).length === 0) return false;
-				if (!filter.route.includes(':') && filter.route !== action.route) return false;
-			}
-			if (filter.route instanceof RegExp && !filter.route.test(action.route)) return false;
-			if (typeof filter.route === 'function' && !filter.route(action.route, action)) return false;
-		}
-		if (filter.params && Object.entries(filter.params).some(([key, value]) => routeParams[key] !== value)) return false;
-		if (!matchesValue(action.body, filter.body, action)) return false;
-		if (!matchesValue(action.query, filter.query, action)) return false;
-		if (!matchesValue(action.files, filter.files, action)) return false;
-		if (!matchesValue(action.reason, filter.reason, action)) return false;
-		if (!matchesValue(action.response, filter.response, action)) return false;
-		if (!matchesError(action.error, filter.error, action)) return false;
-		return true;
-	}
-
-	private filterParams(action: RecordedAction, filter: ActionFilter): Record<string, string> {
-		if (typeof filter.route !== 'string' || !filter.route.includes(':')) return {};
-		return this.matchRouteParams({ method: filter.method ?? action.method, route: filter.route }, action) ?? {};
-	}
-
-	findActions<TBody = Record<string, unknown>, TResponse = unknown, TRoute extends string = string>(
-		matcher: RouteMatcher<TRoute>,
-		params?: Partial<RouteParams<TRoute>>,
-	): TypedMatchedAction<TBody, TResponse, RouteParams<TRoute>>[];
-	findActions<TBody = Record<string, unknown>, TResponse = unknown, TRoute extends string = string>(
-		matcher: RouteMatcher<TRoute>,
-		filter: RouteActionFilter<RouteParams<TRoute>>,
-	): TypedMatchedAction<TBody, TResponse, RouteParams<TRoute>>[];
-	findActions<TBody = Record<string, unknown>, TResponse = unknown>(
-		matcher: ActionFilter | ActionPredicate,
-	): TypedMatchedAction<TBody, TResponse>[];
-	findActions<TBody = Record<string, unknown>, TResponse = unknown>(
-		matcher: ActionMatcher,
-		paramsOrFilter?: Partial<Record<string, string>> | RouteActionFilter,
-	): TypedMatchedAction<TBody, TResponse>[];
-	findActions(
-		matcher: ActionMatcher,
-		paramsOrFilter?: Partial<Record<string, string>> | RouteActionFilter,
-	): MatchedAction[] {
-		const out: MatchedAction[] = [];
-		for (const action of this.actions) {
-			if (typeof matcher === 'function') {
-				if (matcher(action)) out.push({ ...action, params: {} });
-				continue;
-			}
-
-			if (!isRouteMatcherOnly(matcher)) {
-				if (this.filterMatches(action, matcher, {}))
-					out.push({ ...action, params: this.filterParams(action, matcher) });
-				continue;
-			}
-
-			const captured = this.matchRouteParams(matcher, action);
-			if (!captured) continue;
-			if (!this.filterMatches(action, normalizeRouteActionFilter(paramsOrFilter), captured)) continue;
-			out.push({ ...action, params: captured });
-		}
-		return out;
-	}
-
-	findAction<TBody = Record<string, unknown>, TResponse = unknown, TRoute extends string = string>(
-		matcher: RouteMatcher<TRoute>,
-		params?: Partial<RouteParams<TRoute>>,
-	): TypedMatchedAction<TBody, TResponse, RouteParams<TRoute>> | undefined;
-	findAction<TBody = Record<string, unknown>, TResponse = unknown, TRoute extends string = string>(
-		matcher: RouteMatcher<TRoute>,
-		filter: RouteActionFilter<RouteParams<TRoute>>,
-	): TypedMatchedAction<TBody, TResponse, RouteParams<TRoute>> | undefined;
-	findAction<TBody = Record<string, unknown>, TResponse = unknown>(
-		matcher: ActionFilter | ActionPredicate,
-	): TypedMatchedAction<TBody, TResponse> | undefined;
-	findAction<TBody = Record<string, unknown>, TResponse = unknown>(
-		matcher: ActionMatcher,
-		paramsOrFilter?: Partial<Record<string, string>> | RouteActionFilter,
-	): TypedMatchedAction<TBody, TResponse> | undefined;
-	findAction(
-		matcher: ActionMatcher,
-		paramsOrFilter?: Partial<Record<string, string>> | RouteActionFilter,
-	): MatchedAction | undefined {
-		return this.findActions(matcher, paramsOrFilter)[0];
-	}
-
-	requireAction<TBody = Record<string, unknown>, TResponse = unknown, TRoute extends string = string>(
-		matcher: RouteMatcher<TRoute>,
-		params?: Partial<RouteParams<TRoute>>,
-	): TypedMatchedAction<TBody, TResponse, RouteParams<TRoute>>;
-	requireAction<TBody = Record<string, unknown>, TResponse = unknown>(
-		matcher: ActionFilter | ActionPredicate,
-	): TypedMatchedAction<TBody, TResponse>;
-	requireAction<TBody = Record<string, unknown>, TResponse = unknown>(
-		matcher: ActionMatcher,
-		paramsOrFilter?: Partial<Record<string, string>> | RouteActionFilter,
-	): TypedMatchedAction<TBody, TResponse> {
-		const action = this.findAction(matcher, paramsOrFilter) as TypedMatchedAction<TBody, TResponse> | undefined;
-		if (action) return action;
-		throw new Error(
-			`requireAction: no action matched ${this.describeMatcher(matcher)}. Actions seen:\n${this.actionsSeen()}`,
-		);
-	}
-
-	waitForAction<TBody = Record<string, unknown>, TResponse = unknown, TRoute extends string = string>(
-		matcher: RouteMatcher<TRoute>,
-		timeoutMs?: number,
-	): Promise<TypedMatchedAction<TBody, TResponse, RouteParams<TRoute>>>;
-	waitForAction<TBody = Record<string, unknown>, TResponse = unknown>(
-		matcher: ActionFilter,
-		timeoutMs?: number,
-	): Promise<TypedMatchedAction<TBody, TResponse>>;
-	waitForAction<TBody = Record<string, unknown>, TResponse = unknown>(
-		predicate: ActionPredicate,
-		timeoutMs?: number,
-	): Promise<TypedMatchedAction<TBody, TResponse>>;
-	waitForAction(
-		matcherOrPredicate: RouteMatcher | ActionFilter | ActionPredicate,
-		timeoutMs = 2000,
-	): Promise<MatchedAction> {
+	/** @internal Temporal coordination for dispatch machinery; user assertions belong to bot.restCalls(). */
+	waitUntilAction(matcherOrPredicate: RouteMatcher | ActionPredicate, timeoutMs = 2000): Promise<RecordedAction> {
 		return this.listenForAction(matcherOrPredicate, timeoutMs, 'settled');
 	}
 
+	/** @internal One-line delegation kept for `request(matcher, params)`; tests use the free `routeUrl`. */
 	routeUrl<TRoute extends string>(matcher: RouteMatcher<TRoute>, params: RouteParams<TRoute>): `/${string}` {
 		return routeUrl(matcher, params);
 	}
@@ -664,11 +574,9 @@ export class MockApiHandler extends ApiHandler {
 		return this.actions.map(action => `  ${this.describeAction(action)}`).join('\n');
 	}
 
-	private describeMatcher(matcher: RouteMatcher | ActionFilter | ActionPredicate): string {
+	private describeMatcher(matcher: RouteMatcher | ActionPredicate): string {
 		if (typeof matcher === 'function') return '(predicate)';
-		const route =
-			typeof matcher.route === 'string' ? matcher.route : matcher.route instanceof RegExp ? matcher.route : '*';
-		return `${matcher.method ?? '*'} ${route}`;
+		return `${matcher.method} ${matcher.route}`;
 	}
 
 	private describeAction(action: RecordedAction): string {
@@ -681,28 +589,19 @@ export class MockApiHandler extends ApiHandler {
 	}
 
 	private listenForAction(
-		matcherOrPredicate: RouteMatcher | ActionFilter | ActionPredicate,
+		matcherOrPredicate: RouteMatcher | ActionPredicate,
 		timeoutMs: number,
 		resolveOn: NotifyPhase,
-	): Promise<MatchedAction> {
-		const enrich = (action: RecordedAction): MatchedAction => {
-			if (typeof matcherOrPredicate === 'function') return { ...action, params: {} };
-			if (isRouteMatcherOnly(matcherOrPredicate)) {
-				return { ...action, params: this.matchRouteParams(matcherOrPredicate, action) ?? {} };
-			}
-			return { ...action, params: this.filterParams(action, matcherOrPredicate) };
-		};
+	): Promise<RecordedAction> {
 		const predicate =
 			typeof matcherOrPredicate === 'function'
 				? matcherOrPredicate
-				: isRouteMatcherOnly(matcherOrPredicate)
-					? (action: RecordedAction) => this.matches(matcherOrPredicate, action)
-					: (action: RecordedAction) => this.filterMatches(action, matcherOrPredicate, {});
+				: (action: RecordedAction) => this.matches(matcherOrPredicate, action);
 
 		const existing = this.actions.find(
 			action => predicate(action) && (resolveOn === 'pending' || action.settled || action.error !== undefined),
 		);
-		if (existing) return Promise.resolve(enrich(existing));
+		if (existing) return Promise.resolve(existing);
 
 		return new Promise((resolve, reject) => {
 			let listener!: ActionListener;
@@ -711,7 +610,7 @@ export class MockApiHandler extends ApiHandler {
 					this.listeners = this.listeners.filter(entry => entry !== listener);
 					reject(
 						new Error(
-							`waitForAction timed out after ${timeoutMs}ms waiting for ${this.describeMatcher(
+							`Action wait timed out after ${timeoutMs}ms waiting for ${this.describeMatcher(
 								matcherOrPredicate,
 							)}. Actions seen:\n${this.actionsSeen()}`,
 						),
@@ -723,7 +622,7 @@ export class MockApiHandler extends ApiHandler {
 					if (!predicate(action)) return;
 					realClearTimeout(listener.timer);
 					this.listeners = this.listeners.filter(entry => entry !== listener);
-					resolve(enrich(action));
+					resolve(action);
 				},
 			};
 			this.listeners.push(listener);
@@ -731,7 +630,7 @@ export class MockApiHandler extends ApiHandler {
 	}
 
 	gateNext(
-		matcher?: RouteMatcher | ActionFilter | ActionPredicate,
+		matcher?: RouteMatcher | ActionPredicate,
 		dispatchId?: number,
 	): {
 		hit: Promise<RecordedAction>;
@@ -742,17 +641,20 @@ export class MockApiHandler extends ApiHandler {
 		const test = (action: RecordedAction) =>
 			action.seq >= startSeq &&
 			(dispatchId === undefined || action.dispatchId === dispatchId) &&
-			(!matcher ||
-				(typeof matcher === 'function'
-					? matcher(action)
-					: isRouteMatcherOnly(matcher)
-						? this.matches(matcher, action)
-						: this.filterMatches(action, matcher, {})));
+			(!matcher || (typeof matcher === 'function' ? matcher(action) : this.matches(matcher, action)));
 		const entry = { test, hold: () => g.open, release: g.release };
 		this.gates.push(entry);
-		const hit = this.listenForAction(test, 2000, 'pending').finally(() => {
+		// Unwind on failure only. Releasing when the wait *succeeds* — which is what a .finally here does —
+		// opens the gate on the microtask that settles `hit`, always before the awaiting test resumes: the
+		// caller would be handed an action whose request has already been let go, and the returned release()
+		// would have nothing left to release. Holding is the whole point of the surface.
+		//
+		// The success path needs no cleanup here: `request()` removes the entry from `gates` when it matches.
+		// A timed-out or rejected wait does, or the parked request would wait on a gate nobody can reach.
+		const hit = this.listenForAction(test, 2000, 'pending').catch(error => {
 			this.gates = this.gates.filter(other => other !== entry);
 			g.release();
+			throw error;
 		});
 		return { hit, release: g.release };
 	}
@@ -798,9 +700,9 @@ export class MockApiHandler extends ApiHandler {
 	}
 
 	private statusCodeFor(error: unknown): number | undefined {
-		if (error instanceof MockApiError) return error.status;
 		if (isRecord(error)) {
 			if (typeof error.status === 'number') return error.status;
+			// parseError files the status under metadata; a rate-limit notification is decided off it.
 			const metadata = error.metadata;
 			if (isRecord(metadata) && typeof metadata.status === 'number') return metadata.status;
 		}
@@ -808,7 +710,6 @@ export class MockApiHandler extends ApiHandler {
 	}
 
 	private errorBodyFor(error: unknown): unknown {
-		if (error instanceof MockApiError) return { code: error.code, message: error.message };
 		if (isRecord(error) && isRecord(error.metadata) && 'response' in error.metadata) return error.metadata.response;
 		return { message: error instanceof Error ? error.message : String(error) };
 	}
@@ -833,10 +734,18 @@ export class MockApiHandler extends ApiHandler {
 			files: requestOptions.files,
 			reason: requestOptions.reason,
 		};
-		const dispatchId = dispatchStore.getStore()?.dispatchId ?? 0;
-		const action: RecordedAction = { seq: this.seq++, dispatchId, ...pending, settled: false, response: undefined };
+		const context = dispatchStore.getStore();
+		const dispatchId = context?.dispatchId ?? 0;
+		const action: RecordedAction = {
+			seq: this.seq++,
+			dispatchId,
+			...(context?.sessionKey === undefined ? {} : { sessionKey: context.sessionKey }),
+			...pending,
+			settled: false,
+			response: undefined,
+		};
 		this.actions.push(action);
-		this.inFlight.set(dispatchId, (this.inFlight.get(dispatchId) ?? 0) + 1);
+		this.inFlight.add(action);
 		this.notifyListeners(action, 'pending');
 		const observer = this.observerRequest(url, requestOptions);
 		const notifier = this as unknown as ApiObserverNotifier;
@@ -855,6 +764,7 @@ export class MockApiHandler extends ApiHandler {
 
 			try {
 				const response = await this.resolveResponse(pending);
+				this.assertUsableResponse(response, pending);
 				action.response = response;
 				action.settled = true;
 				if (response !== null && typeof response === 'object' && this.syntheticResponses.has(response)) {
@@ -865,7 +775,13 @@ export class MockApiHandler extends ApiHandler {
 				}
 				this.notifyListeners(action, 'settled');
 				return response as T;
-			} catch (error) {
+			} catch (thrown) {
+				// The single seam where a Discord failure becomes an error. World guards throw a MockApiError from
+				// call sites that know only the DiscordErrorInit; here the method and route are still in hand, so
+				// seyfert's own parseError can build exactly what it builds for a real 4xx. Translating once, for
+				// every route, is what keeps `rest.fail()` and a seeded world from training a command against two
+				// different error shapes. Anything else (a responder bug, an unusable payload) passes through.
+				const error = thrown instanceof MockApiError ? this.discordError(method, url, thrown.discord) : thrown;
 				action.error = error;
 				action.settled = true;
 				const statusCode = this.statusCodeFor(error);
@@ -884,26 +800,26 @@ export class MockApiHandler extends ApiHandler {
 				throw error;
 			}
 		} finally {
-			const remaining = (this.inFlight.get(dispatchId) ?? 1) - 1;
-			if (remaining > 0) this.inFlight.set(dispatchId, remaining);
-			else this.inFlight.delete(dispatchId);
+			this.inFlight.delete(action);
 		}
 	}
 
 	/**
-	 * Number of REST requests currently between request() entry and settlement (includes gated/parked requests).
-	 * With a dispatchId, counts only that dispatch's requests; without, the global total.
+	 * REST requests currently between request() entry and completion (includes gated/parked requests).
+	 * A numeric scope selects one dispatch; a predicate can express interaction-token ownership exactly.
 	 */
-	pendingRequestCount(dispatchId?: number): number {
-		if (dispatchId !== undefined) return this.inFlight.get(dispatchId) ?? 0;
-		let total = 0;
-		for (const count of this.inFlight.values()) total += count;
-		return total;
+	pendingRequests(scope?: number | ActionPredicate): RecordedAction[] {
+		if (scope === undefined) return [...this.inFlight];
+		if (typeof scope === 'number') return [...this.inFlight].filter(action => action.dispatchId === scope);
+		return [...this.inFlight].filter(scope);
 	}
 
-	hasPendingRequests(dispatchId?: number): boolean {
-		if (dispatchId !== undefined) return (this.inFlight.get(dispatchId) ?? 0) > 0;
-		return this.inFlight.size > 0;
+	pendingRequestCount(scope?: number | ActionPredicate): number {
+		return this.pendingRequests(scope).length;
+	}
+
+	hasPendingRequests(scope?: number | ActionPredicate): boolean {
+		return this.pendingRequests(scope).length > 0;
 	}
 
 	private resolveResponse(pending: PendingAction): unknown {
@@ -915,7 +831,11 @@ export class MockApiHandler extends ApiHandler {
 			interceptor.names.forEach((name, index) => {
 				params[name] = match[index + 1];
 			});
-			return interceptor.responder(pending, params);
+			const answer = interceptor.responder(pending, params);
+			// A `fail({ when })` whose predicate said no steps aside, so the route's real handler still answers.
+			// Anything else would make a conditional failure silently suppress the behaviour it conditions on.
+			if (answer === PASS_TO_NEXT) continue;
+			return answer;
 		}
 
 		// No interceptor handled this request. Surface the gap (respecting onUnhandledRest) before answering with
@@ -923,6 +843,26 @@ export class MockApiHandler extends ApiHandler {
 		// newly introduced non-GET endpoints.
 		this.reportUnhandled(pending);
 		return this.markSynthetic(this.syntheticResponse(pending));
+	}
+
+	/**
+	 * Catch a responder that answered with something seyfert cannot treat as a Discord payload, at the seam
+	 * where the route and the request are still known.
+	 *
+	 * Unguarded, a returned string dies several frames away inside seyfert's cache — `TypeError: Cannot read
+	 * properties of undefined (reading 'startsWith')` — which names neither the route, nor the responder, nor
+	 * this package. `undefined` and `null` stay legal: an empty body is what a 204 looks like. Checked on the
+	 * value the caller already awaited, not by wrapping the responder: an extra `.then` would delay `settled`
+	 * by a microtask, and the drain guarantees are measured in those.
+	 */
+	private assertUsableResponse(value: unknown, pending: PendingAction): void {
+		if (value === undefined || value === null || typeof value === 'object') return;
+		throw new TypeError(
+			`intercept(${pending.method} ${pending.route}): the responder returned the ${typeof value} ` +
+				`${JSON.stringify(value)}, which is not a Discord payload. Return the object the route answers with ` +
+				'(or undefined for an empty body); to make the call fail, throw — rest.fail(matcher, { status, code }) ' +
+				'builds the error Discord would send.',
+		);
 	}
 
 	private syntheticResponse(pending: PendingAction): unknown {

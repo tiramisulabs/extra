@@ -60,19 +60,18 @@ describe('actors and dispatch tempo', () => {
 		const bot = await createMockBot({ components: [OnlyFooButton] });
 
 		// The dispatch executor rejects (no component handler matches "nomatch"); without surfacing that
-		// rejection, until() would wait the full waitForAction timeout and report a generic "timed out" error.
+		// rejection, until() would otherwise wait for its control timeout and report a generic timeout error.
 		await expect(
-			bot.clickButton('nomatch', { allowSyntheticSource: true }).until(Routes.createMessage),
+			bot.actor({ session: false }).clickButton('nomatch', { allowSyntheticSource: true }).until(Routes.createMessage),
 		).rejects.toThrow(/no handler matched customId "nomatch"/);
 		await bot.close();
 	});
 
-	test('waitForAction with a plain route matcher resolves after the response is populated', async () => {
+	test('restCalls exposes the populated response after a stateful step', async () => {
 		const bot = await createMockBot({ commands: [RouteWriteCommand] });
-		const pending = bot.waitForAction(Routes.createMessage);
 		await bot.slash({ name: 'route-write' });
 
-		const write = await pending;
+		const [write] = bot.restCalls(Routes.createMessage);
 		expect((write.response as { id?: string }).id).toBeDefined();
 		await bot.close();
 	});
@@ -110,21 +109,50 @@ describe('actors and dispatch tempo', () => {
 
 	test('until suspends the command at a matching call', async () => {
 		const bot = await createMockBot({ commands: [SlowBanCommand] });
-		const dispatch = bot.slash({ name: 'slowban' });
+		const dispatch = bot.actor({ session: false }).slash({ name: 'slowban' });
 
 		const inFlight = await dispatch.until(Routes.ban);
 		expect(inFlight.response).toBeUndefined();
-		expect(bot.findActions(Routes.ban)).toHaveLength(1);
-		expect(bot.findAction(Routes.ban)?.params).toMatchObject({ guildId: '1', userId: '42' });
+		expect(bot.rest.matchRouteParams(Routes.ban, inFlight)).toMatchObject({ guildId: '1', userId: '42' });
 
 		const result = await dispatch;
 		expect(result.content).toBe('logged');
 		await bot.close();
 	});
 
+	test('the gate holds the dispatch until release, not just until the wait resolves', async () => {
+		@Declare({ name: 'spam', description: 'posts three messages back to back' })
+		class SpamCommand extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.client.messages.write(ctx.channelId, { content: 'one' });
+				await ctx.client.messages.write(ctx.channelId, { content: 'two' });
+				await ctx.client.messages.write(ctx.channelId, { content: 'three' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [SpamCommand] });
+		const dispatch = bot.actor({ session: false }).slash({ name: 'spam' });
+
+		const hit = await dispatch.until(Routes.createMessage);
+		// README's guarantee for a resolved until(): the call started, the response is still undefined.
+		// A handler with no slow await between its calls is what makes this observable — the gate used to
+		// open on the microtask that settled the wait, so the rest of the handler ran anyway.
+		expect(hit.settled).toBe(false);
+		expect(hit.response).toBeUndefined();
+		expect(bot.restCalls(Routes.createMessage)).toHaveLength(1);
+
+		// Still parked several macrotasks later, with nothing released.
+		for (let turn = 0; turn < 5; turn++) await new Promise(resolve => setTimeout(resolve, 0));
+		expect(bot.restCalls(Routes.createMessage)).toHaveLength(1);
+
+		await dispatch;
+		expect(bot.restCalls(Routes.createMessage)).toHaveLength(3);
+		await bot.close();
+	});
+
 	test('checkpoints chain and advance between matching calls', async () => {
 		const bot = await createMockBot({ commands: [SlowBanCommand] });
-		const dispatch = bot.slash({ name: 'slowban' });
+		const dispatch = bot.actor({ session: false }).slash({ name: 'slowban' });
 
 		const ban = await dispatch.until(Routes.ban);
 		expect(ban.response).toBeUndefined();
@@ -140,10 +168,10 @@ describe('actors and dispatch tempo', () => {
 	test('a dispatch is lazy until awaited or stepped', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 		const bot = await createMockBot({ commands: [SlowBanCommand] });
-		bot.slash({ name: 'slowban' });
+		bot.actor({ session: false }).slash({ name: 'slowban' });
 
 		await new Promise(resolve => setImmediate(resolve));
-		expect(bot.actions).toHaveLength(0);
+		expect(bot.rest.actions).toHaveLength(0);
 		await bot.close();
 		expect(warn).toHaveBeenCalledWith(expect.stringContaining('dispatch(es) were created but never awaited'));
 		warn.mockRestore();

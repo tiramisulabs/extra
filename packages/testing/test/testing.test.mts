@@ -17,24 +17,24 @@ import { assert, describe, expect, test } from 'vitest';
 import {
 	channelOption,
 	idAge,
-	mockChannel,
-	mockClient,
 	mockCommandContext,
 	mockComponentContext,
-	mockEmoji,
-	mockGuild,
 	mockId,
-	mockMember,
-	mockMessage,
 	mockModalContext,
-	mockQueues,
-	mockRole,
 	mockScene,
-	mockScheduler,
-	mockUser,
-	mockVoiceState,
 	resetMockIds,
+	richChannel,
+	richEmoji,
+	richGuild,
+	richMember,
+	richMessage,
+	richRole,
+	richUser,
+	richVoiceState,
 	setupSlipherTesting,
+	stubClient,
+	stubQueues,
+	stubScheduler,
 	timestampFrom,
 	userOption,
 } from '../src';
@@ -43,10 +43,10 @@ describe('entity factories', () => {
 	test('generate unique IDs by default', () => {
 		resetMockIds();
 
-		const first = mockUser();
-		const second = mockUser();
-		const guild = mockGuild();
-		const channel = mockChannel();
+		const first = richUser();
+		const second = richUser();
+		const guild = richGuild();
+		const channel = richChannel();
 
 		assert.notEqual(first.id, second.id);
 		assert.notEqual(first.id, guild.id);
@@ -54,10 +54,10 @@ describe('entity factories', () => {
 	});
 
 	test('preserve explicit overrides', () => {
-		const user = mockUser({ id: '1', username: 'socram', bot: true });
-		const guild = mockGuild({ id: '2', name: 'Seyfert' });
-		const channel = mockChannel({ id: '3', guildId: null });
-		const member = mockMember({ user, roles: ['admin'], nick: 'Soc' });
+		const user = richUser({ id: '1', username: 'socram', bot: true });
+		const guild = richGuild({ id: '2', name: 'Seyfert' });
+		const channel = richChannel({ id: '3', guildId: null });
+		const member = richMember({ user, roles: ['admin'], nick: 'Soc' });
 
 		assert.equal(user.id, '1');
 		assert.equal(user.username, 'socram');
@@ -68,22 +68,46 @@ describe('entity factories', () => {
 		assert.equal(member.nick, 'Soc');
 	});
 
-	test('mockChannel implements seyfert type-guards from type (no stub needed)', () => {
-		const text = mockChannel({ type: ChannelType.GuildText });
+	test('richGuild mirrors seyfert icon data and CDN URL behavior', () => {
+		const defaultGuild = richGuild({ id: 'guild-default' });
+		const withoutIcon = richGuild({ id: 'guild-null', icon: null });
+		const withIcon = richGuild({ id: 'guild-one', icon: 'icon-one' });
+		const anotherGuild = richGuild({ id: 'guild-two', icon: 'icon-two' });
+
+		assert.equal(defaultGuild.icon, null);
+		assert.equal(defaultGuild.iconURL(), undefined);
+		assert.equal(withoutIcon.icon, null);
+		assert.equal(withoutIcon.iconURL(), undefined);
+		assert.equal(withIcon.icon, 'icon-one');
+		assert.equal(withIcon.iconURL(), 'https://cdn.discordapp.com/icons/guild-one/icon-one.png');
+		assert.equal(
+			withIcon.iconURL({ extension: 'webp', size: 128 }),
+			'https://cdn.discordapp.com/icons/guild-one/icon-one.webp?size=128',
+		);
+		assert.equal(anotherGuild.icon, 'icon-two');
+		assert.equal(anotherGuild.iconURL(), 'https://cdn.discordapp.com/icons/guild-two/icon-two.png');
+
+		withIcon.icon = 'updated-icon';
+		assert.equal(withIcon.iconURL(), 'https://cdn.discordapp.com/icons/guild-one/updated-icon.png');
+		assert.equal(anotherGuild.iconURL(), 'https://cdn.discordapp.com/icons/guild-two/icon-two.png');
+	});
+
+	test('richChannel implements seyfert type-guards from type (no stub needed)', () => {
+		const text = richChannel({ type: ChannelType.GuildText });
 		assert.equal(text.isTextGuild(), true);
 		assert.equal(text.isGuildTextable(), true);
 		assert.equal(text.isVoice(), false);
 
-		const voice = mockChannel({ type: ChannelType.GuildVoice });
+		const voice = richChannel({ type: ChannelType.GuildVoice });
 		assert.equal(voice.isVoice(), true);
 		assert.equal(voice.isTextGuild(), false);
 		assert.equal(voice.isGuildTextable(), true); // voice carries text in seyfert (AllGuildTextableChannels)
 
-		const category = mockChannel({ type: ChannelType.GuildCategory });
+		const category = richChannel({ type: ChannelType.GuildCategory });
 		assert.equal(category.isGuildTextable(), false);
 		assert.equal(category.isTextGuild(), false);
 
-		const dm = mockChannel({ type: ChannelType.DM, guildId: null });
+		const dm = richChannel({ type: ChannelType.DM, guildId: null });
 		assert.equal(dm.isDM(), true);
 		assert.equal(dm.isGuildTextable(), false); // textable, but not a guild channel
 
@@ -92,22 +116,22 @@ describe('entity factories', () => {
 	});
 
 	test('entities derive seyfert getters from their data (toString/tag/name/url/createdAt)', () => {
-		const user = mockUser({ id: '900000000000000005', username: 'neo', globalName: null, discriminator: '7' });
+		const user = richUser({ id: '900000000000000005', username: 'neo', globalName: null, discriminator: '7' });
 		assert.equal(`${user}`, '<@900000000000000005>'); // toString → mention (was [object Object])
 		assert.equal(user.tag, 'neo#7'); // no globalName → username#discriminator
 		assert.equal(user.name, 'neo');
 		assert.ok(user.createdAt instanceof Date);
 		assert.equal(typeof user.createdTimestamp, 'number');
 
-		const withGlobal = mockUser({ username: 'neo', globalName: 'Neo' });
+		const withGlobal = richUser({ username: 'neo', globalName: 'Neo' });
 		assert.equal(withGlobal.tag, 'Neo'); // globalName wins
 		assert.equal(withGlobal.name, 'Neo');
 
-		const channel = mockChannel({ id: '5', guildId: '9' });
+		const channel = richChannel({ id: '5', guildId: '9' });
 		assert.equal(`${channel}`, '<#5>');
 		assert.equal(channel.url, 'https://discord.com/channels/9/5');
 
-		const member = mockMember({ user });
+		const member = richMember({ user });
 		assert.equal(`${member}`, '<@900000000000000005>');
 		assert.equal(member.id, user.id); // member.id mirrors its user's id
 		assert.equal(member.tag, 'neo#7');
@@ -115,28 +139,28 @@ describe('entity factories', () => {
 		assert.equal(member.username, 'neo');
 		assert.equal(member.bot, false);
 
-		const nicked = mockMember({ user, nick: 'Trinity' });
+		const nicked = richMember({ user, nick: 'Trinity' });
 		assert.equal(nicked.displayName, 'Trinity'); // nick wins
 
 		// avatar/banner/decoration URLs via seyfert's CDN router (no real rest client)
 		assert.match(user.defaultAvatarURL(), /cdn\.discordapp\.com\/embed\/avatars\/\d+\.png/);
-		const withAssets = mockUser({ id: '5', avatar: 'abc', banner: 'bh', avatarDecorationData: { asset: 'deco' } });
+		const withAssets = richUser({ id: '5', avatar: 'abc', banner: 'bh', avatarDecorationData: { asset: 'deco' } });
 		assert.equal(withAssets.avatarURL(), 'https://cdn.discordapp.com/avatars/5/abc.png');
 		assert.equal(withAssets.bannerURL(), 'https://cdn.discordapp.com/banners/5/bh.png');
 		assert.equal(withAssets.avatarDecorationURL(), 'https://cdn.discordapp.com/avatar-decoration-presets/deco.png');
 		assert.equal(user.bannerURL(), undefined); // no banner → undefined, like seyfert
 		// friendly (non-snowflake) ids must not throw in defaultAvatarURL's BigInt(id) path
-		assert.match(mockUser({ id: 'u1' }).avatarURL(), /embed\/avatars\/0\.png/);
+		assert.match(richUser({ id: 'u1' }).avatarURL(), /embed\/avatars\/0\.png/);
 
 		// message jump link from ids + user alias
-		const message = mockMessage({ id: '5', channelId: '3', guildId: '9', author: user });
+		const message = richMessage({ id: '5', channelId: '3', guildId: '9', author: user });
 		assert.equal(message.url, 'https://discord.com/channels/9/3/5');
-		assert.equal(mockMessage({ id: '5', channelId: '3' }).url, 'https://discord.com/channels/@me/3/5');
+		assert.equal(richMessage({ id: '5', channelId: '3' }).url, 'https://discord.com/channels/@me/3/5');
 		assert.equal(message.user, message.author); // Message.user aliases author
 	});
 
 	test('member.roles is seyfert’s manager: keys pure, list/permissions data-backed, add/remove mutate', async () => {
-		const member = mockMember({
+		const member = richMember({
 			roles: ['r1', 'r2'],
 			guildId: 'g1',
 			roleData: [
@@ -160,46 +184,46 @@ describe('entity factories', () => {
 	});
 
 	test('member.roles.list() without roleData throws a directed error', async () => {
-		const member = mockMember({ roles: ['r1'] });
+		const member = richMember({ roles: ['r1'] });
 		await expect(member.roles.list()).rejects.toThrow(/no role source/);
 	});
 
-	test('mockRole / mockEmoji / mockVoiceState mirror seyfert entities (mention/url/derived getters)', () => {
-		const role = mockRole({ id: '5', permissions: '8' }); // 8 = Administrator
+	test('richRole / richEmoji / richVoiceState mirror seyfert entities (mention/url/derived getters)', () => {
+		const role = richRole({ id: '5', permissions: '8' }); // 8 = Administrator
 		assert.equal(`${role}`, '<@&5>');
 		assert.equal(role.permissions.has('Administrator'), true);
 		assert.ok(role.createdAt instanceof Date);
 
-		const emoji = mockEmoji({ id: '5', name: 'smile' });
+		const emoji = richEmoji({ id: '5', name: 'smile' });
 		assert.equal(`${emoji}`, '<:smile:5>');
-		assert.equal(mockEmoji({ id: '5', name: 'wave', animated: true }).toString(), '<a:wave:5>');
+		assert.equal(richEmoji({ id: '5', name: 'wave', animated: true }).toString(), '<a:wave:5>');
 		assert.equal(emoji.url(), 'https://cdn.discordapp.com/emojis/5.png');
 
-		const voice = mockVoiceState({ selfMute: true, deaf: true });
+		const voice = richVoiceState({ selfMute: true, deaf: true });
 		assert.equal(voice.isMuted, true); // selfMute
 		assert.equal(voice.isDeafened, true); // deaf
 		assert.equal(voice.isStreaming, false);
 	});
 
 	test('member.hasTimeout reflects communication_disabled_until', () => {
-		assert.equal(mockMember().hasTimeout, false); // no timeout
+		assert.equal(richMember().hasTimeout, false); // no timeout
 		const future = new Date(Date.now() + 60_000).toISOString();
-		assert.equal(typeof mockMember({ communicationDisabledUntil: future }).hasTimeout, 'number');
+		assert.equal(typeof richMember({ communicationDisabledUntil: future }).hasTimeout, 'number');
 		const past = new Date(Date.now() - 60_000).toISOString();
-		assert.equal(mockMember({ communicationDisabledUntil: past }).hasTimeout, false); // expired
+		assert.equal(richMember({ communicationDisabledUntil: past }).hasTimeout, false); // expired
 	});
 
 	test('preserve an explicit null globalName', () => {
-		const user = mockUser({ username: 'socram', globalName: null });
+		const user = richUser({ username: 'socram', globalName: null });
 
 		assert.equal(user.globalName, null);
 		assert.equal(user.global_name, null);
 	});
 
 	test('factory outputs can be used directly as interaction option payloads', () => {
-		const user = mockUser({ id: 'factory-user', username: 'socram', globalName: 'Socram' });
-		const channel = mockChannel({ id: 'factory-channel', guildId: 'factory-guild' });
-		const member = mockMember({ user, joinedAt: '2026-06-14T00:00:00.000Z' });
+		const user = richUser({ id: 'factory-user', username: 'socram', globalName: 'Socram' });
+		const channel = richChannel({ id: 'factory-channel', guildId: 'factory-guild' });
+		const member = richMember({ user, joinedAt: '2026-06-14T00:00:00.000Z' });
 
 		const encodedUser = userOption(user);
 		const encodedChannel = channelOption(channel);
@@ -222,7 +246,7 @@ describe('entity factories', () => {
 
 		resetMockIds(' 42 ');
 
-		assert.equal(mockUser().id, '661720242761760810');
+		assert.equal(richUser().id, '661720242761760810');
 	});
 });
 
@@ -249,7 +273,7 @@ describe('time-aware mock ids', () => {
 		mockId({ at: new Date('2024-01-01T00:00:00.000Z') });
 
 		// plain mockId() is still byte-identical to seq 42
-		assert.equal(mockUser().id, '661720242761760810');
+		assert.equal(richUser().id, '661720242761760810');
 	});
 
 	test('ids pinned to the same instant stay distinct', () => {
@@ -289,7 +313,7 @@ describe('mockCommandContext', () => {
 	});
 
 	test('creates direct-message-like contexts without impossible guild state', () => {
-		const member = mockMember();
+		const member = richMember();
 		const ctx = mockCommandContext({ guild: null, guildId: '2', member });
 
 		assert.equal(ctx.guildId, undefined);
@@ -299,8 +323,8 @@ describe('mockCommandContext', () => {
 	});
 
 	test('guild and channel use Seyfert method shape', async () => {
-		const guild = mockGuild({ id: 'guild-1' });
-		const channel = mockChannel({ id: 'channel-1', guildId: guild.id });
+		const guild = richGuild({ id: 'guild-1' });
+		const channel = richChannel({ id: 'channel-1', guildId: guild.id });
 		const ctx = mockCommandContext({ guild, channel });
 
 		assert.equal(typeof ctx.guild, 'function');
@@ -316,7 +340,7 @@ describe('mockCommandContext', () => {
 		const channel = await ctx.channel();
 
 		assert.equal(channel.id, 'c1');
-		assert.equal(channel.position, 0); // filled by mockChannel from the partial
+		assert.equal(channel.position, 0); // filled by richChannel from the partial
 		assert.equal(channel.nsfw, false);
 		assert.equal(channel.isGuildTextable(), true); // guard derived from type, no stub
 	});
@@ -576,8 +600,8 @@ describe('standalone interaction contexts', () => {
 });
 
 describe('standalone stubs', () => {
-	test('mockQueues returns stable named queues', async () => {
-		const queues = mockQueues();
+	test('stubQueues returns stable named queues', async () => {
+		const queues = stubQueues();
 		const first = queues.get('email');
 		const second = queues.get('email');
 
@@ -588,8 +612,8 @@ describe('standalone stubs', () => {
 		assert.equal(second.jobs[0]?.name, 'send');
 	});
 
-	test('mockQueues rejects ambiguous string payload plus options-shaped data', async () => {
-		const queue = mockQueues().get('email');
+	test('stubQueues rejects ambiguous string payload plus options-shaped data', async () => {
+		const queue = stubQueues().get('email');
 
 		await expect(queue.add('send', { delay: '5s' })).rejects.toThrow(/Ambiguous queue\.add\(\) call/);
 
@@ -599,17 +623,17 @@ describe('standalone stubs', () => {
 		assert.deepEqual(job.payload, { delay: '5s' });
 	});
 
-	test('mockScheduler records dynamic tasks', () => {
-		const scheduler = mockScheduler();
+	test('stubScheduler records dynamic tasks', () => {
+		const scheduler = stubScheduler();
 		const task = scheduler.add('heartbeat', '5m', () => undefined);
 
 		assert.equal(task.name, 'heartbeat');
 		assert.equal(scheduler.tasks.length, 1);
 	});
 
-	test('mockClient defaults and explicit overrides are reachable', () => {
-		const queues = mockQueues();
-		const client = mockClient({ queues, botId: 'bot-1', applicationId: 'app-1', extra: { custom: 1 } });
+	test('stubClient defaults and explicit overrides are reachable', () => {
+		const queues = stubQueues();
+		const client = stubClient({ queues, botId: 'bot-1', applicationId: 'app-1', extra: { custom: 1 } });
 
 		assert.equal(client.queues, queues);
 		assert.equal(client.botId, 'bot-1');
@@ -621,8 +645,8 @@ describe('standalone stubs', () => {
 });
 
 describe('Phase-4a additions', () => {
-	test('mockMessage mirrors camelCase/snake_case and defaults', () => {
-		const m = mockMessage({ channelId: 'chan-1', guildId: 'guild-1', content: 'hi' });
+	test('richMessage mirrors camelCase/snake_case and defaults', () => {
+		const m = richMessage({ channelId: 'chan-1', guildId: 'guild-1', content: 'hi' });
 		assert.equal(m.channelId, 'chan-1');
 		assert.equal(m.channel_id, 'chan-1');
 		assert.equal(m.guildId, 'guild-1');
@@ -632,8 +656,8 @@ describe('Phase-4a additions', () => {
 		assert.deepEqual(m.embeds, []);
 	});
 
-	test('mockMessage omits guild fields for a DM message', () => {
-		const m = mockMessage({ guildId: null });
+	test('richMessage omits guild fields for a DM message', () => {
+		const m = richMessage({ guildId: null });
 		assert.equal('guildId' in m, false);
 		assert.equal('guild_id' in m, false);
 	});
@@ -665,11 +689,11 @@ describe('Phase-4a additions', () => {
 
 			// the registered hook resets ids to the deterministic start
 			resetMockIds();
-			const firstAtStart = mockUser().id;
+			const firstAtStart = richUser().id;
 			resetMockIds(500);
-			mockUser(); // advance the sequence
+			richUser(); // advance the sequence
 			registered?.(); // what beforeEach would run -> resetMockIds()
-			assert.equal(mockUser().id, firstAtStart);
+			assert.equal(richUser().id, firstAtStart);
 
 			// no-op when no hook is present
 			(globalThis as { beforeEach?: unknown }).beforeEach = undefined;

@@ -1,13 +1,11 @@
-import { SpanStatusCode } from '@opentelemetry/api';
+import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
 import type { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import { assert, describe, test } from 'vitest';
 import { type EventsApi, instrumentEvents } from '../src/instrument/events';
-import { setTraceServiceName } from '../src/trace-api';
 import { installTestTracer } from './helpers/otel-test-provider.mts';
 
 function withProvider(run: (exporter: InMemorySpanExporter) => Promise<void> | void) {
 	const { exporter, shutdown } = installTestTracer();
-	setTraceServiceName('events-test');
 	return Promise.resolve(run(exporter)).finally(() => shutdown());
 }
 
@@ -50,10 +48,14 @@ describe('instrumentEvents (gateway runEvent)', () => {
 	test('fake path produces span event messageCreate', async () => {
 		await withProvider(async exporter => {
 			const { client, calls } = fakeClient();
-			const cleanup = instrumentEvents(client, {
-				checkIfShouldTrace: () => true,
-				getMetrics: () => undefined,
-			});
+			const cleanup = instrumentEvents(
+				{ client, api: undefined },
+				{
+					traceEnabled: true,
+					checkIfShouldTrace: () => true,
+					getMetrics: () => undefined,
+				},
+			);
 
 			const result = await client.events.runEvent('messageCreate', client, { content: 'hi' }, 0);
 
@@ -62,6 +64,7 @@ describe('instrumentEvents (gateway runEvent)', () => {
 			const spans = exporter.getFinishedSpans();
 			assert.equal(spans.length, 1);
 			assert.equal(spans[0].name, 'event messageCreate');
+			assert.equal(spans[0].kind, SpanKind.CONSUMER);
 			assert.equal(spans[0].attributes['seyfert.event.name'], 'messageCreate');
 			assert.equal(spans[0].attributes['seyfert.shard_id'], 0);
 			assert.equal(spans[0].status.code, SpanStatusCode.UNSET);
@@ -70,14 +73,47 @@ describe('instrumentEvents (gateway runEvent)', () => {
 		});
 	});
 
+	test('records event metrics without creating a span when tracing is disabled', async () => {
+		await withProvider(async exporter => {
+			const recorded: Record<string, unknown>[] = [];
+			const { client } = fakeClient();
+			const cleanup = instrumentEvents(
+				{ client, api: undefined },
+				{
+					traceEnabled: false,
+					checkIfShouldTrace: () => true,
+					getMetrics: () => ({
+						recordInteraction() {},
+						recordEvent(_durationSeconds, attributes) {
+							recorded.push(attributes as Record<string, unknown>);
+						},
+						recordRest() {},
+						recordCache() {},
+					}),
+				},
+			);
+
+			await client.events.runEvent('messageCreate', client, {}, 0);
+
+			assert.equal(recorded.length, 1);
+			assert.equal(recorded[0]['seyfert.event.name'], 'messageCreate');
+			assert.equal(exporter.getFinishedSpans().length, 0);
+			cleanup();
+		});
+	});
+
 	test('cleanup restores / no new spans after cleanup', async () => {
 		await withProvider(async exporter => {
 			const { client } = fakeClient();
 			const original = client.events.runEvent;
-			const cleanup = instrumentEvents(client, {
-				checkIfShouldTrace: () => true,
-				getMetrics: () => undefined,
-			});
+			const cleanup = instrumentEvents(
+				{ client, api: undefined },
+				{
+					traceEnabled: true,
+					checkIfShouldTrace: () => true,
+					getMetrics: () => undefined,
+				},
+			);
 
 			await client.events.runEvent('messageCreate', client, {}, 1);
 			assert.equal(exporter.getFinishedSpans().length, 1);
@@ -92,10 +128,14 @@ describe('instrumentEvents (gateway runEvent)', () => {
 	test('checkIfShouldTrace false → no span', async () => {
 		await withProvider(async exporter => {
 			const { client, calls } = fakeClient();
-			const cleanup = instrumentEvents(client, {
-				checkIfShouldTrace: () => false,
-				getMetrics: () => undefined,
-			});
+			const cleanup = instrumentEvents(
+				{ client, api: undefined },
+				{
+					traceEnabled: true,
+					checkIfShouldTrace: () => false,
+					getMetrics: () => undefined,
+				},
+			);
 
 			const result = await client.events.runEvent('messageCreate', client, {}, 0);
 			assert.equal(result, 'ok');
@@ -111,10 +151,14 @@ describe('instrumentEvents (gateway runEvent)', () => {
 			const { client } = fakeClient(() => {
 				throw new Error('handler boom');
 			});
-			const cleanup = instrumentEvents(client, {
-				checkIfShouldTrace: () => true,
-				getMetrics: () => undefined,
-			});
+			const cleanup = instrumentEvents(
+				{ client, api: undefined },
+				{
+					traceEnabled: true,
+					checkIfShouldTrace: () => true,
+					getMetrics: () => undefined,
+				},
+			);
 
 			assert.throws(() => client.events.runEvent('messageCreate', client, {}, 0), /handler boom/);
 
@@ -133,10 +177,14 @@ describe('instrumentEvents (gateway runEvent)', () => {
 			const { client } = fakeClient(async () => {
 				throw new Error('async boom');
 			});
-			const cleanup = instrumentEvents(client, {
-				checkIfShouldTrace: () => true,
-				getMetrics: () => undefined,
-			});
+			const cleanup = instrumentEvents(
+				{ client, api: undefined },
+				{
+					traceEnabled: true,
+					checkIfShouldTrace: () => true,
+					getMetrics: () => undefined,
+				},
+			);
 
 			let thrown: unknown;
 			try {
@@ -166,8 +214,9 @@ describe('instrumentEvents (gateway runEvent)', () => {
 				return undefined;
 			});
 			const cleanup = instrumentEvents(
-				client,
+				{ client, api: eventApi.api },
 				{
+					traceEnabled: true,
 					checkIfShouldTrace: () => true,
 					getMetrics: () => ({
 						recordInteraction() {},
@@ -181,7 +230,6 @@ describe('instrumentEvents (gateway runEvent)', () => {
 						recordCache() {},
 					}),
 				},
-				eventApi.api,
 			);
 
 			await client.events.runEvent('messageCreate', client, {}, 0);
@@ -201,8 +249,9 @@ describe('instrumentEvents (gateway runEvent)', () => {
 	test('missing events.runEvent → no-op disposer', async () => {
 		await withProvider(async exporter => {
 			const cleanup = instrumentEvents(
-				{},
+				{ client: {}, api: undefined },
 				{
+					traceEnabled: true,
 					checkIfShouldTrace: () => true,
 					getMetrics: () => undefined,
 				},
@@ -217,20 +266,24 @@ describe('instrumentEvents (gateway runEvent)', () => {
 		await withProvider(async exporter => {
 			const recorded: Array<{ duration: number; attrs: Record<string, unknown> }> = [];
 			const { client } = fakeClient();
-			const cleanup = instrumentEvents(client, {
-				checkIfShouldTrace: () => true,
-				getMetrics: () => ({
-					recordInteraction() {},
-					recordEvent(durationSeconds, attributes) {
-						recorded.push({
-							duration: durationSeconds,
-							attrs: attributes as Record<string, unknown>,
-						});
-					},
-					recordRest() {},
-					recordCache() {},
-				}),
-			});
+			const cleanup = instrumentEvents(
+				{ client, api: undefined },
+				{
+					traceEnabled: true,
+					checkIfShouldTrace: () => true,
+					getMetrics: () => ({
+						recordInteraction() {},
+						recordEvent(durationSeconds, attributes) {
+							recorded.push({
+								duration: durationSeconds,
+								attrs: attributes as Record<string, unknown>,
+							});
+						},
+						recordRest() {},
+						recordCache() {},
+					}),
+				},
+			);
 
 			await client.events.runEvent('ready', client, {}, -1);
 			assert.equal(recorded.length, 1);

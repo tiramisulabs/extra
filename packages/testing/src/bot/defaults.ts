@@ -2,11 +2,11 @@ import { createWorldDefaultContext, type WorldDefaultHooks } from './default-con
 import { registerCoreWorldRoutes } from './default-core-routes';
 import { registerWorldResourceRoutes } from './default-resource-routes';
 import type { MockApiHandler } from './rest';
-import type { MockWorld } from './world';
+import type { WorldData } from './world';
 
 export function registerWorldDefaults(
 	rest: MockApiHandler,
-	world: MockWorld | undefined,
+	world: WorldData | undefined,
 	hooks: WorldDefaultHooks,
 ): void {
 	const context = createWorldDefaultContext(rest, world, hooks);

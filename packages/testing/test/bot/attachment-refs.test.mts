@@ -1,7 +1,8 @@
 import { Command, type CommandContext, Declare, MessageFlags } from 'seyfert';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
-import { seedGuildFixture } from './_setup';
+import { DiscordErrors } from '../../src/bot/rest';
+import { expectDiscordError, seedGuildFixture } from './_setup';
 
 describe('attachment:// reference reconciliation (F23)', () => {
 	test('an embed referencing attachment:// with no uploaded file is rejected', async () => {
@@ -15,7 +16,9 @@ describe('attachment:// reference reconciliation (F23)', () => {
 		}
 
 		const bot = await createMockBot({ commands: [BrokenImage], world });
-		await expect(bot.slash({ name: 'broken-image', guildId: guild.id, channel, user: actor.user })).rejects.toThrow(
+		await expectDiscordError(
+			bot.slash({ name: 'broken-image', guildId: guild.id, channel, user: actor.user }),
+			DiscordErrors.InvalidFormBody,
 			/attachment:\/\/logo\.png/,
 		);
 		await bot.close();
@@ -85,7 +88,9 @@ describe('attachment:// reference reconciliation (F23)', () => {
 		}
 
 		const bot = await createMockBot({ commands: [BrokenAccessory], world });
-		await expect(bot.slash({ name: 'broken-accessory', guildId: guild.id, channel, user: actor.user })).rejects.toThrow(
+		await expectDiscordError(
+			bot.slash({ name: 'broken-accessory', guildId: guild.id, channel, user: actor.user }),
+			DiscordErrors.InvalidFormBody,
 			/attachment:\/\/logo\.png/,
 		);
 		await bot.close();

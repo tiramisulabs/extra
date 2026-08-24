@@ -1,4 +1,5 @@
 import { asRecord, type EmbedView, numberValue } from '../bot/state';
+import { dispatchFactsOf } from './dispatch-facts';
 import { normalizeOutput } from './normalize';
 import {
 	type AnyComponentView,
@@ -9,7 +10,7 @@ import {
 	type CanonicalEmbed,
 	type CanonicalMessage,
 	type CanonicalModal,
-	type CanonicalOutput,
+	type CapturedErrorView,
 	COMPONENT,
 	type ComponentKind,
 	type ComponentQuery,
@@ -20,7 +21,12 @@ import {
 	type ContainerView,
 	type ContentQuery,
 	type ContentView,
+	type DenialQuery,
+	type DenialView,
+	type DispatchFacts,
 	type EmbedQuery,
+	type ErrorMatcher,
+	type ErrorQuery,
 	type FieldQuery,
 	type FileUploadQuery,
 	type FileUploadView,
@@ -32,6 +38,7 @@ import {
 	type MediaQuery,
 	type MediaView,
 	type ModalQuery,
+	type OutputFinder,
 	type ReaderMode,
 	type RenderedMessage,
 	type RenderedMessageQuery,
@@ -61,7 +68,9 @@ export type * from './types';
 export { RenderedOutputError } from './types';
 
 export function rendered(subject: RenderedSubject, options: RenderedOptions = {}): RenderedOutput {
+	assertSubject(subject);
 	const canonical = normalizeOutput(subject, options);
+	const dispatch = dispatchFactsOf(subject);
 	const scope: Scope = {
 		label: 'rendered',
 		messages: canonical.messages,
@@ -70,18 +79,93 @@ export function rendered(subject: RenderedSubject, options: RenderedOptions = {}
 			...canonical.messages.flatMap(message => message.components),
 			...canonical.modals.flatMap(modal => modal.components),
 		],
+		...(dispatch === undefined ? {} : { dispatch }),
 	};
 	return {
 		raw: {
-			actions: () => canonical.actions,
 			messages: () => canonical.messages.map(message => message.raw),
 			modals: () => canonical.modals.map(modal => modal.raw),
 		},
-		get: makeFinder('get', scope),
-		query: makeFinder('query', scope),
-		all: makeFinder('all', scope),
-		debug: () => debugOutput(canonical),
+		get: makeOutputFinder('get', scope),
+		query: makeOutputFinder('query', scope),
+		all: makeOutputFinder('all', scope),
+		debug: () => debugOutput(canonical, dispatch),
 	};
+}
+
+/**
+ * Reject the subjects that would otherwise normalize into an empty scope, where the resulting "found 0"
+ * reads like a product bug. A forgotten `await` is the common one — every stateful verb is async — so it
+ * gets its own sentence rather than being folded into "not an object".
+ */
+function assertSubject(subject: RenderedSubject): void {
+	if (subject == null || (typeof subject !== 'object' && typeof subject !== 'function')) {
+		throw new TypeError(
+			`rendered(): expected a MockBot, Actor, DispatchResult, mock context, or message payload, got ${describeSubject(subject)}.`,
+		);
+	}
+	// `instanceof Promise`, not "is thenable": a parked `Dispatch` is a documented subject and is itself
+	// PromiseLike. Only the native promise an un-awaited `await`-less call returns is the mistake.
+	if (subject instanceof Promise) {
+		throw new TypeError(
+			'rendered(): got a promise, not rendered output. Every stateful verb is async — await the dispatch ' +
+				'first, e.g. rendered(await bot.slash(...)). A parked Dispatch needs no await.',
+		);
+	}
+	assertNotBareBuilder(subject);
+}
+
+/** Message-body keys. A payload carrying any of these is a message, whatever else it also carries. */
+const MESSAGE_KEYS = [
+	'content',
+	'embeds',
+	'components',
+	'attachments',
+	'files',
+	'poll',
+	'flags',
+	'tts',
+	'allowed_mentions',
+	'sticker_ids',
+	'message_reference',
+] as const;
+const EMBED_KEYS = ['title', 'description', 'fields', 'color', 'footer', 'author', 'image', 'thumbnail'] as const;
+
+/**
+ * A component or embed builder passed on its own is normalized as if it were a message, so an ActionRow's
+ * `components` read as a message's rows and an Embed's fields match nothing — the reader answers "0 buttons"
+ * for output that plainly has one. That is the silent-empty scope this whole function exists to reject, so it
+ * belongs here rather than in the docs.
+ */
+function assertNotBareBuilder(subject: object): void {
+	const toJSON = (subject as { toJSON?: unknown }).toJSON;
+	if (typeof toJSON !== 'function') return;
+	const body: unknown = (subject as { toJSON(): unknown }).toJSON();
+	if (typeof body !== 'object' || body === null || Array.isArray(body)) return;
+	const record = body as Record<string, unknown>;
+	// `type` is checked before the message keys, not after: an ActionRow serializes to
+	// `{ type: 1, components: [...] }`, and `components` alone would read as a message body. A message payload
+	// never carries a top-level numeric `type`.
+	const kind =
+		typeof record.type === 'number'
+			? 'component'
+			: MESSAGE_KEYS.some(key => key in record)
+				? undefined
+				: EMBED_KEYS.some(key => key in record)
+					? 'embed'
+					: undefined;
+	if (!kind) return;
+	throw new TypeError(
+		`rendered(): got a bare ${kind} builder, which has no message to read it from — every query would answer ` +
+			`"found 0". Wrap it the way the handler sends it, e.g. rendered({ ${kind === 'embed' ? 'embeds: [embed]' : 'components: [row]'} }).`,
+	);
+}
+
+function describeSubject(subject: unknown): string {
+	if (subject === null) return 'null';
+	if (subject === undefined) return 'undefined';
+	if (typeof subject === 'string') return `the string ${JSON.stringify(subject)}`;
+	return `the ${typeof subject} ${String(subject)}`;
 }
 
 function makeFinder<Mode extends ReaderMode>(mode: Mode, scope: Scope): Finder<Mode> {
@@ -95,6 +179,43 @@ function makeFinder<Mode extends ReaderMode>(mode: Mode, scope: Scope): Finder<M
 		container: query => componentResult(mode, scope, 'container', query),
 		component: (kind, query) => componentResult(mode, scope, kind, query),
 	} as Finder<Mode>;
+}
+
+/**
+ * The reader over a whole subject. `denial` and `error` are dispatch-level, so they exist here and not on the
+ * scoped finders; both go through the same {@link resolve} cardinality contract as every rendered kind.
+ */
+function makeOutputFinder<Mode extends ReaderMode>(mode: Mode, scope: Scope): OutputFinder<Mode> {
+	return {
+		...makeFinder(mode, scope),
+		denial: (query?: DenialQuery) => {
+			assertDispatchSubject(mode, 'denial', scope);
+			return resolve(mode, 'denial', query, denialCandidates(scope, query), scope, identity);
+		},
+		error: (query?: ErrorQuery | ErrorMatcher) => {
+			assertDispatchSubject(mode, 'error', scope);
+			return resolve(mode, 'error', query, errorCandidates(scope, query), scope, identity);
+		},
+	} as OutputFinder<Mode>;
+}
+
+/**
+ * A subject that can never be denied is a mistake about the subject, not a query that matched nothing — the
+ * same class of mistake {@link assertSubject} rejects, so it fails the same way. Reporting "matched none of 0
+ * denials" for a `MockBot` would make `query`/`all` pass vacuously, which is what this reader exists to stop.
+ */
+function assertDispatchSubject(mode: ReaderMode, kind: 'denial' | 'error', scope: Scope): void {
+	if (scope.dispatch) return;
+	const carries = kind === 'denial' ? 'a denial' : 'a captured error';
+	throw new TypeError(
+		`rendered().${mode}.${kind}(): only a DispatchResult carries ${carries}. A MockBot, an actor, a parked flow, ` +
+			`a mock context and a raw payload carry rendered output only — read it off the awaited dispatch, ` +
+			`e.g. rendered(await bot.slash(...)).${mode}.${kind}().`,
+	);
+}
+
+function identity<T>(value: T): T {
+	return value;
 }
 
 function makeContainerFinder<Mode extends ReaderMode>(mode: Mode, scope: Scope): ContainerFinder<Mode> {
@@ -124,7 +245,12 @@ function resolve<Mode extends ReaderMode, Canonical, View>(
 	scope: Scope,
 	toView: (value: Canonical) => View,
 ): Result<Mode, View> {
-	if (mode === 'query') return (candidates[0] ? toView(candidates[0].value) : undefined) as Result<Mode, View>;
+	// Same contract as world.query: zero is fine, more than one is a question the query did not answer.
+	// Returning the first was the only reader variant that could make an ambiguous match pass green.
+	if (mode === 'query') {
+		if (candidates.length > 1) throw renderedOutputError(kind, query, candidates, scope);
+		return (candidates[0] ? toView(candidates[0].value) : undefined) as Result<Mode, View>;
+	}
 	if (mode === 'all') return candidates.map(candidate => toView(candidate.value)) as Result<Mode, View>;
 	if (candidates.length === 1) return toView(candidates[0].value) as Result<Mode, View>;
 	throw renderedOutputError(kind, query, candidates, scope);
@@ -139,25 +265,27 @@ function renderedOutputError(
 	const allCandidates = candidatesForKind(scope, kind);
 	const renderedMatches = matches.map(candidate => `  ${candidate.summary}`);
 	const renderedCandidates = allCandidates.map(candidate => `  ${candidate.summary}`);
-	const nearMisses =
-		matches.length === 0 && renderedCandidates.length > 0
-			? renderedCandidates.slice(0, 5).map(candidate => candidate.replace(/^  /, '  '))
-			: [];
 	const queryText = describeQuery(query);
+	// "found 0 embeds" reads as "there were no embeds" and sends the author looking for a rendering failure
+	// when the matcher is what's wrong. Say how many were there, so zero-rendered and zero-matched differ.
 	const base =
 		matches.length === 0
-			? `${scope.label}.get.${kind}(${queryText}) found 0 ${plural(kind)}.`
+			? `${scope.label}.get.${kind}(${queryText}) matched none of ${allCandidates.length} ${plural(kind)}.`
 			: `${scope.label}.get.${kind}(${queryText}) found ${matches.length} ${plural(kind)}; get.${kind} requires exactly one.`;
 	const sections = [
 		base,
 		matches.length > 1 ? '\nMatches:\n' + renderedMatches.join('\n') : undefined,
 		matches.length === 0 && renderedCandidates.length
-			? `\n${capitalize(plural(kind))} rendered:\n${renderedCandidates.join('\n')}`
+			? `\n${capitalize(plural(kind))} ${recordedVerb(kind)}:\n${renderedCandidates.join('\n')}`
 			: undefined,
-		nearMisses.length > 0 ? `\nNear misses:\n${nearMisses.join('\n')}` : undefined,
+		// Nothing of the queried kind exists, so the per-kind list above is empty and would leave a bare
+		// headline. Fall back to the whole scope: "you asked for an embed, here is the content that was sent".
+		matches.length === 0 && renderedCandidates.length === 0 ? scopeFallback(kind, scope) : undefined,
 		containerContentDiagnostics(kind, query, scope),
 		modalFieldDiagnostics(kind, scope),
-		kind !== 'message' && scope.messages.length > 1
+		denialDiagnostics(kind, scope),
+		errorCaptureDiagnostics(kind, scope),
+		kind !== 'message' && !isDispatchKind(kind) && scope.messages.length > 1
 			? `\nUse a scope first, for example rendered(result).get.message({ content: /.../ }).get.${kind}(...).`
 			: undefined,
 		matches.length > 1 ? `\nOr use:\n  ${scope.label}.all.${kind}(${queryText})` : undefined,
@@ -170,6 +298,39 @@ function renderedOutputError(
 		matches: renderedMatches,
 		candidates: renderedCandidates,
 	});
+}
+
+function scopeFallback(kind: string, scope: Scope): string {
+	const dump = debugOutput({ messages: scope.messages, modals: scope.modals }, scope.dispatch);
+	// A dispatch kind has no per-kind candidate list to fall back on, so say the fact and show what did happen.
+	if (kind === 'denial') return `\nThe dispatch was not denied; it reached the handler. ${dump}`;
+	if (kind === 'error') return `\nThe dispatch captured no error. ${dump}`;
+	const nothing = `\nNothing of kind "${kind}" was rendered.`;
+	return scope.messages.length === 0 && scope.modals.length === 0
+		? `${nothing} The subject rendered no output at all.`
+		: `${nothing} ${dump}`;
+}
+
+/**
+ * A miss on a dispatch that never reached the handler is usually the denial being the contract, not a
+ * rendering bug — name the read that passes rather than leave the author hunting the handler for output it
+ * never got to write.
+ */
+function denialDiagnostics(kind: string, scope: Scope): string | undefined {
+	const denial = scope.dispatch?.denial;
+	if (!denial || kind === 'denial') return undefined;
+	return (
+		'\nThe dispatch was denied before the handler ran. If the denial is the contract, use:\n' +
+		`  rendered(result).get.denial({ kind: ${JSON.stringify(denial.denialKind)} })`
+	);
+}
+
+function errorCaptureDiagnostics(kind: string, scope: Scope): string | undefined {
+	if (kind !== 'error' || scope.dispatch?.error !== undefined) return undefined;
+	return (
+		'\nIf you expected an unhandled command error, create the bot with:\n' +
+		'  createMockBot({ onCommandError: "capture" })'
+	);
 }
 
 function containerContentDiagnostics(kind: string, query: unknown, scope: Scope): string | undefined {
@@ -246,12 +407,33 @@ function componentCandidates<K extends ComponentKind>(
 		.map(component => ({ value: component, path: component.path, summary: summarizeComponent(component) }));
 }
 
+function denialCandidates(scope: Scope, query: DenialQuery | undefined): Candidate<DenialView>[] {
+	assertKnownKeys(query, ['kind', 'middleware', 'missing'], 'denial');
+	const denial = scope.dispatch?.denial;
+	if (!denial || !denialMatches(denial, query)) return [];
+	return [{ value: denial, path: 'denial', summary: summarizeDenial(denial) }];
+}
+
+function errorCandidates(scope: Scope, query: ErrorQuery | ErrorMatcher | undefined): Candidate<CapturedErrorView>[] {
+	const normalized = normalizeErrorQuery(query);
+	const captured = scope.dispatch?.error;
+	if (!captured) return [];
+	if (normalized?.match !== undefined && !matchesError(captured.error, normalized.match)) return [];
+	return [{ value: captured, path: 'error', summary: summarizeError(captured) }];
+}
+
 function candidatesForKind(scope: Scope, kind: string): Candidate<unknown>[] {
 	if (kind === 'message') return messageCandidates(scope, undefined);
 	if (kind === 'modal') return modalCandidates(scope, undefined);
 	if (kind === 'embed') return embedCandidates(scope, undefined);
+	if (kind === 'denial') return denialCandidates(scope, undefined);
+	if (kind === 'error') return errorCandidates(scope, undefined);
 	if (isComponentKind(kind)) return componentCandidates(scope, kind, undefined);
 	return [];
+}
+
+function isDispatchKind(kind: string): boolean {
+	return kind === 'denial' || kind === 'error';
 }
 
 function flattenComponents(components: readonly CanonicalComponent[]): CanonicalComponent[] {
@@ -464,6 +646,36 @@ function fileUploadMatches(component: CanonicalComponent, query: FileUploadQuery
 
 function styleNumber(style: ButtonQuery['style']): number | undefined {
 	return typeof style === 'number' ? style : style === undefined ? undefined : STYLE_NAME[style];
+}
+
+function denialMatches(denial: DenialView, query: DenialQuery | undefined): boolean {
+	if (!query) return true;
+	if (query.kind !== undefined && denial.denialKind !== query.kind) return false;
+	if (query.middleware !== undefined && denial.middleware !== query.middleware) return false;
+	if (query.missing !== undefined) {
+		const missing = typeof query.missing === 'string' ? [query.missing] : query.missing;
+		if (!missing.every(permission => denial.missing.includes(permission))) return false;
+	}
+	return true;
+}
+
+function normalizeErrorQuery(query: ErrorQuery | ErrorMatcher | undefined): ErrorQuery | undefined {
+	if (query === undefined) return undefined;
+	if (isErrorMatcher(query)) return { match: query };
+	assertKnownKeys(query, ['match'], 'error');
+	return query;
+}
+
+function isErrorMatcher(value: unknown): value is ErrorMatcher {
+	return typeof value === 'string' || value instanceof RegExp || typeof value === 'function';
+}
+
+function matchesError(error: unknown, matcher: ErrorMatcher): boolean {
+	if (typeof matcher === 'function') return matcher(error);
+	const message = errorText(error);
+	if (typeof matcher === 'string') return message.includes(matcher);
+	matcher.lastIndex = 0;
+	return matcher.test(message);
 }
 
 function matchesText(value: string | undefined, matcher: TextMatcher): boolean {
@@ -802,8 +1014,31 @@ function summarizeComponent(component: CanonicalComponent): string {
 	return `${component.path} ${component.kind}${attrs.length ? ` ${attrs.join(' ')}` : ''}`;
 }
 
+function summarizeDenial(denial: DenialView): string {
+	const parts = [`denied ${denial.denialKind}`];
+	if (denial.middleware) parts.push(`middleware=${denial.middleware}`);
+	if (denial.missing.length > 0) parts.push(`missing=[${denial.missing.join(', ')}]`);
+	return parts.join(' ');
+}
+
+function summarizeError(captured: CapturedErrorView): string {
+	const error = captured.error;
+	return `error ${error instanceof Error ? `${error.name}: ${error.message}` : errorText(error)}`;
+}
+
+function errorText(error: unknown): string {
+	try {
+		return String(error);
+	} catch {
+		return Object.prototype.toString.call(error);
+	}
+}
+
 function describeQuery(query: unknown): string {
 	if (query === undefined) return '';
+	// An error matcher is a bare function or RegExp, which JSON.stringify turns into `undefined` / `{}`.
+	if (typeof query === 'function') return `[Function${query.name ? ` ${query.name}` : ''}]`;
+	if (query instanceof RegExp) return String(query);
 	return JSON.stringify(query, (_key, value) => (value instanceof RegExp ? value.toString() : value));
 }
 
@@ -812,11 +1047,22 @@ function plural(kind: string): string {
 	return `${kind}s`;
 }
 
+/** A denial is not something the bot rendered, so the candidate heading does not claim it was. */
+function recordedVerb(kind: string): string {
+	return isDispatchKind(kind) ? 'recorded' : 'rendered';
+}
+
 function capitalize(value: string): string {
 	return value.length === 0 ? value : `${value[0].toUpperCase()}${value.slice(1)}`;
 }
 
-function debugOutput(canonical: CanonicalOutput): string {
+function debugOutput(
+	canonical: {
+		readonly messages: readonly CanonicalMessage[];
+		readonly modals: readonly CanonicalModal[];
+	},
+	dispatch?: DispatchFacts,
+): string {
 	const lines = ['Rendered output:'];
 	for (const message of canonical.messages) {
 		lines.push(`  ${summarizeMessage(message)}`);
@@ -827,5 +1073,7 @@ function debugOutput(canonical: CanonicalOutput): string {
 		lines.push(`  ${summarizeModal(modal)}`);
 		for (const component of flattenComponents(modal.components)) lines.push(`    ${summarizeComponent(component)}`);
 	}
+	if (dispatch?.denial) lines.push(`  ${summarizeDenial(dispatch.denial)}`);
+	if (dispatch?.error) lines.push(`  ${summarizeError(dispatch.error)}`);
 	return lines.join('\n');
 }

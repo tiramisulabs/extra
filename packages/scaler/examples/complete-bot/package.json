@@ -1,0 +1,17 @@
+{
+	"name": "@slipher/scaler-complete-bot-example",
+	"private": true,
+	"type": "commonjs",
+	"scripts": {
+		"build": "tsc",
+		"upload": "node dist/upload.js"
+	},
+	"dependencies": {
+		"@slipher/scaler": "workspace:*",
+		"seyfert": "^5.0.0"
+	},
+	"devDependencies": {
+		"@types/node": "^26.0.1",
+		"typescript": "^6.0.3"
+	}
+}
