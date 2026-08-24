@@ -64,4 +64,36 @@ describe('non-interaction channel webhooks (sendLog)', () => {
 		});
 		await bot.close();
 	});
+
+	test('a webhook the world registered is harvested too, not only a synthesized one', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'wh-seeded-guild' });
+		const channel = world.registerChannel(guild.id, { id: 'seeded-log', name: 'seeded-log' });
+		// a registered webhook gets a snowflake id, not the `wh-` prefix the mock synthesizes
+		const webhook = world.registerWebhook(channel.id, { name: 'seeded' });
+		expect(webhook.id).not.toMatch(/^wh-/);
+
+		const onJoin = createEvent({
+			data: { name: 'guildMemberAdd' },
+			async run(member, client) {
+				await client.webhooks.writeMessage(webhook.id, webhook.token as string, {
+					body: { embeds: [{ title: 'Seeded log', description: member.user.username }] },
+				});
+			},
+		});
+
+		const bot = await createMockBot({ events: [onJoin], world });
+		const res = await bot.emit('GUILD_MEMBER_ADD', {
+			guild_id: guild.id,
+			...apiMember({ user: apiUser({ username: 'seeded-newbie' }) }),
+		});
+
+		// the classifier used to require the `wh-` prefix, so this message was recorded by the world but
+		// missing from the harvested result — two code paths disagreeing about the same call
+		expect(res.embeds[0]).toMatchObject({ title: 'Seeded log', description: 'seeded-newbie' });
+		expect(bot.world.query.channel({ guildId: guild.id, id: 'seeded-log' })?.lastMessage?.embeds[0]).toMatchObject({
+			title: 'Seeded log',
+		});
+		await bot.close();
+	});
 });

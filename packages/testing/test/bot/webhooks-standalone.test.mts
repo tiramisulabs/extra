@@ -4,6 +4,7 @@ import { createMockBot } from '../../src/bot/bot';
 import { apiUser } from '../../src/bot/payloads';
 import { DiscordErrors } from '../../src/bot/rest';
 import { mockWorld } from '../../src/bot/world';
+import { expectDiscordError } from './_setup';
 
 describe('standalone webhooks', () => {
 	test('create then fetch by id and token', async () => {
@@ -101,22 +102,16 @@ describe('standalone webhooks', () => {
 		world.registerWebhook(channel.id, { id: 'token-wh', token: 'good-token' });
 
 		const bot = await createMockBot({ world });
-		await expect(bot.rest.request('GET', '/webhooks/token-wh/bad-token')).rejects.toMatchObject({
-			code: DiscordErrors.UnknownWebhook.code,
-		});
-		await expect(
+		await expectDiscordError(bot.rest.request('GET', '/webhooks/token-wh/bad-token'), DiscordErrors.UnknownWebhook);
+		await expectDiscordError(
 			bot.rest.request('POST', '/webhooks/token-wh/bad-token', { body: { content: 'wrong token' } }),
-		).rejects.toMatchObject({
-			code: DiscordErrors.UnknownWebhook.code,
-		});
-		await expect(
+			DiscordErrors.UnknownWebhook,
+		);
+		await expectDiscordError(
 			bot.rest.request('PATCH', '/webhooks/token-wh/bad-token', { body: { name: 'wrong token' } }),
-		).rejects.toMatchObject({
-			code: DiscordErrors.UnknownWebhook.code,
-		});
-		await expect(bot.rest.request('DELETE', '/webhooks/token-wh/bad-token')).rejects.toMatchObject({
-			code: DiscordErrors.UnknownWebhook.code,
-		});
+			DiscordErrors.UnknownWebhook,
+		);
+		await expectDiscordError(bot.rest.request('DELETE', '/webhooks/token-wh/bad-token'), DiscordErrors.UnknownWebhook);
 		await bot.close();
 	});
 

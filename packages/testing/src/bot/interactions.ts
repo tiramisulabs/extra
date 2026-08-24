@@ -20,6 +20,7 @@ import {
 	apiUser,
 	type MemberInput,
 	memberOptionsFrom,
+	type WireFields,
 } from './payloads';
 import {
 	ALL_PERMISSIONS,
@@ -37,10 +38,6 @@ const OptionType = ApplicationCommandOptionType;
  * permission bit the installed seyfert knows, ORed together. Note: the invoking
  * member's permissions default to DEFAULT_MEMBER_PERMISSIONS, not this.
  */
-export const DEFAULT_PERMISSIONS = ALL_PERMISSIONS.toString();
-
-/** String payload default for the invoking member's permissions: a non-admin set. */
-export const DEFAULT_MEMBER_PERMISSIONS_STRING = DEFAULT_MEMBER_PERMISSIONS.toString();
 
 export interface EncodedOption {
 	__slipherOption: true;
@@ -60,8 +57,16 @@ export interface EncodedOption {
  * is applied automatically from the command's declared option type, so `{ options: { user: { id, username } } }`
  * needs no `userOption(...)` wrapper. A loose `{ id }` is completed with api* defaults; a full api object passes
  * through unchanged.
+ *
+ * Stated as {@link WireFields} rather than the payload types: resolved option data is encoded, never cloned,
+ * so a `rich*` fixture is a legitimate value here even though seeding a world with one is not.
  */
-export type EntityOptionInput = ApiUser | ApiChannel | ApiRole | ApiAttachment | { id: string; [key: string]: unknown };
+export type EntityOptionInput =
+	| WireFields<ApiUser>
+	| WireFields<ApiChannel>
+	| ApiRole
+	| ApiAttachment
+	| { id: string; [key: string]: unknown };
 export type OptionInput = string | number | boolean | EncodedOption | EntityOptionInput;
 export interface NamedOptionInput {
 	name: string;
@@ -78,7 +83,7 @@ export function rawOption(type: number, value: string | number | boolean): Encod
 	return option(type, value);
 }
 
-export function userOption(user: ApiUser = apiUser(), member?: MemberInput): EncodedOption {
+export function userOption(user: WireFields<ApiUser> = apiUser(), member?: MemberInput): EncodedOption {
 	const memberPayload = member ? resolvedMember(member) : undefined;
 	return option(OptionType.User, user.id, {
 		users: { [user.id]: user },
@@ -86,9 +91,9 @@ export function userOption(user: ApiUser = apiUser(), member?: MemberInput): Enc
 	});
 }
 
-export function channelOption(channel: ApiChannel = apiChannel()): EncodedOption {
+export function channelOption(channel: WireFields<ApiChannel> = apiChannel()): EncodedOption {
 	return option(OptionType.Channel, channel.id, {
-		channels: { [channel.id]: { ...channel, permissions: DEFAULT_PERMISSIONS } },
+		channels: { [channel.id]: { ...channel, permissions: ALL_PERMISSIONS.toString() } },
 	});
 }
 
@@ -96,7 +101,7 @@ function resolvedMember(member: MemberInput): Omit<ApiMember, 'user'> {
 	const { user: _user, ...wire } = apiMember(memberOptionsFrom(member));
 	return {
 		...wire,
-		permissions: wire.permissions ?? DEFAULT_PERMISSIONS,
+		permissions: wire.permissions ?? ALL_PERMISSIONS.toString(),
 	};
 }
 
@@ -120,7 +125,7 @@ export function roleOption(role: ApiRoleInput): EncodedOption {
 }
 
 /** A user or a role. Pass the entity object. */
-export function mentionableOption(entity: ApiUser | { id: string; name: string }): EncodedOption {
+export function mentionableOption(entity: WireFields<ApiUser> | { id: string; name: string }): EncodedOption {
 	if ('username' in entity) {
 		return option(OptionType.Mentionable, entity.id, { users: { [entity.id]: entity } });
 	}
@@ -333,7 +338,7 @@ function baseInteraction(options: BaseInteractionOptions, type: number): ApiInte
 	const dm = options.guildId === null;
 	const guildId = dm ? undefined : (options.guildId ?? options.channel?.guild_id ?? TEST_GUILD_ID);
 	const channel = options.channel ?? apiChannel({ id: TEST_CHANNEL_ID, guildId: guildId ?? null });
-	const permissions = permissionBits(options.permissions ?? DEFAULT_PERMISSIONS);
+	const permissions = permissionBits(options.permissions ?? ALL_PERMISSIONS.toString());
 	const memberOptions = options.member ? memberOptionsFrom(options.member) : undefined;
 	const memberRolePayloads = options.memberRoles?.map(resolvedRole);
 	const memberPermissions =
@@ -345,7 +350,7 @@ function baseInteraction(options: BaseInteractionOptions, type: number): ApiInte
 				? permissionBits(memberOptions.permissions)
 				: memberRolePayloads !== undefined
 					? combineRolePermissions(memberRolePayloads)
-					: DEFAULT_MEMBER_PERMISSIONS_STRING;
+					: DEFAULT_MEMBER_PERMISSIONS.toString();
 	const memberRoleIds = memberRolePayloads?.map(role => role.id) ?? [];
 	const memberRoles = [...new Set([...(memberOptions?.roles ?? []), ...memberRoleIds])];
 	const member = dm

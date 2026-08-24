@@ -1,10 +1,10 @@
 import { PermissionFlagsBits } from 'seyfert';
 import { type ApiMember, apiChannel, apiGuild, apiUser } from './payloads';
 import { computeChannelPermissions } from './permissions';
-import { apiError, ErrorCode, type MockApiHandler, type RouteMatcher } from './rest';
+import { apiError, type DiscordErrorInit, DiscordErrors, type MockApiHandler, type RouteMatcher } from './rest';
 import { Routes } from './routes';
 import type { MessageQuery, WorldState } from './state';
-import type { MockWorld } from './world';
+import type { WorldData } from './world';
 import type { WorldEmitEvent } from './world-events';
 
 export type CacheResourceName = 'channels' | 'roles' | 'stageInstances' | 'emojis' | 'stickers' | 'overwrites' | 'bans';
@@ -54,12 +54,12 @@ export function interceptFetchOne<T>(
 	route: RouteMatcher,
 	find: (params: Record<string, string>) => T | undefined,
 	fallback: (params: Record<string, string>) => T,
-	unknown?: { code: number; message: string },
+	unknown?: DiscordErrorInit,
 ): void {
 	rest.intercept(route, (_pending, params) => {
 		const found = find(params);
 		if (found !== undefined) return found;
-		if (unknown) apiError(404, unknown.code, unknown.message);
+		if (unknown) apiError(unknown);
 		return rest.markSynthetic(fallback(params));
 	});
 }
@@ -86,8 +86,7 @@ export interface GuildCrudConfig {
 	parentGuard?: (guildId: string) => void;
 	guard?: (guildId: string) => void;
 	/** When set (world mode), an edit/delete of a missing entity is this 404 code instead of a fabrication. */
-	unknownCode?: number;
-	unknownMessage?: string;
+	unknownError?: DiscordErrorInit;
 }
 
 export function registerGuildCrud(rest: MockApiHandler, config: GuildCrudConfig): void {
@@ -108,8 +107,8 @@ export function registerGuildCrud(rest: MockApiHandler, config: GuildCrudConfig)
 			config.parentGuard?.(params.guildId);
 			const found = config.one(params.guildId, params[idParam]);
 			if (found !== undefined) return found;
-			if (config.unknownCode !== undefined) {
-				apiError(404, config.unknownCode, config.unknownMessage ?? 'Unknown');
+			if (config.unknownError !== undefined) {
+				apiError(config.unknownError);
 			}
 			return rest.markSynthetic(config.fallback(params.guildId, params[idParam]));
 		});
@@ -120,7 +119,7 @@ export function registerGuildCrud(rest: MockApiHandler, config: GuildCrudConfig)
 			config.guard?.(params.guildId);
 			const patched = await patch(params.guildId, params[idParam], bodyRecord(pending.body));
 			if (patched !== undefined) return patched;
-			if (config.unknownCode !== undefined) apiError(404, config.unknownCode, config.unknownMessage ?? 'Unknown');
+			if (config.unknownError !== undefined) apiError(config.unknownError);
 			return rest.markSynthetic(config.fallback(params.guildId, params[idParam]));
 		});
 	}
@@ -128,11 +127,10 @@ export function registerGuildCrud(rest: MockApiHandler, config: GuildCrudConfig)
 		const drop = config.drop;
 		rest.intercept(config.remove, async (_pending, params) => {
 			config.guard?.(params.guildId);
-			if (config.unknownCode !== undefined && config.one(params.guildId, params[idParam]) === undefined) {
-				apiError(404, config.unknownCode, config.unknownMessage ?? 'Unknown');
+			if (config.unknownError !== undefined && config.one(params.guildId, params[idParam]) === undefined) {
+				apiError(config.unknownError);
 			}
 			await drop(params.guildId, params[idParam]);
-			return {};
 		});
 	}
 }
@@ -146,7 +144,7 @@ export function webhookChannelOf(webhookId: string): string | undefined {
 }
 export function createWorldDefaultContext(
 	rest: MockApiHandler,
-	world: MockWorld | undefined,
+	world: WorldData | undefined,
 	hooks: WorldDefaultHooks,
 ) {
 	const removed = new Set<string>();
@@ -161,10 +159,10 @@ export function createWorldDefaultContext(
 		}
 	};
 
-	const removeMember = async (guildId: string, userId: string, banned: boolean) => {
+	const removeMember = async (guildId: string, userId: string, banned: boolean, reason?: string) => {
 		const entry = findMember(guildId, userId);
 		removed.add(key(guildId, userId));
-		hooks.state.removeMember(guildId, userId, banned);
+		hooks.state.removeMember(guildId, userId, banned, reason);
 		await hooks.removeCachedMember(guildId, userId);
 		if (hooks.simulateGateway) {
 			await hooks.emit('GUILD_MEMBER_REMOVE', {
@@ -217,7 +215,7 @@ export function createWorldDefaultContext(
 	const requireGuild = (guildId: string) => {
 		if (!world) return;
 		if (guildId === 'undefined' || guildId === 'null' || !world.guilds.some(guild => guild.id === guildId)) {
-			apiError(404, ErrorCode.UnknownGuild, 'Unknown Guild');
+			apiError(DiscordErrors.UnknownGuild);
 		}
 	};
 
@@ -230,12 +228,12 @@ export function createWorldDefaultContext(
 			channelId === 'null' ||
 			!world.channels.some(channel => channel.id === channelId)
 		) {
-			apiError(404, ErrorCode.UnknownChannel, 'Unknown Channel');
+			apiError(DiscordErrors.UnknownChannel);
 		}
 	};
 	const requireMessage = (channelId: string, messageId: string) => {
 		requireChannel(channelId);
-		if (!hooks.state.rawMessage(channelId, messageId)) apiError(404, ErrorCode.UnknownMessage, 'Unknown Message');
+		if (!hooks.state.rawMessage(channelId, messageId)) apiError(DiscordErrors.UnknownMessage);
 	};
 
 	// Permission/hierarchy enforcement is OPT-IN: it only activates once a bot member is seeded
@@ -265,7 +263,7 @@ export function createWorldDefaultContext(
 		const perms = botGuildPerms(guildId, channelId);
 		if (perms === undefined) return; // enforcement off (no seeded bot member)
 		if (perms & PermissionFlagsBits.Administrator) return;
-		if (!(perms & bit)) apiError(403, ErrorCode.MissingPermissions, 'Missing Permissions');
+		if (!(perms & bit)) apiError(DiscordErrors.MissingPermissions);
 	};
 	// Channel-scoped permission guard: resolves the channel's guild and folds its overwrites into the check.
 	const requireChannelPerm = (channelId: string, bit: bigint) =>
@@ -281,12 +279,12 @@ export function createWorldDefaultContext(
 		const guild = world?.guilds.find(entry => entry.id === guildId);
 		if (!world || !bot || !guild) return; // enforcement off
 		if (guild.owner_id === hooks.botId) return; // the bot owns the guild
-		if (guild.owner_id === targetUserId) apiError(403, ErrorCode.MissingPermissions, 'Missing Permissions');
+		if (guild.owner_id === targetUserId) apiError(DiscordErrors.MissingPermissions);
 		const target = findMember(guildId, targetUserId);
 		if (!target) return;
 		const roles = guildRolesOf(guildId);
 		if (topRole(target.member.roles, roles) >= topRole(bot.member.roles, roles)) {
-			apiError(403, ErrorCode.MissingPermissions, 'Missing Permissions');
+			apiError(DiscordErrors.MissingPermissions);
 		}
 	};
 	const requireManageableRole = (guildId: string, roleId: string) => {
@@ -296,7 +294,7 @@ export function createWorldDefaultContext(
 		if (guild.owner_id === hooks.botId) return;
 		const roles = guildRolesOf(guildId);
 		if ((roles.find(role => role.id === roleId)?.position ?? 0) >= topRole(bot.member.roles, roles)) {
-			apiError(403, ErrorCode.MissingPermissions, 'Missing Permissions');
+			apiError(DiscordErrors.MissingPermissions);
 		}
 	};
 
@@ -305,14 +303,14 @@ export function createWorldDefaultContext(
 		Routes.fetchGuild,
 		params => world?.guilds.find(guild => guild.id === params.guildId),
 		params => apiGuild({ id: params.guildId }),
-		world ? { code: ErrorCode.UnknownGuild, message: 'Unknown Guild' } : undefined,
+		world ? DiscordErrors.UnknownGuild : undefined,
 	);
 	interceptFetchOne(
 		rest,
 		Routes.fetchChannel,
 		params => world?.channels.find(channel => channel.id === params.channelId),
 		params => apiChannel({ id: params.channelId }),
-		world ? { code: ErrorCode.UnknownChannel, message: 'Unknown Channel' } : undefined,
+		world ? DiscordErrors.UnknownChannel : undefined,
 	);
 	return {
 		rest,

@@ -286,7 +286,7 @@ describe('permission emulation', () => {
 				memberPermissions: ['Administrator'],
 			}),
 		).resolves.toMatchObject({ content: 'member ok' });
-		expect(() => bot.slash({ name: 'world-member-ban', guildId: 'missing-guild', user: member.user })).toThrow(
+		await expect(bot.slash({ name: 'world-member-ban', guildId: 'missing-guild', user: member.user })).rejects.toThrow(
 			/Seeded guilds: world-guild/,
 		);
 		await bot.close();

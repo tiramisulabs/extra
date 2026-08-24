@@ -11,9 +11,27 @@ from the same import and can coexist in one suite.
 
 Requires Seyfert v5 (peer dependency).
 
+## I want to…
+
+| …test this | …start here |
+|---|---|
+| a `run()` body, no pipeline | [`mockCommandContext(MyCommand)`](#mock-command-contexts) |
+| a component/modal filter or handler | [`mockComponentContext` / `mockModalContext`](#mock-component-and-modal-contexts) |
+| a command context sharing one guild/channel/user | [`mockScene`](#mock-command-contexts) - builds the linked fixtures once instead of threading ids |
+| the real command pipeline: options, middlewares, permissions | [`createMockBot({ commands })`](#mock-bot) |
+| what the bot rendered - embeds, buttons, modals, Components V2 | [`rendered(subject)`](#reading-rendered-output) |
+| a multi-step flow: click, then submit a modal | [stateful actions](#step-by-step-flows) on `bot`/`actor` |
+| REST gates, timing, or two flows for one user | [`bot.actor({ session: false })`](#steps-or-dispatches) |
+| that the handler *changed* state | [`world.snapshot()` + `world.diff()`](#asserting-what-changed) |
+| what state looks like now | [`bot.world.get/query/all`](#querying-world-state) |
+| which REST calls happened | [`bot.restCalls(Routes.x)`](#rest-calls) |
+| that a dispatch was denied, or captured an error | [`rendered(result).get.denial/error`](#denials-and-captured-errors) |
+| timeouts, collectors, scheduled work | [`bot.advanceTime`, `bot.settle`](#testing-timed-behavior) |
+| seeding guilds, channels, members, messages | [`mockWorld()`](#seeding-a-world) |
+
 ## How it works
 
-The fixture layer is plain mock objects - no assertions, spies, or fake timers bundled - so they work with any test runner. The core is `mockCommandContext()`: a stand-in for a Seyfert command context with the fields most commands touch, plus working Slipher stubs (`logger`, `queues`, `scheduler`) that **record what your command does** so you can assert on it afterward. Factories (`mockUser`, `mockGuild`, ...) build the entities, with deterministic ids you can override. The mock-bot layer below keeps the same runner-agnostic model while driving a real Seyfert client pipeline.
+The fixture layer is plain mock objects - no assertions, spies, or fake timers bundled - so they work with any test runner. The core is `mockCommandContext()`: a stand-in for a Seyfert command context with the fields most commands touch, plus working Slipher stubs (`logger`, `queues`, `scheduler`) that **record what your command does** so you can assert on it afterward. Factories (`richUser`, `richGuild`, ...) build the entities, with deterministic ids you can override. The mock-bot layer below keeps the same runner-agnostic model while driving a real Seyfert client pipeline.
 
 ## Install
 
@@ -24,7 +42,7 @@ pnpm add -D @slipher/testing
 ## Mock Command Contexts
 
 ```ts
-import { mockCommandContext, mockUser } from '@slipher/testing';
+import { mockCommandContext, richUser } from '@slipher/testing';
 import { expect, test } from 'vitest';
 import BanCommand from './commands/ban';
 
@@ -32,7 +50,7 @@ test('replies after banning', async () => {
 	// A stand-in context carrying just the fields the command touches.
 	// The command class binds ctx.run() and lets options infer from the command.
 	const ctx = mockCommandContext(BanCommand, {
-		options: { user: mockUser({ id: '123' }) },
+		options: { user: richUser({ id: '123' }) },
 	});
 
 	// Run the real command body against the mock — no cast at the call site.
@@ -54,8 +72,30 @@ test('replies after banning', async () => {
 - `write`, `editOrReply`, `followup`, and `deferReply`
 - `logger`, `queues`, and `scheduler` stubs, plus `client` with the same stub instances
 - `responses`, `lastResponse()`, and `clearResponses()`
+- `modals` — payloads the handler passed to `ctx.interaction.modal()`, in order
 
-`ctx.client.logger === ctx.logger`, `ctx.client.queues === ctx.queues`, and `ctx.client.scheduler === ctx.scheduler`. Use `mockClient({ extra })` when a command touches client surfaces that this package does not model.
+`ctx.client.logger === ctx.logger`, `ctx.client.queues === ctx.queues`, and `ctx.client.scheduler === ctx.scheduler`. Use `stubClient({ extra })` when a command touches client surfaces that this package does not model. `extra` is spread one level deep, so each key you pass **replaces** that surface rather than patching into it: `extra: { users: { fetch } }` swaps out the whole `users` manager, and `extra: { cache: { members: undefined } }` swaps out the whole `cache`. Restate the parts you still need.
+
+When the assertion needs the entities as well as the context — the user who ran it, the
+guild it ran in, the channel it replied to — `mockScene()` builds them wired to each
+other in one call, instead of threading ids between four factories:
+
+```ts
+const { ctx, user, guild, channel } = mockScene(BanCommand, { options: { user: target } });
+
+await ctx.run();
+expect(ctx.lastResponse()).toMatchObject({ content: expect.stringContaining(user.username) });
+```
+
+A command that opens a modal is testable here: `ctx.interaction.modal(payload)` records
+into `ctx.modals`, and `rendered(ctx).get.modal('embed-create')` reads it with the same
+vocabulary as any other output. Driving the *submission* needs the interaction runtime, so
+that stays with `createMockBot` + [`bot.submitModal(...)`](#component-collectors-and-modals).
+
+What the fixture layer deliberately does not simulate says so when you reach for it, rather than failing as a missing property: `reply.createComponentCollector()` and `ctx.client.guilds/channels/users.fetch()` each throw an error naming the `createMockBot` flow to use instead. If a test is asserting on `"Cannot read properties of undefined"`, that is this boundary — the assertion is pinning a V8 phrasing, not a behaviour.
+
+Every directed stub is writable, so you can substitute the surface a specific test needs:
+`ctx.interaction = { modal: vi.fn() }` and `ctx.guild = async () => myGuild` both work.
 
 ## Mock Component and Modal Contexts
 
@@ -72,9 +112,9 @@ import { ProfileModal } from '../src/modals/profile';
 
 const leave = mockComponentContext(LeaveButton);
 
-expect(await leave.filter({ customId: 'leave:campaign:c1' })).toBe(true);
+expect(await leave.filter({ customId: 'leave:workspace:w1' })).toBe(true);
 
-const click = await leave.run({ customId: 'leave:campaign:c1' });
+const click = await leave.run({ customId: 'leave:workspace:w1' });
 expect(click.lastResponse()).toMatchObject({ content: expect.stringContaining('left') });
 
 const profile = mockModalContext(ProfileModal);
@@ -88,15 +128,125 @@ const submit = await profile.run({
 expect(submit.lastResponse()).toBeDefined();
 ```
 
-## Factories
+## Reading rendered output
+
+`rendered(subject)` normalizes anything the bot rendered - replies, edits, followups,
+channel messages, Components V2 trees, modals - into one queryable model, then hands
+you three readers over it. It works the same on a light fixture context and on a full
+mock bot, so an assertion survives a test moving between layers.
 
 ```ts
-import { mockChannel, mockGuild, mockMember, mockUser } from '@slipher/testing';
+const ctx = mockCommandContext(ProfileCommand, { options: { user: 'u1' } });
+await ctx.run();
 
-const user = mockUser({ username: 'socram' });
-const guild = mockGuild({ name: 'Slipher Lab' });
-const channel = mockChannel({ guildId: guild.id });
-const member = mockMember({ user });
+expect(rendered(ctx).get.embed({ title: 'Profile' }).description).toContain('socram');
+expect(rendered(ctx).get.button('profile:edit').disabled).toBe(false);
+```
+
+Every subject below is read the same way:
+
+| Subject | What it holds |
+|---|---|
+| `rendered(ctx)` | any mock context's responses - `mockCommandContext`, `mockComponentContext`, `mockModalContext` - plus modals the handler opened |
+| `rendered(result)` | output belonging to that exact dispatch, even after later steps |
+| `rendered(bot)` | output from the latest step of the most recently active actor |
+| `rendered(actor)` | output from that actor's latest step |
+| `rendered(flow)` | what a parked `Dispatch` has rendered so far, before it settles |
+| `rendered(payload)` | a raw message payload, an array of them, or a Seyfert **message** builder (a bare component or embed builder throws — wrap it as the handler sends it) |
+
+`MockBot` and a parked `Dispatch` have no `lastEmbed()` / `lastComponents()` / `lastContent()` of
+their own: they read the same latest-step output `rendered(bot)` and `rendered(flow)` already
+expose, with one vocabulary instead of three. The mock contexts keep theirs, because
+`ctx.lastEmbeds()` means "the last *response*", which is a scope `rendered()` does not name.
+
+The three readers differ only in cardinality:
+
+- `get.*` requires exactly one match and throws with the candidates otherwise.
+- `query.*` allows zero and returns `undefined`, but throws when more than one matches — returning the
+  first was the one reader variant that could let an ambiguous match pass green.
+- `all.*` returns every match.
+
+A miss reports what *was* rendered, so a wrong matcher does not read like a rendering
+failure:
+
+```
+RenderedOutputError: rendered.get.embed({"title":"/Nonexistent/"}) matched none of 2 embeds.
+
+Embeds rendered:
+  message[0] > embed[0] title="Actual Title"
+  message[0] > embed[1] title="Second Embed"
+```
+
+`rendered(subject).debug()` prints that tree on demand, and
+`rendered(subject).raw.messages()` exposes the untouched payloads for wire-shape
+assertions.
+
+### Denials and captured errors
+
+A dispatch can end without rendering anything: a permission guard or a middleware denied it before the
+handler ran, or the handler threw. Both are read from the same reader, under the same cardinality
+contract - `get.*` throws when there is nothing to read, where the flat `result.denial?` /
+`result.error` fields leave the "was there one at all" guard to you:
+
+```ts
+const result = await bot.slash({ name: 'ban', memberPermissions: [] });
+
+rendered(result).get.denial({ kind: 'permissions', missing: 'BanMembers' });
+rendered(result).query.denial({ kind: 'stop' }); // undefined - it was not a middleware stop
+
+const { error } = rendered(result).get.error(/timeout/); // needs onCommandError: 'capture'
+```
+
+`denial` takes `{ kind, middleware, missing }`. `error` takes a string, a `RegExp` or a predicate
+matched against the captured error, or `{ match }`. Both are facts about the dispatch, so they live on
+`rendered(result)` and not on the scoped readers a message or a container hands back - and asking for
+one on a subject that cannot carry it (a bot, an actor, a context, a raw payload) is a `TypeError`
+rather than a miss against nothing.
+
+Whether the dispatch *responded* is not a third kind. A reply, an update, an edit and a followup are
+already messages, and a modal is already `get.modal()`. A defer renders nothing at all - read it from
+`result.deferred` / `result.deferredReply` / `result.deferredUpdate`, which are always present, so a
+comparison on them cannot pass by being `undefined`. An autocomplete answers with `result.choices`.
+
+### Edits: `current` vs `timeline`
+
+When a message and a later edit of it can be tied together - the edit names a
+message id, or both go through the same interaction token - they fold into one
+entry, so you assert the final state a user sees. Pass `view: 'timeline'` to keep
+every rendering event separate instead, for asserting that a handler edited a
+loading message into a result rather than only what it ended up saying:
+
+```ts
+// handler posts "Loading…", then edits that message to "Done"
+expect(rendered(result).all.message().map(m => m.content)).toEqual(['Done']);
+expect(rendered(result, { view: 'timeline' }).all.message().map(m => m.content))
+	.toEqual(['Loading…', 'Done']);
+```
+
+The option only applies to subjects with a REST trail (`bot`, `actor`, `result`,
+`flow`). A literal payload or a context's responses are already one entry per event.
+
+## Factories
+
+Two families, named for what they produce rather than for being test doubles — everything here is a
+test double:
+
+- **`rich*`** (`richUser`, `richGuild`, `richChannel`, `richMember`, `richMessage`, `richRole`,
+  `richEmoji`, `richVoiceState`) — behavioural fixtures carrying `toString()`, `avatarURL()` and the
+  rest. For `mockCommandContext` and friends.
+- **`api*`** (`apiUser`, `apiGuild`, …) — plain wire payloads. World seeding `structuredClone`s, so
+  it takes these; a `rich*` fixture carries methods and cannot be cloned.
+- **`stub*`** (`stubClient`, `stubLogger`, `stubQueues`, `stubScheduler`) — Slipher service doubles,
+  not Discord entities.
+
+```ts
+import { richChannel, richGuild, richMember, richUser } from '@slipher/testing';
+
+const user = richUser({ username: 'socram' });
+const guild = richGuild({ id: 'guild-1', name: 'Slipher Lab', icon: 'guild-icon-hash' });
+guild.iconURL(); // https://cdn.discordapp.com/icons/guild-1/guild-icon-hash.png
+const channel = richChannel({ guildId: guild.id });
+const member = richMember({ user });
 ```
 
 ## Slipher Stubs
@@ -126,22 +276,22 @@ Attach runner-specific behavior by replacing the method or nested surface you ne
 
 ```ts
 import { vi } from 'vitest';
-import { mockCommandContext, mockGuild, mockMember } from '@slipher/testing';
+import { mockCommandContext, richGuild, richMember } from '@slipher/testing';
 
 const ctx = mockCommandContext();
 ctx.guild = vi.fn(async () => ({
-	...mockGuild(),
-	members: { fetch: vi.fn(async () => mockMember()) },
+	...richGuild(),
+	members: { fetch: vi.fn(async () => richMember()) },
 }));
 ```
 
 ```ts
-import { mockCommandContext, mockGuild, mockMember } from '@slipher/testing';
+import { mockCommandContext, richGuild, richMember } from '@slipher/testing';
 
 const ctx = mockCommandContext();
 ctx.guild = jest.fn(async () => ({
-	...mockGuild(),
-	members: { fetch: jest.fn(async () => mockMember()) },
+	...richGuild(),
+	members: { fetch: jest.fn(async () => richMember()) },
 }));
 ```
 
@@ -229,10 +379,14 @@ for the rare assertion where the Discord wire shape itself is the contract. Pref
 `result.content`, `result.deferred`, and `result.edits` for normal behavior checks.
 
 Embeds and components come back parsed and typed, so you assert without casting:
-`result.embedView?.title`, `result.embedViews`, `result.buttons`,
-`result.button('Approve')?.customId`, and `result.textDisplays` (components-v2). The
-raw `result.embeds`/`result.embed` expose the flattened Discord payloads for
-wire-shape assertions.
+`result.embedView?.title`, `result.embedViews`, `result.components`, and
+`result.textDisplays` (components-v2). The raw `result.embeds`/`result.embed` expose
+the flattened Discord payloads for wire-shape assertions.
+
+Those flat fields answer "the first embed" and "all the buttons". For anything with
+structure - a specific button, an embed matched by title, a modal field - use
+[`rendered(result)`](#reading-rendered-output), which queries the same output by shape
+and, when a query matches nothing, prints what *was* rendered.
 
 `createMockBot()` accepts:
 
@@ -309,26 +463,98 @@ from that path.
 
 ### Execution model
 
-Every dispatcher returns a lazy `Dispatch`. Await it directly for one-shot runs, or
-call `dispatch.until(Routes.ban)` first to step through the same dispatch. For a
-dispatch that opens a modal, drive it in one call with `.fillModal(...)` /
-`.timeoutModal()` (see below). Awaiting always releases any active checkpoint, so it
-cannot deadlock.
+The normal interaction API reads chronologically:
 
-- Immediate replies, deferrals, and modal opens are captured in `result.replies`.
-- REST work awaited by the command is classified into `result.edits`,
-  `result.followups`, and dispatch-scoped `result.actions`.
-- `waitForAction()` is for work your command did not await: timers,
-  fire-and-forget promises, queue/scheduler side effects.
-- Dispatches do not reject for command errors; Seyfert routes them through error
-  hooks, and you assert the user-facing error reply.
+```ts
+await bot.slash({ name: 'profile' });
+await bot.submitModal('profile-modal', {
+	'display-name': 'Ada',
+});
+await bot.clickButton('save-profile');
+
+expect(rendered(bot).get.message({ content: 'Profile saved' })).toBeDefined();
+```
+
+`slash()`, `submitModal()`, `clickButton()`, `selectMenu()`, `userMenu()`,
+`messageMenu()`, class-first `menu()`, and `entryPoint()` are stateful. Each
+action updates that actor's current interaction state and resolves when its
+causal handlers finish, or when Seyfert registers the next real user-input
+checkpoint (a modal submission or `collector.waitFor(...)`) and that input is
+rendered. Merely rendering a component does not prematurely finish an action.
+
+Those two stopping points have different synchronization boundaries:
+
+- When the causal handlers finish, the action drains their REST work to
+  quiescence. This includes fire-and-forget REST discovered across immediate
+  event-loop turns and sequential REST chains.
+- At a modal or component checkpoint, the action settles causal REST that has
+  already started, but it does not add an unconditional macrotask discovery
+  turn when the checkpoint is otherwise settled. This keeps a timer scheduled
+  immediately before that quiet checkpoint from advancing the parked flow
+  merely because the caller awaited the action. If an already-started REST
+  responder is still pending, the drain yields real event-loop turns so that
+  responder can finish; unrelated real timers may run during those required
+  turns.
+
+REST discovered after the handler result was built updates the live
+`restCalls()`, `bot.world`, `rendered(bot)`, and `rendered(actor)` views. It does
+not retroactively add entries to the returned result's `actions` or `messages`;
+that result remains an exact snapshot of its own dispatch.
+
+This means the next source-less click/select is resolved against the current
+actor's actionable output. It cannot silently click a component left over from
+an older step. `clickButton()` and `selectMenu()` reject when the component was
+not rendered or is disabled; `submitModal()` rejects when that actor was not
+shown the matching modal. Passing an explicit `source` intentionally addresses
+a rendered historical message, but it still validates the component.
+`rendered()` is optional: it only inspects output for assertions or diagnostics
+and never advances or synchronizes the flow.
+
+When you do inspect output, `get.*` requires exactly one match, `query.*`
+returns `undefined` when absent, and `all.*` returns every match. The reader
+finds output; Vitest, Jest, Mocha, or another runner owns ordinary assertions:
+
+```ts
+const screen = rendered(bot);
+const save = screen.get.button('save-profile');
+
+expect(save.disabled).toBe(false);
+expect(screen.query.embed({ title: 'Validation error' })).toBeUndefined();
+expect(screen.all.button()).toHaveLength(1);
+```
+
+Continuation actions inherit the user, guild, channel, and message context from
+the previous step. Explicit options or an explicit historical source take
+precedence. Use different actors for independent flows; overlapping stateful
+actions for the same actor session fail immediately. Concurrent and
+timeout-driven scenarios are the same identity with `session: false` — see
+[Steps or dispatches](#steps-or-dispatches).
+
+- Immediate replies, deferrals, and modal opens are captured in the returned
+  `DispatchResult`.
+- REST work awaited by the handler is classified into `result.edits`,
+  `result.followups`, and `result.actions`.
+- Completed stateful actions automatically drain their observable causal REST
+  into the live journal. `settle()` is reserved for deliberately detached work
+  outside that boundary, such as an un-sessioned dispatch, direct REST, or work released
+  through an external promise after the action/checkpoint returned.
+- Unhandled command/component/modal errors reject the action by default. Set
+  `onCommandError: 'capture'` to inspect them on `result.error` instead.
 
 | After you awaited | Guaranteed |
 |---|---|
-| `await dispatch` | everything `run()` awaited: replies, edits, followups, and dispatch actions |
-| `dispatch.until(...)` resolved | the matched call started; `response` is still `undefined` while suspended |
-| `await emit(...)` | REST work the handler awaited |
-| nothing | only `waitForAction(...)` observes fire-and-forget work |
+| A completed stateful action | causal handlers and their observable REST reached quiescence; live actor state updated |
+| A stateful input checkpoint | the modal/component is rendered and already-started causal REST settled; no unconditional macrotask discovery |
+| `rendered(bot)` | output from the latest step of the most recently active actor |
+| `rendered(actor)` | output from that actor's latest step |
+| `rendered(result)` | output belonging to that exact result, even after later steps |
+| `bot.restCalls()` | complete REST journal across actors, un-sessioned dispatches, and direct REST, in global order |
+| `actor.restCalls()` | complete causal REST history for that actor across all of its stateful steps |
+| `result.actions` | the exact raw REST trail attributed to that result |
+| `bot.world` | persistent Discord-side entities and messages, including writes from earlier steps |
+| `await raw.<action>(...)` (from `actor({ session: false })`) | handler completion |
+| `raw.until(...)` resolved | the matched REST call started; `response` is still `undefined` while gated |
+| `await bot.settle()` | currently observable, unscoped detached REST/timer work reached quiescence |
 
 ### Step-by-step flows
 
@@ -339,7 +565,7 @@ call:
 
 ```ts
 await using bot = await createMockBot({ commands: [PurgeCommand], world });
-const alice = bot.actor({ member: aliceMember, guildId: guild.id, channel });
+const alice = bot.actor({ member: aliceMember });
 
 await alice.slash({ name: 'poll' });
 await alice.clickButton('poll/yes');
@@ -349,11 +575,38 @@ const result = await alice.slash({ name: 'results' });
 expect(result.content).toContain('1 vote');
 ```
 
-To pause inside a single command, step the same dispatch instead of awaiting it
-immediately:
+The world already records which guild a member belongs to, so `guildId` and
+`channel` are derived from it. The rule is the same on both: derive when the world
+leaves no choice, refuse to guess when it does. A member in one guild needs no
+`guildId`; a guild with one non-thread channel needs no `channel`. Anything
+ambiguous — a member in two guilds, a guild with two channels — throws and names
+the candidates, rather than binding the actor by seeding order. Passing a `guildId`
+or `channel` the member is not in throws too, instead of silently resolving against
+the wrong guild.
+
+### Steps or dispatches
+
+There is one dispatcher. `bot.actor(...)` binds an identity; `bot.*` is that same
+verb set on the default identity. What the second argument to `actor()` chooses is
+the **session**, not a different API:
+
+| | `bot.actor({ member })` | `bot.actor({ member, session: false })` |
+|---|---|---|
+| returns | `Actor` | `Dispatcher` |
+| a verb returns | `Promise<DispatchResult>` | `Dispatch<DispatchResult>` |
+| `await` resolves | at the first real user-input checkpoint, or completion | at handler completion |
+| two actions at once | refused, the flow is chronological | allowed |
+| implicit component source | the current step only | the whole recorded history |
+| `restCalls()` | that identity's causal history | use `bot.restCalls()` |
+
+Steps are the default testing path. Reach for `session: false` when the test is
+about timing or concurrency and needs the un-started `Dispatch` — REST gates,
+several flows in flight, or driving a modal from its opener. The identity still
+binds either way:
 
 ```ts
-const dispatch = bot.slash({ name: 'ban', options: { user: userOption(target) } });
+const raw = bot.actor({ member: aliceMember, session: false });
+const dispatch = raw.slash({ name: 'ban', options: { user: userOption(target) } });
 
 const ban = await dispatch.until(Routes.ban);
 expect(ban.body).toMatchObject({ delete_message_seconds: 0 });
@@ -370,7 +623,7 @@ await bot.autocomplete({ name: 'search', focused: 'query', value: 'sey' });
 await bot.userMenu({ name: 'Report User', target: apiUser({ id: '42' }) });
 await bot.clickButton('confirm');
 await bot.selectMenu('pick-color', ['red']);
-await bot.fillModal('feedback', { rating: '5' });
+await bot.submitModal('feedback', { rating: '5' });
 await bot.say('!echo -text hello');
 await bot.emit('GUILD_MEMBER_ADD', rawMemberPayload);
 ```
@@ -385,9 +638,12 @@ seed world state (no handler expected), opt out explicitly:
 await bot.emit('CHANNEL_CREATE', rawChannelPayload, { allowNoHandler: true });
 ```
 
-Every dispatch defaults to the bot's single test user (`bot.defaultUser`), so
-cross-dispatch state such as cooldowns, waiting modals, and per-user collectors
-correlates automatically. Pin `guildId` for state that must persist per guild.
+Every dispatch defaults to one identity (`bot.defaultUser`), so cross-dispatch
+state such as cooldowns, waiting modals, and per-user collectors correlates
+automatically. When the seeded world has exactly one human member, that member
+*is* the default — a single-actor scenario needs no `user:` at all. Otherwise the
+default is `TEST_USER_ID` and you name the actor explicitly. Pin `guildId` for
+state that must persist per guild.
 
 Primitive option values are encoded automatically. For entity options use the
 explicit helpers, which also populate `resolved` data:
@@ -500,9 +756,9 @@ expect(result.reply?.body).toMatchObject({
 ### Component collectors and modals
 
 For messages with component collectors, fetch the message, register the collector,
-then dispatch the component. `clickButton()` and `selectMenu()` default to the
-latest message-shaped REST response (`lastSentMessage()`), so most tests do not
-thread message ids by hand:
+then dispatch the component. Stateful `clickButton()` and `selectMenu()` use the
+current actor's rendered component/checkpoint, so most tests do not thread
+message ids by hand:
 
 ```ts
 class PollCommand extends Command {
@@ -519,42 +775,71 @@ await bot.slash({ name: 'poll' });
 await bot.clickButton('poll/yes');
 ```
 
-Pass `source` when a flow has multiple messages:
+Pass `source` when you intentionally address a message outside the current
+state or when a current step contains the same custom id on multiple messages:
 
 ```ts
 const sent = bot.lastSentMessage();
-await bot.clickButton('approve', { source: sent?.id });
-await bot.selectMenu('settings/mod', [role.id], { source: sent, componentType: 'role' });
+if (!sent) throw new Error('Expected the command to send a message.');
+
+await bot.clickButton('approve', { source: sent.id });
+await bot.selectMenu('settings/mod', [role.id], { source: sent.id, componentType: 'role' });
 ```
 
 Entity selects auto-resolve seeded world users, members, roles, and channels.
-Use explicit `resolved` when testing a raw Discord payload. For a
-`ComponentCommand` select-menu path without a collector, build the raw payload
-with `selectMenuInteraction()` and pass it to `dispatchInteraction()`.
+Use explicit `resolved` when testing a raw Discord payload.
 
-A dispatch that opens a modal (`interaction.modal(..., { waitFor })`) is driven in one
-call — the open → resolve → settle handshake is handled for you. Submit it with
-`.fillModal(...)`, or take its timeout branch with `.timeoutModal()`:
+For a bot whose panels are posted once and clicked forever after, there is no
+rendered source in *this* run. `allowSyntheticSource` says so. It describes the
+click, not the surface it was made from, so it is accepted per call, bound once on
+the actor, and honoured on components and modals alike:
 
 ```ts
-// the user submitted the modal
-const modal = await bot.clickButton('open-feedback', { user }).fillModal('feedback-modal', { rating: '5' });
-expect(modal.content).toBe('thanks');
+const panelist = bot.actor({ member, allowSyntheticSource: true });
 
-// the user never submitted — the waitFor expires (instant, no fake-timer setup)
-const timedOut = await bot.clickButton('open-feedback', { user }).timeoutModal();
-expect(timedOut.content).toBe('timed out');
+await panelist.clickButton('panel:confirm');
+await panelist.selectMenu('settings/theme', ['dark']);
+await panelist.submitModal('panel:feedback', { rating: '5' });
+
+// or, per call, on the default identity
+await bot.selectMenu('settings/theme', ['dark'], { allowSyntheticSource: true });
 ```
 
-The `DispatchResult` returned by `.fillModal(...)` is scoped to the modal-submit
-interaction. If the opener resumes after `await interaction.modal(...)` and writes
-visible output from that continuation, assert through `rendered(bot)` or another
-bot-level state reader when that cross-dispatch output is the contract. Use
-`rendered(flow)` for the modal that the opener displayed before submission.
+The claim is honoured against implicit resolution: a message the step happens to
+have rendered that does not carry the component is a coincidence, not a source. An
+explicit `source` is a statement about which message was clicked, so it always
+stands — and without the claim, an implicitly resolved message that lacks the
+component still fails loud.
 
-Awaiting a modal-opener directly (without `.fillModal()`/`.timeoutModal()`) fails loud,
-since in real seyfert it would stall on the `waitFor` timer and silently take the
-timeout branch.
+A synthetic step is an ordinary step of the identity that took it: it serializes
+with that identity's other actions, becomes its latest rendered output, and appears
+in `actor.restCalls()`. Only the source message is absent, so it consumes no
+checkpoint and resumes no parked flow.
+
+A modal opened with `interaction.modal(..., { waitFor })` becomes the next
+stateful checkpoint. Submit it as the next chronological action:
+
+```ts
+await bot.clickButton('open-feedback', { user });
+await bot.submitModal('feedback-modal', { rating: '5' }, { user });
+expect(rendered(bot).get.message({ content: 'thanks' })).toBeDefined();
+```
+
+The modal submit waits for both its own interaction and the opener continuation
+it resumed. If that continuation renders a button, the following source-less
+`clickButton()` uses that exact message whether or not you inspect it with
+`rendered(bot)` first.
+
+For the "user never submitted" branch, take the opener un-sessioned so you hold its
+`Dispatch`. `timeoutModal()` resolves Seyfert's modal wait immediately, without fake
+timers:
+
+```ts
+const raw = bot.actor({ user, session: false });
+const opener = raw.clickButton('open-feedback', { allowSyntheticSource: true });
+const timedOut = await opener.timeoutModal();
+expect(timedOut.content).toBe('timed out');
+```
 
 ### Testing timed behavior
 
@@ -562,7 +847,8 @@ Collector `idle`/`timeout` and modal `waitFor` use seyfert's bare global
 `setTimeout`, which the mock can't own. Bridge your runner's fake clock through the
 `timers` callback — the package imports no test runner, so the bridge is yours —
 then `bot.advanceTime(ms)` fires them. Fake only `setTimeout`/`clearTimeout`:
-faking `setImmediate` deadlocks the mock's drain.
+`advanceTime()` and `settle()` require the real global `setImmediate` and fail
+fast when a runner replaces it.
 
 ```ts
 import { afterEach, vi } from 'vitest';
@@ -584,18 +870,97 @@ await bot.advanceTime(60_000); // collector onStop('idle') runs now, no real wai
 Jest's fake timers use the inverted option — `jest.useFakeTimers({ doNotFake: ['setImmediate'] })`
 keeps `setImmediate` real — with `timers: { advance: ms => jest.advanceTimersByTime(ms) }`.
 
-### Recorded actions
+If the runner fakes `setImmediate` and only an otherwise-unstarted detached
+callback is waiting on it, a completed stateful action still resolves without
+executing that callback. This does not apply when awaited handler code or an
+already-started REST responder is itself waiting on the fake immediate: that
+promise remains pending until the runner advances it. Advance fake timers with
+the test runner, restore real timers, and then inspect or settle as needed.
+`advanceTime()` and `settle()` keep their real-`setImmediate` guard instead of
+advancing a runner's global fake implicitly.
 
-Everything else the bot does goes through REST and is recorded:
+### REST calls
+
+Everything else the bot does goes through REST and is recorded. `restCalls()`
+reads that journal without changing it: use `bot.restCalls()` for the complete
+bot history, including stateful actors, un-sessioned dispatches, and direct REST, or
+`actor.restCalls()` for only the calls causally owned by that actor across all
+of its stateful steps. Pass a `Routes` descriptor to narrow by endpoint and
+infer its route params, request body, and response from Discord's REST types.
+
+Both forms always return a read-only array: zero, one, and many matches have the
+same shape. Use regular JavaScript to find, filter, or map calls, and let your
+test runner assert cardinality and values:
 
 ```ts
 import { Routes } from '@slipher/testing';
 
-const edit = await bot.waitForAction(Routes.editOriginalResponse);
-expect(edit.body).toMatchObject({ content: 'done' });
+await bot.slash({ name: 'sync-members' });
+const adaId = 'user-ada';
 
-bot.actions; // every call, in order: { seq, method, route, body, query, response }
+const edits = bot.restCalls(Routes.editMember);
+expect(edits).toHaveLength(2);
+
+const adaEdit = edits.find(call => call.params.userId === adaId);
+expect(adaEdit?.body).toMatchObject({ nick: 'Ada' });
+expect(adaEdit?.response?.user.id).toBe(adaId); // typed, without a cast
+
+const editedUserIds = edits.map(call => call.params.userId);
+expect(editedUserIds).toContain(adaId);
+
+const failedCalls = bot.restCalls().filter(call => call.error !== undefined);
+expect(failedCalls).toHaveLength(0);
 ```
+
+#### Routes the package does not own
+
+A bot that calls its own backend gets none of this — the mock replaces Seyfert's
+REST client, not `globalThis.fetch`, and taking over `fetch` is a process-global
+side effect the package deliberately leaves to you. What it does export is the
+matcher, so your own interception gets the same ergonomics instead of
+`String(url).includes(...)`:
+
+```ts
+import { defineRoute, matchRoute } from '@slipher/testing';
+
+const verdict = defineRoute<VerdictBody, VerdictResponse>()({
+	method: 'POST',
+	route: '/organizations/:orgId/verdict',
+});
+
+// against whatever your fetch stub recorded
+const params = matchRoute(verdict, { method: 'POST', route: '/organizations/42/verdict' });
+expect(params).toEqual({ orgId: '42' }); // undefined when it does not match
+```
+
+Route templates are **paths only**. Keep the origin and the query string outside,
+the way `RecordedAction` keeps `route` and `query` apart — `RouteParams` reads `:`
+as a param marker, so an origin in the template makes `https://` yield an empty
+param name and a `:8080` port yield one called `8080`, neither of which the
+runtime matcher agrees with. Typing your recorder's reader as `RestCalls` gives it
+the exact `restCalls()` contract, params, body and response included.
+
+For endpoints whose successful Discord response has no content, `response` is
+typed and recorded as `undefined`; use `settled` and `error` rather than
+response presence when asserting completion.
+
+`restCalls()` only reads; it does not wait or alter the flow. Await the stateful
+action first; ordinary completed actions already settle their causal REST.
+Calls made through an un-sessioned dispatcher keep handler-completion timing, and
+direct `bot.rest.*` calls are not adopted by an unrelated actor action. Work
+hidden behind an external promise that has not produced a REST call is likewise
+not observable to the causal drain. Await that promise directly, advance the
+responsible timer/gate, or use `await bot.settle()` for the remaining observable
+unscoped work. Each read is an independent snapshot; read again after pending
+work settles to observe its populated response. `reset()` starts a new journal.
+Use `dispatch.until(...)` instead when a low-level concurrency test must stop on
+an in-flight REST call.
+
+`result.actions` deliberately remains the exact raw REST trail attributed to a
+returned result. It stays tied to that result even after a newer actor step
+becomes current; use `restCalls()` for normalized full-history route reads.
+`rendered(bot)` and `rendered(actor)` remain latest-UI readers and do not expand
+to historical output when the REST journal grows.
 
 Stub specific endpoints when a command reads from the API:
 
@@ -614,12 +979,18 @@ import { createMockBot, mockWorld } from '@slipher/testing';
 
 const world = mockWorld();
 const guild = world.registerGuild({ name: 'Slipher Lab' });
-world.registerChannel(guild.id);
-world.registerMember(guild.id, { nick: 'soc' });
+guild.registerChannel();
+guild.registerMember({ nick: 'soc' });
 
 await using bot = await createMockBot({ commands: [WhereCommand], world });
 await bot.slash({ name: 'where', guildId: guild.id });
 ```
+
+A registered guild carries the guild-scoped registrars, so the guild id is stated
+once instead of on every call. The threaded form (`world.registerChannel(guild.id,
+…)`) is unchanged and stays the clearer choice when one statement seeds two guilds.
+The value is still the plain `ApiGuild` payload — the registrars are
+non-enumerable, so it clones, serializes, and deep-equals exactly as before.
 
 Entities are written into the real client cache (`CacheFrom.Test`), so
 `ctx.guild()`, `ctx.channel()`, and related cache reads resolve like production
@@ -699,14 +1070,26 @@ just like production. Without a seeded bot member the routes stay permissive,
 which is useful for unit-style tests that are not asserting bot authorization.
 Seed the bot member whenever the permission contract matters.
 
-Use `apiError()` to drive REST error branches:
+The bot's id is one fact stated once. `createMockBot({ botId })` and
+`world.registerBotMember(guildId, { botId })` are the same statement: set it on
+either and the other adopts it. Setting both to different values fails loudly at
+`createMockBot`, rather than leaving the client and the seeded bot member as two
+different users — which silently breaks `author.id === client.botId` checks and
+turns off the bot-permission enforcement above.
+
+Use `apiError()` to drive REST error branches from your own interceptor:
 
 ```ts
-bot.rest.intercept(Routes.ban, () => apiError(403, 50013, 'Missing Permissions'));
+import { apiError, DiscordErrors } from '@slipher/testing';
+
+bot.rest.intercept(Routes.ban, () => apiError(DiscordErrors.MissingPermissions));
 ```
 
-`MockApiError` is intentionally small; commands that branch on Seyfert's real
-error classes should test that real parse path separately.
+There is one error model. A seeded world's guard, `bot.rest.fail(...)` and your
+own `apiError()` all reject with the `SeyfertError` Seyfert's real `parseError`
+builds from a Discord response, so the command's `catch` runs exactly the code it
+runs in production. Assert on it with `isDiscordError` — see **Simulating REST
+failures** below.
 
 ### Querying world state
 
@@ -769,19 +1152,37 @@ Use `ChannelView.overwrites` for permission-matrix assertions. Direct replies
 also remain available as `result.reply?.body.data` when the channel view is not
 the clearest assertion surface.
 
-### Outcome reader
+### Asserting what changed
 
-Naive checks pass green when nothing happened — `expect(result.content).toContain('ok')`
-is satisfied by `content` being `undefined`. Use the runner-agnostic outcome reader for
-dispatch-level facts, and keep ordinary comparisons in your test runner:
+Point queries answer "what is it now". When the contract is *the mutation* - the
+handler granted a role, removed a ban, renamed a channel - snapshot before and diff
+after, instead of restating every field you expect to be untouched:
 
 ```ts
-import { outcome } from '@slipher/testing';
+const before = bot.world.snapshot();
+await bot.clickButton('join:campaign-1');
 
-outcome(result).get.response(); // throws if the dispatch never responded
-outcome(result).get.denial({ kind: 'permissions', missing: 'BanMembers' });
-const { error } = outcome(result).get.error(/timeout/); // needs onCommandError: 'capture'
+const { members } = bot.world.diff(before);
+expect(members.changed).toContainEqual(
+	expect.objectContaining({ fields: ['roles'] }),
+);
 ```
+
+`snapshot()` is deeply frozen plain data, so later writes never mutate a capture.
+`diff(before)` returns `added` / `removed` / `changed` buckets per entity type
+(`members`, `channels`, `messages`, `roles`, `bans`, `emojis`, `invites`,
+`autoModRules`, `stickers`, `scheduledEvents`, `webhooks`, `pins`, `reactions`,
+`voiceStates`, `threadMembers`), and each `changed` entry carries `before`, `after`,
+and `fields` - the names of the fields that actually differ:
+
+```json
+{ "before": { "guildId": "g1", "userId": "u1", "roles": [], "nick": null },
+  "after":  { "guildId": "g1", "userId": "u1", "roles": ["r-new"], "nick": null },
+  "fields": ["roles"] }
+```
+
+This is usually the shortest way to prove a handler mutated exactly one thing:
+assert the diff you expect, and that the buckets you did not expect are empty.
 
 ### Real-world recipes
 
@@ -799,8 +1200,9 @@ test('/ban bans the target and confirms', async () => {
 	});
 
 	expect(result.content).toBe('Banned spammer');
-	const ban = await bot.waitForAction(Routes.ban);
-	expect(ban.reason).toBe('raid');
+	const ban = bot.restCalls(Routes.ban).find(call => call.params.userId === target.id);
+	expect(ban).toBeDefined();
+	expect(ban?.reason).toBe('raid');
 });
 ```
 
@@ -831,6 +1233,8 @@ Commands read these via `ctx.client` by duck typing; the fakes only need the
 methods the path under test touches. Audio/Lavalink playback itself is out of
 scope — stub the manager, don't emulate it.
 
+#### Simulating REST failures
+
 Simulate Discord **REST failures** to exercise your error handling. `fail`
 throws a faithful `SeyfertError` (same `code`/`metadata` a production `catch`
 sees), not a bespoke mock error:
@@ -843,8 +1247,39 @@ bot.rest.fail(Routes.createMessage, { status: 429, retryAfter: 5 }); // raw shap
 bot.rest.fail(Routes.ban, DiscordErrors.MissingAccess, { times: 1 }); // fail once, then normal
 ```
 
-For sequential or request-conditional failures, use `bot.rest.intercept(...)`
-with a closure.
+For sequential or request-conditional failures, pass `when` — or use
+`bot.rest.intercept(...)` with a closure.
+
+Assert on a failure by **status and code**, never by message. Seyfert names the
+error `API_<statusText>_<code>` and uses that as `.message`, so a Missing
+Permissions rejection reads `Api Forbidden 50013`; matching that text pins
+Seyfert's formatting rather than your bot's behaviour. `isDiscordError` narrows
+a caught value on the fields Discord actually sends:
+
+```ts
+import { DiscordErrors, isDiscordError } from '@slipher/testing';
+
+const error = await bot.slash({ name: 'ban' }).catch((reason: unknown) => reason);
+expect(isDiscordError(error, { status: 403, code: DiscordErrors.MissingPermissions.code })).toBe(true);
+```
+
+The same predicate is what a command should branch on:
+
+```ts
+try {
+	await ctx.client.members.ban(guildId, userId);
+} catch (error) {
+	if (isDiscordError(error, { code: DiscordErrors.MissingPermissions.code })) {
+		return ctx.write({ content: 'I need Ban Members.' });
+	}
+	throw error;
+}
+```
+
+Discord's own copy survives on `error.metadata.response.message`. That is where
+to look for the errors whose text carries per-call detail the code does not —
+`Invalid Form Body: embed title must be 256 or fewer in length` is all code
+50035.
 
 ### MockGateway
 
@@ -894,9 +1329,10 @@ in tests.
   name, and `registeredCommands()` to see whether the file path was discovered
   and whether a command was found after import.
 - **My collector never fires** - send a real message first, click as the same
-  user, and avoid passing a stale `source`.
-- **My modal flow hangs** - `waitFor` uses real timers; the usual cause is a
-  different user between the opener dispatch and `fillModal()`.
+  user, await each action in order, and avoid passing a stale `source`.
+- **My modal cannot be submitted** - await the action that opens it, then call
+  `submitModal()` as the same user. Use `rendered(bot).get.modal(...)` only to
+  inspect whether the modal was actually shown.
 - **`no interceptor or world entity matched GET ...`** - seed the world,
   `intercept()` the route, or set `onUnhandledRest: 'silent'` for that test.
 - **Decorator/transform errors on `@Declare`** - enable
@@ -908,22 +1344,19 @@ in tests.
 
 ### Current defaults
 
-The package is pre-1.0. Current defaults: the single default user
-(`TEST_USER_ID`), strict `onUnhandledRest: 'error'`, opt-in REST fallback shapes
-under `onUnhandledRest: 'warn' | 'silent'`, and newest-first message lists. An
+Current defaults: the single default user (`TEST_USER_ID`), strict
+`onUnhandledRest: 'error'`, opt-in REST fallback shapes under
+`onUnhandledRest: 'warn' | 'silent'`, and newest-first message lists. An
 unhandled error inside a command/component/modal/event handler **rejects the
-`Dispatch` by default** (`onCommandError: 'throw'`);
+stateful action or un-sessioned `Dispatch` by default** (`onCommandError: 'throw'`);
 pass `onCommandError: 'capture'` to surface it on `result.error` instead. The
 read-only `bot.world` (`WorldStateReader`) is the supported way to assert on the
 ~20 entity types the views don't surface (pins, reactions, bans, webhooks,
 emojis, invites, automod rules, scheduled events, poll voters, …).
 
-During 0.x, prefer direct supported entry points over subclassing exported
-classes: build bot tests through `createMockBot()`, seed worlds through
-`mockWorld()`, and use named dispatchers such as `slash()`, `clickButton()`, and
-`emit()`.
-Unspecified and subject to change during 0.x: `mockId()` format, warning text,
-`RecordedAction.seq`, and `MockGateway`.
+Build bot tests through `createMockBot()`, seed worlds through `mockWorld()`,
+and use named actions such as `slash()`, `submitModal()`, `clickButton()`, and
+`emit()` rather than subclassing exported classes.
 
 ### Scope
 

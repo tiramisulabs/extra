@@ -22,13 +22,39 @@ export interface ModalRegistry {
 	keys(): IterableIterator<string>;
 }
 
+export type ComponentCollectorMatch = string | string[] | RegExp;
+
+interface ComponentCollectorNode {
+	callback: (interaction: unknown, ...args: unknown[]) => unknown;
+	match: (customId: string) => boolean;
+}
+
+interface ComponentCollectorState {
+	components: ComponentCollectorNode[];
+}
+
+interface ComponentCollectorHandle {
+	run(match: ComponentCollectorMatch, callback: (...args: unknown[]) => unknown): void;
+	waitFor(match: ComponentCollectorMatch, timeout?: number): Promise<unknown>;
+	stop(reason?: string): void;
+	resetTimeouts(): void;
+}
+
 /** The component handler's overridable hooks the mock wraps to detect component/collector/modal matches. */
 export interface ComponentInternals {
+	createComponentCollector?: (
+		messageId: string,
+		channelId: string,
+		guildId: string | undefined,
+		options?: unknown,
+		components?: unknown[],
+	) => ComponentCollectorHandle;
 	execute?: (...args: unknown[]) => Promise<unknown>;
 	onComponent?: (id: string, interaction: { customId: string }) => Promise<unknown>;
 	hasComponent?: (id: string, customId: string) => boolean | undefined;
 	onModalSubmit?: (interaction: { user: { id: string } }) => unknown;
-	values: Map<string, unknown>;
+	values: Map<string, ComponentCollectorState>;
+	clearValue(id: string): ComponentCollectorState | undefined;
 	modals: ModalRegistry;
 }
 

@@ -1,7 +1,8 @@
 import { Command, type CommandContext, Declare } from 'seyfert';
-import { describe, expect, test } from 'vitest';
+import { describe, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
-import { seedGuildFixture } from './_setup';
+import { DiscordErrors } from '../../src/bot/rest';
+import { expectDiscordError, seedGuildFixture } from './_setup';
 
 // F18: Discord rejects an UpdateMessage (type 7) / DeferredUpdate (type 6) callback on an application command
 // interaction, and a Modal (type 9) callback on a modal submit. seyfert's typed ctx prevents these, so the
@@ -19,7 +20,9 @@ describe('interaction callback type validation (F18)', () => {
 	test('a type-7 update callback on a slash command is rejected', async () => {
 		const { world, guild, actor, channel } = seedGuildFixture('cb');
 		const bot = await createMockBot({ commands: [BadCallback], world });
-		await expect(bot.slash({ name: 'badcb', guildId: guild.id, channel, user: actor.user })).rejects.toThrow(
+		await expectDiscordError(
+			bot.slash({ name: 'badcb', guildId: guild.id, channel, user: actor.user }),
+			DiscordErrors.InvalidFormBody,
 			/message update callbacks are only valid for component or modal/,
 		);
 		await bot.close();
