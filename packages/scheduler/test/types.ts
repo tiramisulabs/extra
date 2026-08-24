@@ -1,15 +1,19 @@
+import type IORedis from 'ioredis';
+import type { RedisOptions } from 'ioredis';
 import {
 	type Client,
 	type CommandContext,
 	definePlugins,
 	type HttpClient,
 	type PluginUsingClient,
+	type SeyfertPluginClient,
 	type SeyfertRegistry,
 	type UsingClient,
 	type WorkerClient,
 } from 'seyfert';
 import {
 	type Awaitable,
+	type BullMQConnection,
 	type CronerFactory,
 	createScheduler,
 	memory,
@@ -22,6 +26,9 @@ declare function expectType<T>(value: T): void;
 declare const context: CommandContext;
 declare const client: Client;
 declare const httpClient: HttpClient;
+declare const barePluginClient: SeyfertPluginClient;
+declare const redisConnection: IORedis;
+declare const redisConnectionOptions: RedisOptions;
 declare const workerClient: WorkerClient;
 declare const usingClient: UsingClient;
 declare const pluginClient: PluginUsingClient<typeof plugins>;
@@ -42,6 +49,24 @@ expectType<SchedulerRegistry | undefined>(httpClient.scheduler);
 expectType<SchedulerRegistry | undefined>(workerClient.scheduler);
 expectType<SchedulerRegistry | undefined>(usingClient.scheduler);
 expectType<SchedulerRegistry>(pluginClient.scheduler);
+expectType<SchedulerRegistry<UsingClient>>(schedulerPlugin.registry);
+schedulerPlugin.registry.interval('client-access', '1m', (_task, taskClient) => {
+	expectType<UsingClient>(taskClient);
+	expectType<SchedulerRegistry>(taskClient.scheduler);
+});
+context.scheduler.interval('context-client-access', '1m', (_task, taskClient) => {
+	expectType<UsingClient>(taskClient);
+	expectType<SchedulerRegistry>(taskClient.scheduler);
+});
+
+// @ts-expect-error plugin registries require the registered Seyfert client
+schedulerPlugin.registry.setup();
+
+// @ts-expect-error plugin registries cannot bind a client without registered extensions
+schedulerPlugin.registry.setup(barePluginClient);
+
+// @ts-expect-error plugin setup requires a Seyfert client
+schedulerPlugin.setup?.({ initialized: true });
 
 createScheduler({ driver: memory() });
 scheduler({ driver: memory() });
@@ -56,10 +81,28 @@ createScheduler({});
 // @ts-expect-error scheduler plugin driver is required
 scheduler({});
 
+// @ts-expect-error scheduler tasks must be task objects or constructors
+scheduler({ driver: memory(), tasks: [1] });
+
 // @ts-expect-error orphan purging belongs to persistent driver options
 createScheduler({ driver: memory(), purgeOrphansOnStartup: true });
 
 createScheduler({ driver: persistent({ purgeOrphansOnStartup: true }) });
+
+const connectionOptions = {
+	host: '127.0.0.1',
+	maxRetriesPerRequest: null,
+	port: 6379,
+} satisfies BullMQConnection;
+expectType<BullMQConnection>(connectionOptions);
+expectType<BullMQConnection>(redisConnection);
+expectType<BullMQConnection>(redisConnectionOptions);
+persistent({ connection: connectionOptions });
+persistent({ connection: redisConnection });
+persistent({ connection: redisConnectionOptions });
+
+// @ts-expect-error BullMQ connections must be options or a compatible client
+persistent({ connection: 'redis://127.0.0.1:6379' });
 
 const customCroner: CronerFactory = (expression, options, runner) => {
 	expectType<string>(expression);

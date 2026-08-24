@@ -1,4 +1,4 @@
-import type { SeyfertPlugin } from 'seyfert';
+import type { SeyfertPlugin, UsingClient } from 'seyfert';
 import type { SchedulerRegistry } from './manager';
 import type { ScheduledTask } from './task';
 
@@ -12,7 +12,10 @@ export type SchedulerOverlapPolicy = 'allow' | 'skip';
 
 export type ScheduledTaskStatus = 'scheduled' | 'running' | 'paused' | 'completed' | 'failed' | 'removed';
 
-export type SchedulerRunner = (task: ScheduledTask) => Awaitable<unknown>;
+export type SchedulerRunner<TClient extends SchedulerClientLike | undefined = SchedulerClientLike | undefined> = (
+	task: ScheduledTask,
+	client: TClient,
+) => Awaitable<unknown>;
 
 export type PersistentSchedulerResource = 'queue' | 'queue-events' | 'worker';
 
@@ -90,7 +93,7 @@ export interface ScheduledTaskDefinition extends CronScheduledTaskOptions {
 	kind: ScheduleKind;
 	expression?: string;
 	intervalMs?: number;
-	runner: SchedulerRunner;
+	runner: (task: ScheduledTask) => Awaitable<unknown>;
 	source?: string;
 }
 
@@ -116,10 +119,9 @@ export interface CronSchedulerDecoratorOptions extends SchedulerDecoratorOptions
 }
 
 export interface SchedulerPlugin
-	extends SeyfertPlugin<{ scheduler: SchedulerRegistry }, { scheduler: SchedulerRegistry }> {
+	extends SeyfertPlugin<{ scheduler: SchedulerRegistry<UsingClient> }, { scheduler: SchedulerRegistry<UsingClient> }> {
 	name: '@slipher/scheduler';
-	registry: SchedulerRegistry;
-	setup(client: SchedulerClientLike): Awaitable<void>;
+	registry: SchedulerRegistry<UsingClient>;
 	teardown(client: SchedulerClientLike): Awaitable<void>;
 }
 
@@ -159,13 +161,44 @@ export type CronerFactory = (
 
 export interface PersistentSchedulerOptions {
 	bullmq?: BullMQModule;
-	connection?: unknown;
+	connection?: BullMQConnection;
 	immediateRunDeduplicationMs?: number;
 	prefix?: string;
 	purgeOrphansOnStartup?: boolean;
 	queueName?: string;
 	logger?: SchedulerLogger;
 }
+
+/**
+ * BullMQ keeps Redis options open so client-specific settings can cross this optional peer boundary
+ * without making either Redis client a dependency of the scheduler package.
+ */
+interface BullMQConnectionOptions {
+	connectionName?: string;
+	db?: number;
+	enableOfflineQueue?: boolean;
+	family?: number;
+	host?: string;
+	lazyConnect?: boolean;
+	maxRetriesPerRequest?: number | null;
+	password?: string;
+	path?: string;
+	port?: number;
+	retryStrategy?: (times: number) => number | null | undefined | void;
+	skipVersionCheck?: boolean;
+	tls?: unknown;
+	url?: string;
+	username?: string;
+	[option: string]: any;
+}
+
+interface BullMQConnectionClient {
+	connect(...args: any[]): unknown;
+	duplicate(...args: any[]): unknown;
+}
+
+/** Connection settings or an existing Redis client forwarded to BullMQ. */
+export type BullMQConnection = BullMQConnectionClient | BullMQConnectionOptions;
 
 export interface BullMQModule {
 	Job?: {

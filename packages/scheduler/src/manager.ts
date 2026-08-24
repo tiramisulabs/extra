@@ -1,4 +1,4 @@
-import { createPlugin } from 'seyfert';
+import { createPlugin, type SeyfertPluginClient, type UsingClient } from 'seyfert';
 import { type DurationInput, InvalidDurationError, parseDuration } from './duration';
 import { SchedulerEmitter } from './events';
 import { getTaskMetadata, instantiateTaskSource } from './metadata';
@@ -17,7 +17,14 @@ import type {
 	SchedulerTaskSource,
 } from './types';
 
-export class SchedulerRegistry extends SchedulerEmitter {
+type SchedulerLifecycleArgs<TClient extends SchedulerClientLike | undefined> = undefined extends TClient
+	? [client?: TClient]
+	: [client: TClient];
+
+export class SchedulerRegistry<
+	TClient extends SchedulerClientLike | undefined = SchedulerClientLike | undefined,
+> extends SchedulerEmitter {
+	private client: TClient | undefined;
 	private readonly driver: SchedulerDriver;
 	private readonly host: SchedulerHost;
 	private readonly tasks = new Map<string, ScheduledTask>();
@@ -42,7 +49,7 @@ export class SchedulerRegistry extends SchedulerEmitter {
 		this.host.logger = logger;
 	}
 
-	add(id: string, schedule: DurationInput, runner: SchedulerRunner, options?: ScheduledTaskOptions) {
+	add(id: string, schedule: DurationInput, runner: SchedulerRunner<TClient>, options?: ScheduledTaskOptions) {
 		try {
 			return this.interval(id, schedule, runner, options);
 		} catch (error) {
@@ -65,7 +72,7 @@ export class SchedulerRegistry extends SchedulerEmitter {
 		}
 	}
 
-	interval(id: string, every: DurationInput, runner: SchedulerRunner, options?: ScheduledTaskOptions) {
+	interval(id: string, every: DurationInput, runner: SchedulerRunner<TClient>, options?: ScheduledTaskOptions) {
 		const intervalMs = parseDuration(every);
 
 		if (intervalMs <= 0) {
@@ -82,7 +89,7 @@ export class SchedulerRegistry extends SchedulerEmitter {
 		});
 	}
 
-	cron(id: string, expression: string, runner: SchedulerRunner, options?: CronScheduledTaskOptions) {
+	cron(id: string, expression: string, runner: SchedulerRunner<TClient>, options?: CronScheduledTaskOptions) {
 		const normalizedExpression = expression.trim();
 
 		if (!normalizedExpression) {
@@ -125,8 +132,8 @@ export class SchedulerRegistry extends SchedulerEmitter {
 
 				const explicitId = typeof definition.options?.id === 'string' && definition.options.id.length > 0;
 				const id = explicitId ? definition.options!.id! : String(definition.propertyKey);
-				const runner = (task: ScheduledTask) =>
-					(method as (task: ScheduledTask) => Awaitable<unknown>).call(instance, task);
+				const runner = (task: ScheduledTask, client: TClient) =>
+					(method as (task: ScheduledTask, client: TClient) => Awaitable<unknown>).call(instance, task, client);
 
 				if (definition.kind === 'interval') {
 					this.interval(id, definition.schedule, runner, {
@@ -184,11 +191,13 @@ export class SchedulerRegistry extends SchedulerEmitter {
 		await this.driver.close?.();
 	}
 
-	async prepare(client?: SchedulerClientLike) {
+	async prepare(...[client]: SchedulerLifecycleArgs<TClient>) {
+		this.bindClient(client);
 		await this.driver.prepare?.(client);
 	}
 
-	async activate(client?: SchedulerClientLike) {
+	async activate(...[client]: SchedulerLifecycleArgs<TClient>) {
+		this.bindClient(client);
 		if (this.driver.activate) {
 			await this.driver.activate(client);
 			return;
@@ -197,21 +206,32 @@ export class SchedulerRegistry extends SchedulerEmitter {
 		await this.driver.setup?.(client);
 	}
 
-	async setup(client?: SchedulerClientLike) {
-		await this.prepare(client);
-		await this.activate(client);
+	async setup(...args: SchedulerLifecycleArgs<TClient>) {
+		await this.prepare(...args);
+		await this.activate(...args);
 	}
 
-	private define(definition: ScheduledTaskDefinition) {
+	private define(definition: Omit<ScheduledTaskDefinition, 'runner'> & { runner: SchedulerRunner<TClient> }) {
 		if (this.tasks.has(definition.id)) {
 			throw new Error(`Scheduler task "${definition.id}" is already registered`);
 		}
 
-		const task = this.driver.schedule(definition);
+		const { runner, ...options } = definition;
+		const task = this.driver.schedule({
+			...options,
+			// Plugin setup binds the client before activation; standalone registries intentionally allow undefined.
+			runner: task => runner(task, this.client as TClient),
+		});
 		this.tasks.set(task.id, task);
 		this.emit('scheduled', { task });
 
 		return task;
+	}
+
+	private bindClient(client?: TClient) {
+		if (client !== undefined) {
+			this.client = client;
+		}
 	}
 
 	private requireTask(id: string) {
@@ -225,12 +245,24 @@ export class SchedulerRegistry extends SchedulerEmitter {
 	}
 }
 
-export function createScheduler(options: CreateSchedulerOptions) {
-	return new SchedulerRegistry(options);
+export function createScheduler<TClient extends SchedulerClientLike | undefined = SchedulerClientLike | undefined>(
+	options: CreateSchedulerOptions,
+) {
+	return new SchedulerRegistry<TClient>(options);
 }
 
+/**
+ * Captures task sources before TypeScript contextually checks their methods. A task may name UsingClient in its runner,
+ * and resolving that type while the registered plugin tuple is still being inferred would make the tuple depend on itself.
+ */
+export function scheduler<const TTasks extends SchedulerTaskSource[]>(
+	options: Omit<CreateSchedulerOptions, 'tasks'> & { tasks?: TTasks },
+): SchedulerPlugin;
 export function scheduler(options: CreateSchedulerOptions): SchedulerPlugin {
-	const registry = createScheduler(options);
+	// Lifecycle hooks expose a stable client type while TypeScript is still inferring the plugin tuple. Tasks only run after
+	// that lifecycle binds the fully registered client, so the public registry keeps its original UsingClient contract.
+	const lifecycleRegistry = new SchedulerRegistry<SeyfertPluginClient>(options);
+	const registry = lifecycleRegistry as unknown as SchedulerRegistry<UsingClient>;
 
 	return createPlugin({
 		name: '@slipher/scheduler',
@@ -242,7 +274,7 @@ export function scheduler(options: CreateSchedulerOptions): SchedulerPlugin {
 			scheduler: () => registry,
 		},
 		register(api) {
-			api.hooks.on('plugins:ready', client => registry.activate(client));
+			api.hooks.on('plugins:ready', client => lifecycleRegistry.activate(client));
 		},
 		async setup(client) {
 			if (!client.scheduler) client.scheduler = registry;
@@ -251,7 +283,7 @@ export function scheduler(options: CreateSchedulerOptions): SchedulerPlugin {
 				registry.setLogger(client.logger);
 			}
 
-			await registry.prepare(client);
+			await lifecycleRegistry.prepare(client);
 		},
 		async teardown() {
 			await registry.close();

@@ -46,7 +46,7 @@
 		"croner": "^9.1.0"
 	},
 	"peerDependencies": {
-		"bullmq": "^5.23.0",
+		"bullmq": "^5.23.0 || ^6.0.0",
 		"seyfert": ">=5.0.0"
 	},
 	"peerDependenciesMeta": {
@@ -56,6 +56,9 @@
 	},
 	"devDependencies": {
 		"@types/node": "^26.0.1",
+		"bullmq": "6.1.2",
+		"bullmq-v5": "npm:bullmq@5.79.3",
+		"ioredis": "^5.10.1",
 		"seyfert": "^5.0.0",
 		"typescript": "^6.0.3"
 	}

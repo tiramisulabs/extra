@@ -359,10 +359,12 @@ describe('decorated queues', () => {
 	});
 
 	test('@Process handlers run with the processor instance as this', async () => {
+		let receivedClient: object | undefined;
 		class MailProcessor {
 			prefix = 'sent';
 
-			handle(job: QueueJobOf<'mail'>) {
+			handle(job: QueueJobOf<'mail'>, client?: object) {
+				receivedClient = client;
 				return `${this.prefix}:${job.data.email}`;
 			}
 		}
@@ -382,6 +384,7 @@ describe('decorated queues', () => {
 
 		if (result.type === 'failed') assert.fail(`Expected completed job, got failed: ${String(result.error)}`);
 		assert.equal(result.result, 'sent:hi@example.com');
+		assert.equal(receivedClient, undefined);
 
 		await registry.close();
 	});
@@ -417,6 +420,115 @@ describe('decorated queues', () => {
 });
 
 describe('queues plugin', () => {
+	test('resolves processors eagerly but waits for setup before consuming jobs with the client', async () => {
+		let resolved = false;
+		let receivedClient: object | undefined;
+
+		class MailProcessor {
+			handle(job: QueueJobOf<'mail'>, client: object) {
+				receivedClient = client;
+				return `sent:${job.data.email}`;
+			}
+		}
+
+		Processor('mail')(MailProcessor);
+		Process()(MailProcessor.prototype, 'handle');
+
+		const plugin = queues({
+			driver: memory(),
+			processors: [MailProcessor],
+			resolve(target) {
+				resolved = true;
+				return new target();
+			},
+		});
+		const client = new Client({ plugins: definePlugins(plugin) });
+		const queue = plugin.registry.get('mail');
+		const completed = waitForEvent(queue, 'completed');
+		const job = await queue.add('send', { email: 'hi@example.com' });
+
+		await flushQueueEvents();
+		assert.equal(resolved, true);
+		assert.equal(job.status, 'waiting');
+		assert.equal(receivedClient, undefined);
+
+		await plugin.setup?.(client);
+		const payload = await completed;
+
+		assert.equal(payload.result, 'sent:hi@example.com');
+		assert.equal(receivedClient, client);
+		await plugin.teardown?.(client);
+	});
+
+	test('passes the bound client to decorated processors registered after setup', async () => {
+		let receivedClient: object | undefined;
+
+		class MailProcessor {
+			handle(_job: QueueJobOf<'mail'>, client: object) {
+				receivedClient = client;
+				return 'sent';
+			}
+		}
+
+		Processor('mail')(MailProcessor);
+		Process()(MailProcessor.prototype, 'handle');
+
+		const plugin = queues({ driver: memory() });
+		const client = new Client({ plugins: definePlugins(plugin) });
+		await plugin.setup?.(client);
+		await plugin.registry.register({ processors: [MailProcessor] });
+		const queue = plugin.registry.get('mail');
+		const completed = waitForEvent(queue, 'completed');
+
+		await queue.add('send', { email: 'hi@example.com' });
+		await completed;
+
+		assert.equal(receivedClient, client);
+		await plugin.teardown?.(client);
+	});
+
+	test('does not initialize the driver when teardown wins an asynchronous processor attachment race', async () => {
+		let releaseAttachment!: () => void;
+		let attachmentStarted!: () => void;
+		let setupCalled = false;
+		const attachment = new Promise<void>(resolve => {
+			releaseAttachment = resolve;
+		});
+		const started = new Promise<void>(resolve => {
+			attachmentStarted = resolve;
+		});
+
+		class MailProcessor {
+			handle() {
+				return 'sent';
+			}
+		}
+
+		Processor('mail')(MailProcessor);
+		Process()(MailProcessor.prototype, 'handle');
+
+		const driver = memory();
+		driver.setup = () => {
+			setupCalled = true;
+		};
+		const plugin = queues({ driver, processors: [MailProcessor] });
+		const queue = plugin.registry.get('mail');
+		queue.process = async () => {
+			attachmentStarted();
+			await attachment;
+			return queue;
+		};
+		const client = new Client({ plugins: definePlugins(plugin) });
+
+		const setup = plugin.setup?.(client);
+		await started;
+		await plugin.teardown?.(client);
+		releaseAttachment();
+
+		await expect(setup).rejects.toThrow('@slipher/queues registry is closed.');
+		assert.equal(setupCalled, false);
+	});
+
 	test('lets Seyfert install the registry as a read-only client extension', async () => {
 		const plugin = queues({ driver: memory() });
 		const plugins = definePlugins(plugin);

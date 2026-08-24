@@ -120,9 +120,11 @@ describe('scheduler lifecycle', () => {
 		const schedulerPlugin = scheduler({ driver: persistent({ bullmq: bullmq.module }) });
 		let downstreamReady = false;
 		let runnerObservedReady = false;
+		let runnerClient: unknown;
 		let processorCompletion: Promise<unknown> | undefined;
-		schedulerPlugin.registry.interval('boot', '1s', () => {
+		schedulerPlugin.registry.interval('boot', '1s', (_task, client) => {
 			runnerObservedReady = downstreamReady;
+			runnerClient = client;
 		});
 		const downstream = createPlugin({
 			name: 'scheduler-lifecycle-downstream',
@@ -142,6 +144,7 @@ describe('scheduler lifecycle', () => {
 		await processorCompletion;
 
 		assert.equal(runnerObservedReady, true);
+		assert.equal(runnerClient, client);
 		await client.close();
 	});
 

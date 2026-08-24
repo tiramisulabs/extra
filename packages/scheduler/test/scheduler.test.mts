@@ -296,14 +296,17 @@ describe('scheduler', () => {
 	test('registers decorated class methods and exposes the registry through the seyfert plugin context', async () => {
 		const croner = createFakeCroner();
 		const runs: string[] = [];
+		const clients: unknown[] = [];
 
 		class MaintenanceTasks {
-			heartbeat(task: ScheduledTask) {
+			heartbeat(task: ScheduledTask, client: unknown) {
 				runs.push(task.id);
+				clients.push(client);
 			}
 
-			daily(task: ScheduledTask) {
+			daily(task: ScheduledTask, client: unknown) {
 				runs.push(task.id);
+				clients.push(client);
 			}
 		}
 
@@ -326,7 +329,7 @@ describe('scheduler', () => {
 			},
 		} as never);
 
-		await plugin.setup?.(client);
+		await plugin.setup?.(client as never);
 		assert.equal(
 			croner.jobs.every(job => job.paused),
 			true,
@@ -353,6 +356,7 @@ describe('scheduler', () => {
 		await croner.jobs[1]!.trigger();
 
 		assert.deepEqual(runs, ['heartbeat', 'daily']);
+		assert.deepEqual(clients, [client, client]);
 	});
 
 	test('adds interval and cron tasks through the generic add helper', () => {
@@ -504,6 +508,21 @@ describe('scheduler', () => {
 		assert.equal(bullmq.state.queues[0]!.closed, true);
 		assert.equal(bullmq.state.queueEvents[0]!.closed, true);
 		assert.equal(bullmq.state.workers[0]!.closed, true);
+	});
+
+	test('uses a BullMQ-compatible default queue name', async () => {
+		const bullmq = createFakeBullMQ();
+		const registry = createScheduler({
+			driver: persistent({ bullmq: bullmq.module }),
+		});
+		registry.interval('heartbeat', '30s', () => undefined);
+
+		await registry.setup({ initialized: true });
+
+		assert.equal(bullmq.state.queues[0]!.name, 'slipher-scheduler');
+		assert.equal(bullmq.state.workers[0]!.name, 'slipher-scheduler');
+		assert.equal(bullmq.state.queueEvents[0]!.name, 'slipher-scheduler');
+		await registry.close();
 	});
 
 	test('rejects unsupported persistent overlap skipping without creating a partial task', () => {
