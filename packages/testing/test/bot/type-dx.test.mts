@@ -2,6 +2,7 @@ import {
 	Command,
 	type CommandContext,
 	ContextMenuCommand,
+	createChannelOption,
 	createMentionableOption,
 	createUserOption,
 	Declare,
@@ -442,6 +443,7 @@ describe('actor() session overload', () => {
 describe('rich fixtures satisfy the package own option inference', () => {
 	test('a rich fixture is assignable where seyfert resolves that entity', async () => {
 		const opts = {
+			where: createChannelOption({ description: 'c' }),
 			who: createUserOption({ description: 'u' }),
 			someone: createMentionableOption({ description: 'm' }),
 		};
@@ -457,6 +459,9 @@ describe('rich fixtures satisfy the package own option inference', () => {
 		// option type was shallow, so a RichMember's `user` still demanded the full seyfert User.
 		mockCommandContext(RichOpts, { options: { someone: richUser({ id: 'u' }) } });
 		mockCommandContext(RichOpts, { options: { someone: richMember({ user: richUser({ id: 'u' }) }) } });
+		mockCommandContext(RichOpts, { options: { where: richChannel({ id: 'c' }) } });
+		expectAssignable<string>(richChannel().guildId);
+		expectAssignable<null>(richChannel({ guildId: null }).guildId);
 
 		const ctx = mockCommandContext(RichOpts, { options: { who: richUser({ id: 'u' }) } });
 		expect(ctx.options.who?.id).toBe('u');

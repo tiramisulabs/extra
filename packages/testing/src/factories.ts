@@ -202,6 +202,18 @@ export interface RichChannel extends Record<string, unknown>, ChannelGuards, Sno
 	readonly url: ReturnType<typeof Formatter.channelLink>;
 }
 
+/** A guild-backed channel fixture; the default returned by {@link richChannel}. */
+export interface RichGuildChannel extends RichChannel {
+	guildId: string;
+	guild_id: string;
+}
+
+/** A DM channel fixture returned when `guildId: null` is explicit. */
+export interface RichDMChannel extends RichChannel {
+	guildId: null;
+	guild_id?: never;
+}
+
 export interface RichMember extends SnowflakeDerived {
 	/** The member's id — the same snowflake as its user, mirroring seyfert's `GuildMember.id`. */
 	id: string;
@@ -348,6 +360,9 @@ function channelGuards(type: number): ChannelGuards {
 	};
 }
 
+export function richChannel(options?: RichChannelOptions & { guildId?: string }): RichGuildChannel;
+export function richChannel(options: RichChannelOptions & { guildId: null }): RichDMChannel;
+export function richChannel(options: RichChannelOptions): RichChannel;
 export function richChannel(options: RichChannelOptions = {}): RichChannel {
 	const id = options.id ?? mockId();
 	const guildId = options.guildId === undefined ? mockId() : options.guildId;
