@@ -50,7 +50,6 @@ jobs:
         run: pnpm run test
         id: test
         env:
-          SLIPHER_CACHE_INTEGRITY_REDIS_URL: redis://127.0.0.1:6379/1
           SLIPHER_SCHEDULER_REDIS_URL: redis://127.0.0.1:6379
 
       - name: Commit and Push changes

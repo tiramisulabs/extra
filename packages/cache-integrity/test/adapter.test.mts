@@ -1,127 +1,302 @@
-import { MemoryAdapter } from 'seyfert';
-import { assert, describe, expect, test } from 'vitest';
-import type { ReconciliationCoordinator } from '../src';
-import { localCoordinator } from '../src';
-import { ReconciledAdapter } from '../src/adapter';
-import { deferred } from './deferred';
+import { type Adapter, MemoryAdapter } from 'seyfert';
+import { describe, expect, it } from 'vitest';
+import { ProcessGenerationAdapter } from '../src/adapter';
 
-describe('ReconciledAdapter lifecycle', () => {
-	test('starts the inner adapter exactly once and retains synchronous behavior', () => {
-		const order: string[] = [];
-		let starts = 0;
-		let started = 0;
+class AsyncAdapter implements Adapter {
+	readonly isAsync = true;
+	readonly memory = new MemoryAdapter();
+	failNextSet = false;
+
+	async start(): Promise<void> {}
+
+	async scan(query: string, keys?: false): Promise<any[]>;
+	async scan(query: string, keys: true): Promise<string[]>;
+	async scan(query: string, keys?: boolean): Promise<any[]> {
+		return this.memory.scan(query, keys as true);
+	}
+
+	async bulkGet(keys: string[]): Promise<any[]> {
+		return this.memory.bulkGet(keys);
+	}
+
+	async get(key: string): Promise<any | null> {
+		return this.memory.get(key);
+	}
+
+	async bulkSet(entries: [string, any][]): Promise<void> {
+		this.memory.bulkSet(entries);
+	}
+
+	async set(key: string, data: any): Promise<void> {
+		if (this.failNextSet) {
+			this.failNextSet = false;
+			throw new Error('set failed');
+		}
+		this.memory.set(key, data);
+	}
+
+	async bulkPatch(entries: [string, any][]): Promise<void> {
+		this.memory.bulkPatch(entries);
+	}
+
+	async patch(key: string, data: any): Promise<void> {
+		this.memory.patch(key, data);
+	}
+
+	async values(to: string): Promise<any[]> {
+		return this.memory.values(to);
+	}
+
+	async keys(to: string): Promise<string[]> {
+		return this.memory.keys(to);
+	}
+
+	async count(to: string): Promise<number> {
+		return this.memory.count(to);
+	}
+
+	async bulkRemove(keys: string[]): Promise<void> {
+		this.memory.bulkRemove(keys);
+	}
+
+	async remove(key: string): Promise<void> {
+		this.memory.remove(key);
+	}
+
+	async flush(): Promise<void> {
+		this.memory.flush();
+	}
+
+	async contains(to: string, key: string): Promise<boolean> {
+		return this.memory.contains(to, key);
+	}
+
+	async getToRelationship(to: string): Promise<string[]> {
+		return this.memory.getToRelationship(to);
+	}
+
+	async bulkAddToRelationShip(data: Record<string, string[]>): Promise<void> {
+		this.memory.bulkAddToRelationShip(data);
+	}
+
+	async addToRelationship(to: string, keys: string | string[]): Promise<void> {
+		this.memory.addToRelationship(to, keys);
+	}
+
+	async removeToRelationship(to: string, keys: string | string[]): Promise<void> {
+		this.memory.removeToRelationship(to, keys);
+	}
+
+	async removeRelationship(to: string | string[]): Promise<void> {
+		this.memory.removeRelationship(to);
+	}
+}
+
+class PrefixedAdapter extends MemoryAdapter<unknown> {
+	readonly prefix = 'cache:';
+
+	buildKey(key: string): string {
+		return key.startsWith(this.prefix) ? key : this.prefix + key;
+	}
+
+	override scan(query: string, keys?: false): any[];
+	override scan(query: string, keys: true): string[];
+	override scan(query: string, keys?: boolean): any[] {
+		return keys ? super.scan(query, true).map(key => this.prefix + key) : super.scan(query);
+	}
+
+	override bulkGet(keys: string[]): unknown[] {
+		return super.bulkGet(keys.map(key => this.logical(key)));
+	}
+
+	override get(key: string): unknown {
+		return super.get(this.logical(key));
+	}
+
+	override patch(key: string, data: any): void {
+		super.patch(this.logical(key), data);
+	}
+
+	override keys(to: string): string[] {
+		return super.keys(to).map(key => this.prefix + key);
+	}
+
+	private logical(key: string): string {
+		return key.startsWith(this.prefix) ? key.slice(this.prefix.length) : key;
+	}
+}
+
+describe('ProcessGenerationAdapter', () => {
+	it('hides values and relationships written before this generation', () => {
 		const inner = new MemoryAdapter();
-		inner.start = () => {
-			order.push('inner');
-			starts++;
-		};
-		const adapter = new ReconciledAdapter(inner, localCoordinator(), {
-			beforeStart: () => order.push('before'),
-			onFailed: () => assert.fail('start should not fail'),
-			onStarted: () => started++,
-		});
+		inner.bulkSet([
+			['guild.old', { id: 'old' }],
+			['guild.other', { id: 'other' }],
+		]);
+		inner.addToRelationship('guild', ['old', 'other']);
 
-		assert.equal(adapter.start(), undefined);
-		assert.equal(adapter.start(), undefined);
-		assert.equal(starts, 1);
-		assert.equal(started, 1);
-		assert.deepEqual(order, ['before', 'inner']);
+		const adapter = new ProcessGenerationAdapter(inner);
+
+		expect(adapter.get('guild.old')).toBeNull();
+		expect(adapter.bulkGet(['guild.old', 'guild.other'])).toEqual([]);
+		expect(adapter.scan('guild.*')).toEqual([]);
+		expect(adapter.scan('guild.*', true)).toEqual([]);
+		expect(adapter.getToRelationship('guild')).toEqual([]);
+		expect(adapter.keys('guild')).toEqual([]);
+		expect(adapter.values('guild')).toEqual([]);
+		expect(adapter.count('guild')).toBe(0);
+		expect(adapter.contains('guild', 'old')).toBe(false);
 	});
 
-	test('preserves synchronous start failures and never retries the inner adapter', () => {
-		const failure = new Error('boom');
-		let starts = 0;
-		const inner = new MemoryAdapter();
-		inner.start = () => {
-			starts++;
-			throw failure;
-		};
-		const adapter = new ReconciledAdapter(inner, localCoordinator(), {
-			beforeStart() {},
-			onFailed() {},
-			onStarted: () => assert.fail('start should not succeed'),
-		});
+	it('exposes successful current-generation writes through every read path', () => {
+		const adapter = new ProcessGenerationAdapter(new MemoryAdapter());
 
-		expect(() => adapter.start()).toThrow(failure);
-		expect(() => adapter.start()).toThrow(failure);
-		assert.equal(starts, 1);
+		adapter.bulkSet([
+			['guild.one', { id: 'one' }],
+			['guild.two', { id: 'two' }],
+		]);
+		adapter.bulkAddToRelationShip({ guild: ['one', 'two'] });
+
+		expect(adapter.get('guild.one')).toEqual({ id: 'one' });
+		expect(adapter.bulkGet(['guild.two', 'guild.one'])).toEqual([{ id: 'two' }, { id: 'one' }]);
+		expect(adapter.scan('guild.*', true)).toEqual(['guild.one', 'guild.two']);
+		expect(adapter.getToRelationship('guild')).toEqual(['one', 'two']);
+		expect(adapter.keys('guild')).toEqual(['guild.one', 'guild.two']);
+		expect(adapter.values('guild')).toEqual([{ id: 'one' }, { id: 'two' }]);
+		expect(adapter.count('guild')).toBe(2);
+		expect(adapter.contains('guild', 'one')).toBe(true);
 	});
 
-	test('preserves asynchronous start failures and never retries the inner adapter', async () => {
-		const failure = new Error('async boom');
-		let starts = 0;
+	it('replaces a hidden value on its first patch, then applies normal patch semantics', () => {
 		const inner = new MemoryAdapter();
-		inner.start = () => {
-			starts++;
-			return Promise.reject(failure);
-		};
-		const adapter = new ReconciledAdapter(inner, localCoordinator(), {
-			beforeStart() {},
-			onFailed() {},
-			onStarted: () => assert.fail('start should not succeed'),
-		});
+		inner.set('member.1', { id: '1', stale: true, username: 'old' });
+		const adapter = new ProcessGenerationAdapter(inner);
 
-		await expect(Promise.resolve(adapter.start())).rejects.toBe(failure);
-		let second: void | Promise<void>;
-		assert.doesNotThrow(() => {
-			second = adapter.start();
-		});
-		await expect(Promise.resolve(second!)).rejects.toBe(failure);
-		assert.equal(starts, 1);
+		adapter.patch('member.1', { id: '1', username: 'current' });
+		expect(adapter.get('member.1')).toEqual({ id: '1', username: 'current' });
+
+		adapter.patch('member.1', { nickname: 'new' });
+		expect(adapter.get('member.1')).toEqual({ id: '1', nickname: 'new', username: 'current' });
 	});
 
-	test('close during inner start prevents a later coordinator start', async () => {
-		const gate = deferred();
-		let coordinatorCloses = 0;
-		let coordinatorStarts = 0;
-		let started = 0;
+	it('handles hidden and visible entries in the same bulk patch', () => {
 		const inner = new MemoryAdapter();
-		inner.start = () => gate.promise;
-		const coordinator: ReconciliationCoordinator = {
-			kind: 'test',
-			start() {
-				coordinatorStarts++;
-			},
-			close() {
-				coordinatorCloses++;
-			},
-		};
-		const adapter = new ReconciledAdapter(inner, coordinator, {
-			beforeStart() {},
-			onFailed: () => assert.fail('start should not fail'),
-			onStarted: () => started++,
-		});
+		inner.set('member.hidden', { stale: true });
+		const adapter = new ProcessGenerationAdapter(inner);
+		adapter.set('member.visible', { current: true });
 
-		const start = Promise.resolve(adapter.start());
-		const firstClose = adapter.close();
-		const secondClose = adapter.close();
-		assert.equal(firstClose, secondClose);
-		gate.resolve();
-		await Promise.all([start, firstClose]);
+		adapter.bulkPatch([
+			['member.hidden', { current: 'hidden' }],
+			['member.visible', { patched: true }],
+		]);
 
-		assert.equal(coordinatorStarts, 0);
-		assert.equal(coordinatorCloses, 1);
-		assert.equal(started, 0);
+		expect(adapter.get('member.hidden')).toEqual({ current: 'hidden' });
+		expect(adapter.get('member.visible')).toEqual({ current: true, patched: true });
 	});
 
-	test('concurrent close calls close the coordinator once', async () => {
-		let closes = 0;
-		const coordinator: ReconciliationCoordinator = {
-			kind: 'test',
-			start() {},
-			close() {
-				closes++;
-			},
-		};
-		const adapter = new ReconciledAdapter(new MemoryAdapter(), coordinator, {
-			beforeStart() {},
-			onFailed: () => assert.fail('start should not fail'),
-			onStarted() {},
-		});
-		adapter.start();
+	it('preserves sequential patch semantics for duplicate bulk keys', () => {
+		const inner = new MemoryAdapter();
+		inner.set('member.duplicate', { stale: true });
+		const adapter = new ProcessGenerationAdapter(inner);
 
-		await Promise.all([adapter.close(), adapter.close(), adapter.close()]);
-		assert.equal(closes, 1);
-		assert.throws(() => adapter.start(), /closed/);
+		adapter.bulkPatch([
+			['member.duplicate', { first: true }],
+			['member.duplicate', { second: true }],
+		]);
+
+		expect(adapter.get('member.duplicate')).toEqual({ first: true, second: true });
+	});
+
+	it('does not expose an old value through a current relationship', () => {
+		const inner = new MemoryAdapter();
+		inner.set('guild.old', { id: 'old' });
+		const adapter = new ProcessGenerationAdapter(inner);
+
+		adapter.addToRelationship('guild', 'old');
+
+		expect(adapter.keys('guild')).toEqual(['guild.old']);
+		expect(adapter.values('guild')).toEqual([]);
+	});
+
+	it('preserves adapter-prefixed keys without losing current visibility', () => {
+		const inner = new PrefixedAdapter();
+		inner.set('guild.old', { id: 'old' });
+		inner.addToRelationship('guild', 'old');
+		const adapter = new ProcessGenerationAdapter(inner);
+
+		adapter.set('guild.current', { id: 'current' });
+		adapter.addToRelationship('guild', 'current');
+
+		expect(adapter.scan('guild.*', true)).toEqual(['cache:guild.current']);
+		expect(adapter.keys('guild')).toEqual(['cache:guild.current']);
+		expect(adapter.values('guild')).toEqual([{ id: 'current' }]);
+
+		adapter.patch('cache:guild.current', { patched: true });
+		expect(adapter.get('guild.current')).toEqual({ id: 'current', patched: true });
+	});
+
+	it('does not confuse colons inside logical keys with the verified adapter prefix', () => {
+		const inner = new PrefixedAdapter();
+		inner.set('tenant:item', { stale: true });
+		const adapter = new ProcessGenerationAdapter(inner);
+
+		adapter.set('item', { current: true });
+
+		expect(adapter.get('cache:tenant:item')).toBeNull();
+		expect(adapter.get('cache:item')).toEqual({ current: true });
+	});
+
+	it('updates visibility after removals and flushes', () => {
+		const adapter = new ProcessGenerationAdapter(new MemoryAdapter());
+		adapter.bulkSet([
+			['guild.one', { id: 'one' }],
+			['guild.two', { id: 'two' }],
+		]);
+		adapter.addToRelationship('guild', ['one', 'two']);
+
+		adapter.remove('guild.one');
+		adapter.removeToRelationship('guild', 'one');
+		expect(adapter.get('guild.one')).toBeNull();
+		expect(adapter.getToRelationship('guild')).toEqual(['two']);
+
+		adapter.flush();
+		expect(adapter.get('guild.two')).toBeNull();
+		expect(adapter.getToRelationship('guild')).toEqual([]);
+	});
+
+	it('does not report a current relationship after the backing adapter loses it', () => {
+		const inner = new MemoryAdapter();
+		const adapter = new ProcessGenerationAdapter(inner);
+		adapter.set('guild.one', { id: 'one' });
+		adapter.addToRelationship('guild', 'one');
+
+		inner.removeToRelationship('guild', 'one');
+
+		expect(adapter.getToRelationship('guild')).toEqual([]);
+		expect(adapter.keys('guild')).toEqual([]);
+		expect(adapter.count('guild')).toBe(0);
+		expect(adapter.contains('guild', 'one')).toBe(false);
+	});
+
+	it('does not expose an asynchronous write until it succeeds', async () => {
+		const inner = new AsyncAdapter();
+		const adapter = new ProcessGenerationAdapter(inner);
+		const hiddenGet = adapter.get('guild.hidden');
+		const hiddenRelationship = adapter.getToRelationship('guild');
+		const hiddenContains = adapter.contains('guild', 'hidden');
+		expect(hiddenGet).toBeInstanceOf(Promise);
+		expect(hiddenRelationship).toBeInstanceOf(Promise);
+		expect(hiddenContains).toBeInstanceOf(Promise);
+		expect(adapter.bulkPatch([])).toBeInstanceOf(Promise);
+		expect(await hiddenGet).toBeNull();
+		expect(await hiddenRelationship).toEqual([]);
+		expect(await hiddenContains).toBe(false);
+
+		inner.failNextSet = true;
+		await expect(adapter.set('guild.failed', { id: 'failed' })).rejects.toThrow('set failed');
+		expect(await adapter.get('guild.failed')).toBeNull();
+
+		await adapter.set('guild.current', { id: 'current' });
+		expect(await adapter.get('guild.current')).toEqual({ id: 'current' });
 	});
 });

@@ -8,7 +8,7 @@
 		},
 		"test": {
 			"cache": false,
-			"env": ["SLIPHER_CACHE_INTEGRITY_REDIS_URL", "SLIPHER_SCHEDULER_REDIS_URL"]
+			"env": ["SLIPHER_SCHEDULER_REDIS_URL"]
 		},
 		"dev": {
 			"cache": false,
