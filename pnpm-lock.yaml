@@ -55,6 +55,24 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
+  packages/cache-integrity:
+    devDependencies:
+      '@redis/client':
+        specifier: 6.1.0
+        version: 6.1.0(@opentelemetry/api@1.9.1)
+      '@slipher/redis-adapter':
+        specifier: workspace:*
+        version: link:../redis-adapter
+      '@types/node':
+        specifier: ^26.0.1
+        version: 26.1.1
+      seyfert:
+        specifier: ^5.0.0
+        version: 5.0.0
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
   packages/chartjs:
     dependencies:
       '@napi-rs/canvas':

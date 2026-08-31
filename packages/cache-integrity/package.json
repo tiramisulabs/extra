@@ -1,0 +1,59 @@
+{
+	"name": "@slipher/cache-integrity",
+	"version": "0.0.0",
+	"private": false,
+	"license": "MIT",
+	"publishConfig": {
+		"access": "public"
+	},
+	"files": [
+		"lib/**"
+	],
+	"main": "./lib/index.js",
+	"types": "./lib/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./lib/index.d.ts",
+			"import": "./lib/index.js",
+			"require": "./lib/index.js",
+			"default": "./lib/index.js"
+		},
+		"./coordinators/redis": {
+			"types": "./lib/coordinators/redis.d.ts",
+			"import": "./lib/coordinators/redis.js",
+			"require": "./lib/coordinators/redis.js",
+			"default": "./lib/coordinators/redis.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"scripts": {
+		"dev": "tsc --watch",
+		"build": "tsc",
+		"lint": "biome lint --write ./src ./test",
+		"format": "biome format --write ./src ./test",
+		"checkb": "biome check --write --no-errors-on-unmatched ./src ./test",
+		"typecheck": "tsc --noEmit --project ./test/tsconfig.json",
+		"test": "pnpm typecheck && vitest run --config ./test/vitest.config.mts ./test/",
+		"prepublishOnly": "pnpm build"
+	},
+	"devDependencies": {
+		"@redis/client": "6.1.0",
+		"@slipher/redis-adapter": "workspace:*",
+		"@types/node": "^26.0.1",
+		"seyfert": "^5.0.0",
+		"typescript": "^6.0.3"
+	},
+	"peerDependencies": {
+		"@redis/client": "6.1.x",
+		"@slipher/redis-adapter": "0.0.9",
+		"seyfert": ">=5.0.0"
+	},
+	"peerDependenciesMeta": {
+		"@redis/client": {
+			"optional": true
+		},
+		"@slipher/redis-adapter": {
+			"optional": true
+		}
+	}
+}

@@ -16,6 +16,7 @@ This monorepo contains the `@slipher/*` packages maintained alongside Seyfert. E
 
 | Package | Purpose | Guide |
 | --- | --- | --- |
+| [`@slipher/cache-integrity`](./packages/cache-integrity) | Detects, hides, and safely removes stale persistent cache entries after restarts. | [Cache integrity](https://seyfert.dev/docs/plugins/official/cache-integrity) |
 | [`@slipher/cooldown`](./packages/cooldown) | Per-command cooldowns with decorator, middleware, and manager APIs. | [Cooldown](https://seyfert.dev/docs/plugins/official/cooldown) |
 | [`@slipher/logger`](./packages/logger) | Request-scoped wide-event logging with pluggable output. | [Logger](https://seyfert.dev/docs/plugins/official/logger) |
 | [`@slipher/opentelemetry`](./packages/opentelemetry) | Traces, duration metrics, and gateway health telemetry. | [OpenTelemetry](https://seyfert.dev/docs/plugins/official/opentelemetry) |
