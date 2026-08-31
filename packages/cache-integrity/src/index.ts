@@ -1,1 +1,1 @@
-export { type CacheIntegrityPlugin, cacheIntegrity } from './plugin';
+export { type CacheIntegrityOptions, type CacheIntegrityPlugin, cacheIntegrity } from './plugin';

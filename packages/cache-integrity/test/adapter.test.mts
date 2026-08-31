@@ -1,11 +1,16 @@
 import { type Adapter, MemoryAdapter } from 'seyfert';
-import { describe, expect, it } from 'vitest';
-import { ProcessGenerationAdapter } from '../src/adapter';
+import { describe, expect, it, vi } from 'vitest';
+import { CacheIntegrityAdapter } from '../src/adapter';
+
+const MAX_AGE = 60_000;
 
 class AsyncAdapter implements Adapter {
 	readonly isAsync = true;
 	readonly memory = new MemoryAdapter();
-	failNextSet = false;
+	failSetAt: number | undefined;
+	getGate: Promise<void> | undefined;
+	patchKeys: string[] = [];
+	setCalls = 0;
 
 	async start(): Promise<void> {}
 
@@ -20,6 +25,7 @@ class AsyncAdapter implements Adapter {
 	}
 
 	async get(key: string): Promise<any | null> {
+		await this.getGate;
 		return this.memory.get(key);
 	}
 
@@ -28,8 +34,8 @@ class AsyncAdapter implements Adapter {
 	}
 
 	async set(key: string, data: any): Promise<void> {
-		if (this.failNextSet) {
-			this.failNextSet = false;
+		this.setCalls++;
+		if (this.setCalls === this.failSetAt) {
 			throw new Error('set failed');
 		}
 		this.memory.set(key, data);
@@ -40,6 +46,7 @@ class AsyncAdapter implements Adapter {
 	}
 
 	async patch(key: string, data: any): Promise<void> {
+		this.patchKeys.push(key);
 		this.memory.patch(key, data);
 	}
 
@@ -126,7 +133,7 @@ class PrefixedAdapter extends MemoryAdapter<unknown> {
 	}
 }
 
-describe('ProcessGenerationAdapter', () => {
+describe('CacheIntegrityAdapter', () => {
 	it('hides values and relationships written before this generation', () => {
 		const inner = new MemoryAdapter();
 		inner.bulkSet([
@@ -135,7 +142,7 @@ describe('ProcessGenerationAdapter', () => {
 		]);
 		inner.addToRelationship('guild', ['old', 'other']);
 
-		const adapter = new ProcessGenerationAdapter(inner);
+		const adapter = new CacheIntegrityAdapter(inner, MAX_AGE);
 
 		expect(adapter.get('guild.old')).toBeNull();
 		expect(adapter.bulkGet(['guild.old', 'guild.other'])).toEqual([]);
@@ -149,7 +156,7 @@ describe('ProcessGenerationAdapter', () => {
 	});
 
 	it('exposes successful current-generation writes through every read path', () => {
-		const adapter = new ProcessGenerationAdapter(new MemoryAdapter());
+		const adapter = new CacheIntegrityAdapter(new MemoryAdapter(), MAX_AGE);
 
 		adapter.bulkSet([
 			['guild.one', { id: 'one' }],
@@ -170,7 +177,7 @@ describe('ProcessGenerationAdapter', () => {
 	it('replaces a hidden value on its first patch, then applies normal patch semantics', () => {
 		const inner = new MemoryAdapter();
 		inner.set('member.1', { id: '1', stale: true, username: 'old' });
-		const adapter = new ProcessGenerationAdapter(inner);
+		const adapter = new CacheIntegrityAdapter(inner, MAX_AGE);
 
 		adapter.patch('member.1', { id: '1', username: 'current' });
 		expect(adapter.get('member.1')).toEqual({ id: '1', username: 'current' });
@@ -182,7 +189,7 @@ describe('ProcessGenerationAdapter', () => {
 	it('handles hidden and visible entries in the same bulk patch', () => {
 		const inner = new MemoryAdapter();
 		inner.set('member.hidden', { stale: true });
-		const adapter = new ProcessGenerationAdapter(inner);
+		const adapter = new CacheIntegrityAdapter(inner, MAX_AGE);
 		adapter.set('member.visible', { current: true });
 
 		adapter.bulkPatch([
@@ -197,7 +204,7 @@ describe('ProcessGenerationAdapter', () => {
 	it('preserves sequential patch semantics for duplicate bulk keys', () => {
 		const inner = new MemoryAdapter();
 		inner.set('member.duplicate', { stale: true });
-		const adapter = new ProcessGenerationAdapter(inner);
+		const adapter = new CacheIntegrityAdapter(inner, MAX_AGE);
 
 		adapter.bulkPatch([
 			['member.duplicate', { first: true }],
@@ -210,7 +217,7 @@ describe('ProcessGenerationAdapter', () => {
 	it('does not expose an old value through a current relationship', () => {
 		const inner = new MemoryAdapter();
 		inner.set('guild.old', { id: 'old' });
-		const adapter = new ProcessGenerationAdapter(inner);
+		const adapter = new CacheIntegrityAdapter(inner, MAX_AGE);
 
 		adapter.addToRelationship('guild', 'old');
 
@@ -222,7 +229,7 @@ describe('ProcessGenerationAdapter', () => {
 		const inner = new PrefixedAdapter();
 		inner.set('guild.old', { id: 'old' });
 		inner.addToRelationship('guild', 'old');
-		const adapter = new ProcessGenerationAdapter(inner);
+		const adapter = new CacheIntegrityAdapter(inner, MAX_AGE);
 
 		adapter.set('guild.current', { id: 'current' });
 		adapter.addToRelationship('guild', 'current');
@@ -238,7 +245,7 @@ describe('ProcessGenerationAdapter', () => {
 	it('does not confuse colons inside logical keys with the verified adapter prefix', () => {
 		const inner = new PrefixedAdapter();
 		inner.set('tenant:item', { stale: true });
-		const adapter = new ProcessGenerationAdapter(inner);
+		const adapter = new CacheIntegrityAdapter(inner, MAX_AGE);
 
 		adapter.set('item', { current: true });
 
@@ -247,7 +254,7 @@ describe('ProcessGenerationAdapter', () => {
 	});
 
 	it('updates visibility after removals and flushes', () => {
-		const adapter = new ProcessGenerationAdapter(new MemoryAdapter());
+		const adapter = new CacheIntegrityAdapter(new MemoryAdapter(), MAX_AGE);
 		adapter.bulkSet([
 			['guild.one', { id: 'one' }],
 			['guild.two', { id: 'two' }],
@@ -266,7 +273,7 @@ describe('ProcessGenerationAdapter', () => {
 
 	it('does not report a current relationship after the backing adapter loses it', () => {
 		const inner = new MemoryAdapter();
-		const adapter = new ProcessGenerationAdapter(inner);
+		const adapter = new CacheIntegrityAdapter(inner, MAX_AGE);
 		adapter.set('guild.one', { id: 'one' });
 		adapter.addToRelationship('guild', 'one');
 
@@ -280,7 +287,7 @@ describe('ProcessGenerationAdapter', () => {
 
 	it('does not expose an asynchronous write until it succeeds', async () => {
 		const inner = new AsyncAdapter();
-		const adapter = new ProcessGenerationAdapter(inner);
+		const adapter = new CacheIntegrityAdapter(inner, MAX_AGE);
 		const hiddenGet = adapter.get('guild.hidden');
 		const hiddenRelationship = adapter.getToRelationship('guild');
 		const hiddenContains = adapter.contains('guild', 'hidden');
@@ -292,11 +299,148 @@ describe('ProcessGenerationAdapter', () => {
 		expect(await hiddenRelationship).toEqual([]);
 		expect(await hiddenContains).toBe(false);
 
-		inner.failNextSet = true;
+		inner.failSetAt = 1;
 		await expect(adapter.set('guild.failed', { id: 'failed' })).rejects.toThrow('set failed');
 		expect(await adapter.get('guild.failed')).toBeNull();
 
+		inner.failSetAt = undefined;
 		await adapter.set('guild.current', { id: 'current' });
 		expect(await adapter.get('guild.current')).toEqual({ id: 'current' });
+	});
+
+	it('reuses recent persisted values only through explicit key reads', () => {
+		const now = Date.now();
+		const dateNow = vi.spyOn(Date, 'now').mockReturnValue(now);
+		const inner = new MemoryAdapter();
+		const first = new CacheIntegrityAdapter(inner, MAX_AGE);
+		first.bulkSet([
+			['guild.one', { id: 'one' }],
+			['guild.two', { id: 'two' }],
+		]);
+		first.addToRelationship('guild', ['one', 'two']);
+
+		const second = new CacheIntegrityAdapter(inner, MAX_AGE);
+		expect(second.get('guild.one')).toEqual({ id: 'one' });
+		expect(second.bulkGet(['guild.two', 'guild.one'])).toEqual([{ id: 'two' }, { id: 'one' }]);
+		expect(second.scan('guild.*')).toEqual([]);
+		expect(second.values('guild')).toEqual([]);
+		expect(second.getToRelationship('guild')).toEqual([]);
+
+		dateNow.mockReturnValue(now + MAX_AGE + 1);
+		try {
+			expect(second.get('guild.one')).toBeNull();
+			expect(second.bulkGet(['guild.one', 'guild.two'])).toEqual([]);
+		} finally {
+			dateNow.mockRestore();
+		}
+	});
+
+	it('patches recent persisted values and replaces expired ones', () => {
+		const now = Date.now();
+		const dateNow = vi.spyOn(Date, 'now').mockReturnValue(now);
+		const inner = new MemoryAdapter();
+		const first = new CacheIntegrityAdapter(inner, MAX_AGE);
+		first.bulkSet([
+			['member.fresh', { id: 'fresh', preserved: true }],
+			['member.expired', { id: 'expired', stale: true }],
+		]);
+
+		const second = new CacheIntegrityAdapter(inner, MAX_AGE);
+		second.patch('member.fresh', { patched: true });
+		expect(second.get('member.fresh')).toEqual({ id: 'fresh', patched: true, preserved: true });
+
+		dateNow.mockReturnValue(now + MAX_AGE + 1);
+		try {
+			second.patch('member.expired', { current: true });
+			expect(second.get('member.expired')).toEqual({ current: true });
+		} finally {
+			dateNow.mockRestore();
+		}
+	});
+
+	it('keeps a new value hidden when its freshness metadata fails', async () => {
+		const inner = new AsyncAdapter();
+		inner.failSetAt = 2;
+		const adapter = new CacheIntegrityAdapter(inner, MAX_AGE);
+
+		await expect(adapter.set('guild.partial', { id: 'partial' })).rejects.toThrow('set failed');
+		expect(inner.memory.get('guild.partial')).toEqual({ id: 'partial' });
+		expect(await adapter.get('guild.partial')).toBeNull();
+	});
+
+	it('checks persisted freshness through asynchronous adapters', async () => {
+		const inner = new AsyncAdapter();
+		const first = new CacheIntegrityAdapter(inner, MAX_AGE);
+		await first.bulkSet([
+			['guild.one', { id: 'one' }],
+			['guild.two', { id: 'two' }],
+		]);
+
+		const second = new CacheIntegrityAdapter(inner, MAX_AGE);
+		expect(await second.get('guild.one')).toEqual({ id: 'one' });
+		expect(await second.bulkGet(['guild.two', 'guild.one'])).toEqual([{ id: 'two' }, { id: 'one' }]);
+	});
+
+	it('evaluates freshness after asynchronous metadata reads settle', async () => {
+		const now = Date.now();
+		const dateNow = vi.spyOn(Date, 'now').mockReturnValue(now);
+		const inner = new AsyncAdapter();
+		const first = new CacheIntegrityAdapter(inner, MAX_AGE);
+		await first.set('guild.delayed', { id: 'delayed' });
+
+		let release!: () => void;
+		inner.getGate = new Promise<void>(resolve => {
+			release = resolve;
+		});
+		const second = new CacheIntegrityAdapter(inner, MAX_AGE);
+		const read = second.get('guild.delayed');
+		dateNow.mockReturnValue(now + MAX_AGE + 1);
+		release();
+
+		try {
+			expect(await read).toBeNull();
+		} finally {
+			dateNow.mockRestore();
+		}
+	});
+
+	it('classifies asynchronous bulk patches by persisted freshness', async () => {
+		const inner = new AsyncAdapter();
+		const first = new CacheIntegrityAdapter(inner, MAX_AGE);
+		await first.set('member.fresh', { preserved: true });
+		inner.memory.set('member.legacy', { stale: true });
+
+		const second = new CacheIntegrityAdapter(inner, MAX_AGE);
+		await second.bulkPatch([
+			['member.fresh', { patched: true }],
+			['member.legacy', { current: true }],
+		]);
+
+		expect(await second.get('member.fresh')).toEqual({ patched: true, preserved: true });
+		expect(await second.get('member.legacy')).toEqual({ current: true });
+	});
+
+	it('replaces a value when freshness metadata outlives the data', async () => {
+		const inner = new AsyncAdapter();
+		const first = new CacheIntegrityAdapter(inner, MAX_AGE);
+		await first.set('member.orphaned', { stale: true });
+		inner.memory.remove('member.orphaned');
+
+		const second = new CacheIntegrityAdapter(inner, MAX_AGE);
+		await second.patch('member.orphaned', { current: true });
+
+		expect(inner.patchKeys).not.toContain('member.orphaned');
+		expect(await second.get('member.orphaned')).toEqual({ current: true });
+	});
+
+	it('removes freshness metadata with its value', () => {
+		const inner = new MemoryAdapter();
+		const first = new CacheIntegrityAdapter(inner, MAX_AGE);
+		first.set('guild.removed', { id: 'removed' });
+		first.remove('guild.removed');
+
+		inner.set('guild.removed', { id: 'bypass' });
+		const second = new CacheIntegrityAdapter(inner, MAX_AGE);
+		expect(second.get('guild.removed')).toBeNull();
 	});
 });

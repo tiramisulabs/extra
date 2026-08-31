@@ -1,5 +1,11 @@
 import type { Adapter } from 'seyfert';
 
+const FRESHNESS_PREFIX = '__slipher_cache_integrity__.freshness.';
+
+interface FreshnessMetadata {
+	writtenAt: number;
+}
+
 function isThenable<T>(value: unknown): value is PromiseLike<T> {
 	return (
 		((typeof value === 'object' && value !== null) || typeof value === 'function') &&
@@ -26,20 +32,23 @@ function adapterKeyPrefix(adapter: object): string | undefined {
 }
 
 /**
- * Makes persisted cache data invisible until the current process writes it.
+ * Makes persisted cache data invisible unless it was written recently or by
+ * the current process.
  *
- * The backing adapter remains the source of storage. This wrapper only keeps
- * the current process generation in memory, so restarting the process begins
- * with no visible values or relationships.
+ * Explicit value lookups can reuse persisted entries within the configured
+ * freshness window. Relationships and enumerations remain process-local.
  *
  * @internal
  */
-export class ProcessGenerationAdapter implements Adapter {
+export class CacheIntegrityAdapter implements Adapter {
 	readonly #keyPrefix: string | undefined;
 	readonly #relationships = new Map<string, Set<string>>();
 	readonly #values = new Set<string>();
 
-	constructor(readonly inner: Adapter) {
+	constructor(
+		readonly inner: Adapter,
+		readonly maxAge: number,
+	) {
 		this.#keyPrefix = adapterKeyPrefix(inner);
 	}
 
@@ -62,26 +71,33 @@ export class ProcessGenerationAdapter implements Adapter {
 	}
 
 	bulkGet(keys: string[]): ReturnType<Adapter['bulkGet']> {
-		return this.inner.bulkGet.call(
-			this.inner,
-			keys.filter(key => this.isVisibleValueKey(key)),
-		);
+		return this.map(this.readableKeys(keys), readable => this.inner.bulkGet.call(this.inner, readable)) as ReturnType<
+			Adapter['bulkGet']
+		>;
 	}
 
 	get(key: string): ReturnType<Adapter['get']> {
-		if (!this.isVisibleValueKey(key)) return this.miss(null) as ReturnType<Adapter['get']>;
-		return this.inner.get.call(this.inner, key);
+		if (this.isVisibleValueKey(key)) return this.inner.get.call(this.inner, key);
+		return this.map(this.hasFreshMetadata(key), fresh =>
+			fresh ? this.inner.get.call(this.inner, key) : null,
+		) as ReturnType<Adapter['get']>;
 	}
 
 	bulkSet(entries: [string, any][]): ReturnType<Adapter['bulkSet']> {
 		const snapshot = entries.map(([key, value]) => [key, value] as [string, any]);
-		return this.commit(this.inner.bulkSet.call(this.inner, snapshot), () => {
-			for (const [key] of snapshot) this.#values.add(this.canonicalKey(key));
-		});
+		return this.commitFreshness(
+			this.inner.bulkSet.call(this.inner, snapshot),
+			snapshot.map(([key]) => key),
+			() => {
+				for (const [key] of snapshot) this.#values.add(this.canonicalKey(key));
+			},
+		) as ReturnType<Adapter['bulkSet']>;
 	}
 
 	set(key: string, data: any): ReturnType<Adapter['set']> {
-		return this.commit(this.inner.set.call(this.inner, key, data), () => this.#values.add(this.canonicalKey(key)));
+		return this.commitFreshness(this.inner.set.call(this.inner, key, data), [key], () =>
+			this.#values.add(this.canonicalKey(key)),
+		) as ReturnType<Adapter['set']>;
 	}
 
 	bulkPatch(entries: [string, any][]): ReturnType<Adapter['bulkPatch']> {
@@ -90,27 +106,28 @@ export class ProcessGenerationAdapter implements Adapter {
 		if (new Set(snapshot.map(([key]) => this.canonicalKey(key))).size !== snapshot.length) {
 			return this.patchSequentially(snapshot) as ReturnType<Adapter['bulkPatch']>;
 		}
-		const replacements: [string, any][] = [];
-		const patches: [string, any][] = [];
-		for (const entry of snapshot) {
-			(this.isVisibleValueKey(entry[0]) ? patches : replacements).push(entry);
-		}
-
-		const replaceResult = replacements.length ? this.inner.bulkSet.call(this.inner, replacements) : undefined;
-		return this.chain(replaceResult, () => {
-			for (const [key] of replacements) this.#values.add(this.canonicalKey(key));
-			if (!patches.length) return;
-			return this.commit(this.inner.bulkPatch.call(this.inner, patches), () => {
-				for (const [key] of patches) this.#values.add(this.canonicalKey(key));
+		return this.map(this.partitionPatches(snapshot), ({ patches, replacements }) => {
+			const replaceResult = replacements.length ? this.inner.bulkSet.call(this.inner, replacements) : undefined;
+			return this.chain(replaceResult, () => {
+				const patchResult = patches.length ? this.inner.bulkPatch.call(this.inner, patches) : undefined;
+				return this.commitFreshness(
+					patchResult,
+					snapshot.map(([key]) => key),
+					() => {
+						for (const [key] of snapshot) this.#values.add(this.canonicalKey(key));
+					},
+				);
 			});
 		}) as ReturnType<Adapter['bulkPatch']>;
 	}
 
 	patch(key: string, data: any): ReturnType<Adapter['patch']> {
-		const result = this.isVisibleValueKey(key)
-			? this.inner.patch.call(this.inner, key, data)
-			: this.inner.set.call(this.inner, key, data);
-		return this.commit(result, () => this.#values.add(this.canonicalKey(key)));
+		return this.map(this.canPatch(key), preserve => {
+			const result = preserve
+				? this.inner.patch.call(this.inner, key, data)
+				: this.inner.set.call(this.inner, key, data);
+			return this.commitFreshness(result, [key], () => this.#values.add(this.canonicalKey(key)));
+		}) as ReturnType<Adapter['patch']>;
 	}
 
 	values(to: string): ReturnType<Adapter['values']> {
@@ -134,13 +151,20 @@ export class ProcessGenerationAdapter implements Adapter {
 
 	bulkRemove(keys: string[]): ReturnType<Adapter['bulkRemove']> {
 		const snapshot = [...keys];
-		return this.commit(this.inner.bulkRemove.call(this.inner, snapshot), () => {
+		return this.chain(this.inner.bulkRemove.call(this.inner, snapshot), () => {
 			for (const key of snapshot) this.deleteValueVisibility(key);
-		});
+			return this.inner.bulkRemove.call(
+				this.inner,
+				snapshot.map(key => this.freshnessKey(key)),
+			);
+		}) as ReturnType<Adapter['bulkRemove']>;
 	}
 
 	remove(key: string): ReturnType<Adapter['remove']> {
-		return this.commit(this.inner.remove.call(this.inner, key), () => this.deleteValueVisibility(key));
+		return this.chain(this.inner.remove.call(this.inner, key), () => {
+			this.deleteValueVisibility(key);
+			return this.inner.remove.call(this.inner, this.freshnessKey(key));
+		}) as ReturnType<Adapter['remove']>;
 	}
 
 	flush(): ReturnType<Adapter['flush']> {
@@ -212,6 +236,23 @@ export class ProcessGenerationAdapter implements Adapter {
 		return this.#keyPrefix && key.startsWith(this.#keyPrefix) ? key.slice(this.#keyPrefix.length) : key;
 	}
 
+	private canPatch(key: string): boolean | Promise<boolean> {
+		if (this.isVisibleValueKey(key)) return true;
+		return this.map(this.hasFreshMetadata(key), fresh => {
+			if (!fresh) return false;
+			return this.map(this.inner.get.call(this.inner, key), value => value != null);
+		});
+	}
+
+	private commitFreshness<T>(result: T | PromiseLike<T>, keys: string[], apply: () => void): T | Promise<T> {
+		return this.map(result, value =>
+			this.map(this.writeFreshness(keys), () => {
+				apply();
+				return value;
+			}),
+		);
+	}
+
 	private deleteValueVisibility(key: string): void {
 		this.#values.delete(this.canonicalKey(key));
 	}
@@ -226,6 +267,45 @@ export class ProcessGenerationAdapter implements Adapter {
 
 	private isVisibleValueKey(key: string): boolean {
 		return this.#values.has(this.canonicalKey(key));
+	}
+
+	private freshnessKey(key: string): string {
+		return `${FRESHNESS_PREFIX}${encodeURIComponent(this.canonicalKey(key))}`;
+	}
+
+	private hasFreshMetadata(key: string): boolean | Promise<boolean> {
+		return this.map(this.inner.get.call(this.inner, this.freshnessKey(key)), metadata => {
+			if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return false;
+			const writtenAt = Reflect.get(metadata, 'writtenAt');
+			const now = Date.now();
+			return (
+				typeof writtenAt === 'number' &&
+				Number.isFinite(writtenAt) &&
+				writtenAt <= now &&
+				now - writtenAt <= this.maxAge
+			);
+		});
+	}
+
+	private partitionPatches(
+		entries: [string, any][],
+	):
+		| { patches: [string, any][]; replacements: [string, any][] }
+		| Promise<{ patches: [string, any][]; replacements: [string, any][] }> {
+		const decisions = entries.map(([key]) => this.canPatch(key));
+		return this.mapAll(decisions, preserve => {
+			const patches: [string, any][] = [];
+			const replacements: [string, any][] = [];
+			for (let index = 0; index < entries.length; index++) {
+				(preserve[index] ? patches : replacements).push(entries[index]);
+			}
+			return { patches, replacements };
+		});
+	}
+
+	private readableKeys(keys: string[]): string[] | Promise<string[]> {
+		const decisions = keys.map(key => this.isVisibleValueKey(key) || this.hasFreshMetadata(key));
+		return this.mapAll(decisions, readable => keys.filter((_, index) => readable[index]));
 	}
 
 	private commit<T>(result: T | PromiseLike<T>, apply: () => void): T | Promise<T> {
@@ -245,6 +325,11 @@ export class ProcessGenerationAdapter implements Adapter {
 		return isThenable<R>(transformed) ? Promise.resolve(transformed) : transformed;
 	}
 
+	private mapAll<T, R>(values: (T | PromiseLike<T>)[], transform: (values: T[]) => R): R | Promise<R> {
+		if (values.some(isThenable<T>)) return Promise.all(values.map(value => Promise.resolve(value))).then(transform);
+		return transform(values as T[]);
+	}
+
 	private miss<T>(value: T): T | Promise<T> {
 		return this.inner.isAsync ? Promise.resolve(value) : value;
 	}
@@ -260,5 +345,15 @@ export class ProcessGenerationAdapter implements Adapter {
 			if (isThenable<void>(result)) pending = Promise.resolve(result);
 		}
 		return pending;
+	}
+
+	private writeFreshness(keys: string[]): void | Promise<void> {
+		if (!keys.length) return this.miss(undefined);
+		const metadata: FreshnessMetadata = { writtenAt: Date.now() };
+		if (keys.length === 1) return this.inner.set.call(this.inner, this.freshnessKey(keys[0]), metadata);
+		return this.inner.bulkSet.call(
+			this.inner,
+			keys.map(key => [this.freshnessKey(key), metadata]),
+		);
 	}
 }
