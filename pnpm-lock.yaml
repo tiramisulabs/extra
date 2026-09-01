@@ -57,6 +57,9 @@ importers:
 
   packages/cache-integrity:
     devDependencies:
+      '@slipher/testing':
+        specifier: workspace:*
+        version: link:../testing
       '@types/node':
         specifier: ^26.0.1
         version: 26.1.1
