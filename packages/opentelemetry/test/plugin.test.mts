@@ -1,3 +1,4 @@
+import { createMockBot } from '@slipher/testing';
 import { assert, describe, test } from 'vitest';
 import { opentelemetry } from '../src';
 import { installTestTracer } from './helpers/otel-test-provider.mts';
@@ -14,16 +15,16 @@ describe('opentelemetry plugin wiring', () => {
 			metrics: { interactions: false, events: false, rest: false, cache: false },
 		});
 		assert.equal(plugin.name, '@slipher/opentelemetry');
-		await plugin.setup?.({} as never);
-		await plugin.teardown?.({} as never);
+		const bot = await createMockBot({ plugins: [plugin] });
+		await bot.close();
 	});
 
-	test('setup + teardown with defaults (stubs) does not throw', async () => {
+	test('setup + teardown with defaults does not throw', async () => {
 		const plugin = opentelemetry({
 			serviceName: 'plugin-wiring-test',
 		});
-		await plugin.setup?.({} as never);
-		await plugin.teardown?.({} as never);
+		const bot = await createMockBot({ plugins: [plugin] });
+		await bot.close();
 	});
 
 	test('setup after teardown fails explicitly instead of silently using a stopped SDK', async () => {
@@ -31,9 +32,9 @@ describe('opentelemetry plugin wiring', () => {
 			traces: { interactions: false, events: false, rest: false, cache: false },
 			metrics: { interactions: false, events: false, rest: false, cache: false },
 		});
-		await plugin.setup?.({} as never);
-		await plugin.teardown?.({} as never);
-		assert.throws(() => plugin.setup?.({} as never), /cannot be set up after teardown; create a new plugin instance/);
+		const bot = await createMockBot({ plugins: [plugin] });
+		await bot.close();
+		assert.throws(() => plugin.setup?.(bot.client), /cannot be set up after teardown; create a new plugin instance/);
 	});
 
 	test('setup is idempotent (second setup unwraps then re-instruments)', async () => {
@@ -60,7 +61,7 @@ describe('opentelemetry plugin wiring', () => {
 		assert.notEqual(adapter.get, wrappedOnce);
 	});
 
-	test('with in-memory exporter: setup empty client and teardown', async () => {
+	test('with in-memory exporter: setup and teardown', async () => {
 		const otel = installTestTracer();
 		try {
 			const plugin = opentelemetry({
@@ -68,8 +69,8 @@ describe('opentelemetry plugin wiring', () => {
 				traces: { interactions: false, events: false, rest: false, cache: false },
 				metrics: { interactions: false, events: false, rest: false, cache: false },
 			});
-			await plugin.setup?.({} as never);
-			await plugin.teardown?.({} as never);
+			const bot = await createMockBot({ plugins: [plugin] });
+			await bot.close();
 			// No user spans expected; wiring must still complete cleanly.
 			assert.ok(Array.isArray(otel.exporter.getFinishedSpans()));
 		} finally {

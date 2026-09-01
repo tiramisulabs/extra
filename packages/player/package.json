@@ -57,6 +57,7 @@
 		"seyfert": ">=5.0.0"
 	},
 	"devDependencies": {
+		"@slipher/testing": "workspace:*",
 		"@slipher/voice": "workspace:*",
 		"@types/node": "^26.0.1",
 		"seyfert": "^5.0.0",

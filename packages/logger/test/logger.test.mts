@@ -1,3 +1,4 @@
+import { createMockBot } from '@slipher/testing';
 import { initLogger } from 'evlog';
 import { LogLevels, Logger as SeyfertLogger } from 'seyfert';
 import { assert, describe, test } from 'vitest';
@@ -478,26 +479,23 @@ describe('logger plugin', () => {
 		const secondAdapter = new RecordingAdapter();
 		const first = logger({ renderer: firstAdapter });
 		const second = logger({ renderer: secondAdapter });
-		const firstClient = { commands: {}, components: {}, events: {}, langs: {}, cache: {} };
-		const secondClient = { commands: {}, components: {}, events: {}, langs: {}, cache: {} };
+		const firstBot = await createMockBot({ plugins: [first] });
+		const secondBot = await createMockBot({ plugins: [second] });
 
-		await first.setup?.(firstClient);
-		await second.setup?.(secondClient);
-		await first.teardown?.(firstClient);
+		await firstBot.close();
 		await useLogger().info('still active');
 
 		assert.equal(firstAdapter.entries.length, 0);
 		assert.equal(secondAdapter.entries[0].message, 'still active');
 
-		await second.teardown?.(secondClient);
+		await secondBot.close();
 		assert.throws(() => useLogger(), /before the @slipher\/logger plugin is set up/);
 	});
 
 	test('useLogger works outside an interaction scope, immediate and as a one-off wide event', async () => {
 		const adapter = new RecordingAdapter();
 		const plugin = logger({ renderer: adapter });
-		const client = { commands: {}, components: {}, events: {}, langs: {}, cache: {} };
-		await plugin.setup?.(client);
+		const bot = await createMockBot({ plugins: [plugin] });
 
 		await useLogger().info('ready');
 		assert.equal(adapter.entries[0].message, 'ready');
@@ -512,14 +510,13 @@ describe('logger plugin', () => {
 		assert.equal(adapter.entries[1].data.interactionId, 'interaction-1');
 		assert.equal(adapter.entries[1].data.outcome, 'success');
 
-		await plugin.teardown?.(client);
+		await bot.close();
 	});
 
 	test('withLoggerScope scopes a unit of work and emits one wide event on success', async () => {
 		const adapter = new RecordingAdapter();
 		const plugin = logger({ renderer: adapter });
-		const client = { commands: {}, components: {}, events: {}, langs: {}, cache: {} };
-		await plugin.setup?.(client);
+		const bot = await createMockBot({ plugins: [plugin] });
 
 		const result = await withLoggerScope({ kind: 'job', jobId: 'job-1' }, () => {
 			useLogger().add({ processed: 2 });
@@ -533,14 +530,13 @@ describe('logger plugin', () => {
 		assert.equal(adapter.entries[0].data.processed, 2);
 		assert.equal(adapter.entries[0].data.outcome, 'success');
 
-		await plugin.teardown?.(client);
+		await bot.close();
 	});
 
 	test('withLoggerScope emits an error wide event and rethrows on failure', async () => {
 		const adapter = new RecordingAdapter();
 		const plugin = logger({ renderer: adapter });
-		const client = { commands: {}, components: {}, events: {}, langs: {}, cache: {} };
-		await plugin.setup?.(client);
+		const bot = await createMockBot({ plugins: [plugin] });
 		const boom = new Error('boom');
 
 		let thrown: unknown;
@@ -558,7 +554,7 @@ describe('logger plugin', () => {
 		assert.notEqual(adapter.entries[0].data.error, boom);
 		assert.equal((adapter.entries[0].data.error as Record<string, unknown>).message, 'boom');
 
-		await plugin.teardown?.(client);
+		await bot.close();
 	});
 
 	test('setup routes Seyfert internal logs through the adapter and preserves existing customizers', async () => {
@@ -571,15 +567,13 @@ describe('logger plugin', () => {
 			return args;
 		});
 		const plugin = logger({ renderer: adapter, now: () => new Date('2026-05-29T10:00:00.000Z') });
-		const client = { commands: {}, components: {}, events: {}, langs: {}, cache: {} };
+		const bot = await createMockBot({ plugins: [plugin] });
 
 		try {
-			await plugin.setup?.(client);
-
 			new SeyfertLogger({ name: '[API]', active: true }).info('identify', { requestId: 'req-1' });
 			new SeyfertLogger({ name: '[Gateway]', active: true }).error('lost shard', new Error('socket closed'));
 		} finally {
-			await plugin.teardown?.(client);
+			await bot.close();
 			SeyfertLogger.customize((_self, _level, args) => args);
 			console.log = originalLog;
 		}

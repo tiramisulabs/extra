@@ -1,31 +1,23 @@
-import type { VoiceManager } from '@slipher/voice';
+import { createMockBot } from '@slipher/testing';
 import { voice } from '@slipher/voice';
-import { BaseClient } from 'seyfert/lib/client/base';
 import { describe, expect, test, vi } from 'vitest';
 import { player } from '../src';
 
-function runtimeConfig() {
-	return {
-		token: 'token',
-		locations: { base: '' },
-		intents: 0,
-	};
-}
-
 describe('player plugin', () => {
-	test('requires voice from the plugin registry and contributes one manager to client and context', () => {
+	test('requires voice from the plugin registry and contributes one manager to client and context', async () => {
 		const voicePlugin = voice();
 		const plugin = player();
-		const client = new BaseClient({ getRC: runtimeConfig, plugins: [voicePlugin, plugin] }) as BaseClient & {
-			player: typeof plugin.manager;
-			voice: VoiceManager;
-		};
+		const bot = await createMockBot({ plugins: [voicePlugin, plugin] });
 
 		expect(plugin.imports).toBeUndefined();
 		expect(plugin.requires).toEqual(['plugin:@slipher/voice']);
-		expect(client.plugins.map(value => value.name)).toEqual(['@slipher/voice', '@slipher/player']);
-		expect(client.player).toBe(plugin.manager);
-		expect(client.options.context?.({} as never)).toEqual({ voice: client.voice, player: client.player });
+		expect(bot.client.plugins.map(value => value.name)).toEqual(['@slipher/voice', '@slipher/player']);
+		expect(bot.client.player).toBe(plugin.manager);
+		expect(bot.client.options.context?.({} as never)).toEqual({
+			voice: bot.client.voice,
+			player: bot.client.player,
+		});
+		await bot.close();
 	});
 
 	test('routes voice state events and closes the manager during teardown', async () => {
@@ -34,29 +26,18 @@ describe('player plugin', () => {
 		const attach = vi.spyOn(manager, 'attach');
 		const handle = vi.spyOn(manager, 'handleVoiceStateChange');
 		const close = vi.spyOn(manager, 'close');
-		let listener: ((...args: readonly unknown[]) => unknown) | undefined;
-
-		plugin.register?.({
-			events: {
-				on(_name: string, value: (...args: readonly unknown[]) => unknown) {
-					listener = value;
-					return () => undefined;
-				},
-			},
-		} as never);
-		const client = { events: { emit: vi.fn() }, logger: { warn: vi.fn() } };
-		await plugin.setup?.(client as never);
+		const bot = await createMockBot({ plugins: [voice(), plugin] });
 		const connection = {} as never;
 		const state = {} as never;
-		listener?.(connection, state, undefined);
+		await bot.emit('voiceConnectionStateChange', [connection, state], { updateCache: false });
 
-		expect(attach).toHaveBeenCalledExactlyOnceWith(client);
+		expect(attach).toHaveBeenCalledExactlyOnceWith(bot.client);
 		expect(handle).toHaveBeenCalledExactlyOnceWith(connection, state);
-		await plugin.teardown?.(client as never);
+		await bot.close();
 		expect(close).toHaveBeenCalledOnce();
 	});
 
-	test('rejects a client configuration without the required voice plugin', () => {
-		expect(() => new BaseClient({ getRC: runtimeConfig, plugins: [player()] })).toThrow(/@slipher\/voice/);
+	test('rejects a client configuration without the required voice plugin', async () => {
+		await expect(createMockBot({ plugins: [player()] })).rejects.toThrow(/@slipher\/voice/);
 	});
 });

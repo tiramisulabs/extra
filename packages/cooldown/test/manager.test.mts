@@ -1,10 +1,11 @@
+import { createMockBot } from '@slipher/testing';
 import {
 	type AnyContext,
 	Cache,
 	CacheFrom,
 	Client,
 	Command,
-	definePlugins,
+	Declare,
 	Logger,
 	MemoryAdapter,
 	SubCommand,
@@ -12,7 +13,7 @@ import {
 import { HandleCommand } from 'seyfert/lib/commands/handle';
 import { CommandHandler } from 'seyfert/lib/commands/handler.js';
 import { afterEach, assert, beforeEach, describe, expect, test, vi } from 'vitest';
-import { Cooldown, CooldownManager, type CooldownProps, cooldown as cooldownPlugin } from '../src';
+import { Cooldown, CooldownManager, type CooldownProps, type CooldownResult, cooldown as cooldownPlugin } from '../src';
 import type { CooldownData } from '../src/resource';
 
 type CooldownContextScope = (context: AnyContext, run: () => unknown) => unknown;
@@ -136,6 +137,21 @@ function createAsyncMemoryAdapter() {
 		},
 	});
 	return { adapter, storage };
+}
+
+@Declare({ name: 'global-cooldown', description: 'Command with a global cooldown middleware' })
+@Cooldown.user(1_000)
+class GlobalCooldownCommand extends Command {
+	onMiddlewaresError() {}
+	run() {}
+}
+
+@Declare({ name: 'default-cooldown', description: 'Command with the default cooldown middleware' })
+@Cooldown.user(1_000)
+class DefaultCooldownCommand extends Command {
+	middlewares = ['cooldown'] as never;
+	onMiddlewaresError() {}
+	run() {}
 }
 
 describe('CooldownManager — explicit check / consume / reset', () => {
@@ -757,18 +773,15 @@ describe('cooldown() plugin', () => {
 		assert.equal(result.key, 'testCommand:user:user1');
 	});
 
-	test('installs the manager through the Seyfert v5 client extension contract', () => {
+	test('installs the manager through the Seyfert v5 client extension contract', async () => {
 		const plugin = cooldownPlugin();
-		const plugins = definePlugins(plugin);
-		const client = new Client({
-			getRC: () => ({ debug: false, intents: 0, token: '', locations: { base: '', output: '' } }),
-			plugins,
-		});
+		const bot = await createMockBot({ plugins: [plugin] });
+		const client = bot.client as typeof bot.client & { cooldown: CooldownManager };
 
 		assert.equal(client.cooldown, plugin.manager);
 		assert.equal(Object.getOwnPropertyDescriptor(client, 'cooldown')?.writable, false);
-		plugin.setup(client);
-		assert.equal(plugin.manager.client, client);
+		assert.equal(plugin.manager.client, bot.client);
+		await bot.close();
 	});
 
 	test('does not register a middleware by default', () => {
@@ -784,140 +797,40 @@ describe('cooldown() plugin', () => {
 	});
 
 	test('registers an optional middleware that consumes the active context cooldown', async () => {
-		vi.useFakeTimers();
-		try {
-			vi.setSystemTime(new Date(0));
-			const plugin = cooldownPlugin({
-				middleware: {
-					global: true,
-					message: (result, context) => `${context.fullCommandName}:${result.remainingMs}`,
-					name: 'commandCooldown',
-				},
-			});
-			const registered: {
-				middleware: (payload: {
-					context: AnyContext;
-					next: (result?: unknown) => void;
-					pass: () => void;
-					stop: (message: string) => void;
-				}) => unknown;
-				name: string;
-				options?: { global?: boolean };
-			}[] = [];
-			plugin.register?.({
-				middlewares: {
-					add(name, middleware, options) {
-						registered.push({ name, middleware, options });
-					},
-				},
-				options: { set() {} },
-			} as never);
+		const plugin = cooldownPlugin({
+			middleware: {
+				global: true,
+				message: (result: CooldownResult, context: AnyContext) =>
+					`${'fullCommandName' in context ? context.fullCommandName : 'unknown'}:${result.remainingMs}`,
+				name: 'commandCooldown',
+			},
+		});
+		const bot = await createMockBot({ commands: [GlobalCooldownCommand], plugins: [plugin] });
 
-			assert.equal(registered.length, 1);
-			assert.equal(registered[0]?.name, 'commandCooldown');
-			assert.deepEqual(registered[0]?.options, { global: true });
+		const allowed = await bot.slash({ name: 'global-cooldown' });
+		const blocked = await bot.slash({ name: 'global-cooldown' });
 
-			const { client, command } = createClientForPlugin({
-				interval: 1_000,
-				type: 'user',
-			});
-			plugin.setup(client);
-			const context = commandContext({ client, command, fullCommandName: 'testCommand' });
-			const nextCalls: unknown[] = [];
-			const stops: string[] = [];
-			const scope = getPluginContextScope(plugin)!;
-
-			await scope(context, () =>
-				registered[0]!.middleware({
-					context,
-					next: result => nextCalls.push(result),
-					pass: () => {
-						throw new Error('cooldown middleware should not pass');
-					},
-					stop: message => stops.push(message),
-				}),
-			);
-			await scope(context, () =>
-				registered[0]!.middleware({
-					context,
-					next: result => nextCalls.push(result),
-					pass: () => {
-						throw new Error('cooldown middleware should not pass');
-					},
-					stop: message => stops.push(message),
-				}),
-			);
-
-			assert.equal(nextCalls.length, 1);
-			assert.equal((nextCalls[0] as { allowed: boolean }).allowed, true);
-			assert.deepEqual(stops, ['testCommand:1000']);
-		} finally {
-			vi.useRealTimers();
-		}
+		assert.equal(allowed.denied, false);
+		assert.equal(blocked.denied, true);
+		assert.equal(blocked.denial?.kind, 'stop');
+		assert.equal(blocked.denial?.middleware, 'commandCooldown');
+		assert.match(String(blocked.denial?.reason ?? ''), /^global-cooldown:\d+$/);
+		await bot.close();
 	});
 
 	test('uses a friendly default cooldown middleware message', async () => {
-		vi.useFakeTimers();
-		try {
-			vi.setSystemTime(new Date(0));
-			const plugin = cooldownPlugin({ middleware: true });
-			const registered: {
-				middleware: (payload: {
-					context: AnyContext;
-					next: (result?: unknown) => void;
-					pass: () => void;
-					stop: (message: string) => void;
-				}) => unknown;
-				name: string;
-				options?: { global?: boolean };
-			}[] = [];
-			plugin.register?.({
-				middlewares: {
-					add(name, middleware, options) {
-						registered.push({ name, middleware, options });
-					},
-				},
-				options: { set() {} },
-			} as never);
+		const plugin = cooldownPlugin({ middleware: true });
+		const bot = await createMockBot({ commands: [DefaultCooldownCommand], plugins: [plugin] });
 
-			assert.equal(registered.length, 1);
-			assert.equal(registered[0]?.name, 'cooldown');
-			assert.equal(registered[0]?.options, undefined);
+		const allowed = await bot.slash({ name: 'default-cooldown' });
+		const blocked = await bot.slash({ name: 'default-cooldown' });
 
-			const { client, command } = createClientForPlugin({
-				interval: 1_000,
-				type: 'user',
-			});
-			plugin.setup(client);
-			const context = commandContext({ client, command, fullCommandName: 'testCommand' });
-			const stops: string[] = [];
-			const scope = getPluginContextScope(plugin)!;
-
-			await scope(context, () =>
-				registered[0]!.middleware({
-					context,
-					next: () => {},
-					pass: () => {
-						throw new Error('cooldown middleware should not pass');
-					},
-					stop: message => stops.push(message),
-				}),
-			);
-			await scope(context, () =>
-				registered[0]!.middleware({
-					context,
-					next: () => {},
-					pass: () => {
-						throw new Error('cooldown middleware should not pass');
-					},
-					stop: message => stops.push(message),
-				}),
-			);
-
-			assert.deepEqual(stops, ['This command is cooling down. Try again <t:1:R>.']);
-		} finally {
-			vi.useRealTimers();
-		}
+		assert.equal(allowed.denied, false);
+		assert.equal(blocked.denied, true);
+		assert.equal(blocked.denial?.kind, 'stop');
+		assert.equal(blocked.denial?.middleware, 'cooldown');
+		assert.match(String(blocked.denial?.reason ?? ''), /^This command is cooling down\. Try again <t:\d+:R>\.$/);
+		await bot.close();
 	});
 
 	test('setup attaches the manager to the client resources without mutating plugin-owned keys', () => {

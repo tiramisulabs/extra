@@ -1,3 +1,4 @@
+import { createMockBot } from '@slipher/testing';
 import {
 	type GatewayDispatchPayload,
 	GatewayIntentBits,
@@ -6,10 +7,8 @@ import {
 	PluginOrder,
 	type PluginOrderOpt,
 } from 'seyfert';
-import { BaseClient } from 'seyfert/lib/client/base';
 import { describe, expect, test, vi } from 'vitest';
 import type { DaveSessionFactoryResource } from '../src/dave/types';
-import type { VoiceManager } from '../src/manager';
 import { createVoicePlugin } from '../src/plugin';
 import type { VoiceRuntimeAdapter } from '../src/runtime/types';
 
@@ -46,27 +45,16 @@ function createClient() {
 	};
 }
 
-function runtimeConfig() {
-	return {
-		token: 'token',
-		locations: { base: '' },
-		intents: 0,
-	};
-}
-
 describe('voice plugin', () => {
 	test('installs the same manager through Seyfert client and context lifecycle', async () => {
 		const daveFactory = createDaveFactory();
 		const plugin = createVoicePlugin(createRuntime(), daveFactory);
-		const client = new BaseClient({ getRC: runtimeConfig, plugins: [plugin] }) as BaseClient & {
-			voice: VoiceManager;
-		};
+		const bot = await createMockBot({ plugins: [plugin] });
 
-		expect(client.options.context?.({} as never)).toEqual({ voice: client.voice });
-		expect(client.cache.intents & GatewayIntentBits.GuildVoiceStates).toBe(GatewayIntentBits.GuildVoiceStates);
+		expect(bot.client.options.context?.({} as never)).toEqual({ voice: bot.client.voice });
+		expect(bot.client.cache.intents & GatewayIntentBits.GuildVoiceStates).toBe(GatewayIntentBits.GuildVoiceStates);
 
-		await client.start();
-		await client.close();
+		await bot.close();
 
 		expect(daveFactory.close).toHaveBeenCalledOnce();
 	});

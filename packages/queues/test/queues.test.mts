@@ -1,3 +1,4 @@
+import { createMockBot } from '@slipher/testing';
 import { Client, definePlugins } from 'seyfert';
 import { assert, describe, expect, test } from 'vitest';
 import {
@@ -474,8 +475,7 @@ describe('queues plugin', () => {
 		Process()(MailProcessor.prototype, 'handle');
 
 		const plugin = queues({ driver: memory() });
-		const client = new Client({ plugins: definePlugins(plugin) });
-		await plugin.setup?.(client);
+		const bot = await createMockBot({ plugins: [plugin] });
 		await plugin.registry.register({ processors: [MailProcessor] });
 		const queue = plugin.registry.get('mail');
 		const completed = waitForEvent(queue, 'completed');
@@ -483,8 +483,8 @@ describe('queues plugin', () => {
 		await queue.add('send', { email: 'hi@example.com' });
 		await completed;
 
-		assert.equal(receivedClient, client);
-		await plugin.teardown?.(client);
+		assert.equal(receivedClient, bot.client);
+		await bot.close();
 	});
 
 	test('does not initialize the driver when teardown wins an asynchronous processor attachment race', async () => {
@@ -531,27 +531,24 @@ describe('queues plugin', () => {
 
 	test('lets Seyfert install the registry as a read-only client extension', async () => {
 		const plugin = queues({ driver: memory() });
-		const plugins = definePlugins(plugin);
-		const client = new Client({ plugins });
-		const extension = { queues: plugin.ctx?.queues({}, client) };
+		const bot = await createMockBot({ plugins: [plugin] });
+		const extension = { queues: plugin.ctx?.queues({}, bot.client) };
 
 		assert.equal(plugin.name, '@slipher/queues');
 		assert.equal(typeof plugin.client?.queues, 'function');
 		assert.equal(extension.queues, plugin.registry);
-		assert.equal(client.queues, plugin.registry);
-		assert.equal(Object.getOwnPropertyDescriptor(client, 'queues')?.writable, false);
-		await plugin.setup?.(client);
-		await plugin.teardown?.(client);
+		assert.equal(bot.client.queues, plugin.registry);
+		assert.equal(Object.getOwnPropertyDescriptor(bot.client, 'queues')?.writable, false);
+		await bot.close();
 	});
 
 	test('teardown closes captured registry access without mutating Seyfert-owned client properties', async () => {
 		const plugin = queues({ driver: memory() });
-		const client = new Client({ plugins: definePlugins(plugin) });
+		const bot = await createMockBot({ plugins: [plugin] });
 
-		await plugin.setup?.(client);
-		await plugin.teardown?.(client);
+		await bot.close();
 
-		assert.equal(client.queues, plugin.registry);
+		assert.equal(bot.client.queues, plugin.registry);
 		assert.throws(() => plugin.registry.get('welcome'), /closed/);
 	});
 });
