@@ -1,4 +1,5 @@
-import { createPlugin, definePlugins, HttpClient } from 'seyfert';
+import { createMockBot } from '@slipher/testing';
+import { createPlugin } from 'seyfert';
 import { assert, describe, test } from 'vitest';
 import {
 	type CronerFactoryOptions,
@@ -69,20 +70,6 @@ async function assertRejects(run: () => Promise<unknown>, expected: RegExp) {
 	assert.match((thrown as Error).message, expected);
 }
 
-function createSeyfertClient(plugins: readonly unknown[]) {
-	class TestClient extends HttpClient {
-		protected override async execute() {}
-	}
-
-	return new TestClient({
-		plugins: plugins as never,
-		getRC: () => ({
-			locations: { base: '.' },
-			token: 'scheduler-test-token',
-		}),
-	});
-}
-
 describe('scheduler lifecycle', () => {
 	test('memory schedules added after setup recur and run immediately exactly once when requested', async () => {
 		const croner = createFakeCroner();
@@ -138,14 +125,13 @@ describe('scheduler lifecycle', () => {
 				downstreamReady = true;
 			},
 		});
-		const client = createSeyfertClient(definePlugins(schedulerPlugin, downstream));
+		const bot = await createMockBot({ plugins: [schedulerPlugin, downstream] });
 
-		await client.start({ token: 'scheduler-test-token' });
 		await processorCompletion;
 
 		assert.equal(runnerObservedReady, true);
-		assert.equal(runnerClient, client);
-		await client.close();
+		assert.equal(runnerClient, bot.client);
+		await bot.close();
 	});
 
 	test('real Seyfert startup rejects persistent preparation failures before plugins:ready', async () => {
@@ -160,9 +146,7 @@ describe('scheduler lifecycle', () => {
 				downstreamSetup = true;
 			},
 		});
-		const client = createSeyfertClient(definePlugins(schedulerPlugin, downstream));
-
-		await assertRejects(() => client.start({ token: 'scheduler-test-token' }), /upsert failed/);
+		await assertRejects(() => createMockBot({ plugins: [schedulerPlugin, downstream] }), /upsert failed/);
 
 		assert.equal(downstreamSetup, false);
 		assert.equal(bullmq.state.workers[0]!.running, false);

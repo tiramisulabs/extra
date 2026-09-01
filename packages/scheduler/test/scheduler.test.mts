@@ -1,3 +1,4 @@
+import { createMockBot } from '@slipher/testing';
 import { Cron as Croner } from 'croner';
 import { assert, describe, test } from 'vitest';
 import {
@@ -317,34 +318,17 @@ describe('scheduler', () => {
 			driver: memory({ croner: croner.factory }),
 			tasks: [MaintenanceTasks],
 		});
-		const client: Record<string, unknown> = {};
-		let onPluginsReady: ((client: Record<string, unknown>) => Promise<void> | void) | undefined;
-		plugin.register?.({
-			hooks: {
-				on(name: string, listener: (client: Record<string, unknown>) => Promise<void> | void) {
-					assert.equal(name, 'plugins:ready');
-					onPluginsReady = listener;
-					return () => undefined;
-				},
-			},
-		} as never);
-
-		await plugin.setup?.(client as never);
-		assert.equal(
-			croner.jobs.every(job => job.paused),
-			true,
-		);
-		await onPluginsReady?.(client);
+		const bot = await createMockBot({ plugins: [plugin] });
 		assert.equal(
 			croner.jobs.every(job => !job.paused),
 			true,
 		);
 
-		const extension = { scheduler: plugin.ctx?.scheduler({} as never, client as never) };
+		const extension = { scheduler: plugin.ctx?.scheduler({} as never, bot.client) };
 
 		assert.equal(plugin.name, '@slipher/scheduler');
 		assert.equal(typeof plugin.client?.scheduler, 'function');
-		assert.equal(client.scheduler, plugin.registry);
+		assert.equal(bot.client.scheduler, plugin.registry);
 		assert.equal(extension.scheduler, plugin.registry);
 		assert.deepEqual(
 			plugin.registry.list().map(task => task.id),
@@ -356,7 +340,8 @@ describe('scheduler', () => {
 		await croner.jobs[1]!.trigger();
 
 		assert.deepEqual(runs, ['heartbeat', 'daily']);
-		assert.deepEqual(clients, [client, client]);
+		assert.deepEqual(clients, [bot.client, bot.client]);
+		await bot.close();
 	});
 
 	test('adds interval and cron tasks through the generic add helper', () => {

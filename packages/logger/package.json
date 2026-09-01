@@ -40,6 +40,7 @@
 	"devDependencies": {
 		"@opentelemetry/api": "^1.9.1",
 		"@opentelemetry/context-async-hooks": "^2.0.1",
+		"@slipher/testing": "workspace:*",
 		"@types/node": "^26.0.1",
 		"evlog": "^2.26.0",
 		"seyfert": "^5.0.0",

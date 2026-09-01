@@ -7,6 +7,7 @@
 			"outputs": ["lib/**"]
 		},
 		"test": {
+			"dependsOn": ["^build"],
 			"cache": false,
 			"env": ["SLIPHER_SCHEDULER_REDIS_URL"]
 		},
