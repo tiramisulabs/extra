@@ -235,7 +235,7 @@ try {
 					verify: count => verifyLegacyRelationship(baseline, 'guild.1', count * batchSize),
 				},
 				{
-					name: 'atomic pipelined contract',
+					name: 'atomic chunked Lua',
 					roundTrips: `${atomicChunksPerBatch}/batch (${(atomicChunksPerBatch / batchSize).toFixed(3)}/entry)`,
 					reset: () => atomic.flush(),
 					run: batch =>

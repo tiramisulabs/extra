@@ -14,11 +14,16 @@ local function type_name(key)
 	return reply
 end
 
-local function assert_hash_or_none(key)
+local function hash_type_error(key)
 	local keyType = type_name(key)
 	if keyType ~= 'none' and keyType ~= 'hash' then
-		error('WRONGTYPE expected hash or none for ' .. key)
+		return 'WRONGTYPE expected hash or none for ' .. key
 	end
+end
+
+local function assert_hash_or_none(key)
+	local message = hash_type_error(key)
+	if message then error(message) end
 end
 
 local function parse_owner(owner)
@@ -37,7 +42,48 @@ local function hset_with_expiry(key, field, value, expiresAt)
 end
 `;
 
-const WRITE_ENTRY_SCRIPT = `${SCRIPT_HELPERS}
+const WRITE_SCRIPT_HELPERS = `${SCRIPT_HELPERS}
+local function expiration_deadline(valueKey, expirationMode, expirationMs)
+local expiresAt = -1
+if expirationMode == 'preserve' then
+	expiresAt = redis.call('PEXPIRETIME', valueKey)
+elseif expirationMode == 'expire' then
+	local time = redis.call('TIME')
+	expiresAt = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000) + expirationMs
+end
+if expiresAt > 70368744177663 then
+	return nil, 'ERR cache expiry exceeds Redis hash-field deadline limit'
+end
+return expiresAt, nil
+end
+
+local function write_entry(valueKey, relationshipKey, lookupKey, logicalKey, relationshipTo, relationshipId, operation, expiresAt, fields, logicalFields, returnValue)
+if operation == 'replace' then
+	redis.call('DEL', valueKey)
+else
+	for index = 1, #logicalFields do
+		local field = logicalFields[index]
+		redis.call('HDEL', valueKey, field, 'B_' .. field, 'N_' .. field, 'O_' .. field)
+	end
+end
+local command = {'HSET', valueKey}
+for index = 1, #fields do table.insert(command, fields[index]) end
+redis.call(unpack(command))
+
+if expiresAt >= 0 then redis.call('PEXPIREAT', valueKey, expiresAt)
+else redis.call('PERSIST', valueKey) end
+
+hset_with_expiry(relationshipKey, relationshipId, logicalKey, expiresAt)
+hset_with_expiry(lookupKey, logicalKey, relationshipTo .. '.' .. relationshipId, expiresAt)
+
+if returnValue then
+	return {redis.call('HGETALL', valueKey), redis.call('PTTL', valueKey)}
+end
+return 1
+end
+`;
+
+const WRITE_ENTRY_SCRIPT = `${WRITE_SCRIPT_HELPERS}
 local logicalKey = ARGV[1]
 local relationshipTo = ARGV[2]
 local relationshipId = ARGV[3]
@@ -46,43 +92,61 @@ local expirationMode = ARGV[5]
 local expirationMs = tonumber(ARGV[6])
 local fieldCount = tonumber(ARGV[7])
 local logicalFieldCount = tonumber(ARGV[8])
+local fields = {}
+local logicalFields = {}
 
 assert_hash_or_none(KEYS[1])
 assert_hash_or_none(KEYS[2])
 assert_hash_or_none(KEYS[3])
 
-local expiresAt = -1
-if expirationMode == 'preserve' then
-	expiresAt = redis.call('PEXPIRETIME', KEYS[1])
-elseif expirationMode == 'expire' then
-	local time = redis.call('TIME')
-	expiresAt = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000) + expirationMs
-end
-if expiresAt > 70368744177663 then error('ERR cache expiry exceeds Redis hash-field deadline limit') end
+local expiresAt, expirationError = expiration_deadline(KEYS[1], expirationMode, expirationMs)
+if expirationError then error(expirationError) end
+for index = 1, fieldCount * 2 do fields[index] = ARGV[8 + index] end
+local logicalFieldsOffset = 8 + fieldCount * 2
+for index = 1, logicalFieldCount do logicalFields[index] = ARGV[logicalFieldsOffset + index] end
+local returnValue = ARGV[9 + fieldCount * 2 + logicalFieldCount] == '1'
+return write_entry(KEYS[1], KEYS[2], KEYS[3], logicalKey, relationshipTo, relationshipId, operation, expiresAt, fields, logicalFields, returnValue)
+`;
 
-if operation == 'replace' then
-	redis.call('DEL', KEYS[1])
-else
-	local logicalFieldsOffset = 8 + fieldCount * 2
-	for index = 1, logicalFieldCount do
-		local field = ARGV[logicalFieldsOffset + index]
-		redis.call('HDEL', KEYS[1], field, 'B_' .. field, 'N_' .. field, 'O_' .. field)
+const BULK_WRITE_SCRIPT = `${WRITE_SCRIPT_HELPERS}
+local entries = cjson.decode(ARGV[1])
+local lookupKey = KEYS[1]
+local lookupError = hash_type_error(lookupKey)
+local prepared = {}
+local results = {}
+
+for index, entry in ipairs(entries) do
+	local valueKey = KEYS[index * 2]
+	local relationshipKey = KEYS[index * 2 + 1]
+	local message = lookupError or hash_type_error(valueKey) or hash_type_error(relationshipKey)
+	local expiresAt = nil
+	if not message then expiresAt, message = expiration_deadline(valueKey, entry[5], entry[6]) end
+	prepared[index] = {expiresAt = expiresAt, message = message}
+end
+
+for index, entry in ipairs(entries) do
+	local state = prepared[index]
+	if state.message then
+		results[index] = {'error', state.message}
+	else
+		local result = write_entry(
+			KEYS[index * 2],
+			KEYS[index * 2 + 1],
+			lookupKey,
+			entry[1],
+			entry[2],
+			entry[3],
+			entry[4],
+			state.expiresAt,
+			entry[7],
+			entry[8],
+			entry[9]
+		)
+		if entry[9] then results[index] = {'ok', result[1], result[2]}
+		else results[index] = {'ok'} end
 	end
 end
-local command = {'HSET', KEYS[1]}
-for index = 1, fieldCount * 2 do table.insert(command, ARGV[8 + index]) end
-redis.call(unpack(command))
-
-if expiresAt >= 0 then redis.call('PEXPIREAT', KEYS[1], expiresAt)
-else redis.call('PERSIST', KEYS[1]) end
-
-hset_with_expiry(KEYS[2], relationshipId, logicalKey, expiresAt)
-hset_with_expiry(KEYS[3], logicalKey, relationshipTo .. '.' .. relationshipId, expiresAt)
-
-if ARGV[9 + fieldCount * 2 + logicalFieldCount] == '1' then
-	return {redis.call('HGETALL', KEYS[1]), redis.call('PTTL', KEYS[1])}
-end
-return 1
+return results
 `;
 
 const REMOVE_ENTRY_SCRIPT = `${SCRIPT_HELPERS}
@@ -178,6 +242,7 @@ return 1
 
 const CACHE_SCRIPTS = [
 	WRITE_ENTRY_SCRIPT,
+	BULK_WRITE_SCRIPT,
 	REMOVE_ENTRY_SCRIPT,
 	REMOVE_RELATIONSHIP_MEMBER_SCRIPT,
 	REMOVE_RELATIONSHIP_SCRIPT,
@@ -223,6 +288,17 @@ function encodeEntryData(data: any) {
 	});
 	return { fields, logicalFields: Array.isArray(data) ? [] : Object.keys(data) };
 }
+
+interface EncodedWrite {
+	encoded: ReturnType<typeof encodeEntryData>;
+	key: string;
+	relationship: AdapterRelationship;
+	replace: boolean;
+}
+
+type WriteOutcome =
+	| { result?: { observedAt: number; ttl: number; value: ReturnType<typeof toNormal> }; status: 'fulfilled' }
+	| { reason: unknown; status: 'rejected' };
 
 type ExpirationPolicy = { type: 'preserve' } | { type: 'expire'; milliseconds: number } | { type: 'persist' };
 
@@ -392,6 +468,85 @@ export class RedisAdapter<SupportsAtomicCooldowns extends boolean = true> implem
 		await this.writeEntry(key, relationship, replace, encoded);
 	}
 
+	protected async writeEncodedBatch(
+		entries: EncodedWrite[],
+		returnValues: readonly boolean[] = [],
+	): Promise<WriteOutcome[]> {
+		const preflights = await Promise.allSettled(
+			entries.map(entry => (entry.replace ? Promise.resolve() : this.readBeforePatch(entry.key))),
+		);
+		const outcomes = new Array<WriteOutcome>(entries.length);
+		const submitted: Array<{ entry: EncodedWrite; index: number; returnValue: boolean }> = [];
+		for (const [index, preflight] of preflights.entries()) {
+			if (preflight.status === 'rejected') outcomes[index] = { reason: preflight.reason, status: 'rejected' };
+			else submitted.push({ entry: entries[index]!, index, returnValue: returnValues[index] ?? false });
+		}
+		if (!submitted.length) return outcomes;
+
+		const keys = [this.relationshipOwnersKey];
+		const payload = submitted.map(({ entry, returnValue }) => {
+			keys.push(this.buildKey(entry.key), this.relationshipKey(entry.relationship[0]));
+			const expiration = this.getExpirationPolicy(entry.key);
+			return [
+				entry.key,
+				entry.relationship[0],
+				entry.relationship[1],
+				entry.replace ? 'replace' : 'patch',
+				expiration.type,
+				expiration.type === 'expire' ? expiration.milliseconds : 0,
+				entry.encoded.fields,
+				entry.encoded.logicalFields,
+				returnValue,
+			];
+		});
+		const observedAt = Date.now();
+		const replies = await this.runScript<unknown[]>(BULK_WRITE_SCRIPT, keys, [JSON.stringify(payload)]);
+		if (!Array.isArray(replies) || replies.length !== submitted.length) {
+			throw new TypeError('RedisAdapter expected the bulk write script to return one result per entry');
+		}
+		for (const [submittedIndex, reply] of replies.entries()) {
+			const { index, returnValue } = submitted[submittedIndex]!;
+			if (!Array.isArray(reply) || (reply[0] !== 'ok' && reply[0] !== 'error')) {
+				throw new TypeError('RedisAdapter expected a valid bulk write result');
+			}
+			if (reply[0] === 'error') {
+				outcomes[index] = { reason: new Error(String(reply[1])), status: 'rejected' };
+			} else if (returnValue) {
+				outcomes[index] = {
+					result: { ...this.parseWriteResult([reply[1], reply[2]]), observedAt },
+					status: 'fulfilled',
+				};
+			} else {
+				outcomes[index] = { status: 'fulfilled' };
+			}
+		}
+		return outcomes;
+	}
+
+	protected async settleEncodedBatches(
+		entries: EncodedWrite[],
+		operation: (batch: EncodedWrite[]) => Promise<WriteOutcome[]>,
+	) {
+		const failures: unknown[] = [];
+		await this.runInBatches(entries, async batch => {
+			try {
+				const outcomes = await operation(batch);
+				for (const outcome of outcomes) {
+					if (outcome.status === 'rejected') failures.push(outcome.reason);
+				}
+			} catch (error) {
+				failures.push(...batch.map(() => error));
+			}
+		});
+		if (failures.length) {
+			throw new AggregateError(failures, `RedisAdapter bulk operation failed for ${failures.length} entries`);
+		}
+	}
+
+	protected async writeEncodedEntries(entries: EncodedWrite[]) {
+		await this.settleEncodedBatches(entries, batch => this.writeEncodedBatch(batch));
+	}
+
 	protected parseWriteResult(result: unknown[]) {
 		if (!Array.isArray(result) || result.length !== 2) {
 			throw new TypeError('RedisAdapter expected the write script to return value and TTL');
@@ -403,10 +558,13 @@ export class RedisAdapter<SupportsAtomicCooldowns extends boolean = true> implem
 	}
 
 	async bulkSet(entries: AdapterEntry[]) {
-		const prepared = entries.map(([key, value, relationship]) => [key, relationship, encodeEntryData(value)] as const);
-		await this.runBulk(prepared, ([key, relationship, encoded]) =>
-			this.writeEncodedEntry(key, relationship, true, encoded),
-		);
+		const prepared = entries.map(([key, value, relationship]) => ({
+			encoded: encodeEntryData(value),
+			key,
+			relationship,
+			replace: true,
+		}));
+		await this.writeEncodedEntries(prepared);
 	}
 
 	async set(key: string, data: any, relationship: AdapterRelationship) {
@@ -414,12 +572,13 @@ export class RedisAdapter<SupportsAtomicCooldowns extends boolean = true> implem
 	}
 
 	async bulkPatch(entries: AdapterEntry[]) {
-		const prepared = entries.map(
-			([key, value, relationship]) => [key, relationship, Array.isArray(value), encodeEntryData(value)] as const,
-		);
-		await this.runBulk(prepared, ([key, relationship, replace, encoded]) =>
-			this.writeEncodedEntry(key, relationship, replace, encoded),
-		);
+		const prepared = entries.map(([key, value, relationship]) => ({
+			encoded: encodeEntryData(value),
+			key,
+			relationship,
+			replace: Array.isArray(value),
+		}));
+		await this.writeEncodedEntries(prepared);
 	}
 
 	async patch(key: string, data: any, relationship: AdapterRelationship): Promise<void> {

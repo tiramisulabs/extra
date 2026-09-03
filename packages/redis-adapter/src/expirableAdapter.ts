@@ -26,6 +26,13 @@ interface CachedValue {
 	value: any;
 }
 
+interface EncodedWrite {
+	encoded: { fields: string[]; logicalFields: string[] };
+	key: string;
+	relationship: AdapterRelationship;
+	replace: boolean;
+}
+
 function hashReply(value: unknown): Record<string, any> {
 	if (!value || typeof value !== 'object' || Array.isArray(value) || value instanceof Error) {
 		throw new TypeError('ExpirableRedisAdapter expected HGETALL to return an object');
@@ -291,6 +298,36 @@ export class ExpirableRedisAdapter extends RedisAdapter<false> {
 		} finally {
 			this.finishMutation(mutation.normalizedKey, mutation.token);
 		}
+	}
+
+	protected override async writeEncodedEntries(entries: EncodedWrite[]) {
+		await this.settleEncodedBatches(entries, async batch => {
+			const mutations = batch.map(entry => ({
+				cacheLocally: this.getOndemandBucket(entry.key, true) !== undefined,
+				entry,
+				mutation: this.beginMutation(entry.key),
+			}));
+			try {
+				const outcomes = await this.writeEncodedBatch(
+					batch,
+					mutations.map(({ cacheLocally }) => cacheLocally),
+				);
+				for (const [index, outcome] of outcomes.entries()) {
+					if (outcome.status !== 'fulfilled' || !outcome.result) continue;
+					const { entry, mutation } = mutations[index]!;
+					this.publishMutation(
+						entry.key,
+						mutation,
+						outcome.result.value,
+						outcome.result.ttl,
+						outcome.result.observedAt,
+					);
+				}
+				return outcomes;
+			} finally {
+				for (const { mutation } of mutations) this.finishMutation(mutation.normalizedKey, mutation.token);
+			}
+		});
 	}
 
 	private legacyRelationshipFromKey(key: string) {

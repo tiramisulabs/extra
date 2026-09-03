@@ -233,6 +233,48 @@ describe('ExpirableRedisAdapter', () => {
 		assert.equal(adapter.cachedEntryCount, 3);
 	});
 
+	test('bulk patches skip undecodable entries and still commit the valid subset', async () => {
+		const { adapter, namespace } = await createAdapter();
+		await adapter.bulkSet([userEntry('corrupt'), userEntry('valid')]);
+		await adapter.client.hSet(`${namespace}:user.corrupt`, { O_corrupt: '{' });
+
+		const error = await adapter
+			.bulkPatch([userEntry('corrupt', { patched: true }), userEntry('valid', { patched: true })])
+			.catch(reason => reason);
+
+		expect(error).toBeInstanceOf(AggregateError);
+		expect((error as AggregateError).errors).toHaveLength(1);
+		assert.equal(await adapter.client.hGet(`${namespace}:user.corrupt`, 'B_patched'), null);
+		assert.equal(await adapter.client.hGet(`${namespace}:user.corrupt`, 'O_corrupt'), '{');
+		assert.deepEqual(await adapter.get('user.valid'), { id: 'valid', patched: true });
+		assert.equal(await adapter.contains('user', 'corrupt'), true);
+		assert.equal(await adapter.contains('user', 'valid'), true);
+	});
+
+	test('bulk writes publish only confirmed entries to the on-demand cache', async () => {
+		const { adapter, namespace } = await createAdapter({ user: { ondemand: true } });
+		const invalidRelationship = `${namespace}:relationships:bulk.invalid`;
+		await adapter.client.set(invalidRelationship, 'wrong type');
+		try {
+			await expect(
+				adapter.bulkSet([
+					userEntry('confirmed-one'),
+					['user.rejected', { id: 'rejected' }, ['bulk.invalid', 'rejected']],
+					userEntry('confirmed-two'),
+				]),
+			).rejects.toThrow('RedisAdapter bulk operation failed for 1 entries');
+			assert.equal(adapter.cachedEntryCount, 2);
+			await adapter.client.del([`${namespace}:user.confirmed-one`, `${namespace}:user.confirmed-two`]);
+
+			assert.deepEqual(await adapter.get('user.confirmed-one'), { id: 'confirmed-one' });
+			assert.equal(await adapter.get('user.rejected'), undefined);
+			assert.deepEqual(await adapter.get('user.confirmed-two'), { id: 'confirmed-two' });
+			assert.equal(adapter.cachedEntryCount, 2);
+		} finally {
+			await adapter.client.del(invalidRelationship);
+		}
+	});
+
 	test('bulk removal clears Redis reverse lookups and on-demand state for every submitted entry', async () => {
 		const { adapter } = await createAdapter({ user: { ondemand: true } });
 		await adapter.bulkSet([userEntry('one'), userEntry('two'), userEntry('three')]);

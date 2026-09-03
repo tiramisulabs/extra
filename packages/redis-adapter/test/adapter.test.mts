@@ -222,23 +222,29 @@ describe('RedisAdapter', () => {
 		const mutableClient = adapter.client as unknown as { evalSha: typeof adapter.client.evalSha };
 		const { promise: firstChunkReady, resolve: markFirstChunkReady } = Promise.withResolvers<void>();
 		const { promise: firstChunkGate, resolve: releaseFirstChunk } = Promise.withResolvers<void>();
-		const bulkKeyPrefix = `${namespace}:user.best-effort-`;
-		let activeWrites = 0;
-		let maxActiveWrites = 0;
+		const firstValueKey = `${namespace}:user.best-effort-0`;
+		const secondValueKey = `${namespace}:user.best-effort-100`;
+		let activeChunks = 0;
+		let bulkCalls = 0;
+		let maxActiveChunks = 0;
 		let activeWhenLaterChunkStarted: number | undefined;
 		mutableClient.evalSha = (async (...args: Parameters<typeof adapter.client.evalSha>) => {
-			const valueKey = args[1]?.keys?.[0];
-			if (typeof valueKey !== 'string' || !valueKey.startsWith(bulkKeyPrefix)) return originalEvalSha(...args);
-			const index = Number(valueKey.slice(bulkKeyPrefix.length));
-			if (index >= 100 && activeWhenLaterChunkStarted === undefined) activeWhenLaterChunkStarted = activeWrites;
-			activeWrites++;
-			maxActiveWrites = Math.max(maxActiveWrites, activeWrites);
-			if (activeWrites === 100) markFirstChunkReady();
+			const keys = args[1]?.keys ?? [];
+			const isFirstChunk = keys.includes(firstValueKey);
+			const isLaterChunk = keys.includes(secondValueKey);
+			if (!isFirstChunk && !isLaterChunk && !keys.includes(`${namespace}:user.best-effort-200`)) {
+				return originalEvalSha(...args);
+			}
+			if (isLaterChunk && activeWhenLaterChunkStarted === undefined) activeWhenLaterChunkStarted = activeChunks;
+			activeChunks++;
+			bulkCalls++;
+			maxActiveChunks = Math.max(maxActiveChunks, activeChunks);
+			if (isFirstChunk) markFirstChunkReady();
 			try {
-				if (index < 100) await firstChunkGate;
+				if (isFirstChunk) await firstChunkGate;
 				return await originalEvalSha(...args);
 			} finally {
-				activeWrites--;
+				activeChunks--;
 			}
 		}) as typeof adapter.client.evalSha;
 		let operation: Promise<void> | undefined;
@@ -246,7 +252,8 @@ describe('RedisAdapter', () => {
 		try {
 			operation = adapter.bulkSet(entries);
 			await firstChunkReady;
-			assert.equal(maxActiveWrites, 100);
+			assert.equal(bulkCalls, 1);
+			assert.equal(maxActiveChunks, 1);
 			assert.equal(activeWhenLaterChunkStarted, undefined);
 			releaseFirstChunk();
 
@@ -255,7 +262,8 @@ describe('RedisAdapter', () => {
 			expect(error).toHaveProperty('message', 'RedisAdapter bulk operation failed for 3 entries');
 			expect((error as AggregateError).errors).toHaveLength(3);
 			assert.equal(activeWhenLaterChunkStarted, 0);
-			assert.equal(maxActiveWrites, 100);
+			assert.equal(maxActiveChunks, 1);
+			assert.equal(bulkCalls, 3);
 
 			assert.equal(await adapter.get('user.best-effort-1'), undefined);
 			assert.equal(await adapter.get('user.best-effort-2'), undefined);
@@ -270,7 +278,7 @@ describe('RedisAdapter', () => {
 		}
 	});
 
-	test('bulk writes recover each pipelined entry after the script cache is flushed', async () => {
+	test('bulk writes recover the chunk script after the script cache is flushed', async () => {
 		await adapter.client.scriptFlush();
 		await adapter.bulkSet([userEntry('noscript-one'), userEntry('noscript-two'), userEntry('noscript-three')]);
 

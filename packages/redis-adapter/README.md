@@ -42,11 +42,12 @@ removal operations. Lua scripts update those pieces in a single isolated Redis o
 - `remove`, `removeToRelationship`, and `removeRelationship` delete values and memberships as one logical operation;
 - encoding and supported Redis type checks complete before the first mutation;
 - `set` replaces the stored value, while object `patch` merges fields and array `patch` replaces the array;
-- `bulkSet` and `bulkPatch` encode their complete input before sending writes. All bulk operations then pipeline atomic
-  per-entry operations in chunks of 100. The batch is not atomic or ordered. After execution begins, the adapter attempts
-  every entry, accumulates per-entry failures, and rejects with an `AggregateError` only after every chunk settles. Any
-  subset may therefore be committed, but no writes remain active after the caller observes failure. An encoding failure
-  still rejects before the first write because complete-batch encoding is the bulk-write preflight.
+- `bulkSet` and `bulkPatch` encode their complete input before sending writes, then submit bounded Lua scripts of at most
+  100 entries. Each script preflights its entries, commits the valid subset, and reports one result per entry in a single
+  round trip. The batch is not atomic or ordered. The adapter attempts every chunk, accumulates per-entry failures, and
+  rejects with an `AggregateError` only after all chunks settle. Any subset may therefore be committed, but no writes
+  remain active after the caller observes failure. An encoding failure still rejects before the first write because
+  complete-batch encoding is the bulk-write preflight.
 
 `removeRelationship` is atomic for each supplied relationship and its runtime is proportional to that relationship's
 member count. Prefer bounded relationships or explicit member removal when one relationship can grow very large,
@@ -158,8 +159,8 @@ The benchmark reports median p50/p95 latency, median throughput with median abso
 client/server command boundaries for single writes, patches, bulk writes, and TTL writes. The split baselines reproduce
 the previous adapter's set-index and value commands for the same supported logical operation.
 Correctness oracles run after, not inside, each timed sample. `BENCH_SAMPLES`, `BENCH_OPERATIONS`, `BENCH_BATCHES`,
-`BENCH_WARMUP`, and `BENCH_BATCH_SIZE` tune the run. Atomic `bulkSet` pipelines one atomic script per entry, retaining
-the old transport efficiency without exposing half-written entries.
+`BENCH_WARMUP`, and `BENCH_BATCH_SIZE` tune the run. Atomic `bulkSet` uses one bounded script per 100-entry chunk, so the
+default workload crosses the client/server boundary once per batch without exposing half-written entries.
 
 Both adapters own clients they construct. Close the client during shutdown:
 
