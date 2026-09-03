@@ -34,7 +34,7 @@
 		"@slipher/redis-adapter": "workspace:*",
 		"@slipher/testing": "workspace:*",
 		"@types/node": "^26.0.1",
-		"seyfert": "https://pkg.pr.new/seyfert@439",
+		"seyfert": "https://pkg.pr.new/seyfert@441",
 		"typescript": "^6.0.3"
 	},
 	"peerDependencies": {

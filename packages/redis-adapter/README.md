@@ -4,11 +4,12 @@ Redis-backed cache adapters for Seyfert's atomic adapter contract. Each `set` or
 relationship membership supplied by Seyfert; the removed `addToRelationship` and `bulkAddToRelationShip` calls are not
 part of this API.
 
-The package requires Redis 8.0 or newer and the first Seyfert release containing
-[the atomic cache contract](https://github.com/tiramisulabs/seyfert/pull/439). While that Seyfert change is under
-review, this repository tests against its `pkg.pr.new` preview; do not publish `@slipher/redis-adapter`,
-`@slipher/cooldown`, or `@slipher/opentelemetry` against an older tagged Seyfert version. Once the upstream release exists,
-update those packages' peer dependency minimum to that exact version before publishing.
+The package requires Redis 8.0 or newer and the first Seyfert release containing both
+[the atomic write signature](https://github.com/tiramisulabs/seyfert/pull/439) and
+[the stable relationship identity contract](https://github.com/tiramisulabs/seyfert/pull/441). While that stacked Seyfert
+change is under review, this repository tests against the `pkg.pr.new` preview for #441; do not publish
+`@slipher/redis-adapter`, `@slipher/cooldown`, or `@slipher/opentelemetry` against an older tagged Seyfert version. Once
+the upstream release exists, update those packages' peer dependency minimum to that exact version before publishing.
 
 ## Basic adapter
 
