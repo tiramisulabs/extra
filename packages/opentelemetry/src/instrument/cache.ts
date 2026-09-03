@@ -35,8 +35,6 @@ const ADAPTER_METHODS = [
 	'bulkRemove',
 	'bulkPatch',
 	'getToRelationship',
-	'bulkAddToRelationShip',
-	'addToRelationship',
 	'removeToRelationship',
 	'removeRelationship',
 ] as const;
@@ -64,7 +62,7 @@ function namespaceFromKey(key: string): string {
  *
  * Seyfert resources hash ids as `{namespace}.{id}` or `{namespace}.{guild}.{id}`;
  * relationship methods pass the namespace (or derived key) as the first string arg.
- * Bulk ops take `string[]` or `[string, value][]`.
+ * Bulk ops take `string[]` or `[string, value, relationship][]`.
  */
 export function extractCacheResource(args: unknown[]): string {
 	const first = args[0];

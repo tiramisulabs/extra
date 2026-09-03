@@ -1,5 +1,11 @@
 import { createClient } from '@redis/client';
-import { ExpirableRedisAdapter, type ExpirableRedisAdapterOptions, type ResourceLimitedMemoryAdapter } from '../src';
+import type { Adapter } from 'seyfert/lib/cache';
+import {
+	ExpirableRedisAdapter,
+	type ExpirableRedisAdapterOptions,
+	RedisAdapter,
+	type ResourceLimitedMemoryAdapter,
+} from '../src';
 
 const resource = {
 	expire: 1_000,
@@ -25,6 +31,24 @@ new ExpirableRedisAdapter(
 	},
 	{ default: { native: true } },
 );
+
+const atomicAdapter = new RedisAdapter({ redisOptions: {} });
+const adapterContract: Adapter = atomicAdapter;
+adapterContract.set('user.1', { id: '1' }, ['user', '1']);
+adapterContract.patch('user.1', { username: 'updated' }, ['user', '1']);
+adapterContract.bulkSet([['user.1', { id: '1' }, ['user', '1']]]);
+atomicAdapter.supportsAtomicCooldowns satisfies boolean;
+const atomicCooldownContract: {
+	supportsAtomicCooldowns: true;
+	eval<T = unknown>(script: string, keys: string[], args: string[]): Promise<T>;
+} = atomicAdapter;
+void atomicCooldownContract;
+
+// @ts-expect-error the atomic contract requires relationship ownership on every write
+adapterContract.set('user.1', { id: '1' });
+
+// @ts-expect-error split relationship writes were removed from Seyfert's adapter contract
+adapterContract.addToRelationship('user', '1');
 
 // @ts-expect-error on-demand is a boolean policy
 new ExpirableRedisAdapter({ redisOptions: {} }, { user: { ondemand: 'yes' } });
