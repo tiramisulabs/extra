@@ -46,19 +46,10 @@ local expirationMode = ARGV[5]
 local expirationMs = tonumber(ARGV[6])
 local fieldCount = tonumber(ARGV[7])
 local logicalFieldCount = tonumber(ARGV[8])
-local relationshipPrefix = string.sub(KEYS[3], 1, string.len(KEYS[3]) - string.len('owners'))
 
 assert_hash_or_none(KEYS[1])
 assert_hash_or_none(KEYS[2])
 assert_hash_or_none(KEYS[3])
-
-local oldOwner = redis.call('HGET', KEYS[3], logicalKey)
-local oldTo, oldId = parse_owner(oldOwner)
-local oldRelationshipKey = nil
-if oldTo then
-	oldRelationshipKey = relationshipPrefix .. oldTo
-	assert_hash_or_none(oldRelationshipKey)
-end
 
 local expiresAt = -1
 if expirationMode == 'preserve' then
@@ -85,10 +76,8 @@ redis.call(unpack(command))
 if expiresAt >= 0 then redis.call('PEXPIREAT', KEYS[1], expiresAt)
 else redis.call('PERSIST', KEYS[1]) end
 
-local newOwner = relationshipTo .. '.' .. relationshipId
-if oldRelationshipKey and oldOwner ~= newOwner then redis.call('HDEL', oldRelationshipKey, oldId) end
 hset_with_expiry(KEYS[2], relationshipId, logicalKey, expiresAt)
-hset_with_expiry(KEYS[3], logicalKey, newOwner, expiresAt)
+hset_with_expiry(KEYS[3], logicalKey, relationshipTo .. '.' .. relationshipId, expiresAt)
 
 if ARGV[9 + fieldCount * 2 + logicalFieldCount] == '1' then
 	return {redis.call('HGETALL', KEYS[1]), redis.call('PTTL', KEYS[1])}
@@ -180,11 +169,6 @@ assert_hash_or_none(KEYS[1])
 assert_hash_or_none(KEYS[2])
 assert_hash_or_none(KEYS[3])
 if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
-
-local owner = redis.call('HGET', KEYS[3], logicalKey)
-if owner and owner ~= relationshipTo .. '.' .. relationshipId then
-	error('ERR conflicting cache relationship owner for ' .. logicalKey)
-end
 
 local expiresAt = redis.call('PEXPIRETIME', KEYS[1])
 hset_with_expiry(KEYS[2], relationshipId, logicalKey, expiresAt)

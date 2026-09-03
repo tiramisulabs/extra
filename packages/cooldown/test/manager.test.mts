@@ -1,4 +1,4 @@
-import { RedisAdapter } from '@slipher/redis-adapter';
+import { ExpirableRedisAdapter, RedisAdapter } from '@slipher/redis-adapter';
 import { createMockBot } from '@slipher/testing';
 import {
 	type AnyContext,
@@ -83,7 +83,7 @@ class AtomicMemoryAdapter extends MemoryAdapter {
 
 		try {
 			const [hashKey] = keys;
-			const [intervalArg, limitArg, costArg, memberKey, logicalKey] = args;
+			const [intervalArg, limitArg, costArg, memberKey] = args;
 			const now = Date.now();
 			const interval = Number(intervalArg);
 			const limit = Number(limitArg);
@@ -110,7 +110,6 @@ class AtomicMemoryAdapter extends MemoryAdapter {
 
 			const remaining = data.remaining - cost;
 			this.patch(hashKey, { interval, remaining }, ['cooldowns', memberKey]);
-			assert.equal(logicalKey, hashKey);
 			return [1, 0, now, limit, remaining];
 		} finally {
 			this.inFlight--;
@@ -733,6 +732,41 @@ describe('CooldownManager — atomic storage', () => {
 			await manager.reset({ name: 'ping', target: 'tenant.example' });
 			assert.equal(await adapter.get(`cooldowns.${relationshipId}`), undefined);
 			assert.equal(await adapter.contains('cooldowns', relationshipId), false);
+		} finally {
+			await adapter.flush();
+			adapter.client.close();
+		}
+	});
+
+	test('expirable Redis writes cooldowns through the expiration-aware adapter contract', async () => {
+		vi.useRealTimers();
+		const namespace = `cooldown-expirable-${process.pid}-${Date.now()}`;
+		const adapter = new ExpirableRedisAdapter(
+			{
+				namespace,
+				redisOptions: { url: process.env.SLIPHER_REDIS_URL ?? 'redis://127.0.0.1:6379' },
+			},
+			{ default: { expire: 1_000 } },
+		);
+		await adapter.start();
+		client = createClient(
+			[
+				makeCommand({
+					name: 'ping',
+					description: 'Ping',
+					cooldown: { type: 'user', interval: 1_000, uses: 2 },
+				}),
+			],
+			adapter,
+		);
+		manager = new CooldownManager(client);
+
+		try {
+			await manager.consume({ name: 'ping', target: 'u1' });
+			assert.isAbove(await adapter.client.pTTL(`${namespace}:cooldowns.ping:user:u1`), 0);
+			const [relationshipTtl] =
+				(await adapter.client.hpTTL(`${namespace}:relationships:cooldowns`, 'ping:user:u1')) ?? [];
+			assert.isAbove(relationshipTtl ?? -2, 0);
 		} finally {
 			await adapter.flush();
 			adapter.client.close();

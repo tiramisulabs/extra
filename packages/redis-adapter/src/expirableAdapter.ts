@@ -351,18 +351,10 @@ export class ExpirableRedisAdapter extends RedisAdapter<false> {
 		}
 
 		const migrations: { logicalKey: string; relationship: AdapterRelationship }[] = [];
-		const legacyOwners = new Map<string, AdapterRelationship>();
 		for (const [to, id] of relationships.values()) {
 			const logicalKey = await this.resolveLegacyLogicalKey(to, id);
-			if (!logicalKey) {
-				continue;
-			}
-			const previous = legacyOwners.get(logicalKey);
-			if (previous && (previous[0] !== to || previous[1] !== id)) {
-				throw new Error(`Ambiguous legacy ownership for ${logicalKey}: ${previous[0]}.${previous[1]} and ${to}.${id}`);
-			}
+			if (!logicalKey) continue;
 			const relationship = [to, id] as const;
-			legacyOwners.set(logicalKey, relationship);
 			migrations.push({ logicalKey, relationship });
 		}
 

@@ -255,52 +255,10 @@ try {
 
 	rows.push(
 		...(await measureScenario({
-			name: 'move relationship',
-			implementations: [
-				{
-					name: 'correctness-equivalent split baseline',
-					roundTrips: '3/entry',
-					reset: async () => {
-						await deletePrefix(baseline, baselinePrefix);
-						await baseline.hSet(baselineValue('role.shared'), { id: 'shared' });
-					},
-					run: async index => {
-						const from = `guild.${index % 2}`;
-						const to = `guild.${(index + 1) % 2}`;
-						await baseline.hDel(baselineRelationship(from), 'shared');
-						await baseline.hSet(baselineRelationship(to), 'shared', 'role.shared');
-						await baseline.hSet(baselineValue('role.shared'), { id: 'shared', generation: String(index) });
-					},
-					verify: async count => {
-						const expectedTo = `guild.${count % 2}`;
-						if ((await baseline.hGet(baselineRelationship(expectedTo), 'shared')) !== 'role.shared')
-							throw new Error('move oracle failed');
-					},
-				},
-				{
-					name: 'atomic Lua',
-					roundTrips: '1/entry',
-					reset: () => atomic.flush(),
-					run: index =>
-						atomic.set('role.shared', { id: 'shared', generation: index }, [`guild.${(index + 1) % 2}`, 'shared']),
-					verify: async count => {
-						const expectedTo = `guild.${count % 2}`;
-						if (!(await atomic.contains(expectedTo, 'shared'))) throw new Error('atomic move oracle failed');
-						if (await atomic.contains(`guild.${(count + 1) % 2}`, 'shared'))
-							throw new Error('atomic move left stale ownership');
-						await verifyRelationship(atomic.client, `${atomic.namespace}:`, expectedTo, 1, true);
-					},
-				},
-			],
-		})),
-	);
-
-	rows.push(
-		...(await measureScenario({
 			name: 'patch one entry',
 			implementations: [
 				{
-					name: 'correctness-equivalent split baseline',
+					name: 'historical split baseline',
 					roundTrips: '2/entry',
 					reset: async () => {
 						await deletePrefix(baseline, baselinePrefix);
@@ -337,7 +295,7 @@ try {
 			name: 'set with TTL',
 			implementations: [
 				{
-					name: 'correctness-equivalent split baseline',
+					name: 'historical split baseline',
 					roundTrips: '2/entry',
 					reset: () => deletePrefix(baseline, baselinePrefix),
 					run: async index => {
@@ -364,76 +322,6 @@ try {
 						await verifyRelationship(expirable.client, `${expirable.namespace}:`, 'guild.1', count, true);
 						await verifyExpirations(expirable.client, `${expirable.namespace}:`, 'guild.1', count);
 					},
-				},
-			],
-		})),
-	);
-
-	const seedMixedBaseline = async () => {
-		await deletePrefix(baseline, baselinePrefix);
-		for (let index = 0; index < 10; index++) {
-			const key = `role.${index}`;
-			await baseline.hSet(baselineValue(key), { id: String(index), generation: '0' });
-			await baseline.hSet(baselineRelationship('guild.0'), String(index), key);
-		}
-	};
-	const verifyMixed = async (client, prefix, verifyOwners = false) => {
-		const first = await client.hGetAll(`${prefix}relationships:guild.0`);
-		const second = await client.hGetAll(`${prefix}relationships:guild.1`);
-		const logicalKeys = new Set([...Object.values(first), ...Object.values(second)]);
-		if (logicalKeys.size !== 10 || Object.keys(first).length + Object.keys(second).length !== 10) {
-			throw new Error('mixed workload ownership oracle failed');
-		}
-		if (verifyOwners) {
-			for (const [to, relationship] of [
-				['guild.0', first],
-				['guild.1', second],
-			]) {
-				for (const [id, logicalKey] of Object.entries(relationship)) {
-					const owner = await client.hGet(`${prefix}relationships:owners`, logicalKey);
-					if (owner !== `${to}.${id}`) throw new Error(`mixed workload reverse-owner oracle failed for ${to}.${id}`);
-				}
-			}
-		}
-	};
-	rows.push(
-		...(await measureScenario({
-			name: 'mixed 80% read / 20% move',
-			implementations: [
-				{
-					name: 'correctness-equivalent split baseline',
-					roundTrips: '1.4/operation',
-					reset: seedMixedBaseline,
-					run: async index => {
-						const id = String(index % 10);
-						const key = `role.${id}`;
-						if (index % 5) {
-							await baseline.hGetAll(baselineValue(key));
-							return;
-						}
-						const to = `guild.${Math.floor(index / 5) % 2}`;
-						const from = to === 'guild.0' ? 'guild.1' : 'guild.0';
-						await baseline.hDel(baselineRelationship(from), id);
-						await baseline.hSet(baselineRelationship(to), id, key);
-						await baseline.hSet(baselineValue(key), 'generation', String(index));
-					},
-					verify: () => verifyMixed(baseline, baselinePrefix),
-				},
-				{
-					name: 'atomic Lua',
-					roundTrips: '1/operation',
-					reset: async () => {
-						await atomic.flush();
-						for (let index = 0; index < 10; index++) {
-							await atomic.set(`role.${index}`, { id: String(index), generation: 0 }, ['guild.0', String(index)]);
-						}
-					},
-					run: index => {
-						const id = String(index % 10);
-						if (index % 5) return atomic.get(`role.${id}`);
-						return atomic.set(`role.${id}`, { id, generation: index }, [`guild.${Math.floor(index / 5) % 2}`, id]);
-					},
-					verify: () => verifyMixed(atomic.client, `${atomic.namespace}:`, true),
 				},
 			],
 		})),

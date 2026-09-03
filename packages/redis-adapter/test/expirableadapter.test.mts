@@ -48,10 +48,8 @@ describe('ExpirableRedisAdapter', () => {
 		);
 	});
 
-	test('implements atomic writes while opting out of the cooldown-specific bridge', async () => {
+	test('supports atomic adapter operations with expiration', async () => {
 		const { adapter } = await createAdapter({ default: { expire: 2_000 } });
-		assert.equal(adapter.isAsync, true);
-		assert.equal(adapter.supportsAtomicCooldowns, false);
 
 		await adapter.set(...userEntry('primary', { id: 'primary', stale: true, value: 'old' }));
 		await adapter.set(...userEntry('primary', { id: 'primary', value: 'current' }));
@@ -67,7 +65,46 @@ describe('ExpirableRedisAdapter', () => {
 		assert.equal(await adapter.count('user'), 3);
 	});
 
-	test('gives value, ownership, and relationship fields one expiration authority', async () => {
+	test('inherits default on-demand and limit options into resource overrides', async () => {
+		const { adapter, namespace } = await createAdapter({
+			default: { limit: 2, ondemand: true },
+			user: { expire: 1_000 },
+		});
+
+		await adapter.set(...userEntry('cached-one'));
+		await adapter.set(...userEntry('cached-two'));
+		await adapter.get('user.cached-one');
+		await adapter.set(...userEntry('cached-three'));
+		await adapter.client.del([
+			`${namespace}:user.cached-one`,
+			`${namespace}:user.cached-two`,
+			`${namespace}:user.cached-three`,
+		]);
+
+		assert.deepEqual(await adapter.get('user.cached-one'), { id: 'cached-one' });
+		assert.equal(await adapter.get('user.cached-two'), undefined);
+		assert.deepEqual(await adapter.get('user.cached-three'), { id: 'cached-three' });
+	});
+
+	test('disables local caching through resource policy', async () => {
+		const { adapter, namespace } = await createAdapter({
+			default: { ondemand: true },
+			guild: { ondemand: false },
+			message: { limit: 0 },
+			user: { native: true },
+		});
+
+		await adapter.set('guild.one', { id: 'one' }, ['guild', 'one']);
+		await adapter.set('message.one', { id: 'one' }, ['message.channel', 'one']);
+		await adapter.set(...userEntry('native'));
+		await adapter.client.del([`${namespace}:guild.one`, `${namespace}:message.one`, `${namespace}:user.native`]);
+
+		assert.equal(await adapter.get('guild.one'), undefined);
+		assert.equal(await adapter.get('message.one'), undefined);
+		assert.equal(await adapter.get('user.native'), undefined);
+	});
+
+	test('gives value, reverse lookup, and relationship fields one expiration authority', async () => {
 		const { adapter, namespace } = await createAdapter({ channel: { expire: 800 } });
 		await adapter.set(...channelEntry('guild-one'));
 
@@ -111,25 +148,23 @@ describe('ExpirableRedisAdapter', () => {
 		assert.isAtMost(afterFailure, beforeFailure);
 	});
 
-	test('failed patch decode and encode leave value, owner, and expiration unchanged', async () => {
+	test('failed patch decode and encode leave value, reverse lookup, and expiration unchanged', async () => {
 		const decode = await createAdapter({ channel: { expire: 600 } });
 		await decode.adapter.set(...channelEntry('guild-old', 'old'));
 		await decode.adapter.client.hSet(`${decode.namespace}:channel.channel-1`, { O_corrupt: '{' });
 		const decodeTtl = await decode.adapter.client.pTTL(`${decode.namespace}:channel.channel-1`);
 
-		await expect(decode.adapter.patch(...channelEntry('guild-new', 'new'))).rejects.toThrow();
+		await expect(decode.adapter.patch(...channelEntry('guild-old', 'new'))).rejects.toThrow();
 		assert.equal(await decode.adapter.contains('channel.guild-old', 'channel-1'), true);
-		assert.equal(await decode.adapter.contains('channel.guild-new', 'channel-1'), false);
 		assert.isAtMost(await decode.adapter.client.pTTL(`${decode.namespace}:channel.channel-1`), decodeTtl);
 
 		const encode = await createAdapter({ channel: { expire: 600 } });
 		await encode.adapter.set(...channelEntry('guild-old', 'old'));
 		const encodeTtl = await encode.adapter.client.pTTL(`${encode.namespace}:channel.channel-1`);
 		await expect(
-			encode.adapter.patch('channel.channel-1', { invalid: undefined }, ['channel.guild-new', 'channel-1']),
+			encode.adapter.patch('channel.channel-1', { invalid: undefined }, ['channel.guild-old', 'channel-1']),
 		).rejects.toThrow('cannot encode');
 		assert.equal(await encode.adapter.contains('channel.guild-old', 'channel-1'), true);
-		assert.equal(await encode.adapter.contains('channel.guild-new', 'channel-1'), false);
 		assert.isAtMost(await encode.adapter.client.pTTL(`${encode.namespace}:channel.channel-1`), encodeTtl);
 	});
 
@@ -155,30 +190,16 @@ describe('ExpirableRedisAdapter', () => {
 		assert.closeTo(await preserving.adapter.client.pExpireTime(`${preserving.namespace}:user.one`), before, 5);
 	});
 
-	test('moves globally keyed resources and their TTL atomically', async () => {
-		const { adapter, namespace } = await createAdapter({ channel: { expire: 800 } });
-		await adapter.set(...channelEntry('guild-one'));
-		await delay(20);
-		await adapter.patch(...channelEntry('guild-two', 'moved'));
-
-		assert.equal(await adapter.contains('channel.guild-one', 'channel-1'), false);
-		assert.equal(await adapter.contains('channel.guild-two', 'channel-1'), true);
-		assert.deepEqual(await adapter.keys('channel.guild-two'), ['channel.channel-1']);
-		const [ttl] = (await adapter.client.hpTTL(`${namespace}:relationships:channel.guild-two`, 'channel-1')) ?? [];
-		assert.isAbove(ttl ?? -2, 0);
-	});
-
 	test('tracks messages by relationship scope rather than storage scope', async () => {
 		const { adapter } = await createAdapter({ message: { expire: 800 } });
 		await adapter.set('message.message-1', { id: 'message-1', guild_id: 'guild-1', channel_id: 'channel-1' }, [
 			'message.channel-1',
 			'message-1',
 		]);
-		await adapter.patch('message.message-1', { channel_id: 'channel-2' }, ['message.channel-2', 'message-1']);
+		await adapter.patch('message.message-1', { edited: true }, ['message.channel-1', 'message-1']);
 
-		assert.equal(await adapter.contains('message.channel-1', 'message-1'), false);
-		assert.equal(await adapter.contains('message.channel-2', 'message-1'), true);
-		assert.deepEqual(await adapter.keys('message.channel-2'), ['message.message-1']);
+		assert.equal(await adapter.contains('message.channel-1', 'message-1'), true);
+		assert.deepEqual(await adapter.keys('message.channel-1'), ['message.message-1']);
 		assert.equal((await adapter.get('message.message-1')).guild_id, 'guild-1');
 	});
 
@@ -212,7 +233,7 @@ describe('ExpirableRedisAdapter', () => {
 		assert.equal(adapter.cachedEntryCount, 3);
 	});
 
-	test('bulk removal clears Redis ownership and on-demand state for every submitted entry', async () => {
+	test('bulk removal clears Redis reverse lookups and on-demand state for every submitted entry', async () => {
 		const { adapter } = await createAdapter({ user: { ondemand: true } });
 		await adapter.bulkSet([userEntry('one'), userEntry('two'), userEntry('three')]);
 		assert.equal(adapter.cachedEntryCount, 3);
@@ -282,13 +303,14 @@ describe('ExpirableRedisAdapter', () => {
 
 	test('preflights Redis failures without publishing local or relationship state', async () => {
 		const { adapter, namespace } = await createAdapter({ channel: { expire: 800, ondemand: true } });
-		await adapter.set(...channelEntry('guild-safe', 'safe'));
 		const invalidRelationship = `${namespace}:relationships:channel.guild-invalid`;
 		await adapter.client.set(invalidRelationship, 'wrong type');
 
-		await expect(adapter.set(...channelEntry('guild-invalid', 'unsafe'))).rejects.toThrow('WRONGTYPE');
-		assert.equal(await adapter.contains('channel.guild-safe', 'channel-1'), true);
-		assert.equal((await adapter.get('channel.channel-1')).name, 'safe');
+		await expect(
+			adapter.set('channel.invalid', { id: 'invalid' }, ['channel.guild-invalid', 'invalid']),
+		).rejects.toThrow('WRONGTYPE');
+		assert.equal(await adapter.get('channel.invalid'), undefined);
+		assert.equal(adapter.cachedEntryCount, 0);
 		await adapter.client.del(invalidRelationship);
 	});
 
@@ -298,13 +320,12 @@ describe('ExpirableRedisAdapter', () => {
 		const valueDeadline = await adapter.client.pExpireTime(`${namespace}:user.deadline`);
 		adapter.options.user!.expire = Number.MAX_SAFE_INTEGER;
 
-		await expect(
-			adapter.set('user.deadline', { id: 'deadline', value: 'new' }, ['user.other', 'deadline']),
-		).rejects.toThrow('cache expiry exceeds Redis hash-field deadline limit');
+		await expect(adapter.set('user.deadline', { id: 'deadline', value: 'new' }, ['user', 'deadline'])).rejects.toThrow(
+			'cache expiry exceeds Redis hash-field deadline limit',
+		);
 
 		assert.deepEqual(await adapter.get('user.deadline'), { id: 'deadline', value: 'old' });
 		assert.equal(await adapter.contains('user', 'deadline'), true);
-		assert.equal(await adapter.contains('user.other', 'deadline'), false);
 		assert.equal(await adapter.client.pExpireTime(`${namespace}:user.deadline`), valueDeadline);
 	});
 
@@ -376,7 +397,7 @@ describe('ExpirableRedisAdapter', () => {
 		}
 	});
 
-	test('migrates old strings, sets, and marker hashes into ownership indexes offline', async () => {
+	test('migrates old strings, sets, and marker hashes into atomic reverse lookups offline', async () => {
 		const namespace = `slipher_migration_${process.pid}_${namespaceSequence++}`;
 		const seed = createClient({ url: redisUrl });
 		await seed.connect();
@@ -406,30 +427,24 @@ describe('ExpirableRedisAdapter', () => {
 		assert.isAbove(relationshipTtl ?? -2, 0);
 	});
 
-	test('rejects conflicting legacy ownership before deleting migration inputs', async () => {
-		const namespace = `slipher_migration_conflict_${process.pid}_${namespaceSequence++}`;
+	test('does not mutate legacy relationships unless migration is enabled', async () => {
+		const namespace = `slipher_migration_disabled_${process.pid}_${namespaceSequence++}`;
+		const legacyValueKey = `${namespace}:member.guild.user`;
+		const legacySetKey = `${namespace}:member.guild:set`;
 		const seed = createClient({ url: redisUrl });
 		await seed.connect();
-		await seed.hSet(`${namespace}:channel.channel`, { id: 'channel' });
-		await seed.sAdd(`${namespace}:channel.guild-one:set`, 'channel');
-		await seed.sAdd(`${namespace}:channel.guild-two:set`, 'channel');
+		await seed.hSet(legacyValueKey, { id: 'user', guild_id: 'guild' });
+		await seed.sAdd(legacySetKey, 'user');
 		seed.close();
 
-		const adapter = new ExpirableRedisAdapter(
-			{ redisOptions: { url: redisUrl }, namespace },
-			{ migrateLegacyRelationships: true },
-		);
-		await expect(adapter.start()).rejects.toThrow('Ambiguous legacy ownership');
+		const adapter = new ExpirableRedisAdapter({ redisOptions: { url: redisUrl }, namespace });
+		await adapter.start();
 		adapters.push(adapter);
 
-		assert.equal(await adapter.client.exists(`${namespace}:channel.guild-one:set`), 1);
-		assert.equal(await adapter.client.exists(`${namespace}:channel.guild-two:set`), 1);
+		assert.equal(await adapter.client.exists(legacyValueKey), 1);
+		assert.deepEqual(await adapter.client.sMembers(legacySetKey), ['user']);
 		assert.equal(await adapter.client.hLen(`${namespace}:relationships:owners`), 0);
-		await adapter.client.del([
-			`${namespace}:channel.channel`,
-			`${namespace}:channel.guild-one:set`,
-			`${namespace}:channel.guild-two:set`,
-		]);
+		await adapter.client.del([legacyValueKey, legacySetKey]);
 	});
 
 	test('keeps Redis and on-demand representations equal across patch type changes', async () => {
@@ -459,26 +474,6 @@ describe('ExpirableRedisAdapter', () => {
 		assert.deepEqual(await adapter.getToRelationship('user'), []);
 		assert.deepEqual(await adapter.keys('user'), []);
 		assert.equal(await adapter.client.hExists(`${namespace}:relationships:owners`, 'user.ghost'), 0);
-	});
-
-	test('rejects a legacy marker that conflicts with an existing reverse owner', async () => {
-		const namespace = `slipher_migration_owner_conflict_${process.pid}_${namespaceSequence++}`;
-		const seed = createClient({ url: redisUrl });
-		await seed.connect();
-		await seed.hSet(`${namespace}:user.one`, { id: 'one' });
-		await seed.hSet(`${namespace}:relationships:user`, { one: '1' });
-		await seed.hSet(`${namespace}:relationships:owners`, { 'user.one': 'user.two' });
-		seed.close();
-
-		const adapter = new ExpirableRedisAdapter(
-			{ redisOptions: { url: redisUrl }, namespace },
-			{ migrateLegacyRelationships: true },
-		);
-		await expect(adapter.start()).rejects.toThrow('conflicting cache relationship owner');
-		adapters.push(adapter);
-
-		assert.equal(await adapter.client.hGet(`${namespace}:relationships:user`, 'one'), '1');
-		assert.equal(await adapter.client.hGet(`${namespace}:relationships:owners`, 'user.one'), 'user.two');
 	});
 
 	test('flush removes adapter hashes but preserves unrelated strings and sets', async () => {

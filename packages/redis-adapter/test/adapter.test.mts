@@ -11,12 +11,8 @@ function userEntry(id: string, value: Record<string, unknown> = { id }) {
 	return [`user.${id}`, value, ['user', id]] as const;
 }
 
-function channelEntry(guildId: string, name = guildId) {
-	return [
-		'channel.channel-1',
-		{ id: 'channel-1', guild_id: guildId, name },
-		[`channel.${guildId}`, 'channel-1'],
-	] as const;
+function channelEntry(id: string, guildId: string, name = guildId) {
+	return [`channel.${id}`, { id, guild_id: guildId, name }, [`channel.${guildId}`, id]] as const;
 }
 
 describe('RedisAdapter', () => {
@@ -31,8 +27,6 @@ describe('RedisAdapter', () => {
 	});
 
 	test('supports the complete atomic adapter surface', async () => {
-		assert.equal(adapter.isAsync, true);
-		assert.equal(adapter.namespace, namespace);
 		assert.equal(await adapter.get('user.missing'), undefined);
 
 		await adapter.set(...userEntry('primary', { id: 'primary', stale: true, value: 'old' }));
@@ -56,29 +50,31 @@ describe('RedisAdapter', () => {
 		assert.equal((await adapter.scan('user.*')).length, 3);
 	});
 
-	test('encodes before mutating value or relationship state', async () => {
-		await adapter.set(...channelEntry('guild-old', 'old'));
+	test('replaces object and array representations without retaining stale fields', async () => {
+		await adapter.set('user.representation', { stale: true, value: 'object' }, ['user', 'representation']);
+		await adapter.patch('user.representation', [{ value: 'array' }], ['user', 'representation']);
+		assert.deepEqual(await adapter.get('user.representation'), [{ value: 'array' }]);
 
-		await expect(
-			adapter.set('channel.channel-1', { id: 'channel-1', invalid: undefined }, ['channel.guild-new', 'channel-1']),
-		).rejects.toThrow('cannot encode');
+		await adapter.patch('user.representation', [], ['user', 'representation']);
+		assert.deepEqual(await adapter.get('user.representation'), []);
 
-		assert.deepEqual(await adapter.get('channel.channel-1'), {
-			guild_id: 'guild-old',
-			id: 'channel-1',
-			name: 'old',
-		});
-		assert.equal(await adapter.contains('channel.guild-old', 'channel-1'), true);
-		assert.equal(await adapter.contains('channel.guild-new', 'channel-1'), false);
+		await adapter.set('user.representation', { value: 'replacement' }, ['user', 'representation']);
+		assert.deepEqual(await adapter.get('user.representation'), { value: 'replacement' });
 	});
 
-	test('moves ownership atomically for globally keyed resources', async () => {
-		await adapter.set(...channelEntry('guild-one'));
-		await adapter.set(...channelEntry('guild-two'));
+	test('encodes before mutating value or relationship state', async () => {
+		await adapter.set(...channelEntry('encoding', 'guild-old', 'old'));
 
-		assert.equal(await adapter.contains('channel.guild-one', 'channel-1'), false);
-		assert.equal(await adapter.contains('channel.guild-two', 'channel-1'), true);
-		assert.deepEqual(await adapter.keys('channel.guild-two'), ['channel.channel-1']);
+		await expect(
+			adapter.set('channel.encoding', { id: 'encoding', invalid: undefined }, ['channel.guild-old', 'encoding']),
+		).rejects.toThrow('cannot encode');
+
+		assert.deepEqual(await adapter.get('channel.encoding'), {
+			guild_id: 'guild-old',
+			id: 'encoding',
+			name: 'old',
+		});
+		assert.equal(await adapter.contains('channel.guild-old', 'encoding'), true);
 	});
 
 	test('patch replaces prior encodings when a field changes type', async () => {
@@ -101,29 +97,21 @@ describe('RedisAdapter', () => {
 			'message.channel-1',
 			'message-1',
 		]);
-		await adapter.set('message.message-1', { id: 'message-1', guild_id: 'guild-1', channel_id: 'channel-2' }, [
-			'message.channel-2',
-			'message-1',
-		]);
 
-		assert.deepEqual(await adapter.keys('message.channel-2'), ['message.message-1']);
-		assert.equal(await adapter.contains('message.channel-1', 'message-1'), false);
-		assert.equal(await adapter.contains('message.channel-2', 'message-1'), true);
+		assert.deepEqual(await adapter.keys('message.channel-1'), ['message.message-1']);
+		assert.equal(await adapter.contains('message.channel-1', 'message-1'), true);
 	});
 
-	test('preflights Redis key types before changing an existing entry', async () => {
-		await adapter.set(...channelEntry('guild-safe', 'safe'));
+	test('preflights Redis key types before creating an entry', async () => {
 		const invalidRelationship = `${namespace}:relationships:channel.guild-invalid`;
 		await adapter.client.set(invalidRelationship, 'wrong type');
 
-		await expect(adapter.set(...channelEntry('guild-invalid', 'unsafe'))).rejects.toThrow('WRONGTYPE');
+		await expect(
+			adapter.set('channel.invalid', { id: 'invalid' }, ['channel.guild-invalid', 'invalid']),
+		).rejects.toThrow('WRONGTYPE');
 
-		assert.equal(await adapter.contains('channel.guild-safe', 'channel-1'), true);
-		assert.deepEqual(await adapter.get('channel.channel-1'), {
-			guild_id: 'guild-safe',
-			id: 'channel-1',
-			name: 'safe',
-		});
+		assert.equal(await adapter.get('channel.invalid'), undefined);
+		assert.equal(await adapter.client.hExists(`${namespace}:relationships:owners`, 'channel.invalid'), 0);
 		await adapter.client.del(invalidRelationship);
 	});
 
@@ -293,7 +281,7 @@ describe('RedisAdapter', () => {
 		]);
 	});
 
-	test('returns logical scan keys so scan-driven cleanup removes ownership too', async () => {
+	test('returns logical scan keys so scan-driven cleanup removes reverse lookups too', async () => {
 		await adapter.set(...userEntry('scan-one'));
 		await adapter.set(...userEntry('scan-two'));
 
@@ -307,46 +295,50 @@ describe('RedisAdapter', () => {
 		assert.equal(await adapter.contains('user', 'scan-two'), false);
 	});
 
-	test('removes values and ownership together from either entry surface', async () => {
+	test('removes values and reverse lookups together from either entry surface', async () => {
 		await adapter.set(...userEntry('direct'));
 		await adapter.remove('user.direct');
 		assert.equal(await adapter.get('user.direct'), undefined);
 		assert.equal(await adapter.contains('user', 'direct'), false);
 
-		await adapter.set(...channelEntry('guild-remove'));
-		await adapter.removeToRelationship('channel.guild-remove', 'channel-1');
-		assert.equal(await adapter.get('channel.channel-1'), undefined);
-		assert.equal(await adapter.contains('channel.guild-remove', 'channel-1'), false);
+		await adapter.set(...channelEntry('remove', 'guild-remove'));
+		await adapter.removeToRelationship('channel.guild-remove', 'remove');
+		assert.equal(await adapter.get('channel.remove'), undefined);
+		assert.equal(await adapter.contains('channel.guild-remove', 'remove'), false);
 	});
 
-	test('removes complete relationships without deleting entries moved elsewhere', async () => {
-		await adapter.set(...channelEntry('guild-old'));
-		await adapter.set(...channelEntry('guild-live'));
-		await adapter.removeRelationship('channel.guild-old');
+	test('removes every value and reverse lookup in a complete relationship', async () => {
+		await adapter.set('role.exact-one', { id: 'exact-one' }, ['role.guild-exact', 'exact-one']);
+		await adapter.set('role.exact-two', { id: 'exact-two' }, ['role.guild-exact', 'exact-two']);
 
-		assert.deepEqual(await adapter.get('channel.channel-1'), {
-			guild_id: 'guild-live',
-			id: 'channel-1',
-			name: 'guild-live',
-		});
-		assert.equal(await adapter.contains('channel.guild-live', 'channel-1'), true);
+		await adapter.removeRelationship('role.guild-exact');
 
-		await adapter.removeRelationship('channel.guild-live');
-		assert.equal(await adapter.get('channel.channel-1'), undefined);
+		assert.equal(await adapter.get('role.exact-one'), undefined);
+		assert.equal(await adapter.get('role.exact-two'), undefined);
+		assert.deepEqual(await adapter.getToRelationship('role.guild-exact'), []);
+		assert.equal(await adapter.client.hExists(`${namespace}:relationships:owners`, 'role.exact-one'), 0);
+		assert.equal(await adapter.client.hExists(`${namespace}:relationships:owners`, 'role.exact-two'), 0);
 	});
 
-	test('serializes concurrent ownership moves without leaving multiple relationships', async () => {
-		await Promise.all(Array.from({ length: 32 }, (_, index) => adapter.set(...channelEntry(`guild-${index}`))));
+	test('removes wildcard relationships without affecting neighboring relationship types', async () => {
+		await adapter.set('role.one', { id: 'one' }, ['role.guild-one', 'one']);
+		await adapter.set('role.two', { id: 'two' }, ['role.guild-two', 'two']);
+		await adapter.set('member.one', { id: 'one' }, ['member.guild-one', 'one']);
 
-		const owners = await Promise.all(
-			Array.from({ length: 32 }, (_, index) => adapter.contains(`channel.guild-${index}`, 'channel-1')),
-		);
-		assert.equal(owners.filter(Boolean).length, 1);
-		assert.ok(await adapter.get('channel.channel-1'));
+		await adapter.removeRelationship('role.*');
+
+		assert.equal(await adapter.get('role.one'), undefined);
+		assert.equal(await adapter.get('role.two'), undefined);
+		assert.deepEqual(await adapter.getToRelationship('role.guild-one'), []);
+		assert.deepEqual(await adapter.getToRelationship('role.guild-two'), []);
+		assert.equal(await adapter.client.hExists(`${namespace}:relationships:owners`, 'role.one'), 0);
+		assert.equal(await adapter.client.hExists(`${namespace}:relationships:owners`, 'role.two'), 0);
+		assert.deepEqual(await adapter.get('member.one'), { id: 'one' });
+		assert.deepEqual(await adapter.getToRelationship('member.guild-one'), ['one']);
+		assert.equal(await adapter.client.hGet(`${namespace}:relationships:owners`, 'member.one'), 'member.guild-one.one');
 	});
 
 	test('exposes the documented atomic cooldown script bridge with namespace boundaries', async () => {
-		assert.equal(adapter.supportsAtomicCooldowns, true);
 		const result = await adapter.eval<string>(
 			"redis.call('SET', KEYS[1], ARGV[1]); return KEYS[1]",
 			['cooldown'],

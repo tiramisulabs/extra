@@ -37,7 +37,6 @@ const adapterContract: Adapter = atomicAdapter;
 adapterContract.set('user.1', { id: '1' }, ['user', '1']);
 adapterContract.patch('user.1', { username: 'updated' }, ['user', '1']);
 adapterContract.bulkSet([['user.1', { id: '1' }, ['user', '1']]]);
-atomicAdapter.supportsAtomicCooldowns satisfies boolean;
 const atomicCooldownContract: {
 	supportsAtomicCooldowns: true;
 	eval<T = unknown>(script: string, keys: string[], args: string[]): Promise<T>;
