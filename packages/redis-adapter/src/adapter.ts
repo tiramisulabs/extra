@@ -1,44 +1,372 @@
+import { createHash } from 'node:crypto';
 import { createClient, type RedisClientOptions, type RedisClientType } from '@redis/client';
-import type { Adapter } from 'seyfert/lib/cache';
+import type { Adapter, AdapterEntry, AdapterRelationship } from 'seyfert';
 
 const BULK_BATCH_SIZE = 100;
+const RELATIONSHIP_PREFIX = 'relationships:';
+const RELATIONSHIP_OWNERS = `${RELATIONSHIP_PREFIX}owners`;
+const EMPTY_OBJECT_FIELD = '\0';
+
+const SCRIPT_HELPERS = `
+local function type_name(key)
+	local reply = redis.call('TYPE', key)
+	if type(reply) == 'table' then return reply.ok end
+	return reply
+end
+
+local function hash_type_error(key)
+	local keyType = type_name(key)
+	if keyType ~= 'none' and keyType ~= 'hash' then
+		return 'WRONGTYPE expected hash or none for ' .. key
+	end
+end
+
+local function assert_hash_or_none(key)
+	local message = hash_type_error(key)
+	if message then error(message) end
+end
+
+local function parse_owner(owner)
+	if not owner then return nil, nil end
+	local to, id = string.match(owner, '^(.*)%.([^%.]+)$')
+	if not to or not id then error('ERR invalid cache relationship owner') end
+	return to, id
+end
+
+local function hset_with_expiry(key, field, value, expiresAt)
+	if expiresAt >= 0 then
+		redis.call('HSETEX', key, 'PXAT', tostring(expiresAt), 'FIELDS', 1, field, value)
+	else
+		redis.call('HSETEX', key, 'FIELDS', 1, field, value)
+	end
+end
+`;
+
+const WRITE_SCRIPT_HELPERS = `${SCRIPT_HELPERS}
+local function expiration_deadline(valueKey, expirationMode, expirationMs)
+local expiresAt = -1
+if expirationMode == 'preserve' then
+	expiresAt = redis.call('PEXPIRETIME', valueKey)
+elseif expirationMode == 'expire' then
+	local time = redis.call('TIME')
+	expiresAt = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000) + expirationMs
+end
+if expiresAt > 70368744177663 then
+	return nil, 'ERR cache expiry exceeds Redis hash-field deadline limit'
+end
+return expiresAt, nil
+end
+
+local function write_entry(valueKey, relationshipKey, lookupKey, logicalKey, relationshipTo, relationshipId, operation, expiresAt, fields, logicalFields, returnValue)
+if operation == 'replace' then
+	redis.call('DEL', valueKey)
+else
+	for index = 1, #logicalFields do
+		local field = logicalFields[index]
+		redis.call('HDEL', valueKey, field, 'B_' .. field, 'N_' .. field, 'O_' .. field)
+	end
+end
+local command = {'HSET', valueKey}
+for index = 1, #fields do table.insert(command, fields[index]) end
+redis.call(unpack(command))
+
+if expiresAt >= 0 then redis.call('PEXPIREAT', valueKey, expiresAt)
+else redis.call('PERSIST', valueKey) end
+
+hset_with_expiry(relationshipKey, relationshipId, logicalKey, expiresAt)
+hset_with_expiry(lookupKey, logicalKey, relationshipTo .. '.' .. relationshipId, expiresAt)
+
+if returnValue then
+	return {redis.call('HGETALL', valueKey), redis.call('PTTL', valueKey)}
+end
+return 1
+end
+`;
+
+const WRITE_ENTRY_SCRIPT = `${WRITE_SCRIPT_HELPERS}
+local logicalKey = ARGV[1]
+local relationshipTo = ARGV[2]
+local relationshipId = ARGV[3]
+local operation = ARGV[4]
+local expirationMode = ARGV[5]
+local expirationMs = tonumber(ARGV[6])
+local fieldCount = tonumber(ARGV[7])
+local logicalFieldCount = tonumber(ARGV[8])
+local fields = {}
+local logicalFields = {}
+
+assert_hash_or_none(KEYS[1])
+assert_hash_or_none(KEYS[2])
+assert_hash_or_none(KEYS[3])
+
+local expiresAt, expirationError = expiration_deadline(KEYS[1], expirationMode, expirationMs)
+if expirationError then error(expirationError) end
+for index = 1, fieldCount * 2 do fields[index] = ARGV[8 + index] end
+local logicalFieldsOffset = 8 + fieldCount * 2
+for index = 1, logicalFieldCount do logicalFields[index] = ARGV[logicalFieldsOffset + index] end
+local returnValue = ARGV[9 + fieldCount * 2 + logicalFieldCount] == '1'
+return write_entry(KEYS[1], KEYS[2], KEYS[3], logicalKey, relationshipTo, relationshipId, operation, expiresAt, fields, logicalFields, returnValue)
+`;
+
+const BULK_WRITE_SCRIPT = `${WRITE_SCRIPT_HELPERS}
+local entries = cjson.decode(ARGV[1])
+local lookupKey = KEYS[1]
+local lookupError = hash_type_error(lookupKey)
+local relationshipErrors = {}
+local prepared = {}
+local results = {}
+
+for index, entry in ipairs(entries) do
+	local valueKey = KEYS[index * 2]
+	local relationshipKey = KEYS[index * 2 + 1]
+	local relationshipError = relationshipErrors[relationshipKey]
+	if relationshipError == nil then
+		relationshipError = hash_type_error(relationshipKey) or false
+		relationshipErrors[relationshipKey] = relationshipError
+	end
+	local message = lookupError or hash_type_error(valueKey) or relationshipError
+	local expiresAt = nil
+	if not message then expiresAt, message = expiration_deadline(valueKey, entry[5], entry[6]) end
+	prepared[index] = {expiresAt = expiresAt, message = message}
+end
+
+for index, entry in ipairs(entries) do
+	local state = prepared[index]
+	if state.message then
+		results[index] = {'error', state.message}
+	else
+		local result = write_entry(
+			KEYS[index * 2],
+			KEYS[index * 2 + 1],
+			lookupKey,
+			entry[1],
+			entry[2],
+			entry[3],
+			entry[4],
+			state.expiresAt,
+			entry[7],
+			entry[8],
+			entry[9]
+		)
+		if entry[9] then results[index] = {'ok', result[1], result[2]}
+		else results[index] = {'ok'} end
+	end
+end
+return results
+`;
+
+const REMOVE_ENTRY_SCRIPT = `${SCRIPT_HELPERS}
+local logicalKey = ARGV[1]
+local relationshipPrefix = string.sub(KEYS[2], 1, string.len(KEYS[2]) - string.len('owners'))
+
+assert_hash_or_none(KEYS[1])
+assert_hash_or_none(KEYS[2])
+
+local owner = redis.call('HGET', KEYS[2], logicalKey)
+local to, id = parse_owner(owner)
+local relationshipKey = nil
+if to then
+	relationshipKey = relationshipPrefix .. to
+	assert_hash_or_none(relationshipKey)
+end
+
+redis.call('DEL', KEYS[1])
+if relationshipKey then redis.call('HDEL', relationshipKey, id) end
+redis.call('HDEL', KEYS[2], logicalKey)
+return 1
+`;
+
+const REMOVE_RELATIONSHIP_MEMBER_SCRIPT = `${SCRIPT_HELPERS}
+local relationshipTo = ARGV[1]
+local relationshipId = ARGV[2]
+local valuePrefix = ARGV[3]
+
+assert_hash_or_none(KEYS[1])
+assert_hash_or_none(KEYS[2])
+
+local logicalKey = redis.call('HGET', KEYS[1], relationshipId)
+if not logicalKey then return false end
+local expectedOwner = relationshipTo .. '.' .. relationshipId
+local owner = redis.call('HGET', KEYS[2], logicalKey)
+if owner == expectedOwner then
+	local valueKey = valuePrefix .. logicalKey
+	assert_hash_or_none(valueKey)
+	redis.call('DEL', valueKey)
+	redis.call('HDEL', KEYS[2], logicalKey)
+	redis.call('HDEL', KEYS[1], relationshipId)
+	return logicalKey
+end
+redis.call('HDEL', KEYS[1], relationshipId)
+return false
+`;
+
+const REMOVE_RELATIONSHIP_SCRIPT = `${SCRIPT_HELPERS}
+local relationshipTo = ARGV[1]
+local valuePrefix = ARGV[2]
+
+assert_hash_or_none(KEYS[1])
+assert_hash_or_none(KEYS[2])
+
+local entries = redis.call('HGETALL', KEYS[1])
+for index = 1, #entries, 2 do
+	local id = entries[index]
+	local logicalKey = entries[index + 1]
+	local expectedOwner = relationshipTo .. '.' .. id
+	if redis.call('HGET', KEYS[2], logicalKey) == expectedOwner then
+		assert_hash_or_none(valuePrefix .. logicalKey)
+	end
+end
+
+for index = 1, #entries, 2 do
+	local id = entries[index]
+	local logicalKey = entries[index + 1]
+	local expectedOwner = relationshipTo .. '.' .. id
+	if redis.call('HGET', KEYS[2], logicalKey) == expectedOwner then
+		redis.call('DEL', valuePrefix .. logicalKey)
+		redis.call('HDEL', KEYS[2], logicalKey)
+	end
+end
+redis.call('DEL', KEYS[1])
+return #entries / 2
+`;
+
+const MIGRATE_ENTRY_SCRIPT = `${SCRIPT_HELPERS}
+local logicalKey = ARGV[1]
+local relationshipTo = ARGV[2]
+local relationshipId = ARGV[3]
+
+assert_hash_or_none(KEYS[1])
+assert_hash_or_none(KEYS[2])
+assert_hash_or_none(KEYS[3])
+if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
+
+local expiresAt = redis.call('PEXPIRETIME', KEYS[1])
+hset_with_expiry(KEYS[2], relationshipId, logicalKey, expiresAt)
+hset_with_expiry(KEYS[3], logicalKey, relationshipTo .. '.' .. relationshipId, expiresAt)
+return 1
+`;
+
+const CACHE_SCRIPTS = [
+	WRITE_ENTRY_SCRIPT,
+	BULK_WRITE_SCRIPT,
+	REMOVE_ENTRY_SCRIPT,
+	REMOVE_RELATIONSHIP_MEMBER_SCRIPT,
+	REMOVE_RELATIONSHIP_SCRIPT,
+	MIGRATE_ENTRY_SCRIPT,
+] as const;
+const CACHE_SCRIPT_SHAS: ReadonlyMap<string, string> = new Map(
+	CACHE_SCRIPTS.map(script => [script, createHash('sha1').update(script).digest('hex')]),
+);
+
+function isNoScriptError(error: unknown) {
+	return error instanceof Error && error.message.includes('NOSCRIPT');
+}
+
+function hashReply(value: unknown, adapterName = 'RedisAdapter'): Record<string, any> {
+	if (!value || typeof value !== 'object' || Array.isArray(value) || value instanceof Error) {
+		throw new TypeError(`${adapterName} expected HGETALL to return an object`);
+	}
+	return value as Record<string, any>;
+}
+
+function flatHashReply(value: unknown, adapterName = 'RedisAdapter') {
+	if (!Array.isArray(value) || value.length % 2 !== 0) {
+		throw new TypeError(`${adapterName} expected HGETALL to return field-value pairs`);
+	}
+	const hash: Record<string, any> = {};
+	for (let index = 0; index < value.length; index += 2) {
+		const field = value[index];
+		if (typeof field !== 'string') throw new TypeError(`${adapterName} expected a string hash field`);
+		hash[field] = value[index + 1];
+	}
+	return hash;
+}
+
+function integerReply(command: string, value: unknown, adapterName = 'RedisAdapter'): number {
+	if (typeof value !== 'number') throw new TypeError(`${adapterName} expected ${command} to return a number`);
+	return value;
+}
+
+function encodeEntryData(data: any) {
+	const fields = Object.entries(toDb(data)).flatMap(([field, value]) => {
+		if (typeof value !== 'string') throw new TypeError(`RedisAdapter cannot encode field ${field}`);
+		return [field, value];
+	});
+	return { fields, logicalFields: Array.isArray(data) ? [] : Object.keys(data) };
+}
+
+interface EncodedWrite {
+	encoded: ReturnType<typeof encodeEntryData>;
+	key: string;
+	relationship: AdapterRelationship;
+	replace: boolean;
+}
+
+type WriteOutcome =
+	| { result?: { observedAt: number; ttl: number; value: ReturnType<typeof toNormal> }; status: 'fulfilled' }
+	| { reason: unknown; status: 'rejected' };
+
+type ExpirationPolicy = { type: 'preserve' } | { type: 'expire'; milliseconds: number } | { type: 'persist' };
 
 export interface RedisAdapterOptions {
 	namespace?: string;
 }
 
-export class RedisAdapter implements Adapter {
+export class RedisAdapter<SupportsAtomicCooldowns extends boolean = true> implements Adapter {
 	isAsync = true;
+	readonly supportsAtomicCooldowns: SupportsAtomicCooldowns;
 
 	client: RedisClientType;
 	namespace: string;
 
-	constructor(data?: ({ client: RedisClientType } | { redisOptions: RedisClientOptions }) & RedisAdapterOptions) {
+	constructor(
+		data?: ({ client: RedisClientType } | { redisOptions: RedisClientOptions }) & RedisAdapterOptions,
+		supportsAtomicCooldowns: SupportsAtomicCooldowns = true as SupportsAtomicCooldowns,
+	) {
 		this.client = data && 'client' in data ? data.client : createClient(data?.redisOptions);
 		this.namespace = data?.namespace ?? 'seyfert';
+		this.supportsAtomicCooldowns = supportsAtomicCooldowns;
 	}
 
 	async start() {
 		await this.client.connect();
+		await Promise.all(CACHE_SCRIPTS.map(script => this.client.scriptLoad(script)));
+	}
+
+	protected get relationshipPrefix() {
+		return this.buildKey(RELATIONSHIP_PREFIX);
+	}
+
+	protected relationshipKey(to: string) {
+		const namespace = `${this.namespace}:`;
+		return `${this.relationshipPrefix}${to.startsWith(namespace) ? to.slice(namespace.length) : to}`;
+	}
+
+	protected get relationshipOwnersKey() {
+		return this.buildKey(RELATIONSHIP_OWNERS);
+	}
+
+	protected async runScript<T>(script: string, keys: string[], args: string[]): Promise<T> {
+		const options = { arguments: args, keys };
+		try {
+			return (await this.client.evalSha(CACHE_SCRIPT_SHAS.get(script)!, options)) as T;
+		} catch (error) {
+			if (!isNoScriptError(error)) throw error;
+			return (await this.client.eval(script, options)) as T;
+		}
+	}
+
+	protected getExpirationPolicy(_key: string): ExpirationPolicy {
+		return { type: 'persist' };
 	}
 
 	protected async *scanKeyBatches(query: string, type: 'hash' | 'set' | 'string') {
-		const match = this.buildKey(query);
-
-		for await (const keys of this.client.scanIterator({
-			MATCH: match,
-			TYPE: type,
-		})) {
-			yield keys;
-		}
+		for await (const keys of this.client.scanIterator({ MATCH: this.buildKey(query), TYPE: type })) yield keys;
 	}
 
 	protected async scanKeys(query: string, type: 'hash' | 'set' | 'string') {
 		const keys: string[] = [];
-		for await (const batch of this.scanKeyBatches(query, type)) {
-			keys.push(...batch);
-		}
-
+		for await (const batch of this.scanKeyBatches(query, type)) keys.push(...batch);
 		return keys;
 	}
 
@@ -65,6 +393,19 @@ export class RedisAdapter implements Adapter {
 		}
 	}
 
+	protected async runBulk<T>(items: T[], operation: (item: T) => Promise<unknown>) {
+		const failures: unknown[] = [];
+		await this.runInBatches(items, async batch => {
+			const results = await Promise.allSettled(batch.map(operation));
+			for (const result of results) {
+				if (result.status === 'rejected') failures.push(result.reason);
+			}
+		});
+		if (failures.length) {
+			throw new AggregateError(failures, `RedisAdapter bulk operation failed for ${failures.length} entries`);
+		}
+	}
+
 	protected async deleteRedisKeys(keys: string[]) {
 		if (!keys.length) return;
 		await this.runInBatches(keys, batch => this.client.del(batch));
@@ -73,113 +414,266 @@ export class RedisAdapter implements Adapter {
 	async scan(query: string, returnKeys?: false): Promise<any[]>;
 	async scan(query: string, returnKeys: true): Promise<string[]>;
 	async scan(query: string, returnKeys = false) {
-		const keys = await this.scanKeys(query, 'hash');
+		const namespace = `${this.namespace}:`;
+		const keys = (await this.scanKeys(query, 'hash'))
+			.filter(key => !key.startsWith(this.relationshipPrefix))
+			.map(key => key.slice(namespace.length));
 		return returnKeys ? keys : this.bulkGet(keys);
 	}
 
 	async bulkGet(keys: string[]) {
-		const promises: Promise<any>[] = [];
-		for (const key of keys) {
-			promises.push(this.client.hGetAll(this.buildKey(key)));
-		}
+		const values = await Promise.all(keys.map(key => this.client.hGetAll(this.buildKey(key))));
+		return values.map(value => toNormal(hashReply(value))).filter(value => value !== undefined);
+	}
 
-		return (
-			(await Promise.all(promises))
-				?.filter(x => x)
-				.map(x => toNormal(x as Record<string, any>))
-				.filter(x => x) ?? []
+	async get(key: string): Promise<any> {
+		return toNormal(hashReply(await this.client.hGetAll(this.buildKey(key))));
+	}
+
+	protected async readBeforePatch(key: string) {
+		return this.get(key);
+	}
+
+	protected async writeEntry(
+		key: string,
+		relationship: AdapterRelationship,
+		replace: boolean,
+		encoded: { fields: string[]; logicalFields: string[] },
+		returnValue = false,
+	) {
+		const { fields, logicalFields } = encoded;
+		if (!replace) await this.readBeforePatch(key);
+		const expiration = this.getExpirationPolicy(key);
+		const observedAt = Date.now();
+		const result = await this.runScript<unknown[]>(
+			WRITE_ENTRY_SCRIPT,
+			[this.buildKey(key), this.relationshipKey(relationship[0]), this.relationshipOwnersKey],
+			[
+				key,
+				relationship[0],
+				relationship[1],
+				replace ? 'replace' : 'patch',
+				expiration.type,
+				expiration.type === 'expire' ? String(expiration.milliseconds) : '0',
+				String(fields.length / 2),
+				String(logicalFields.length),
+				...fields,
+				...logicalFields,
+				returnValue ? '1' : '0',
+			],
 		);
+		return returnValue ? { ...this.parseWriteResult(result), observedAt } : undefined;
 	}
 
-	async get(keys: string): Promise<any> {
-		const value = await this.client.hGetAll(this.buildKey(keys));
-		if (value) {
-			return toNormal(value);
+	protected async writeEncodedEntry(
+		key: string,
+		relationship: AdapterRelationship,
+		replace: boolean,
+		encoded: { fields: string[]; logicalFields: string[] },
+	) {
+		await this.writeEntry(key, relationship, replace, encoded);
+	}
+
+	protected async writeEncodedBatch(
+		entries: EncodedWrite[],
+		returnValues: readonly boolean[] = [],
+	): Promise<WriteOutcome[]> {
+		const outcomes = new Array<WriteOutcome>(entries.length);
+		if (entries.some(entry => !entry.replace)) {
+			const preflights = await Promise.allSettled(
+				entries.map(entry => (entry.replace ? Promise.resolve() : this.readBeforePatch(entry.key))),
+			);
+			for (const [index, preflight] of preflights.entries()) {
+				if (preflight.status === 'rejected') outcomes[index] = { reason: preflight.reason, status: 'rejected' };
+			}
+		}
+		const submitted: Array<{ entry: EncodedWrite; index: number; returnValue: boolean }> = [];
+		for (const [index, entry] of entries.entries()) {
+			if (!outcomes[index]) submitted.push({ entry, index, returnValue: returnValues[index] ?? false });
+		}
+		if (!submitted.length) return outcomes;
+
+		const keys = [this.relationshipOwnersKey];
+		const payload = submitted.map(({ entry, returnValue }) => {
+			keys.push(this.buildKey(entry.key), this.relationshipKey(entry.relationship[0]));
+			const expiration = this.getExpirationPolicy(entry.key);
+			return [
+				entry.key,
+				entry.relationship[0],
+				entry.relationship[1],
+				entry.replace ? 'replace' : 'patch',
+				expiration.type,
+				expiration.type === 'expire' ? expiration.milliseconds : 0,
+				entry.encoded.fields,
+				entry.encoded.logicalFields,
+				returnValue,
+			];
+		});
+		const observedAt = Date.now();
+		const replies = await this.runScript<unknown[]>(BULK_WRITE_SCRIPT, keys, [JSON.stringify(payload)]);
+		if (!Array.isArray(replies) || replies.length !== submitted.length) {
+			throw new TypeError('RedisAdapter expected the bulk write script to return one result per entry');
+		}
+		for (const [submittedIndex, reply] of replies.entries()) {
+			const { index, returnValue } = submitted[submittedIndex]!;
+			if (!Array.isArray(reply) || (reply[0] !== 'ok' && reply[0] !== 'error')) {
+				throw new TypeError('RedisAdapter expected a valid bulk write result');
+			}
+			if (reply[0] === 'error') {
+				outcomes[index] = { reason: new Error(String(reply[1])), status: 'rejected' };
+			} else if (returnValue) {
+				outcomes[index] = {
+					result: { ...this.parseWriteResult([reply[1], reply[2]]), observedAt },
+					status: 'fulfilled',
+				};
+			} else {
+				outcomes[index] = { status: 'fulfilled' };
+			}
+		}
+		return outcomes;
+	}
+
+	protected async settleEncodedBatches(
+		entries: EncodedWrite[],
+		operation: (batch: EncodedWrite[]) => Promise<WriteOutcome[]>,
+	) {
+		const failures: unknown[] = [];
+		await this.runInBatches(entries, async batch => {
+			try {
+				const outcomes = await operation(batch);
+				for (const outcome of outcomes) {
+					if (outcome.status === 'rejected') failures.push(outcome.reason);
+				}
+			} catch (error) {
+				failures.push(...batch.map(() => error));
+			}
+		});
+		if (failures.length) {
+			throw new AggregateError(failures, `RedisAdapter bulk operation failed for ${failures.length} entries`);
 		}
 	}
 
-	async bulkSet(data: [string, any][]) {
-		await this.runInBatches(data, batch => Promise.all(batch.map(([key, value]) => this.set(key, value))));
+	protected async writeEncodedEntries(entries: EncodedWrite[]) {
+		await this.settleEncodedBatches(entries, batch => this.writeEncodedBatch(batch));
 	}
 
-	async set(id: string, data: any) {
-		const key = this.buildKey(id);
-		await this.client.multi().del(key).hSet(key, toDb(data)).exec();
-	}
-
-	async bulkPatch(data: [string, any][]) {
-		await this.runInBatches(data, batch => Promise.all(batch.map(([key, value]) => this.patch(key, value))));
-	}
-
-	async patch(id: string, data: any): Promise<void> {
-		if (Array.isArray(data)) {
-			await this.set(id, data);
-			return;
+	protected parseWriteResult(result: unknown[]) {
+		if (!Array.isArray(result) || result.length !== 2) {
+			throw new TypeError('RedisAdapter expected the write script to return value and TTL');
 		}
-		await this.client.hSet(this.buildKey(id), toDb(data));
+		return {
+			ttl: integerReply('PTTL', result[1]),
+			value: toNormal(flatHashReply(result[0])),
+		};
+	}
+
+	async bulkSet(entries: AdapterEntry[]) {
+		const prepared = entries.map(([key, value, relationship]) => ({
+			encoded: encodeEntryData(value),
+			key,
+			relationship,
+			replace: true,
+		}));
+		await this.writeEncodedEntries(prepared);
+	}
+
+	async set(key: string, data: any, relationship: AdapterRelationship) {
+		await this.writeEncodedEntry(key, relationship, true, encodeEntryData(data));
+	}
+
+	async bulkPatch(entries: AdapterEntry[]) {
+		const prepared = entries.map(([key, value, relationship]) => ({
+			encoded: encodeEntryData(value),
+			key,
+			relationship,
+			replace: Array.isArray(value),
+		}));
+		await this.writeEncodedEntries(prepared);
+	}
+
+	async patch(key: string, data: any, relationship: AdapterRelationship): Promise<void> {
+		await this.writeEncodedEntry(key, relationship, Array.isArray(data), encodeEntryData(data));
+	}
+
+	async eval<T = unknown>(script: string, keys: string[] = [], args: string[] = []): Promise<T> {
+		return this.client.eval(script, {
+			arguments: args,
+			keys: keys.map(key => this.buildKey(key)),
+		}) as Promise<T>;
 	}
 
 	async values(to: string): Promise<any[]> {
-		const array: unknown[] = [];
-		const data = await this.keys(to);
-		if (data.length) {
-			const items = await this.bulkGet(data);
-			for (const item of items) {
-				if (item) {
-					array.push(item);
-				}
-			}
-		}
-
-		return array;
+		return this.bulkGet(await this.keys(to));
 	}
 
 	async keys(to: string): Promise<string[]> {
-		const data = await this.getToRelationship(to);
-		return data.map(id => this.buildKey(`${to}.${id}`));
+		return this.client.hVals(this.relationshipKey(to));
 	}
 
 	async count(to: string): Promise<number> {
-		return this.client.sCard(`${this.buildKey(to)}:set`);
+		return this.client.hLen(this.relationshipKey(to));
 	}
 
 	async bulkRemove(keys: string[]) {
-		await this.deleteRedisKeys(keys.map(key => this.buildKey(key)));
+		await this.runBulk(keys, key => this.remove(key));
 	}
 
-	async remove(keys: string): Promise<void> {
-		await this.client.del(this.buildKey(keys));
+	async remove(key: string): Promise<void> {
+		await this.runScript(REMOVE_ENTRY_SCRIPT, [this.buildKey(key), this.relationshipOwnersKey], [key]);
 	}
 
 	async flush(): Promise<void> {
-		await Promise.all([this.removeScannedKeys('*', 'hash'), this.removeScannedKeys('*:set', 'set')]);
+		await this.removeScannedKeys('*', 'hash');
 	}
 
-	async contains(to: string, keys: string): Promise<boolean> {
-		return (await this.client.sIsMember(`${this.buildKey(to)}:set`, keys)) > 0;
+	async contains(to: string, key: string): Promise<boolean> {
+		return (await this.client.hExists(this.relationshipKey(to), key)) > 0;
 	}
 
 	getToRelationship(to: string): Promise<string[]> {
-		return this.client.sMembers(`${this.buildKey(to)}:set`);
+		return this.client.hKeys(this.relationshipKey(to));
 	}
 
-	async bulkAddToRelationShip(data: Record<string, string[]>): Promise<void> {
-		await this.runInBatches(Object.entries(data), batch =>
-			Promise.all(batch.map(([key, value]) => this.client.sAdd(`${this.buildKey(key)}:set`, value))),
+	protected async removeRelationshipMember(to: string, id: string) {
+		return this.runScript<string | null>(
+			REMOVE_RELATIONSHIP_MEMBER_SCRIPT,
+			[this.relationshipKey(to), this.relationshipOwnersKey],
+			[to, id, `${this.namespace}:`],
 		);
 	}
 
-	async addToRelationship(to: string, keys: string | string[]): Promise<void> {
-		await this.client.sAdd(`${this.buildKey(to)}:set`, Array.isArray(keys) ? keys : [keys]);
-	}
-
 	async removeToRelationship(to: string, keys: string | string[]): Promise<void> {
-		await this.client.sRem(`${this.buildKey(to)}:set`, Array.isArray(keys) ? keys : [keys]);
+		for (const id of Array.isArray(keys) ? keys : [keys]) {
+			await this.removeRelationshipMember(to, id);
+		}
 	}
 
 	async removeRelationship(to: string | string[]): Promise<void> {
-		await this.runInBatches(Array.isArray(to) ? to : [to], batch =>
-			this.client.del(batch.map(relationship => `${this.buildKey(relationship)}:set`)),
+		for (const relationship of Array.isArray(to) ? to : [to]) {
+			if (!relationship.includes('*')) {
+				await this.removeExactRelationship(relationship);
+				continue;
+			}
+			const keys = (await this.scanKeys(`${RELATIONSHIP_PREFIX}${relationship}`, 'hash')).filter(
+				key => key !== this.relationshipOwnersKey,
+			);
+			for (const key of keys) await this.removeExactRelationship(key.slice(this.relationshipPrefix.length));
+		}
+	}
+
+	protected async migrateEntry(logicalKey: string, relationship: AdapterRelationship) {
+		return this.runScript<number>(
+			MIGRATE_ENTRY_SCRIPT,
+			[this.buildKey(logicalKey), this.relationshipKey(relationship[0]), this.relationshipOwnersKey],
+			[logicalKey, relationship[0], relationship[1]],
+		);
+	}
+
+	private async removeExactRelationship(to: string) {
+		await this.runScript(
+			REMOVE_RELATIONSHIP_SCRIPT,
+			[this.relationshipKey(to), this.relationshipOwnersKey],
+			[to, `${this.namespace}:`],
 		);
 	}
 
@@ -197,22 +691,18 @@ export function toNormal(target: Record<string, any>): undefined | Record<string
 	if (!Object.keys(target).length) return undefined;
 	const result: Record<string, any> = {};
 	for (const [key, value] of Object.entries(target)) {
-		if (key.startsWith('O_')) {
-			result[key.slice(2)] = JSON.parse(value);
-		} else if (key.startsWith('N_')) {
-			result[key.slice(2)] = Number(value);
-		} else if (key.startsWith('B_')) {
-			result[key.slice(2)] = value === 't';
-		} else {
-			result[key] = value;
-		}
+		if (key === EMPTY_OBJECT_FIELD) continue;
+		if (key.startsWith('O_')) result[key.slice(2)] = JSON.parse(value);
+		else if (key.startsWith('N_')) result[key.slice(2)] = Number(value);
+		else if (key.startsWith('B_')) result[key.slice(2)] = value === 't';
+		else result[key] = value;
 	}
 	return result;
 }
 
-export function toDb(target: Record<string, any> | Record<string, any>[]): Record<string, any> | { ARRAY_OF: string } {
+export function toDb(target: Record<string, any> | Record<string, any>[]): Record<string, string> {
 	if (Array.isArray(target)) return { ARRAY_OF: JSON.stringify(target.map(toDb)) };
-	const result: Record<string, any> = {};
+	const result: Record<string, string> = {};
 	for (const [key, value] of Object.entries(target)) {
 		switch (typeof value) {
 			case 'boolean':
@@ -221,26 +711,16 @@ export function toDb(target: Record<string, any> | Record<string, any>[]): Recor
 			case 'number':
 				result[`N_${key}`] = `${value}`;
 				break;
-			case 'object': {
-				if (Array.isArray(value)) {
-					result[`O_${key}`] = JSON.stringify(value);
-					break;
-				}
-				if (isObject(value)) {
-					result[`O_${key}`] = JSON.stringify(value);
-					break;
-				}
-				if (!Number.isNaN(value)) {
-					result[`O_${key}`] = 'null';
-					break;
-				}
-				result[`O_${key}`] = JSON.stringify(value);
+			case 'object':
+				result[`O_${key}`] = value === null ? 'null' : JSON.stringify(value);
 				break;
-			}
-			default:
+			case 'string':
 				result[key] = value;
 				break;
+			default:
+				throw new TypeError(`RedisAdapter cannot encode ${typeof value} field ${key}`);
 		}
 	}
+	if (!Object.keys(result).length) result[EMPTY_OBJECT_FIELD] = '1';
 	return result;
 }

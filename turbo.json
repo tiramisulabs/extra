@@ -9,7 +9,7 @@
 		"test": {
 			"dependsOn": ["^build"],
 			"cache": false,
-			"env": ["SLIPHER_SCHEDULER_REDIS_URL"]
+			"env": ["SLIPHER_REDIS_URL", "SLIPHER_SCHEDULER_REDIS_URL"]
 		},
 		"dev": {
 			"cache": false,

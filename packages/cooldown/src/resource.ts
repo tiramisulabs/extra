@@ -3,7 +3,8 @@ import type { PickPartial } from 'seyfert/lib/common';
 
 export const COOLDOWN_RESOURCE_NAMESPACE = 'cooldowns';
 export const COOLDOWN_RESOURCE_FIELD_PREFIX = 'N_';
-export const COOLDOWN_RESOURCE_RELATIONSHIP_SUFFIX = ':set';
+export const COOLDOWN_RESOURCE_RELATIONSHIP_KEY = `relationships:${COOLDOWN_RESOURCE_NAMESPACE}`;
+export const COOLDOWN_RESOURCE_OWNERS_KEY = 'relationships:owners';
 
 export interface CooldownData {
 	remaining: number;

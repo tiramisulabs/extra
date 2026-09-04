@@ -1,3 +1,4 @@
+import { ExpirableRedisAdapter, RedisAdapter } from '@slipher/redis-adapter';
 import { createMockBot } from '@slipher/testing';
 import {
 	type AnyContext,
@@ -10,6 +11,7 @@ import {
 	MemoryAdapter,
 	SubCommand,
 } from 'seyfert';
+import type { Adapter } from 'seyfert/lib/cache';
 import { HandleCommand } from 'seyfert/lib/commands/handle';
 import { CommandHandler } from 'seyfert/lib/commands/handler.js';
 import { afterEach, assert, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -43,7 +45,7 @@ function commandContext(overrides: Record<string, unknown> = {}) {
 	} as unknown as AnyContext;
 }
 
-function createClient(commands: Command[] = []) {
+function createClient(commands: Command[] = [], adapter: Adapter = new MemoryAdapter()) {
 	const client = new Client({
 		getRC: () => ({ debug: false, intents: 0, token: '', locations: { base: '', output: '' } }),
 	});
@@ -51,7 +53,7 @@ function createClient(commands: Command[] = []) {
 	handler.values = commands;
 	client.commands = handler;
 	client.handleCommand = new HandleCommand(client);
-	client.cache = new Cache(0, new MemoryAdapter(), {}, client);
+	client.cache = new Cache(0, adapter, {}, client);
 	return client;
 }
 
@@ -80,7 +82,7 @@ class AtomicMemoryAdapter extends MemoryAdapter {
 		await Promise.resolve();
 
 		try {
-			const [hashKey, namespace] = keys;
+			const [hashKey] = keys;
 			const [intervalArg, limitArg, costArg, memberKey] = args;
 			const now = Date.now();
 			const interval = Number(intervalArg);
@@ -97,8 +99,7 @@ class AtomicMemoryAdapter extends MemoryAdapter {
 
 			if (!data || invalidData || now - data.lastDrip >= interval) {
 				const remaining = limit - cost;
-				this.addToRelationship(namespace, memberKey);
-				this.set(hashKey, { interval, remaining, lastDrip: now });
+				this.set(hashKey, { interval, remaining, lastDrip: now }, ['cooldowns', memberKey]);
 				return [1, 0, now, limit, remaining];
 			}
 
@@ -108,8 +109,7 @@ class AtomicMemoryAdapter extends MemoryAdapter {
 			}
 
 			const remaining = data.remaining - cost;
-			this.addToRelationship(namespace, memberKey);
-			this.patch(hashKey, { interval, remaining });
+			this.patch(hashKey, { interval, remaining }, ['cooldowns', memberKey]);
 			return [1, 0, now, limit, remaining];
 		} finally {
 			this.inFlight--;
@@ -668,6 +668,111 @@ describe('CooldownManager — atomic storage', () => {
 		assert.equal((adapter.get('cooldowns.ping:user:u1') as CooldownData | null)?.remaining, 0);
 	});
 
+	test('Redis atomic path keeps the bucket and relationship index coherent under concurrency', async () => {
+		vi.useRealTimers();
+		const adapter = new RedisAdapter({
+			namespace: `cooldown-integration-${process.pid}-${Date.now()}`,
+			redisOptions: { url: process.env.SLIPHER_REDIS_URL ?? 'redis://127.0.0.1:6379' },
+		});
+		await adapter.start();
+		client = createClient(
+			[
+				makeCommand({
+					name: 'ping',
+					description: 'Ping',
+					cooldown: { type: 'user', interval: 1_000, uses: 2 },
+				}),
+			],
+			adapter,
+		);
+		manager = new CooldownManager(client);
+
+		try {
+			const results = await Promise.all(
+				Array.from({ length: 5 }, () => manager.consume({ name: 'ping', target: 'u1' })),
+			);
+			assert.equal(results.filter(result => result?.allowed).length, 2);
+			assert.equal(results.filter(result => result && !result.allowed).length, 3);
+			assert.equal(await adapter.contains('cooldowns', 'ping:user:u1'), true);
+			assert.equal((await adapter.get('cooldowns.ping:user:u1'))?.remaining, 0);
+
+			await manager.reset({ name: 'ping', target: 'u1' });
+			assert.equal(await adapter.get('cooldowns.ping:user:u1'), undefined);
+			assert.equal(await adapter.contains('cooldowns', 'ping:user:u1'), false);
+		} finally {
+			await adapter.flush();
+			adapter.client.close();
+		}
+	});
+
+	test('Redis atomic path cleans up dotted cooldown groups and targets', async () => {
+		vi.useRealTimers();
+		const adapter = new RedisAdapter({
+			namespace: `cooldown-dotted-${process.pid}-${Date.now()}`,
+			redisOptions: { url: process.env.SLIPHER_REDIS_URL ?? 'redis://127.0.0.1:6379' },
+		});
+		await adapter.start();
+		client = createClient(
+			[
+				makeCommand({
+					name: 'ping',
+					description: 'Ping',
+					cooldown: { group: 'api.v2', type: () => 'tenant.example', interval: 1_000, uses: 1 },
+				}),
+			],
+			adapter,
+		);
+		manager = new CooldownManager(client);
+
+		try {
+			await manager.consume({ name: 'ping', target: 'tenant.example' });
+			const relationshipId = 'api%2Ev2:custom:tenant%2Eexample';
+			assert.equal(await adapter.contains('cooldowns', relationshipId), true);
+
+			await manager.reset({ name: 'ping', target: 'tenant.example' });
+			assert.equal(await adapter.get(`cooldowns.${relationshipId}`), undefined);
+			assert.equal(await adapter.contains('cooldowns', relationshipId), false);
+		} finally {
+			await adapter.flush();
+			adapter.client.close();
+		}
+	});
+
+	test('expirable Redis writes cooldowns through the expiration-aware adapter contract', async () => {
+		vi.useRealTimers();
+		const namespace = `cooldown-expirable-${process.pid}-${Date.now()}`;
+		const adapter = new ExpirableRedisAdapter(
+			{
+				namespace,
+				redisOptions: { url: process.env.SLIPHER_REDIS_URL ?? 'redis://127.0.0.1:6379' },
+			},
+			{ default: { expire: 1_000 } },
+		);
+		await adapter.start();
+		client = createClient(
+			[
+				makeCommand({
+					name: 'ping',
+					description: 'Ping',
+					cooldown: { type: 'user', interval: 1_000, uses: 2 },
+				}),
+			],
+			adapter,
+		);
+		manager = new CooldownManager(client);
+
+		try {
+			await manager.consume({ name: 'ping', target: 'u1' });
+			assert.isAbove(await adapter.client.pTTL(`${namespace}:cooldowns.ping:user:u1`), 0);
+			const [relationshipTtl] =
+				(await adapter.client.hpTTL(`${namespace}:relationships:cooldowns`, 'ping:user:u1')) ?? [];
+			assert.isAbove(relationshipTtl ?? -2, 0);
+		} finally {
+			await adapter.flush();
+			adapter.client.close();
+		}
+	});
+
 	test('atomic adapter replaces corrupt buckets with canonical state', async () => {
 		const adapter = new AtomicMemoryAdapter();
 		client.cache = new Cache(0, adapter, {}, client);
@@ -683,7 +788,7 @@ describe('CooldownManager — atomic storage', () => {
 		for (const [index, bucket] of corruptBuckets.entries()) {
 			const target = `corrupt-${index}`;
 			const key = `cooldowns.ping:user:${target}`;
-			adapter.set(key, { interval: 1_000, ...bucket });
+			adapter.set(key, { interval: 1_000, ...bucket }, ['cooldowns', key.slice('cooldowns.'.length)]);
 
 			const result = await manager.consume({ name: 'ping', target });
 			const stored = adapter.get(key) as CooldownData | null;

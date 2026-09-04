@@ -1,6 +1,7 @@
 import type { RedisClientOptions, RedisClientType } from '@redis/client';
+import type { AdapterRelationship } from 'seyfert';
 import { type MakeRequired, MergeOptions } from 'seyfert/lib/common';
-import { RedisAdapter, type RedisAdapterOptions, toDb, toNormal } from './adapter';
+import { RedisAdapter, type RedisAdapterOptions, toNormal } from './adapter';
 
 export interface ResourceLimitedMemoryAdapter {
 	/** Redis key lifetime in milliseconds. Positive values refresh the TTL; non-positive values remove it. */
@@ -25,25 +26,12 @@ interface CachedValue {
 	value: any;
 }
 
-const REPLACE_HASH_SCRIPT = `
-local ttl = -1
-if ARGV[1] == 'preserve' then
-	ttl = redis.call('PTTL', KEYS[1])
-end
-
-redis.call('DEL', KEYS[1])
-if #ARGV > 2 then
-	redis.call('HSET', KEYS[1], unpack(ARGV, 3))
-end
-
-if ARGV[1] == 'expire' then
-	redis.call('PEXPIRE', KEYS[1], ARGV[2])
-elseif ARGV[1] == 'preserve' and ttl >= 0 then
-	redis.call('PEXPIRE', KEYS[1], ttl)
-end
-
-return 1
-`;
+interface EncodedWrite {
+	encoded: { fields: string[]; logicalFields: string[] };
+	key: string;
+	relationship: AdapterRelationship;
+	replace: boolean;
+}
 
 function hashReply(value: unknown): Record<string, any> {
 	if (!value || typeof value !== 'object' || Array.isArray(value) || value instanceof Error) {
@@ -59,16 +47,8 @@ function integerReply(command: string, value: unknown): number {
 	return value;
 }
 
-type ExpirationPolicy = { type: 'preserve' } | { type: 'expire'; milliseconds: number } | { type: 'persist' };
-
-function resolveExpirationPolicy(expire?: number): ExpirationPolicy {
-	if (expire === undefined) return { type: 'preserve' };
-	if (expire > 0) return { type: 'expire', milliseconds: expire };
-	return { type: 'persist' };
-}
-
 export interface ExpirableRedisAdapterOptions {
-	/** Migrates relationship keys created by older adapter releases during startup. Disabled by default. */
+	/** Migrates pre-atomic relationship indexes during startup. Run only while cache writers are stopped. */
 	migrateLegacyRelationships?: boolean;
 
 	default?: ResourceLimitedMemoryAdapter;
@@ -92,7 +72,6 @@ export interface ExpirableRedisAdapterOptions {
 
 type ExpirableResourceOptions = Omit<ExpirableRedisAdapterOptions, 'migrateLegacyRelationships'>;
 
-// Legacy relationship keys had no internal prefix, so cleanup is restricted to Seyfert cache resources.
 const CACHE_RESOURCE_NAMES = {
 	ban: true,
 	channel: true,
@@ -109,7 +88,7 @@ const CACHE_RESOURCE_NAMES = {
 	voice_state: true,
 } as const satisfies Record<Exclude<keyof ExpirableResourceOptions, 'default'>, true>;
 
-export class ExpirableRedisAdapter extends RedisAdapter {
+export class ExpirableRedisAdapter extends RedisAdapter<false> {
 	options: MakeRequired<ExpirableResourceOptions, 'default'>;
 	protected readonly ondemandCache = new Map<string, Map<string, CachedValue>>();
 	private readonly ondemandNextExpiry = new WeakMap<Map<string, CachedValue>, number>();
@@ -123,7 +102,7 @@ export class ExpirableRedisAdapter extends RedisAdapter {
 		},
 		options: ExpirableRedisAdapterOptions = {},
 	) {
-		super(data);
+		super(data, false);
 		const { migrateLegacyRelationships = false, ...resourceOptions } = options;
 		this.migrateLegacyRelationshipsOnStart = migrateLegacyRelationships;
 		this.options = MergeOptions(
@@ -139,11 +118,9 @@ export class ExpirableRedisAdapter extends RedisAdapter {
 		this.validateOptions();
 	}
 
-	async start() {
+	override async start() {
 		await super.start();
-		if (this.migrateLegacyRelationshipsOnStart) {
-			await this.migrateLegacyRelationships();
-		}
+		if (this.migrateLegacyRelationshipsOnStart) await this.migrateLegacyRelationships();
 	}
 
 	protected resolveCacheType(key: string): keyof ExpirableResourceOptions {
@@ -170,13 +147,11 @@ export class ExpirableRedisAdapter extends RedisAdapter {
 
 		const cacheType = this.resolveCacheType(key);
 		let bucket = this.ondemandCache.get(cacheType);
-
 		if (!bucket && create) {
 			bucket = new Map<string, CachedValue>();
 			this.ondemandCache.set(cacheType, bucket);
 		}
 		if (bucket) this.pruneOndemandBucket(bucket);
-
 		return bucket;
 	}
 
@@ -186,9 +161,8 @@ export class ExpirableRedisAdapter extends RedisAdapter {
 
 		let nextExpiry: number | undefined;
 		for (const [key, entry] of bucket) {
-			if (entry.expiresAt !== undefined && entry.expiresAt <= now) {
-				bucket.delete(key);
-			} else if (entry.expiresAt !== undefined && (nextExpiry === undefined || entry.expiresAt < nextExpiry)) {
+			if (entry.expiresAt !== undefined && entry.expiresAt <= now) bucket.delete(key);
+			else if (entry.expiresAt !== undefined && (nextExpiry === undefined || entry.expiresAt < nextExpiry)) {
 				nextExpiry = entry.expiresAt;
 			}
 		}
@@ -200,13 +174,10 @@ export class ExpirableRedisAdapter extends RedisAdapter {
 		const bucket = this.getOndemandBucket(key);
 		const normalizedKey = this.buildKey(key);
 		const entry = bucket?.get(normalizedKey);
-
 		if (!bucket || !entry) return;
 
-		// Refresh insertion order so the bucket behaves like an LRU cache.
 		bucket.delete(normalizedKey);
 		bucket.set(normalizedKey, entry);
-
 		return entry.value;
 	}
 
@@ -218,17 +189,11 @@ export class ExpirableRedisAdapter extends RedisAdapter {
 
 		const bucket = this.getOndemandBucket(key, true);
 		if (!bucket) return;
-
 		const normalizedKey = this.buildKey(key);
-		if (bucket.has(normalizedKey)) {
-			bucket.delete(normalizedKey);
-		}
+		if (bucket.has(normalizedKey)) bucket.delete(normalizedKey);
 
 		const expiresAt = ttl > 0 ? observedAt + ttl : undefined;
-		bucket.set(normalizedKey, {
-			expiresAt,
-			value,
-		});
+		bucket.set(normalizedKey, { expiresAt, value });
 		const nextExpiry = this.ondemandNextExpiry.get(bucket);
 		if (expiresAt !== undefined && (nextExpiry === undefined || expiresAt < nextExpiry)) {
 			this.ondemandNextExpiry.set(bucket, expiresAt);
@@ -263,9 +228,7 @@ export class ExpirableRedisAdapter extends RedisAdapter {
 	}
 
 	private finishMutation(normalizedKey: string, token: object) {
-		if (this.activeMutations.get(normalizedKey) === token) {
-			this.activeMutations.delete(normalizedKey);
-		}
+		if (this.activeMutations.get(normalizedKey) === token) this.activeMutations.delete(normalizedKey);
 	}
 
 	private validateOptions() {
@@ -293,17 +256,20 @@ export class ExpirableRedisAdapter extends RedisAdapter {
 		};
 	}
 
-	private async replaceHash(id: string, data: any) {
-		const expiration = resolveExpirationPolicy(this.getResourceOptions(id).expire);
-		const fields = Object.entries(toDb(data)).flatMap(([field, value]) => [field, value]);
-		await this.client.eval(REPLACE_HASH_SCRIPT, {
-			arguments: [expiration.type, expiration.type === 'expire' ? expiration.milliseconds.toString() : '', ...fields],
-			keys: [this.buildKey(id)],
-		});
+	protected override async readBeforePatch(key: string) {
+		// Validate Redis directly; the write script owns expiration.
+		return super.get(key);
+	}
+
+	protected override getExpirationPolicy(key: string) {
+		const expire = this.getResourceOptions(key).expire;
+		if (expire === undefined) return { type: 'preserve' } as const;
+		if (expire > 0) return { type: 'expire', milliseconds: expire } as const;
+		return { type: 'persist' } as const;
 	}
 
 	private publishMutation(
-		id: string,
+		key: string,
 		mutation: { normalizedKey: string; token: object },
 		value: ReturnType<typeof toNormal>,
 		ttl: number,
@@ -311,75 +277,65 @@ export class ExpirableRedisAdapter extends RedisAdapter {
 	) {
 		this.pendingReads.delete(mutation.normalizedKey);
 		if (this.activeMutations.get(mutation.normalizedKey) !== mutation.token) {
-			this.deleteCachedValue(id);
+			this.deleteCachedValue(key);
 			return;
 		}
-
-		if (value === undefined) this.deleteCachedValue(id);
-		else this.cacheValue(id, value, ttl, observedAt);
+		if (value === undefined) this.deleteCachedValue(key);
+		else this.cacheValue(key, value, ttl, observedAt);
 	}
 
-	private async writeHash(id: string, data: any, replace: boolean) {
-		const mutation = this.beginMutation(id);
-		const cacheLocally = this.getOndemandBucket(id, true) !== undefined;
-
+	protected override async writeEncodedEntry(
+		key: string,
+		relationship: AdapterRelationship,
+		replace: boolean,
+		encoded: { fields: string[]; logicalFields: string[] },
+	) {
+		const mutation = this.beginMutation(key);
+		const cacheLocally = this.getOndemandBucket(key, true) !== undefined;
 		try {
-			if (replace) {
-				await this.replaceHash(id, data);
-				this.pendingReads.delete(mutation.normalizedKey);
-				if (!cacheLocally) return;
-
-				const { observedAt, ttl, value } = await this.readHash(this.buildKey(id));
-				this.publishMutation(id, mutation, value, ttl, observedAt);
-				return;
-			}
-
-			const key = this.buildKey(id);
-			const expiration = resolveExpirationPolicy(this.getResourceOptions(id).expire);
-			const transaction = this.client.multi().hSet(key, toDb(data));
-			const observedAt = Date.now();
-
-			switch (expiration.type) {
-				case 'expire':
-					transaction.pExpire(key, expiration.milliseconds);
-					break;
-				case 'persist':
-					transaction.persist(key);
-					break;
-				case 'preserve':
-					break;
-			}
-			if (cacheLocally) transaction.hGetAll(key).pTTL(key);
-
-			const results = await transaction.exec();
+			const result = await super.writeEntry(key, relationship, replace, encoded, cacheLocally);
 			this.pendingReads.delete(mutation.normalizedKey);
-			if (!cacheLocally) return;
-
-			this.publishMutation(
-				id,
-				mutation,
-				toNormal(hashReply(results.at(-2))),
-				integerReply('PTTL', results.at(-1)),
-				observedAt,
-			);
+			if (result) this.publishMutation(key, mutation, result.value, result.ttl, result.observedAt);
 		} finally {
 			this.finishMutation(mutation.normalizedKey, mutation.token);
 		}
 	}
 
-	private relationshipKey(to: string) {
-		const namespace = `${this.namespace}:`;
-		return `${namespace}relationships:${to.startsWith(namespace) ? to.slice(namespace.length) : to}`;
+	protected override async writeEncodedEntries(entries: EncodedWrite[]) {
+		await this.settleEncodedBatches(entries, async batch => {
+			const mutations = batch.map(entry => ({
+				cacheLocally: this.getOndemandBucket(entry.key, true) !== undefined,
+				entry,
+				mutation: this.beginMutation(entry.key),
+			}));
+			try {
+				const outcomes = await this.writeEncodedBatch(
+					batch,
+					mutations.map(({ cacheLocally }) => cacheLocally),
+				);
+				for (const [index, outcome] of outcomes.entries()) {
+					if (outcome.status !== 'fulfilled' || !outcome.result) continue;
+					const { entry, mutation } = mutations[index]!;
+					this.publishMutation(
+						entry.key,
+						mutation,
+						outcome.result.value,
+						outcome.result.ttl,
+						outcome.result.observedAt,
+					);
+				}
+				return outcomes;
+			} finally {
+				for (const { mutation } of mutations) this.finishMutation(mutation.normalizedKey, mutation.token);
+			}
+		});
 	}
 
 	private legacyRelationshipFromKey(key: string) {
 		const value = key.slice(`${this.namespace}:`.length);
 		const separator = value.lastIndexOf('.uset.');
 		if (separator === -1) return;
-		return {
-			id: value.slice(separator + '.uset.'.length),
-			to: value.slice(0, separator),
-		};
+		return { id: value.slice(separator + '.uset.'.length), to: value.slice(0, separator) };
 	}
 
 	private isLegacyRelationshipKey(key: string) {
@@ -389,195 +345,140 @@ export class ExpirableRedisAdapter extends RedisAdapter {
 		return Object.hasOwn(CACHE_RESOURCE_NAMES, resource);
 	}
 
+	private async resolveLegacyLogicalKey(to: string, id: string) {
+		const resource = to.split('.')[0]!;
+		const candidates = [...new Set([`${to}.${id}`, `${resource}.${id}`])];
+		const exists = await Promise.all(candidates.map(key => this.client.exists(this.buildKey(key))));
+		const matches = candidates.filter((_, index) => exists[index] > 0);
+		if (matches.length > 1) throw new Error(`Ambiguous legacy relationship ${to}.${id}`);
+		return matches[0];
+	}
+
 	private async migrateLegacyRelationships() {
-		let migrated: number;
-		do {
-			migrated = 0;
-			for await (const batch of this.scanKeyBatches('*.uset.*', 'string')) {
-				const sentinelKeys = batch.filter(key => this.isLegacyRelationshipKey(key));
-				if (!sentinelKeys.length) continue;
+		const relationships = new Map<string, AdapterRelationship>();
+		const relationshipHashFields = new Map<string, { id: string; key: string }[]>();
+		const add = (to: string, id: string) => {
+			const identity = JSON.stringify([to, id]);
+			relationships.set(identity, [to, id]);
+			return identity;
+		};
 
-				await this.runInBatches(sentinelKeys, keys =>
-					Promise.all(
-						keys.map(async key => {
-							const relationship = this.legacyRelationshipFromKey(key);
-							if (!relationship) return;
+		const sentinelKeys = (await this.scanKeys('*.uset.*', 'string')).filter(key => this.isLegacyRelationshipKey(key));
+		for (const key of sentinelKeys) {
+			const relationship = this.legacyRelationshipFromKey(key);
+			if (relationship) add(relationship.to, relationship.id);
+		}
 
-							const expiresAt = await this.client.pExpireTime(key);
-							if (expiresAt === -2 || (expiresAt >= 0 && expiresAt <= Date.now())) return;
+		const setKeys = (await this.scanKeys('*:set', 'set')).filter(key => this.isLegacyRelationshipKey(key));
+		for (const key of setKeys) {
+			const to = key.slice(`${this.namespace}:`.length, -':set'.length);
+			for (const id of await this.client.sMembers(key)) add(to, id);
+		}
 
-							const fields = new Map([[relationship.id, '1']]);
-							if (expiresAt === -1) {
-								await this.client.hSetEx(this.relationshipKey(relationship.to), fields, { mode: 'FNX' });
-							} else {
-								await this.client.hSetEx(this.relationshipKey(relationship.to), fields, {
-									expiration: { type: 'PXAT', value: expiresAt },
-									mode: 'FNX',
-								});
-							}
-						}),
-					),
-				);
-				await this.deleteRedisKeys(sentinelKeys);
-				migrated += sentinelKeys.length;
+		const relationshipKeys = (await this.scanKeys('relationships:*', 'hash')).filter(
+			key => key !== this.relationshipOwnersKey,
+		);
+		for (const key of relationshipKeys) {
+			const to = key.slice(this.relationshipPrefix.length);
+			for (const id of await this.client.hKeys(key)) {
+				const identity = add(to, id);
+				const fields = relationshipHashFields.get(identity) ?? [];
+				fields.push({ id, key });
+				relationshipHashFields.set(identity, fields);
 			}
-		} while (migrated > 0);
+		}
+
+		const migrations: { logicalKey: string; relationship: AdapterRelationship }[] = [];
+		for (const [to, id] of relationships.values()) {
+			const logicalKey = await this.resolveLegacyLogicalKey(to, id);
+			if (!logicalKey) continue;
+			const relationship = [to, id] as const;
+			migrations.push({ logicalKey, relationship });
+		}
+
+		const migratedIdentities = new Set<string>();
+		for (const { logicalKey, relationship } of migrations) {
+			if ((await this.migrateEntry(logicalKey, relationship)) === 1) {
+				migratedIdentities.add(JSON.stringify(relationship));
+			}
+		}
+		for (const [identity, fields] of relationshipHashFields) {
+			if (migratedIdentities.has(identity)) continue;
+			for (const { id, key } of fields) await this.client.hDel(key, id);
+		}
 
 		await Promise.all([
-			this.removeScannedKeys('*:set', 'set', key => this.isLegacyRelationshipKey(key)),
+			this.deleteRedisKeys(sentinelKeys),
+			this.deleteRedisKeys(setKeys),
 			this.removeScannedKeys('*:set:indexed', 'string', key => this.isLegacyRelationshipKey(key)),
 		]);
 	}
 
-	async scan(query: string, returnKeys?: false): Promise<any[]>;
-	async scan(query: string, returnKeys: true): Promise<string[]>;
-	async scan(query: string, returnKeys = false) {
-		const relationshipPrefix = `${this.namespace}:relationships:`;
-		const keys = (await this.scanKeys(query, 'hash')).filter(key => !key.startsWith(relationshipPrefix));
-		return returnKeys ? keys : this.bulkGet(keys);
-	}
+	override async get(key: string): Promise<any> {
+		const cached = this.getCachedValue(key);
+		if (cached !== undefined) return cached;
+		if (!this.getOndemandBucket(key, true)) return super.get(key);
 
-	getToRelationship(to: string): Promise<string[]> {
-		return this.client.hKeys(this.relationshipKey(to));
-	}
-
-	async bulkAddToRelationShip(data: Record<string, string[]>): Promise<void> {
-		await this.runInBatches(
-			Object.entries(data).filter(([, values]) => values.length),
-			batch =>
-				Promise.all(
-					batch.map(async ([to, values]) => {
-						const fields = new Map(values.map(value => [value, '1']));
-						const expiration = resolveExpirationPolicy(this.getResourceOptions(to).expire);
-
-						switch (expiration.type) {
-							case 'preserve':
-								await this.client.hSetEx(this.relationshipKey(to), fields, { expiration: 'KEEPTTL' });
-								break;
-							case 'expire':
-								await this.client.hSetEx(this.relationshipKey(to), fields, {
-									expiration: { type: 'PX', value: expiration.milliseconds },
-								});
-								break;
-							case 'persist':
-								await this.client.hSetEx(this.relationshipKey(to), fields);
-								break;
-						}
-					}),
-				),
-		);
-	}
-
-	async addToRelationship(to: string, keys: string | string[]): Promise<void> {
-		await this.bulkAddToRelationShip({
-			[to]: Array.isArray(keys) ? keys : [keys],
-		});
-	}
-
-	async removeToRelationship(to: string, keys: string | string[]): Promise<void> {
-		const relationshipIds = Array.isArray(keys) ? keys : [keys];
-		if (!relationshipIds.length) return;
-		await this.client.hDel(this.relationshipKey(to), relationshipIds);
-	}
-
-	async removeRelationship(to: string | string[]): Promise<void> {
-		const exactRelationships: string[] = [];
-		for (const relationship of Array.isArray(to) ? to : [to]) {
-			if (relationship.includes('*')) {
-				await this.removeScannedKeys(this.relationshipKey(relationship), 'hash');
-			} else {
-				exactRelationships.push(relationship);
-			}
-		}
-
-		await this.runInBatches(exactRelationships, batch =>
-			this.client.del(batch.map(relationship => this.relationshipKey(relationship))),
-		);
-	}
-
-	async count(to: string): Promise<number> {
-		// Redis 8.0 HLEN can include lazily expired fields; HKEYS keeps count aligned with list and membership reads.
-		return (await this.client.hKeys(this.relationshipKey(to))).length;
-	}
-
-	async contains(to: string, key: string): Promise<boolean> {
-		return (await this.client.hExists(this.relationshipKey(to), key)) > 0;
-	}
-
-	async flush(): Promise<void> {
-		this.clearOndemandCache();
-		await this.removeScannedKeys('*', 'hash');
-	}
-
-	async bulkSet(data: [string, any][]) {
-		await this.runInBatches(data, batch => Promise.all(batch.map(([key, value]) => this.set(key, value))));
-	}
-
-	async set(id: string, data: any) {
-		await this.writeHash(id, data, true);
-	}
-
-	async get(keys: string): Promise<any> {
-		const cached = this.getCachedValue(keys);
-		if (cached !== undefined) {
-			return cached;
-		}
-
-		if (!this.getOndemandBucket(keys, true)) return super.get(keys);
-
-		const normalizedKey = this.buildKey(keys);
+		const normalizedKey = this.buildKey(key);
 		const token = {};
 		this.pendingReads.set(normalizedKey, token);
-
 		try {
 			const { observedAt, ttl, value } = await this.readHash(normalizedKey);
 			if (value !== undefined && this.pendingReads.get(normalizedKey) === token) {
-				this.cacheValue(keys, value, ttl, observedAt);
+				this.cacheValue(key, value, ttl, observedAt);
 			}
 			return value;
 		} finally {
-			if (this.pendingReads.get(normalizedKey) === token) {
-				this.pendingReads.delete(normalizedKey);
-			}
+			if (this.pendingReads.get(normalizedKey) === token) this.pendingReads.delete(normalizedKey);
 		}
 	}
 
-	async bulkGet(keys: string[]) {
+	override async bulkGet(keys: string[]) {
 		const result = await Promise.all(keys.map(key => this.get(key)));
-		return result.filter(x => x !== undefined);
+		return result.filter(value => value !== undefined);
 	}
 
-	async patch(id: string, data: any): Promise<void> {
-		await this.writeHash(id, data, Array.isArray(data));
-	}
-
-	async remove(keys: string): Promise<void> {
-		const mutation = this.beginMutation(keys);
-		this.deleteCachedValue(keys);
+	override async remove(key: string): Promise<void> {
+		const mutation = this.beginMutation(key);
+		this.deleteCachedValue(key);
 		try {
-			await super.remove(keys);
+			await super.remove(key);
 		} finally {
 			this.pendingReads.delete(mutation.normalizedKey);
-			this.deleteCachedValue(keys);
+			this.deleteCachedValue(key);
 			this.finishMutation(mutation.normalizedKey, mutation.token);
 		}
 	}
 
-	async bulkRemove(keys: string[]) {
-		await this.runInBatches(keys, async batch => {
-			const mutations = batch.map(key => [key, this.beginMutation(key)] as const);
-			for (const key of batch) {
-				this.deleteCachedValue(key);
-			}
+	override async removeToRelationship(to: string, keys: string | string[]): Promise<void> {
+		for (const id of Array.isArray(keys) ? keys : [keys]) {
+			const logicalKey = await this.removeRelationshipMember(to, id);
+			if (logicalKey === null) continue;
+			const mutation = this.beginMutation(logicalKey);
 			try {
-				await super.bulkRemove(batch);
+				this.pendingReads.delete(mutation.normalizedKey);
+				this.deleteCachedValue(logicalKey);
 			} finally {
-				for (const [key, mutation] of mutations) {
-					this.pendingReads.delete(mutation.normalizedKey);
-					this.deleteCachedValue(key);
-					this.finishMutation(mutation.normalizedKey, mutation.token);
-				}
+				this.finishMutation(mutation.normalizedKey, mutation.token);
 			}
-		});
+		}
+	}
+
+	override async removeRelationship(to: string | string[]): Promise<void> {
+		this.clearOndemandCache();
+		try {
+			await super.removeRelationship(to);
+		} finally {
+			this.clearOndemandCache();
+		}
+	}
+
+	override async count(to: string): Promise<number> {
+		return (await this.client.hKeys(this.relationshipKey(to))).length;
+	}
+
+	override async flush(): Promise<void> {
+		this.clearOndemandCache();
+		await super.flush();
 	}
 }
