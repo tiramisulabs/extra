@@ -1,5 +1,5 @@
 import { createClient } from '@redis/client';
-import type { Adapter } from 'seyfert/lib/cache';
+import type { Adapter } from 'seyfert';
 import {
 	ExpirableRedisAdapter,
 	type ExpirableRedisAdapterOptions,

@@ -252,14 +252,14 @@ describe('ExpirableRedisAdapter', () => {
 	});
 
 	test('bulk writes publish only confirmed entries to the on-demand cache', async () => {
-		const { adapter, namespace } = await createAdapter({ user: { ondemand: true } });
-		const invalidRelationship = `${namespace}:relationships:bulk.invalid`;
+		const { adapter, namespace } = await createAdapter({ default: { ondemand: true } });
+		const invalidRelationship = `${namespace}:relationships:channel.invalid`;
 		await adapter.client.set(invalidRelationship, 'wrong type');
 		try {
 			await expect(
 				adapter.bulkSet([
 					userEntry('confirmed-one'),
-					['user.rejected', { id: 'rejected' }, ['bulk.invalid', 'rejected']],
+					['channel.rejected', { id: 'rejected' }, ['channel.invalid', 'rejected']],
 					userEntry('confirmed-two'),
 				]),
 			).rejects.toThrow('RedisAdapter bulk operation failed for 1 entries');
@@ -267,7 +267,7 @@ describe('ExpirableRedisAdapter', () => {
 			await adapter.client.del([`${namespace}:user.confirmed-one`, `${namespace}:user.confirmed-two`]);
 
 			assert.deepEqual(await adapter.get('user.confirmed-one'), { id: 'confirmed-one' });
-			assert.equal(await adapter.get('user.rejected'), undefined);
+			assert.equal(await adapter.get('channel.rejected'), undefined);
 			assert.deepEqual(await adapter.get('user.confirmed-two'), { id: 'confirmed-two' });
 			assert.equal(adapter.cachedEntryCount, 2);
 		} finally {

@@ -4,10 +4,9 @@ Redis-backed cache adapters for Seyfert's atomic adapter contract. Each `set` or
 relationship membership supplied by Seyfert; the removed `addToRelationship` and `bulkAddToRelationShip` calls are not
 part of this API.
 
-The package requires Redis 8.0 or newer and the first Seyfert release containing both
-[the atomic write signature](https://github.com/tiramisulabs/seyfert/pull/439) and
-[the stable relationship identity contract](https://github.com/tiramisulabs/seyfert/pull/441). While that stacked Seyfert
-change is under review, this repository tests against the `pkg.pr.new` preview for #441; do not publish
+The package requires Redis 8.0 or newer and the first Seyfert release containing
+[the final atomic adapter contract](https://github.com/tiramisulabs/seyfert/pull/439). While that Seyfert change is under
+review, this repository tests against the `pkg.pr.new` preview for #439; do not publish
 `@slipher/redis-adapter`, `@slipher/cooldown`, or `@slipher/opentelemetry` against an older tagged Seyfert version. Once
 the upstream release exists, update those packages' peer dependency minimum to that exact version before publishing.
 
@@ -37,10 +36,14 @@ Every entry has three pieces of state: its value hash, one field in a relationsh
 removal operations. Lua scripts update those pieces in a single isolated Redis operation. The resulting contract is:
 
 - a successful write commits the value and supplied relationship together;
+- keys use `resource.id` or `resource.scope.id`, with no dots inside IDs or namespace segments. Each custom resource
+  must consistently use one layout. These are caller preconditions, not runtime validation;
 - Seyfert's cache resources define entry identity and relationship placement. Passing a different relationship for the
   same physical key is outside the adapter contract; the adapter neither migrates the previous membership nor adds a
   rejection policy for that unsupported input;
 - `remove`, `removeToRelationship`, and `removeRelationship` delete values and memberships as one logical operation;
+- `bulkRemove` removes each entry atomically, attempts every chunk, and collects failures in an `AggregateError` after
+  all submitted removals settle. Successful removals remain committed; the bulk itself is neither atomic nor ordered;
 - encoding and supported Redis type checks complete before the first mutation;
 - `set` replaces the stored value, while object `patch` merges fields and array `patch` replaces the array;
 - `bulkSet` and `bulkPatch` encode their complete input before sending writes, then submit bounded Lua scripts of at most

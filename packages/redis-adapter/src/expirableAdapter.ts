@@ -1,5 +1,5 @@
 import type { RedisClientOptions, RedisClientType } from '@redis/client';
-import type { AdapterRelationship } from 'seyfert/lib/cache';
+import type { AdapterRelationship } from 'seyfert';
 import { type MakeRequired, MergeOptions } from 'seyfert/lib/common';
 import { RedisAdapter, type RedisAdapterOptions, toNormal } from './adapter';
 

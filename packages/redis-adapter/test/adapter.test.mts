@@ -156,7 +156,7 @@ describe('RedisAdapter', () => {
 		const { promise: lateWriteFinished, resolve: finished } = Promise.withResolvers<void>();
 		mutableClient.evalSha = (async (...args: Parameters<typeof adapter.client.evalSha>) => {
 			const result = await originalEvalSha(...args);
-			if (args[1]?.keys?.includes(`${namespace}:user.bulk-late`)) {
+			if (args[1]?.keys?.includes(`${namespace}:bulk.bulk-late`)) {
 				finished();
 				await releaseLateWrite;
 			}
@@ -167,9 +167,9 @@ describe('RedisAdapter', () => {
 			let settled = false;
 			const outcome = adapter
 				.bulkSet([
-					['user.bulk-first', { id: 'bulk-first' }, ['bulk.valid', 'bulk-first']],
-					['user.bulk-invalid', { id: 'bulk-invalid' }, ['bulk.invalid', 'bulk-invalid']],
-					['user.bulk-late', { id: 'bulk-late' }, ['bulk.valid', 'bulk-late']],
+					['bulk.bulk-first', { id: 'bulk-first' }, ['bulk.valid', 'bulk-first']],
+					['bulk.bulk-invalid', { id: 'bulk-invalid' }, ['bulk.invalid', 'bulk-invalid']],
+					['bulk.bulk-late', { id: 'bulk-late' }, ['bulk.valid', 'bulk-late']],
 				])
 				.then(
 					() => ({ status: 'fulfilled' as const }),
@@ -192,9 +192,9 @@ describe('RedisAdapter', () => {
 				);
 			}
 
-			assert.deepEqual(await adapter.get('user.bulk-first'), { id: 'bulk-first' });
-			assert.equal(await adapter.get('user.bulk-invalid'), undefined);
-			assert.deepEqual(await adapter.get('user.bulk-late'), { id: 'bulk-late' });
+			assert.deepEqual(await adapter.get('bulk.bulk-first'), { id: 'bulk-first' });
+			assert.equal(await adapter.get('bulk.bulk-invalid'), undefined);
+			assert.deepEqual(await adapter.get('bulk.bulk-late'), { id: 'bulk-late' });
 			assert.deepEqual((await adapter.getToRelationship('bulk.valid')).sort(), ['bulk-first', 'bulk-late']);
 			assert.equal(await adapter.client.get(invalidRelationship), 'wrong type');
 		} finally {
@@ -213,7 +213,7 @@ describe('RedisAdapter', () => {
 			const relationship =
 				index === 1 || index === 2 ? invalidRelationships[0] : index === 101 ? invalidRelationships[1] : 'bulk.valid';
 			return [
-				`user.best-effort-${index}`,
+				`bulk.best-effort-${index}`,
 				{ id: `best-effort-${index}` },
 				[relationship, `best-effort-${index}`],
 			] as const;
@@ -222,8 +222,8 @@ describe('RedisAdapter', () => {
 		const mutableClient = adapter.client as unknown as { evalSha: typeof adapter.client.evalSha };
 		const { promise: firstChunkReady, resolve: markFirstChunkReady } = Promise.withResolvers<void>();
 		const { promise: firstChunkGate, resolve: releaseFirstChunk } = Promise.withResolvers<void>();
-		const firstValueKey = `${namespace}:user.best-effort-0`;
-		const secondValueKey = `${namespace}:user.best-effort-100`;
+		const firstValueKey = `${namespace}:bulk.best-effort-0`;
+		const secondValueKey = `${namespace}:bulk.best-effort-100`;
 		let activeChunks = 0;
 		let bulkCalls = 0;
 		let maxActiveChunks = 0;
@@ -232,7 +232,7 @@ describe('RedisAdapter', () => {
 			const keys = args[1]?.keys ?? [];
 			const isFirstChunk = keys.includes(firstValueKey);
 			const isLaterChunk = keys.includes(secondValueKey);
-			if (!isFirstChunk && !isLaterChunk && !keys.includes(`${namespace}:user.best-effort-200`)) {
+			if (!isFirstChunk && !isLaterChunk && !keys.includes(`${namespace}:bulk.best-effort-200`)) {
 				return originalEvalSha(...args);
 			}
 			if (isLaterChunk && activeWhenLaterChunkStarted === undefined) activeWhenLaterChunkStarted = activeChunks;
@@ -265,10 +265,10 @@ describe('RedisAdapter', () => {
 			assert.equal(maxActiveChunks, 1);
 			assert.equal(bulkCalls, 3);
 
-			assert.equal(await adapter.get('user.best-effort-1'), undefined);
-			assert.equal(await adapter.get('user.best-effort-2'), undefined);
-			assert.equal(await adapter.get('user.best-effort-101'), undefined);
-			assert.deepEqual(await adapter.get('user.best-effort-201'), { id: 'best-effort-201' });
+			assert.equal(await adapter.get('bulk.best-effort-1'), undefined);
+			assert.equal(await adapter.get('bulk.best-effort-2'), undefined);
+			assert.equal(await adapter.get('bulk.best-effort-101'), undefined);
+			assert.deepEqual(await adapter.get('bulk.best-effort-201'), { id: 'best-effort-201' });
 			assert.equal(await adapter.contains('bulk.valid', 'best-effort-201'), true);
 		} finally {
 			releaseFirstChunk();
@@ -331,7 +331,7 @@ describe('RedisAdapter', () => {
 	test('removes wildcard relationships without affecting neighboring relationship types', async () => {
 		await adapter.set('role.one', { id: 'one' }, ['role.guild-one', 'one']);
 		await adapter.set('role.two', { id: 'two' }, ['role.guild-two', 'two']);
-		await adapter.set('member.one', { id: 'one' }, ['member.guild-one', 'one']);
+		await adapter.set('member.guild-one.one', { id: 'one' }, ['member.guild-one', 'one']);
 
 		await adapter.removeRelationship('role.*');
 
@@ -341,9 +341,12 @@ describe('RedisAdapter', () => {
 		assert.deepEqual(await adapter.getToRelationship('role.guild-two'), []);
 		assert.equal(await adapter.client.hExists(`${namespace}:relationships:owners`, 'role.one'), 0);
 		assert.equal(await adapter.client.hExists(`${namespace}:relationships:owners`, 'role.two'), 0);
-		assert.deepEqual(await adapter.get('member.one'), { id: 'one' });
+		assert.deepEqual(await adapter.get('member.guild-one.one'), { id: 'one' });
 		assert.deepEqual(await adapter.getToRelationship('member.guild-one'), ['one']);
-		assert.equal(await adapter.client.hGet(`${namespace}:relationships:owners`, 'member.one'), 'member.guild-one.one');
+		assert.equal(
+			await adapter.client.hGet(`${namespace}:relationships:owners`, 'member.guild-one.one'),
+			'member.guild-one.one',
+		);
 	});
 
 	test('exposes the documented atomic cooldown script bridge with namespace boundaries', async () => {
@@ -358,8 +361,8 @@ describe('RedisAdapter', () => {
 	});
 
 	test('does not treat a namespace prefix collision as an already namespaced key', async () => {
-		const collidingKey = `${namespace}_other:key`;
-		await adapter.set(collidingKey, { value: 'namespaced' }, ['custom', 'key']);
+		const collidingKey = `${namespace}_other.key`;
+		await adapter.set(collidingKey, { value: 'namespaced' }, [`${namespace}_other`, 'key']);
 		assert.equal(await adapter.client.exists(collidingKey), 0);
 		assert.equal(await adapter.client.exists(`${namespace}:${collidingKey}`), 1);
 	});

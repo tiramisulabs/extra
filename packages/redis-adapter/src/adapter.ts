@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createClient, type RedisClientOptions, type RedisClientType } from '@redis/client';
-import type { Adapter, AdapterEntry, AdapterRelationship } from 'seyfert/lib/cache';
+import type { Adapter, AdapterEntry, AdapterRelationship } from 'seyfert';
 
 const BULK_BATCH_SIZE = 100;
 const RELATIONSHIP_PREFIX = 'relationships:';

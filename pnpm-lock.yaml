@@ -83,8 +83,8 @@ importers:
         specifier: ^26.0.1
         version: 26.1.1
       seyfert:
-        specifier: https://pkg.pr.new/seyfert@441
-        version: https://pkg.pr.new/seyfert@441
+        specifier: https://pkg.pr.new/seyfert@439
+        version: https://pkg.pr.new/seyfert@439
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -186,8 +186,8 @@ importers:
         specifier: ^26.0.1
         version: 26.1.1
       seyfert:
-        specifier: https://pkg.pr.new/seyfert@441
-        version: https://pkg.pr.new/seyfert@441
+        specifier: https://pkg.pr.new/seyfert@439
+        version: https://pkg.pr.new/seyfert@439
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -254,8 +254,8 @@ importers:
         specifier: ^26.0.1
         version: 26.1.1
       seyfert:
-        specifier: https://pkg.pr.new/seyfert@441
-        version: https://pkg.pr.new/seyfert@441
+        specifier: https://pkg.pr.new/seyfert@439
+        version: https://pkg.pr.new/seyfert@439
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -2016,8 +2016,8 @@ packages:
   seyfert@5.0.0:
     resolution: {integrity: sha512-73tb7/RiToy7+IO1in84zzn736XMXtf2Td0I26bSL2+09wcyEdZG1J4vj5M6twesMACFqv498ELImx6CpddCCQ==}
 
-  seyfert@https://pkg.pr.new/seyfert@441:
-    resolution: {integrity: sha512-73GGoNOvipWDxvjJtomleHUnkzBGsPjlRFh0qcx1GLs1lHTzkeZUxd5JUVNNv8H+oomNrlGqJ5vTJzPyZDBQhw==, tarball: https://pkg.pr.new/seyfert@441}
+  seyfert@https://pkg.pr.new/seyfert@439:
+    resolution: {integrity: sha512-Y03qZPcnxSz2YVkEbnsvx8vyqjY3trAz0H/GuaeAItGt9ERDBIytYtm4QswI8H1GH2SCvlLU5HnsRRE84PgLGQ==, tarball: https://pkg.pr.new/seyfert@439}
     version: 5.0.0
 
   shebang-command@2.0.0:
@@ -3717,7 +3717,7 @@ snapshots:
 
   seyfert@5.0.0: {}
 
-  seyfert@https://pkg.pr.new/seyfert@441: {}
+  seyfert@https://pkg.pr.new/seyfert@439: {}
 
   shebang-command@2.0.0:
     dependencies:

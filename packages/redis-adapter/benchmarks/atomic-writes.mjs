@@ -174,22 +174,22 @@ try {
 					reset: () => deletePrefix(baseline, baselinePrefix),
 					run: async index => {
 						const key = `role.${index}`;
-						await baseline.sAdd(legacyRelationship('guild.1'), String(index));
+						await baseline.sAdd(legacyRelationship('role.guild-1'), String(index));
 						await baseline
 							.multi()
 							.del(baselineValue(key))
 							.hSet(baselineValue(key), { id: String(index), name: `role-${index}` })
 							.exec();
 					},
-					verify: count => verifyLegacyRelationship(baseline, 'guild.1', count),
+					verify: count => verifyLegacyRelationship(baseline, 'role.guild-1', count),
 				},
 				{
 					name: 'atomic Lua',
 					roundTrips: '1/entry',
 					reset: () => atomic.flush(),
 					run: index =>
-						atomic.set(`role.${index}`, { id: String(index), name: `role-${index}` }, ['guild.1', String(index)]),
-					verify: count => verifyRelationship(atomic.client, `${atomic.namespace}:`, 'guild.1', count, true),
+						atomic.set(`role.${index}`, { id: String(index), name: `role-${index}` }, ['role.guild-1', String(index)]),
+					verify: count => verifyRelationship(atomic.client, `${atomic.namespace}:`, 'role.guild-1', count, true),
 				},
 			],
 		})),
@@ -198,7 +198,7 @@ try {
 	const bulkEntries = Array.from({ length: batchSize }, (_, index) => [
 		`role.${index}`,
 		{ id: String(index), name: `role-${index}` },
-		['guild.1', String(index)],
+		['role.guild-1', String(index)],
 	]);
 	const atomicChunksPerBatch = Math.ceil(batchSize / atomicChunkSize);
 	rows.push(
@@ -217,7 +217,7 @@ try {
 							const index = batch * batchSize + offset;
 							ids.push(String(index));
 						}
-						await baseline.sAdd(legacyRelationship('guild.1'), ids);
+						await baseline.sAdd(legacyRelationship('role.guild-1'), ids);
 						const valueCommands = [];
 						for (let offset = 0; offset < batchSize; offset++) {
 							const index = batch * batchSize + offset;
@@ -232,7 +232,7 @@ try {
 						}
 						await Promise.all(valueCommands);
 					},
-					verify: count => verifyLegacyRelationship(baseline, 'guild.1', count * batchSize),
+					verify: count => verifyLegacyRelationship(baseline, 'role.guild-1', count * batchSize),
 				},
 				{
 					name: 'atomic chunked Lua',
@@ -247,7 +247,7 @@ try {
 							]),
 						),
 					verify: count =>
-						verifyRelationship(atomic.client, `${atomic.namespace}:`, 'guild.1', count * batchSize, true),
+						verifyRelationship(atomic.client, `${atomic.namespace}:`, 'role.guild-1', count * batchSize, true),
 				},
 			],
 		})),
@@ -265,7 +265,7 @@ try {
 						await baseline.hSet(baselineValue('role.shared'), { id: 'shared', generation: '0' });
 					},
 					run: async index => {
-						await baseline.hSet(baselineRelationship('guild.1'), 'shared', 'role.shared');
+						await baseline.hSet(baselineRelationship('role.guild-1'), 'shared', 'role.shared');
 						await baseline.hSet(baselineValue('role.shared'), 'generation', String(index));
 					},
 					verify: async count => {
@@ -278,9 +278,9 @@ try {
 					roundTrips: '2/entry (read + script)',
 					reset: async () => {
 						await atomic.flush();
-						await atomic.set('role.shared', { id: 'shared', generation: 0 }, ['guild.1', 'shared']);
+						await atomic.set('role.shared', { id: 'shared', generation: 0 }, ['role.guild-1', 'shared']);
 					},
-					run: index => atomic.patch('role.shared', { generation: index }, ['guild.1', 'shared']),
+					run: index => atomic.patch('role.shared', { generation: index }, ['role.guild-1', 'shared']),
 					verify: async count => {
 						if ((await atomic.get('role.shared'))?.generation !== count - 1)
 							throw new Error('atomic patch oracle failed');
@@ -306,21 +306,21 @@ try {
 							.pExpire(baselineValue(key), 60_000)
 							.exec();
 						await baseline.hSetEx(
-							baselineRelationship('guild.1'),
+							baselineRelationship('role.guild-1'),
 							{ [index]: key },
 							{ expiration: { type: 'PX', value: 60_000 } },
 						);
 					},
-					verify: count => verifyRelationship(baseline, baselinePrefix, 'guild.1', count),
+					verify: count => verifyRelationship(baseline, baselinePrefix, 'role.guild-1', count),
 				},
 				{
 					name: 'atomic Lua',
 					roundTrips: '1/entry',
 					reset: () => expirable.flush(),
-					run: index => expirable.set(`role.${index}`, { id: String(index) }, ['guild.1', String(index)]),
+					run: index => expirable.set(`role.${index}`, { id: String(index) }, ['role.guild-1', String(index)]),
 					verify: async count => {
-						await verifyRelationship(expirable.client, `${expirable.namespace}:`, 'guild.1', count, true);
-						await verifyExpirations(expirable.client, `${expirable.namespace}:`, 'guild.1', count);
+						await verifyRelationship(expirable.client, `${expirable.namespace}:`, 'role.guild-1', count, true);
+						await verifyExpirations(expirable.client, `${expirable.namespace}:`, 'role.guild-1', count);
 					},
 				},
 			],
