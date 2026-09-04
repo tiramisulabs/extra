@@ -1,6 +1,6 @@
-import type { Adapter } from 'seyfert';
+import type { Adapter, AdapterEntry, AdapterRelationship } from 'seyfert';
 
-const FRESHNESS_PREFIX = '__slipher_cache_integrity__.freshness.';
+const FRESHNESS_RESOURCE = '__slipher_cache_integrity__';
 
 interface FreshnessMetadata {
 	writtenAt: number;
@@ -42,8 +42,8 @@ function adapterKeyPrefix(adapter: object): string | undefined {
  */
 export class CacheIntegrityAdapter implements Adapter {
 	readonly #keyPrefix: string | undefined;
-	readonly #relationships = new Map<string, Set<string>>();
-	readonly #values = new Set<string>();
+	readonly #relationships = new Map<string, Map<string, string>>();
+	readonly #values = new Map<string, AdapterRelationship>();
 
 	constructor(
 		readonly inner: Adapter,
@@ -83,51 +83,27 @@ export class CacheIntegrityAdapter implements Adapter {
 		) as ReturnType<Adapter['get']>;
 	}
 
-	bulkSet(entries: [string, any][]): ReturnType<Adapter['bulkSet']> {
-		const snapshot = entries.map(([key, value]) => [key, value] as [string, any]);
-		return this.commitFreshness(
-			this.inner.bulkSet.call(this.inner, snapshot),
-			snapshot.map(([key]) => key),
-			() => {
-				for (const [key] of snapshot) this.#values.add(this.canonicalKey(key));
-			},
-		) as ReturnType<Adapter['bulkSet']>;
+	bulkSet(entries: AdapterEntry[]): ReturnType<Adapter['bulkSet']> {
+		return this.runBulk(entries, ([key, value, relationship]) => this.set(key, value, relationship));
 	}
 
-	set(key: string, data: any): ReturnType<Adapter['set']> {
-		return this.commitFreshness(this.inner.set.call(this.inner, key, data), [key], () =>
-			this.#values.add(this.canonicalKey(key)),
-		) as ReturnType<Adapter['set']>;
+	set(key: string, data: any, relationship: AdapterRelationship): ReturnType<Adapter['set']> {
+		return this.commitFreshness(this.inner.set(key, data, relationship), key, relationship);
 	}
 
-	bulkPatch(entries: [string, any][]): ReturnType<Adapter['bulkPatch']> {
-		const snapshot = entries.map(([key, value]) => [key, value] as [string, any]);
-		if (!snapshot.length) return this.miss(undefined) as ReturnType<Adapter['bulkPatch']>;
+	bulkPatch(entries: AdapterEntry[]): ReturnType<Adapter['bulkPatch']> {
+		const snapshot = [...entries];
 		if (new Set(snapshot.map(([key]) => this.canonicalKey(key))).size !== snapshot.length) {
-			return this.patchSequentially(snapshot) as ReturnType<Adapter['bulkPatch']>;
+			return this.runBulk(snapshot, ([key, data, relationship]) => this.patch(key, data, relationship), 1);
 		}
-		return this.map(this.partitionPatches(snapshot), ({ patches, replacements }) => {
-			const replaceResult = replacements.length ? this.inner.bulkSet.call(this.inner, replacements) : undefined;
-			return this.chain(replaceResult, () => {
-				const patchResult = patches.length ? this.inner.bulkPatch.call(this.inner, patches) : undefined;
-				return this.commitFreshness(
-					patchResult,
-					snapshot.map(([key]) => key),
-					() => {
-						for (const [key] of snapshot) this.#values.add(this.canonicalKey(key));
-					},
-				);
-			});
-		}) as ReturnType<Adapter['bulkPatch']>;
+		return this.runBulk(snapshot, ([key, data, relationship]) => this.patch(key, data, relationship));
 	}
 
-	patch(key: string, data: any): ReturnType<Adapter['patch']> {
+	patch(key: string, data: any, relationship: AdapterRelationship): ReturnType<Adapter['patch']> {
 		return this.map(this.canPatch(key), preserve => {
-			const result = preserve
-				? this.inner.patch.call(this.inner, key, data)
-				: this.inner.set.call(this.inner, key, data);
-			return this.commitFreshness(result, [key], () => this.#values.add(this.canonicalKey(key)));
-		}) as ReturnType<Adapter['patch']>;
+			const result = preserve ? this.inner.patch(key, data, relationship) : this.inner.set(key, data, relationship);
+			return this.commitFreshness(result, key, relationship);
+		});
 	}
 
 	values(to: string): ReturnType<Adapter['values']> {
@@ -150,21 +126,14 @@ export class CacheIntegrityAdapter implements Adapter {
 	}
 
 	bulkRemove(keys: string[]): ReturnType<Adapter['bulkRemove']> {
-		const snapshot = [...keys];
-		return this.chain(this.inner.bulkRemove.call(this.inner, snapshot), () => {
-			for (const key of snapshot) this.deleteValueVisibility(key);
-			return this.inner.bulkRemove.call(
-				this.inner,
-				snapshot.map(key => this.freshnessKey(key)),
-			);
-		}) as ReturnType<Adapter['bulkRemove']>;
+		return this.runBulk(keys, key => this.remove(key));
 	}
 
 	remove(key: string): ReturnType<Adapter['remove']> {
-		return this.chain(this.inner.remove.call(this.inner, key), () => {
+		return this.chain(this.inner.remove(key), () => {
 			this.deleteValueVisibility(key);
-			return this.inner.remove.call(this.inner, this.freshnessKey(key));
-		}) as ReturnType<Adapter['remove']>;
+			return this.inner.remove(this.freshnessKey(key));
+		});
 	}
 
 	flush(): ReturnType<Adapter['flush']> {
@@ -187,43 +156,76 @@ export class CacheIntegrityAdapter implements Adapter {
 		) as ReturnType<Adapter['getToRelationship']>;
 	}
 
-	bulkAddToRelationShip(data: Record<string, string[]>): ReturnType<Adapter['bulkAddToRelationShip']> {
-		const snapshot = Object.fromEntries(Object.entries(data).map(([to, keys]) => [to, [...keys]]));
-		return this.commit(this.inner.bulkAddToRelationShip.call(this.inner, snapshot), () => {
-			for (const [to, keys] of Object.entries(snapshot)) this.addVisibleRelationships(to, keys);
-		});
-	}
-
-	addToRelationship(to: string, keys: string | string[]): ReturnType<Adapter['addToRelationship']> {
-		const snapshot = asArray(keys);
-		return this.commit(this.inner.addToRelationship.call(this.inner, to, snapshot), () => {
-			this.addVisibleRelationships(to, snapshot);
-		});
-	}
-
 	removeToRelationship(to: string, keys: string | string[]): ReturnType<Adapter['removeToRelationship']> {
-		const snapshot = asArray(keys);
-		return this.commit(this.inner.removeToRelationship.call(this.inner, to, snapshot), () => {
-			const relationship = this.#relationships.get(to);
-			for (const key of snapshot) relationship?.delete(key);
-			if (relationship?.size === 0) this.#relationships.delete(to);
-		});
+		const snapshot = [...asArray(keys)];
+		return this.runBulk(snapshot, id =>
+			this.commit(this.inner.removeToRelationship(to, id), () => {
+				const key = this.#relationships.get(to)?.get(id);
+				if (key !== undefined) this.deleteValueVisibility(key);
+			}),
+		);
 	}
 
 	removeRelationship(to: string | string[]): ReturnType<Adapter['removeRelationship']> {
-		const snapshot = asArray(to);
-		return this.commit(this.inner.removeRelationship.call(this.inner, snapshot), () => {
-			for (const key of snapshot) this.#relationships.delete(key);
-		});
+		return this.runBulk(asArray(to), target =>
+			this.commit(this.inner.removeRelationship(target), () => {
+				const pattern = new RegExp(
+					`^${target
+						.split('*')
+						.map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+						.join('.*')}$`,
+				);
+				for (const [relationship, members] of this.#relationships) {
+					if (!pattern.test(relationship)) continue;
+					for (const key of members.values()) this.deleteValueVisibility(key);
+				}
+			}),
+		);
 	}
 
-	private addVisibleRelationships(to: string, keys: string[]): void {
-		let relationship = this.#relationships.get(to);
-		if (!relationship) {
-			relationship = new Set();
-			this.#relationships.set(to, relationship);
+	private publishValue(key: string, relationship: AdapterRelationship): void {
+		const logical = this.canonicalKey(key);
+		const [to, id] = relationship;
+		this.#values.set(logical, [to, id]);
+		let members = this.#relationships.get(to);
+		if (!members) {
+			members = new Map();
+			this.#relationships.set(to, members);
 		}
-		for (const key of keys) relationship.add(key);
+		members.set(id, logical);
+	}
+
+	private runBulk<T>(
+		items: T[],
+		operation: (item: T) => void | PromiseLike<void>,
+		batchSize = 100,
+	): void | Promise<void> {
+		const snapshot = [...items];
+		const failures: unknown[] = [];
+		const batch = (items: T[]) =>
+			this.mapAll(
+				items.map(item => {
+					try {
+						const result = operation(item);
+						return isThenable(result)
+							? Promise.resolve(result).catch(error => {
+									failures.push(error);
+								})
+							: result;
+					} catch (error) {
+						failures.push(error);
+					}
+				}),
+				() => undefined,
+			);
+		let pending: void | Promise<void> = this.miss(undefined);
+		for (let offset = 0; offset < snapshot.length; offset += batchSize) {
+			const entries = snapshot.slice(offset, offset + batchSize);
+			pending = this.chain(pending, () => batch(entries));
+		}
+		return this.chain(pending, () => {
+			if (failures.length) throw new AggregateError(failures, 'CacheIntegrityAdapter bulk operation failed');
+		});
 	}
 
 	private chain<T>(result: T | PromiseLike<T>, next: () => void | PromiseLike<void>): void | Promise<void> {
@@ -244,33 +246,52 @@ export class CacheIntegrityAdapter implements Adapter {
 		});
 	}
 
-	private commitFreshness<T>(result: T | PromiseLike<T>, keys: string[], apply: () => void): T | Promise<T> {
-		return this.map(result, value =>
-			this.map(this.writeFreshness(keys), () => {
-				apply();
-				return value;
-			}),
-		);
+	private commitFreshness(
+		result: void | PromiseLike<void>,
+		key: string,
+		relationship: AdapterRelationship,
+	): void | Promise<void> {
+		return this.chain(result, () => {
+			const id = this.freshnessId(key);
+			return this.commit(
+				this.inner.set(this.freshnessKey(key), { writtenAt: Date.now() } satisfies FreshnessMetadata, [
+					FRESHNESS_RESOURCE,
+					id,
+				]),
+				() => {
+					this.publishValue(key, relationship);
+				},
+			);
+		});
 	}
 
 	private deleteValueVisibility(key: string): void {
-		this.#values.delete(this.canonicalKey(key));
+		const logical = this.canonicalKey(key);
+		const relationship = this.#values.get(logical);
+		this.#values.delete(logical);
+		if (!relationship) return;
+		const [to, id] = relationship;
+		const members = this.#relationships.get(to);
+		members?.delete(id);
+		if (members?.size === 0) this.#relationships.delete(to);
 	}
 
 	private isVisibleRelationshipKey(to: string, key: string): boolean {
-		const relationships = this.#relationships.get(to);
-		if (!relationships) return false;
 		const logical = this.canonicalKey(key);
-		const relationshipPrefix = `${to}.`;
-		return logical.startsWith(relationshipPrefix) && relationships.has(logical.slice(relationshipPrefix.length));
+		const relationship = this.#values.get(logical);
+		return relationship?.[0] === to && this.#relationships.get(to)?.get(relationship[1]) === logical;
 	}
 
 	private isVisibleValueKey(key: string): boolean {
 		return this.#values.has(this.canonicalKey(key));
 	}
 
+	private freshnessId(key: string): string {
+		return Buffer.from(this.canonicalKey(key)).toString('hex');
+	}
+
 	private freshnessKey(key: string): string {
-		return `${FRESHNESS_PREFIX}${encodeURIComponent(this.canonicalKey(key))}`;
+		return `${FRESHNESS_RESOURCE}.${this.freshnessId(key)}`;
 	}
 
 	private hasFreshMetadata(key: string): boolean | Promise<boolean> {
@@ -284,22 +305,6 @@ export class CacheIntegrityAdapter implements Adapter {
 				writtenAt <= now &&
 				now - writtenAt <= this.maxAge
 			);
-		});
-	}
-
-	private partitionPatches(
-		entries: [string, any][],
-	):
-		| { patches: [string, any][]; replacements: [string, any][] }
-		| Promise<{ patches: [string, any][]; replacements: [string, any][] }> {
-		const decisions = entries.map(([key]) => this.canPatch(key));
-		return this.mapAll(decisions, preserve => {
-			const patches: [string, any][] = [];
-			const replacements: [string, any][] = [];
-			for (let index = 0; index < entries.length; index++) {
-				(preserve[index] ? patches : replacements).push(entries[index]);
-			}
-			return { patches, replacements };
 		});
 	}
 
@@ -332,28 +337,5 @@ export class CacheIntegrityAdapter implements Adapter {
 
 	private miss<T>(value: T): T | Promise<T> {
 		return this.inner.isAsync ? Promise.resolve(value) : value;
-	}
-
-	private patchSequentially(entries: [string, any][]): void | Promise<void> {
-		let pending: Promise<void> | undefined;
-		for (const [key, data] of entries) {
-			if (pending) {
-				pending = pending.then(() => this.patch(key, data));
-				continue;
-			}
-			const result = this.patch(key, data);
-			if (isThenable<void>(result)) pending = Promise.resolve(result);
-		}
-		return pending;
-	}
-
-	private writeFreshness(keys: string[]): void | Promise<void> {
-		if (!keys.length) return this.miss(undefined);
-		const metadata: FreshnessMetadata = { writtenAt: Date.now() };
-		if (keys.length === 1) return this.inner.set.call(this.inner, this.freshnessKey(keys[0]), metadata);
-		return this.inner.bulkSet.call(
-			this.inner,
-			keys.map(key => [this.freshnessKey(key), metadata]),
-		);
 	}
 }

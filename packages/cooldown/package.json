@@ -34,10 +34,15 @@
 		"@slipher/redis-adapter": "workspace:*",
 		"@slipher/testing": "workspace:*",
 		"@types/node": "^26.0.1",
-		"seyfert": "https://pkg.pr.new/seyfert@439",
+		"seyfert": "5.0.1-dev-33922311634.0",
 		"typescript": "^6.0.3"
 	},
 	"peerDependencies": {
-		"seyfert": ">=5.0.0"
+		"seyfert": ">=5.0.1-dev-33922311634.0"
+	},
+	"dependenciesMeta": {
+		"@slipher/testing": {
+			"injected": true
+		}
 	}
 }

@@ -56,16 +56,22 @@ importers:
         version: 6.0.3
 
   packages/cache-integrity:
+    dependenciesMeta:
+      '@slipher/testing':
+        injected: true
     devDependencies:
+      '@slipher/redis-adapter':
+        specifier: workspace:*
+        version: link:../redis-adapter
       '@slipher/testing':
         specifier: workspace:*
-        version: link:../testing
+        version: file:packages/testing(seyfert@5.0.1-dev-33922311634.0)
       '@types/node':
         specifier: ^26.0.1
         version: 26.1.1
       seyfert:
-        specifier: ^5.0.0
-        version: 5.0.0
+        specifier: 5.0.1-dev-33922311634.0
+        version: 5.0.1-dev-33922311634.0
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -87,19 +93,22 @@ importers:
         version: 6.0.3
 
   packages/cooldown:
+    dependenciesMeta:
+      '@slipher/testing':
+        injected: true
     devDependencies:
       '@slipher/redis-adapter':
         specifier: workspace:*
         version: link:../redis-adapter
       '@slipher/testing':
         specifier: workspace:*
-        version: link:../testing
+        version: file:packages/testing(seyfert@5.0.1-dev-33922311634.0)
       '@types/node':
         specifier: ^26.0.1
         version: 26.1.1
       seyfert:
-        specifier: https://pkg.pr.new/seyfert@439
-        version: https://pkg.pr.new/seyfert@439
+        specifier: 5.0.1-dev-33922311634.0
+        version: 5.0.1-dev-33922311634.0
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -184,6 +193,9 @@ importers:
       '@opentelemetry/semantic-conventions':
         specifier: ^1.43.0
         version: 1.43.0
+    dependenciesMeta:
+      '@slipher/testing':
+        injected: true
     devDependencies:
       '@opentelemetry/api':
         specifier: ^1.9.0
@@ -196,13 +208,13 @@ importers:
         version: 2.9.0(@opentelemetry/api@1.9.1)
       '@slipher/testing':
         specifier: workspace:*
-        version: link:../testing
+        version: file:packages/testing(seyfert@5.0.1-dev-33922311634.0)
       '@types/node':
         specifier: ^26.0.1
         version: 26.1.1
       seyfert:
-        specifier: https://pkg.pr.new/seyfert@439
-        version: https://pkg.pr.new/seyfert@439
+        specifier: 5.0.1-dev-33922311634.0
+        version: 5.0.1-dev-33922311634.0
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -269,8 +281,8 @@ importers:
         specifier: ^26.0.1
         version: 26.1.1
       seyfert:
-        specifier: https://pkg.pr.new/seyfert@439
-        version: https://pkg.pr.new/seyfert@439
+        specifier: 5.0.1-dev-33922311634.0
+        version: 5.0.1-dev-33922311634.0
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -1174,6 +1186,11 @@ packages:
   '@rolldown/pluginutils@1.0.1':
     resolution: {integrity: sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw==}
 
+  '@slipher/testing@file:packages/testing':
+    resolution: {directory: packages/testing, type: directory}
+    peerDependencies:
+      seyfert: '>=5.0.0'
+
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
 
@@ -1439,6 +1456,7 @@ packages:
     resolution: {integrity: sha512-p0SaNjrHOnQeR8/VnfGbmg9te2kfyYSQ7Sc/j/6DtPL3JQvKxmjO9TSjNFpujqV3vEYYBvNNvXSxzyksBWAx1Q==}
     engines: {node: '>=12.0.0'}
     deprecated: v4 is no longer maintained, upgrade to v5
+
   cron-parser@5.10.0:
     resolution: {integrity: sha512-izNAxJyRWUP8ljBoDSub5WyrVOUlT4SLGShswE7eoRBpp6QUsSycYxLBMJlbshgPBMcPT/nrfgjNY2918ayv2A==}
     engines: {node: '>=18'}
@@ -1522,6 +1540,7 @@ packages:
   eslint@10.6.0:
     resolution: {integrity: sha512-6lVbcqSodALYo+4ELD0heG6lFiFxnLMuLkiMi2qV8LMp54N8tE8FT1GMH+ev4Ti00nFjNze2+Su6DsV5OQW3Dg==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
+    hasBin: true
     peerDependencies:
       jiti: '*'
     peerDependenciesMeta:
@@ -2031,9 +2050,8 @@ packages:
   seyfert@5.0.0:
     resolution: {integrity: sha512-73tb7/RiToy7+IO1in84zzn736XMXtf2Td0I26bSL2+09wcyEdZG1J4vj5M6twesMACFqv498ELImx6CpddCCQ==}
 
-  seyfert@https://pkg.pr.new/seyfert@439:
-    resolution: {integrity: sha512-Y03qZPcnxSz2YVkEbnsvx8vyqjY3trAz0H/GuaeAItGt9ERDBIytYtm4QswI8H1GH2SCvlLU5HnsRRE84PgLGQ==, tarball: https://pkg.pr.new/seyfert@439}
-    version: 5.0.0
+  seyfert@5.0.1-dev-33922311634.0:
+    resolution: {integrity: sha512-zEwTcxzU//cApUYuL60TqOhBGpD11NfBCvOyDlu0TmxSulE2bZTur58A9cHbf4HbQbdjN10i59iuLZJ1Ihc3Og==}
 
   shebang-command@2.0.0:
     resolution: {integrity: sha512-kHxr2zZpYtdmrN1qDjrrX/Z1rR1kG8Dx+gkpK1G4eXmvXswmcE1hTWBWYUzlraYw1/yZp6YuDY77YtvbN0dmDA==}
@@ -2208,6 +2226,7 @@ packages:
   vitest@4.1.10:
     resolution: {integrity: sha512-R9jUTe5S4Qb0HCd4TNqpC7oGcrMssMRGXLW80ubjWsW9VH5GF8y1Y0SFLY9AbqSk6nt0PnOx4H4WNJYZ13GUPw==}
     engines: {node: ^20.0.0 || ^22.0.0 || >=24.0.0}
+    hasBin: true
     peerDependencies:
       '@edge-runtime/vm': '*'
       '@opentelemetry/api': ^1.9.0
@@ -2912,6 +2931,10 @@ snapshots:
     optional: true
 
   '@rolldown/pluginutils@1.0.1': {}
+
+  '@slipher/testing@file:packages/testing(seyfert@5.0.1-dev-33922311634.0)':
+    dependencies:
+      seyfert: 5.0.1-dev-33922311634.0
 
   '@standard-schema/spec@1.1.0': {}
 
@@ -3732,7 +3755,7 @@ snapshots:
 
   seyfert@5.0.0: {}
 
-  seyfert@https://pkg.pr.new/seyfert@439: {}
+  seyfert@5.0.1-dev-33922311634.0: {}
 
   shebang-command@2.0.0:
     dependencies:
