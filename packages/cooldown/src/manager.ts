@@ -2,7 +2,12 @@ import { type AnyContext, CacheFrom, type CommandFromContent, type ReturnCache, 
 import type { BaseClient } from 'seyfert/lib/client/base';
 import { type Awaitable, fakePromise } from 'seyfert/lib/common';
 import { getCooldownContext } from './context';
-import { COOLDOWN_RESOURCE_FIELD_PREFIX, COOLDOWN_RESOURCE_RELATIONSHIP_SUFFIX, CooldownResource } from './resource';
+import {
+	COOLDOWN_RESOURCE_FIELD_PREFIX,
+	COOLDOWN_RESOURCE_OWNERS_KEY,
+	COOLDOWN_RESOURCE_RELATIONSHIP_KEY,
+	CooldownResource,
+} from './resource';
 
 export type CooldownTargetType = 'user' | 'guild' | 'channel' | 'global';
 export type CooldownTargetResolver = (context: AnyContext) => string | undefined;
@@ -94,11 +99,25 @@ interface CooldownContextLike {
 
 const ATOMIC_CONSUME_SCRIPT = `
 local hashKey = KEYS[1]
-local namespaceKey = KEYS[2]
+local relationshipKey = KEYS[2]
+local ownersKey = KEYS[3]
 local interval = tonumber(ARGV[1])
 local limit = tonumber(ARGV[2])
 local cost = tonumber(ARGV[3])
 local memberKey = ARGV[4]
+local logicalKey = ARGV[5]
+
+local function assert_hash_or_none(key)
+	local reply = redis.call('TYPE', key)
+	local keyType = type(reply) == 'table' and reply.ok or reply
+	if keyType ~= 'none' and keyType ~= 'hash' then
+		error('WRONGTYPE expected hash or none for ' .. key)
+	end
+end
+
+assert_hash_or_none(hashKey)
+assert_hash_or_none(relationshipKey)
+assert_hash_or_none(ownersKey)
 
 local time = redis.call('TIME')
 local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
@@ -111,7 +130,8 @@ local invalidLastDrip = lastDrip == nil or lastDrip % 1 ~= 0 or lastDrip > now o
 
 if invalidRemaining or invalidLastDrip or now - lastDrip >= interval then
 	local newRemaining = limit - cost
-	redis.call('SADD', namespaceKey .. '${COOLDOWN_RESOURCE_RELATIONSHIP_SUFFIX}', memberKey)
+	redis.call('HSET', relationshipKey, memberKey, logicalKey)
+	redis.call('HSET', ownersKey, logicalKey, logicalKey)
 	redis.call('HSET', hashKey, '${COOLDOWN_RESOURCE_FIELD_PREFIX}interval', tostring(interval), '${COOLDOWN_RESOURCE_FIELD_PREFIX}remaining', tostring(newRemaining), '${COOLDOWN_RESOURCE_FIELD_PREFIX}lastDrip', tostring(now))
 	return {1, 0, now, limit, newRemaining}
 end
@@ -123,7 +143,8 @@ if newRemaining < 0 then
 	return {0, remainingMs, now + remainingMs, limit, remaining}
 end
 
-redis.call('SADD', namespaceKey .. '${COOLDOWN_RESOURCE_RELATIONSHIP_SUFFIX}', memberKey)
+redis.call('HSET', relationshipKey, memberKey, logicalKey)
+redis.call('HSET', ownersKey, logicalKey, logicalKey)
 redis.call('HSET', hashKey, '${COOLDOWN_RESOURCE_FIELD_PREFIX}interval', tostring(interval), '${COOLDOWN_RESOURCE_FIELD_PREFIX}remaining', tostring(newRemaining))
 return {1, 0, now, limit, newRemaining}
 `;
@@ -205,11 +226,11 @@ export class CooldownManager {
 	private buildKey(props: CooldownProps, resolvedName: string, target: string): string {
 		const namespace = props.group ?? resolvedName;
 		if (!namespace.trim()) throw new RangeError('Cooldown group and command names must not be empty.');
-		const encodedNamespace = encodeURIComponent(namespace);
+		const encodedNamespace = encodeCacheSegment(namespace);
 		if (props.type === 'global') return `${encodedNamespace}:global:global`;
 		if (!target.trim()) throw new RangeError('Cooldown targets must not be empty.');
 		const typeLabel = typeof props.type === 'function' ? 'custom' : (props.type ?? 'user');
-		return `${encodedNamespace}:${typeLabel}:${encodeURIComponent(target)}`;
+		return `${encodedNamespace}:${typeLabel}:${encodeCacheSegment(target)}`;
 	}
 
 	private resolveExplicitBucket(options: CooldownCheckOptions): ResolvedBucket | undefined {
@@ -350,8 +371,8 @@ export class CooldownManager {
 		return fakePromise(
 			adapter.eval<AtomicCooldownResult>(
 				ATOMIC_CONSUME_SCRIPT,
-				[this.resource.hashId(key), this.resource.namespace],
-				[String(props.interval), String(limit), String(cost), key],
+				[this.resource.hashId(key), COOLDOWN_RESOURCE_RELATIONSHIP_KEY, COOLDOWN_RESOURCE_OWNERS_KEY],
+				[String(props.interval), String(limit), String(cost), key, this.resource.hashId(key)],
 			),
 		).then(result => this.fromAtomicResult(key, result));
 	}
@@ -525,6 +546,10 @@ export class CooldownManager {
 				return context.author?.id;
 		}
 	}
+}
+
+function encodeCacheSegment(value: string) {
+	return encodeURIComponent(value).replaceAll('.', '%2E');
 }
 
 function isExplicitOptions(

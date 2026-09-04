@@ -21,13 +21,13 @@ function fakeAdapter(store = new Map<string, unknown>()) {
 			if (!store.has(key)) return null;
 			return store.get(key);
 		},
-		set(key: string, data: unknown) {
+		set(key: string, data: unknown, _relationship?: readonly [string, string]) {
 			store.set(key, data);
 		},
 		remove(key: string) {
 			store.delete(key);
 		},
-		patch(key: string, data: unknown) {
+		patch(key: string, data: unknown, _relationship?: readonly [string, string]) {
 			const prev = store.get(key);
 			store.set(
 				key,
@@ -39,13 +39,13 @@ function fakeAdapter(store = new Map<string, unknown>()) {
 		bulkGet(keys: string[]) {
 			return keys.map(k => store.get(k)).filter(v => v !== undefined);
 		},
-		bulkSet(entries: [string, unknown][]) {
+		bulkSet(entries: [string, unknown, readonly [string, string]][]) {
 			for (const [k, v] of entries) store.set(k, v);
 		},
 		bulkRemove(keys: string[]) {
 			for (const k of keys) store.delete(k);
 		},
-		bulkPatch(entries: [string, unknown][]) {
+		bulkPatch(entries: [string, unknown, readonly [string, string]][]) {
 			for (const [k, v] of entries) {
 				(adapter.patch as (key: string, data: unknown) => void)(k, v);
 			}
@@ -68,8 +68,6 @@ function fakeAdapter(store = new Map<string, unknown>()) {
 		contains(to: string, key: string) {
 			return store.has(`${to}.${key}`);
 		},
-		bulkAddToRelationShip(_data: Record<string, string[]>) {},
-		addToRelationship(_to: string, _keys: string | string[]) {},
 		removeToRelationship(_to: string, _keys: string | string[]) {},
 		removeRelationship(_to: string | string[]) {},
 	};
@@ -89,7 +87,7 @@ describe('extractCacheResource', () => {
 
 	test('handles bulk key lists and tuples', () => {
 		assert.equal(extractCacheResource([['user.1', 'user.2']]), 'user');
-		assert.equal(extractCacheResource([[['channel.9', { id: '9' }]]]), 'channel');
+		assert.equal(extractCacheResource([[['channel.9', { id: '9' }, ['channel.guild', '9']]]]), 'channel');
 	});
 
 	test('falls back to unknown', () => {
@@ -117,8 +115,6 @@ describe('instrumentCache (adapter wraps)', () => {
 				'flush',
 				'contains',
 				'getToRelationship',
-				'bulkAddToRelationShip',
-				'addToRelationship',
 				'removeToRelationship',
 				'removeRelationship',
 			] as const;

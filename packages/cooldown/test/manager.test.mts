@@ -1,18 +1,21 @@
+import { ExpirableRedisAdapter, RedisAdapter } from '@slipher/redis-adapter';
+import { createMockBot } from '@slipher/testing';
 import {
 	type AnyContext,
 	Cache,
 	CacheFrom,
 	Client,
 	Command,
-	definePlugins,
+	Declare,
 	Logger,
 	MemoryAdapter,
 	SubCommand,
 } from 'seyfert';
+import type { Adapter } from 'seyfert/lib/cache';
 import { HandleCommand } from 'seyfert/lib/commands/handle';
 import { CommandHandler } from 'seyfert/lib/commands/handler.js';
 import { afterEach, assert, beforeEach, describe, expect, test, vi } from 'vitest';
-import { Cooldown, CooldownManager, type CooldownProps, cooldown as cooldownPlugin } from '../src';
+import { Cooldown, CooldownManager, type CooldownProps, type CooldownResult, cooldown as cooldownPlugin } from '../src';
 import type { CooldownData } from '../src/resource';
 
 type CooldownContextScope = (context: AnyContext, run: () => unknown) => unknown;
@@ -42,7 +45,7 @@ function commandContext(overrides: Record<string, unknown> = {}) {
 	} as unknown as AnyContext;
 }
 
-function createClient(commands: Command[] = []) {
+function createClient(commands: Command[] = [], adapter: Adapter = new MemoryAdapter()) {
 	const client = new Client({
 		getRC: () => ({ debug: false, intents: 0, token: '', locations: { base: '', output: '' } }),
 	});
@@ -50,7 +53,7 @@ function createClient(commands: Command[] = []) {
 	handler.values = commands;
 	client.commands = handler;
 	client.handleCommand = new HandleCommand(client);
-	client.cache = new Cache(0, new MemoryAdapter(), {}, client);
+	client.cache = new Cache(0, adapter, {}, client);
 	return client;
 }
 
@@ -79,7 +82,7 @@ class AtomicMemoryAdapter extends MemoryAdapter {
 		await Promise.resolve();
 
 		try {
-			const [hashKey, namespace] = keys;
+			const [hashKey] = keys;
 			const [intervalArg, limitArg, costArg, memberKey] = args;
 			const now = Date.now();
 			const interval = Number(intervalArg);
@@ -96,8 +99,7 @@ class AtomicMemoryAdapter extends MemoryAdapter {
 
 			if (!data || invalidData || now - data.lastDrip >= interval) {
 				const remaining = limit - cost;
-				this.addToRelationship(namespace, memberKey);
-				this.set(hashKey, { interval, remaining, lastDrip: now });
+				this.set(hashKey, { interval, remaining, lastDrip: now }, ['cooldowns', memberKey]);
 				return [1, 0, now, limit, remaining];
 			}
 
@@ -107,8 +109,7 @@ class AtomicMemoryAdapter extends MemoryAdapter {
 			}
 
 			const remaining = data.remaining - cost;
-			this.addToRelationship(namespace, memberKey);
-			this.patch(hashKey, { interval, remaining });
+			this.patch(hashKey, { interval, remaining }, ['cooldowns', memberKey]);
 			return [1, 0, now, limit, remaining];
 		} finally {
 			this.inFlight--;
@@ -136,6 +137,21 @@ function createAsyncMemoryAdapter() {
 		},
 	});
 	return { adapter, storage };
+}
+
+@Declare({ name: 'global-cooldown', description: 'Command with a global cooldown middleware' })
+@Cooldown.user(1_000)
+class GlobalCooldownCommand extends Command {
+	onMiddlewaresError() {}
+	run() {}
+}
+
+@Declare({ name: 'default-cooldown', description: 'Command with the default cooldown middleware' })
+@Cooldown.user(1_000)
+class DefaultCooldownCommand extends Command {
+	middlewares = ['cooldown'] as never;
+	onMiddlewaresError() {}
+	run() {}
 }
 
 describe('CooldownManager — explicit check / consume / reset', () => {
@@ -652,6 +668,111 @@ describe('CooldownManager — atomic storage', () => {
 		assert.equal((adapter.get('cooldowns.ping:user:u1') as CooldownData | null)?.remaining, 0);
 	});
 
+	test('Redis atomic path keeps the bucket and relationship index coherent under concurrency', async () => {
+		vi.useRealTimers();
+		const adapter = new RedisAdapter({
+			namespace: `cooldown-integration-${process.pid}-${Date.now()}`,
+			redisOptions: { url: process.env.SLIPHER_REDIS_URL ?? 'redis://127.0.0.1:6379' },
+		});
+		await adapter.start();
+		client = createClient(
+			[
+				makeCommand({
+					name: 'ping',
+					description: 'Ping',
+					cooldown: { type: 'user', interval: 1_000, uses: 2 },
+				}),
+			],
+			adapter,
+		);
+		manager = new CooldownManager(client);
+
+		try {
+			const results = await Promise.all(
+				Array.from({ length: 5 }, () => manager.consume({ name: 'ping', target: 'u1' })),
+			);
+			assert.equal(results.filter(result => result?.allowed).length, 2);
+			assert.equal(results.filter(result => result && !result.allowed).length, 3);
+			assert.equal(await adapter.contains('cooldowns', 'ping:user:u1'), true);
+			assert.equal((await adapter.get('cooldowns.ping:user:u1'))?.remaining, 0);
+
+			await manager.reset({ name: 'ping', target: 'u1' });
+			assert.equal(await adapter.get('cooldowns.ping:user:u1'), undefined);
+			assert.equal(await adapter.contains('cooldowns', 'ping:user:u1'), false);
+		} finally {
+			await adapter.flush();
+			adapter.client.close();
+		}
+	});
+
+	test('Redis atomic path cleans up dotted cooldown groups and targets', async () => {
+		vi.useRealTimers();
+		const adapter = new RedisAdapter({
+			namespace: `cooldown-dotted-${process.pid}-${Date.now()}`,
+			redisOptions: { url: process.env.SLIPHER_REDIS_URL ?? 'redis://127.0.0.1:6379' },
+		});
+		await adapter.start();
+		client = createClient(
+			[
+				makeCommand({
+					name: 'ping',
+					description: 'Ping',
+					cooldown: { group: 'api.v2', type: () => 'tenant.example', interval: 1_000, uses: 1 },
+				}),
+			],
+			adapter,
+		);
+		manager = new CooldownManager(client);
+
+		try {
+			await manager.consume({ name: 'ping', target: 'tenant.example' });
+			const relationshipId = 'api%2Ev2:custom:tenant%2Eexample';
+			assert.equal(await adapter.contains('cooldowns', relationshipId), true);
+
+			await manager.reset({ name: 'ping', target: 'tenant.example' });
+			assert.equal(await adapter.get(`cooldowns.${relationshipId}`), undefined);
+			assert.equal(await adapter.contains('cooldowns', relationshipId), false);
+		} finally {
+			await adapter.flush();
+			adapter.client.close();
+		}
+	});
+
+	test('expirable Redis writes cooldowns through the expiration-aware adapter contract', async () => {
+		vi.useRealTimers();
+		const namespace = `cooldown-expirable-${process.pid}-${Date.now()}`;
+		const adapter = new ExpirableRedisAdapter(
+			{
+				namespace,
+				redisOptions: { url: process.env.SLIPHER_REDIS_URL ?? 'redis://127.0.0.1:6379' },
+			},
+			{ default: { expire: 1_000 } },
+		);
+		await adapter.start();
+		client = createClient(
+			[
+				makeCommand({
+					name: 'ping',
+					description: 'Ping',
+					cooldown: { type: 'user', interval: 1_000, uses: 2 },
+				}),
+			],
+			adapter,
+		);
+		manager = new CooldownManager(client);
+
+		try {
+			await manager.consume({ name: 'ping', target: 'u1' });
+			assert.isAbove(await adapter.client.pTTL(`${namespace}:cooldowns.ping:user:u1`), 0);
+			const [relationshipTtl] =
+				(await adapter.client.hpTTL(`${namespace}:relationships:cooldowns`, 'ping:user:u1')) ?? [];
+			assert.isAbove(relationshipTtl ?? -2, 0);
+		} finally {
+			await adapter.flush();
+			adapter.client.close();
+		}
+	});
+
 	test('atomic adapter replaces corrupt buckets with canonical state', async () => {
 		const adapter = new AtomicMemoryAdapter();
 		client.cache = new Cache(0, adapter, {}, client);
@@ -667,7 +788,7 @@ describe('CooldownManager — atomic storage', () => {
 		for (const [index, bucket] of corruptBuckets.entries()) {
 			const target = `corrupt-${index}`;
 			const key = `cooldowns.ping:user:${target}`;
-			adapter.set(key, { interval: 1_000, ...bucket });
+			adapter.set(key, { interval: 1_000, ...bucket }, ['cooldowns', key.slice('cooldowns.'.length)]);
 
 			const result = await manager.consume({ name: 'ping', target });
 			const stored = adapter.get(key) as CooldownData | null;
@@ -757,18 +878,15 @@ describe('cooldown() plugin', () => {
 		assert.equal(result.key, 'testCommand:user:user1');
 	});
 
-	test('installs the manager through the Seyfert v5 client extension contract', () => {
+	test('installs the manager through the Seyfert v5 client extension contract', async () => {
 		const plugin = cooldownPlugin();
-		const plugins = definePlugins(plugin);
-		const client = new Client({
-			getRC: () => ({ debug: false, intents: 0, token: '', locations: { base: '', output: '' } }),
-			plugins,
-		});
+		const bot = await createMockBot({ plugins: [plugin] });
+		const client = bot.client as typeof bot.client & { cooldown: CooldownManager };
 
 		assert.equal(client.cooldown, plugin.manager);
 		assert.equal(Object.getOwnPropertyDescriptor(client, 'cooldown')?.writable, false);
-		plugin.setup(client);
-		assert.equal(plugin.manager.client, client);
+		assert.equal(plugin.manager.client, bot.client);
+		await bot.close();
 	});
 
 	test('does not register a middleware by default', () => {
@@ -784,140 +902,40 @@ describe('cooldown() plugin', () => {
 	});
 
 	test('registers an optional middleware that consumes the active context cooldown', async () => {
-		vi.useFakeTimers();
-		try {
-			vi.setSystemTime(new Date(0));
-			const plugin = cooldownPlugin({
-				middleware: {
-					global: true,
-					message: (result, context) => `${context.fullCommandName}:${result.remainingMs}`,
-					name: 'commandCooldown',
-				},
-			});
-			const registered: {
-				middleware: (payload: {
-					context: AnyContext;
-					next: (result?: unknown) => void;
-					pass: () => void;
-					stop: (message: string) => void;
-				}) => unknown;
-				name: string;
-				options?: { global?: boolean };
-			}[] = [];
-			plugin.register?.({
-				middlewares: {
-					add(name, middleware, options) {
-						registered.push({ name, middleware, options });
-					},
-				},
-				options: { set() {} },
-			} as never);
+		const plugin = cooldownPlugin({
+			middleware: {
+				global: true,
+				message: (result: CooldownResult, context: AnyContext) =>
+					`${'fullCommandName' in context ? context.fullCommandName : 'unknown'}:${result.remainingMs}`,
+				name: 'commandCooldown',
+			},
+		});
+		const bot = await createMockBot({ commands: [GlobalCooldownCommand], plugins: [plugin] });
 
-			assert.equal(registered.length, 1);
-			assert.equal(registered[0]?.name, 'commandCooldown');
-			assert.deepEqual(registered[0]?.options, { global: true });
+		const allowed = await bot.slash({ name: 'global-cooldown' });
+		const blocked = await bot.slash({ name: 'global-cooldown' });
 
-			const { client, command } = createClientForPlugin({
-				interval: 1_000,
-				type: 'user',
-			});
-			plugin.setup(client);
-			const context = commandContext({ client, command, fullCommandName: 'testCommand' });
-			const nextCalls: unknown[] = [];
-			const stops: string[] = [];
-			const scope = getPluginContextScope(plugin)!;
-
-			await scope(context, () =>
-				registered[0]!.middleware({
-					context,
-					next: result => nextCalls.push(result),
-					pass: () => {
-						throw new Error('cooldown middleware should not pass');
-					},
-					stop: message => stops.push(message),
-				}),
-			);
-			await scope(context, () =>
-				registered[0]!.middleware({
-					context,
-					next: result => nextCalls.push(result),
-					pass: () => {
-						throw new Error('cooldown middleware should not pass');
-					},
-					stop: message => stops.push(message),
-				}),
-			);
-
-			assert.equal(nextCalls.length, 1);
-			assert.equal((nextCalls[0] as { allowed: boolean }).allowed, true);
-			assert.deepEqual(stops, ['testCommand:1000']);
-		} finally {
-			vi.useRealTimers();
-		}
+		assert.equal(allowed.denied, false);
+		assert.equal(blocked.denied, true);
+		assert.equal(blocked.denial?.kind, 'stop');
+		assert.equal(blocked.denial?.middleware, 'commandCooldown');
+		assert.match(String(blocked.denial?.reason ?? ''), /^global-cooldown:\d+$/);
+		await bot.close();
 	});
 
 	test('uses a friendly default cooldown middleware message', async () => {
-		vi.useFakeTimers();
-		try {
-			vi.setSystemTime(new Date(0));
-			const plugin = cooldownPlugin({ middleware: true });
-			const registered: {
-				middleware: (payload: {
-					context: AnyContext;
-					next: (result?: unknown) => void;
-					pass: () => void;
-					stop: (message: string) => void;
-				}) => unknown;
-				name: string;
-				options?: { global?: boolean };
-			}[] = [];
-			plugin.register?.({
-				middlewares: {
-					add(name, middleware, options) {
-						registered.push({ name, middleware, options });
-					},
-				},
-				options: { set() {} },
-			} as never);
+		const plugin = cooldownPlugin({ middleware: true });
+		const bot = await createMockBot({ commands: [DefaultCooldownCommand], plugins: [plugin] });
 
-			assert.equal(registered.length, 1);
-			assert.equal(registered[0]?.name, 'cooldown');
-			assert.equal(registered[0]?.options, undefined);
+		const allowed = await bot.slash({ name: 'default-cooldown' });
+		const blocked = await bot.slash({ name: 'default-cooldown' });
 
-			const { client, command } = createClientForPlugin({
-				interval: 1_000,
-				type: 'user',
-			});
-			plugin.setup(client);
-			const context = commandContext({ client, command, fullCommandName: 'testCommand' });
-			const stops: string[] = [];
-			const scope = getPluginContextScope(plugin)!;
-
-			await scope(context, () =>
-				registered[0]!.middleware({
-					context,
-					next: () => {},
-					pass: () => {
-						throw new Error('cooldown middleware should not pass');
-					},
-					stop: message => stops.push(message),
-				}),
-			);
-			await scope(context, () =>
-				registered[0]!.middleware({
-					context,
-					next: () => {},
-					pass: () => {
-						throw new Error('cooldown middleware should not pass');
-					},
-					stop: message => stops.push(message),
-				}),
-			);
-
-			assert.deepEqual(stops, ['This command is cooling down. Try again <t:1:R>.']);
-		} finally {
-			vi.useRealTimers();
-		}
+		assert.equal(allowed.denied, false);
+		assert.equal(blocked.denied, true);
+		assert.equal(blocked.denial?.kind, 'stop');
+		assert.equal(blocked.denial?.middleware, 'cooldown');
+		assert.match(String(blocked.denial?.reason ?? ''), /^This command is cooling down\. Try again <t:\d+:R>\.$/);
+		await bot.close();
 	});
 
 	test('setup attaches the manager to the client resources without mutating plugin-owned keys', () => {

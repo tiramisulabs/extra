@@ -1,6 +1,6 @@
+import { createMockBot } from '@slipher/testing';
 import { createDrainPipeline } from 'evlog/pipeline';
 import {
-	Client,
 	Command,
 	ComponentCommand,
 	createMiddleware,
@@ -8,7 +8,6 @@ import {
 	ModalCommand,
 	Logger as SeyfertLogger,
 } from 'seyfert';
-import { HandleCommand } from 'seyfert/lib/commands/handle';
 import { assert, describe, test } from 'vitest';
 import { evlogTransport, type LogEntry, type LoggerAdapter, logger, useLogger } from '../src';
 
@@ -152,58 +151,13 @@ async function setupLifecycleClient(adapter: LoggerAdapter) {
 			api.modals.add(modal);
 		},
 	});
-	const client = new Client({
+	const bot = await createMockBot({
 		plugins: [loggerPlugin, fixtures],
-		logger: { active: false },
-		commands: { prefix: () => ['!'] },
+		prefixes: ['!'],
+		validateOptions: false,
+		clientOptions: { logger: { active: false } },
 	});
-	await (client as unknown as { setupPlugins(): Promise<void> }).setupPlugins();
-	await client.reloadPluginContributions();
-	client.handleCommand = new HandleCommand(client);
-	return { client, command, component, modal };
-}
-
-function commandHandlerContext(client: Client, command: Command) {
-	return interactionContext({
-		client,
-		command,
-		author: { id: 'user-1' },
-		options: {},
-	});
-}
-
-function componentHandlerContext(client: Client, command: ComponentCommand | ModalCommand) {
-	return interactionContext({
-		client,
-		command,
-		customId: command.customId,
-		author: { id: 'user-1' },
-	});
-}
-
-function rawPrefixMessage() {
-	return {
-		id: 'message-1',
-		channel_id: 'channel-1',
-		guild_id: 'guild-1',
-		content: '!custom-command',
-		author: {
-			id: 'user-1',
-			username: 'tester',
-			discriminator: '0',
-			avatar: null,
-		},
-		attachments: [],
-		components: [],
-		embeds: [],
-		mentions: [],
-		mention_roles: [],
-		mention_everyone: false,
-		pinned: false,
-		timestamp: '2026-07-10T12:00:00.000Z',
-		tts: false,
-		type: 0,
-	};
+	return { bot, client: bot.client, command, component, modal };
 }
 
 describe('logger lifecycle regressions', () => {
@@ -246,19 +200,14 @@ describe('logger lifecycle regressions', () => {
 
 	test('real Seyfert handlers compose custom success hooks with one terminal event', async () => {
 		const adapter = new RecordingAdapter();
-		const { client, command, component, modal } = await setupLifecycleClient(adapter);
+		const { bot, command, component, modal } = await setupLifecycleClient(adapter);
 
 		try {
-			await client.handleCommand.chatInput(
-				command,
-				{} as never,
-				{} as never,
-				commandHandlerContext(client, command) as never,
-			);
-			await client.components.execute(component, componentHandlerContext(client, component) as never);
-			await client.components.execute(modal, componentHandlerContext(client, modal) as never);
+			await bot.slash({ name: 'custom-command' });
+			await bot.clickButton('custom:component', { allowSyntheticSource: true });
+			await bot.submitModal('custom:modal', {}, { allowSyntheticSource: true });
 		} finally {
-			await client.close();
+			await bot.close();
 		}
 
 		assert.deepEqual(command.afterErrors, [undefined]);
@@ -276,22 +225,17 @@ describe('logger lifecycle regressions', () => {
 
 	test('real Seyfert handlers compose custom error hooks with one terminal event', async () => {
 		const adapter = new RecordingAdapter();
-		const { client, command, component, modal } = await setupLifecycleClient(adapter);
+		const { bot, command, component, modal } = await setupLifecycleClient(adapter);
 		command.throwOnRun = true;
 		component.throwOnRun = true;
 		modal.throwOnRun = true;
 
 		try {
-			await client.handleCommand.chatInput(
-				command,
-				{} as never,
-				{} as never,
-				commandHandlerContext(client, command) as never,
-			);
-			await client.components.execute(component, componentHandlerContext(client, component) as never);
-			await client.components.execute(modal, componentHandlerContext(client, modal) as never);
+			await bot.slash({ name: 'custom-command' });
+			await bot.clickButton('custom:component', { allowSyntheticSource: true });
+			await bot.submitModal('custom:modal', {}, { allowSyntheticSource: true });
 		} finally {
-			await client.close();
+			await bot.close();
 		}
 
 		for (const artifact of [command, component, modal]) {
@@ -311,18 +255,13 @@ describe('logger lifecycle regressions', () => {
 
 	test('loaded command callbacks preserve custom option handling and emit one error', async () => {
 		const adapter = new RecordingAdapter();
-		const { client, command } = await setupLifecycleClient(adapter);
+		const { bot, command } = await setupLifecycleClient(adapter);
 		command.options = [{ name: 'required', required: true }] as never;
 
 		try {
-			await client.handleCommand.chatInput(
-				command,
-				{} as never,
-				{ getHoisted: () => undefined } as never,
-				commandHandlerContext(client, command) as never,
-			);
+			await bot.slash({ name: 'custom-command' });
 		} finally {
-			await client.close();
+			await bot.close();
 		}
 
 		assert.equal(command.optionErrors.length, 1);
@@ -333,7 +272,7 @@ describe('logger lifecycle regressions', () => {
 
 	test('real prefix permission hook failures correlate to one command internal error', async () => {
 		const adapter = new RecordingAdapter();
-		const { client, command } = await setupLifecycleClient(adapter);
+		const { bot, client, command } = await setupLifecycleClient(adapter);
 		command.defaultMemberPermissions = 8n;
 		command.throwOnPermissions = true;
 		(client.members as unknown as { permissions(): Promise<unknown> }).permissions = async () => ({
@@ -345,9 +284,9 @@ describe('logger lifecycle regressions', () => {
 		(client.guilds as unknown as { raw(): Promise<unknown> }).raw = async () => ({ owner_id: 'owner-1' });
 
 		try {
-			await client.handleCommand.message(rawPrefixMessage() as never, 0);
+			await bot.say('!custom-command');
 		} finally {
-			await client.close();
+			await bot.close();
 		}
 
 		assert.equal(command.permissionCalls, 1);
@@ -360,13 +299,13 @@ describe('logger lifecycle regressions', () => {
 
 	test('real prefix runtime errors preserve custom hooks and emit one command failure', async () => {
 		const adapter = new RecordingAdapter();
-		const { client, command } = await setupLifecycleClient(adapter);
+		const { bot, command } = await setupLifecycleClient(adapter);
 		command.throwOnRun = true;
 
 		try {
-			await client.handleCommand.message(rawPrefixMessage() as never, 0);
+			await bot.say('!custom-command');
 		} finally {
-			await client.close();
+			await bot.close();
 		}
 
 		assert.equal(command.runErrors.length, 1);

@@ -88,12 +88,18 @@ importers:
 
   packages/cooldown:
     devDependencies:
+      '@slipher/redis-adapter':
+        specifier: workspace:*
+        version: link:../redis-adapter
+      '@slipher/testing':
+        specifier: workspace:*
+        version: link:../testing
       '@types/node':
         specifier: ^26.0.1
         version: 26.1.1
       seyfert:
-        specifier: ^5.0.0
-        version: 5.0.0
+        specifier: https://pkg.pr.new/seyfert@439
+        version: https://pkg.pr.new/seyfert@439
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -154,6 +160,9 @@ importers:
       '@opentelemetry/context-async-hooks':
         specifier: ^2.0.1
         version: 2.0.1(@opentelemetry/api@1.9.1)
+      '@slipher/testing':
+        specifier: workspace:*
+        version: link:../testing
       '@types/node':
         specifier: ^26.0.1
         version: 26.1.1
@@ -185,18 +194,24 @@ importers:
       '@opentelemetry/sdk-trace-base':
         specifier: ^2.0.0
         version: 2.9.0(@opentelemetry/api@1.9.1)
+      '@slipher/testing':
+        specifier: workspace:*
+        version: link:../testing
       '@types/node':
         specifier: ^26.0.1
         version: 26.1.1
       seyfert:
-        specifier: ^5.0.0
-        version: 5.0.0
+        specifier: https://pkg.pr.new/seyfert@439
+        version: https://pkg.pr.new/seyfert@439
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
 
   packages/player:
     devDependencies:
+      '@slipher/testing':
+        specifier: workspace:*
+        version: link:../testing
       '@slipher/voice':
         specifier: workspace:*
         version: link:../voice
@@ -231,6 +246,9 @@ importers:
         specifier: ^5.0.0
         version: 5.79.3
     devDependencies:
+      '@slipher/testing':
+        specifier: workspace:*
+        version: link:../testing
       '@types/node':
         specifier: ^26.0.1
         version: 26.1.1
@@ -251,8 +269,8 @@ importers:
         specifier: ^26.0.1
         version: 26.1.1
       seyfert:
-        specifier: ^5.0.0
-        version: 5.0.0
+        specifier: https://pkg.pr.new/seyfert@439
+        version: https://pkg.pr.new/seyfert@439
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -285,6 +303,9 @@ importers:
         specifier: ^9.1.0
         version: 9.1.0
     devDependencies:
+      '@slipher/testing':
+        specifier: workspace:*
+        version: link:../testing
       '@types/node':
         specifier: ^26.0.1
         version: 26.1.1
@@ -353,6 +374,9 @@ importers:
         specifier: 2.3.0
         version: 2.3.0
     devDependencies:
+      '@slipher/testing':
+        specifier: workspace:*
+        version: link:../testing
       '@types/node':
         specifier: ^26.0.1
         version: 26.1.1
@@ -2006,6 +2030,10 @@ packages:
 
   seyfert@5.0.0:
     resolution: {integrity: sha512-73tb7/RiToy7+IO1in84zzn736XMXtf2Td0I26bSL2+09wcyEdZG1J4vj5M6twesMACFqv498ELImx6CpddCCQ==}
+
+  seyfert@https://pkg.pr.new/seyfert@439:
+    resolution: {integrity: sha512-Y03qZPcnxSz2YVkEbnsvx8vyqjY3trAz0H/GuaeAItGt9ERDBIytYtm4QswI8H1GH2SCvlLU5HnsRRE84PgLGQ==, tarball: https://pkg.pr.new/seyfert@439}
+    version: 5.0.0
 
   shebang-command@2.0.0:
     resolution: {integrity: sha512-kHxr2zZpYtdmrN1qDjrrX/Z1rR1kG8Dx+gkpK1G4eXmvXswmcE1hTWBWYUzlraYw1/yZp6YuDY77YtvbN0dmDA==}
@@ -3703,6 +3731,8 @@ snapshots:
       type-fest: 5.8.0
 
   seyfert@5.0.0: {}
+
+  seyfert@https://pkg.pr.new/seyfert@439: {}
 
   shebang-command@2.0.0:
     dependencies:
