@@ -1,7 +1,7 @@
 import { createClient } from '@redis/client';
 import { Cache, CacheFrom, RoleFlags } from 'seyfert';
 import { afterAll, assert, describe, expect, test } from 'vitest';
-import { ExpirableRedisAdapter, type ExpirableRedisAdapterOptions } from '../src';
+import { ExpirableRedisAdapter, type ExpirableRedisAdapterOptions, RedisAdapter } from '../src';
 
 const redisUrl = process.env.SLIPHER_REDIS_URL ?? 'redis://127.0.0.1:6379';
 const adapters: ExpirableRedisAdapter[] = [];
@@ -233,13 +233,18 @@ describe('ExpirableRedisAdapter', () => {
 		assert.equal(adapter.cachedEntryCount, 3);
 	});
 
-	test('bulk patches skip undecodable entries and still commit the valid subset', async () => {
-		const { adapter, namespace } = await createAdapter();
-		await adapter.bulkSet([userEntry('corrupt'), userEntry('valid')]);
+	test('bulk patches skip undecodable entries while publishing object patches and array replacements', async () => {
+		const { adapter, namespace } = await createAdapter({ default: { ondemand: true } });
+		await adapter.bulkSet([userEntry('corrupt'), userEntry('valid'), userEntry('replaced')]);
 		await adapter.client.hSet(`${namespace}:user.corrupt`, { O_corrupt: '{' });
+		await adapter.client.hSet(`${namespace}:user.replaced`, { O_corrupt: '{' });
 
 		const error = await adapter
-			.bulkPatch([userEntry('corrupt', { patched: true }), userEntry('valid', { patched: true })])
+			.bulkPatch([
+				userEntry('corrupt', { patched: true }),
+				['user.replaced', [{ id: 'replacement' }], ['user', 'replaced']],
+				userEntry('valid', { patched: true }),
+			])
 			.catch(reason => reason);
 
 		expect(error).toBeInstanceOf(AggregateError);
@@ -249,6 +254,11 @@ describe('ExpirableRedisAdapter', () => {
 		assert.deepEqual(await adapter.get('user.valid'), { id: 'valid', patched: true });
 		assert.equal(await adapter.contains('user', 'corrupt'), true);
 		assert.equal(await adapter.contains('user', 'valid'), true);
+		assert.deepEqual(await adapter.get('user.replaced'), [{ id: 'replacement' }]);
+		assert.equal(await adapter.contains('user', 'replaced'), true);
+		const reader = new RedisAdapter({ client: adapter.client, namespace });
+		assert.deepEqual(await reader.get('user.valid'), await adapter.get('user.valid'));
+		assert.deepEqual(await reader.get('user.replaced'), await adapter.get('user.replaced'));
 	});
 
 	test('bulk writes publish only confirmed entries to the on-demand cache', async () => {

@@ -160,11 +160,29 @@ SLIPHER_REDIS_URL=redis://127.0.0.1:6379 pnpm --filter @slipher/redis-adapter be
 ```
 
 The benchmark reports median p50/p95 latency, median throughput with median absolute deviation, and deterministic
-client/server command boundaries for single writes, patches, bulk writes, and TTL writes. The split baselines reproduce
-the previous adapter's set-index and value commands for the same supported logical operation.
-Correctness oracles run after, not inside, each timed sample. `BENCH_SAMPLES`, `BENCH_OPERATIONS`, `BENCH_BATCHES`,
-`BENCH_WARMUP`, and `BENCH_BATCH_SIZE` tune the run. Atomic `bulkSet` uses one bounded script per 100-entry chunk, so the
-default workload crosses the client/server boundary once per batch without exposing half-written entries.
+client/server command boundaries for single writes, patches, bulk writes, and TTL writes. It rotates implementation
+order between samples and runs correctness checks outside the timed region. The split baselines reproduce the previous
+adapter's commands; they do not provide the atomic adapter's ownership guarantees.
+
+Use `BENCH_PAYLOAD=role` for a representative role with nested data and `BENCH_CONCURRENCY=8` for eight independent
+lanes. Patch lanes use separate keys so completion order cannot change the expected final value. The default payload
+is a small object and concurrency defaults to one. `BENCH_SAMPLES`, `BENCH_OPERATIONS`, `BENCH_BATCHES`, `BENCH_WARMUP`,
+and `BENCH_BATCH_SIZE` tune the run; defaults are eight samples, 3,000 single operations, 300 batches, 300 warmup
+operations, and 100 entries per batch. Atomic `bulkSet` uses one bounded script per 100-entry chunk.
+
+To measure an optimization against another atomic implementation, build the reference checkout and pass its compiled
+entry point. Both versions run in the same process against the same Redis instance with separate namespaces:
+
+```sh
+BENCH_COMPARE_MODULE=/absolute/path/to/reference/packages/redis-adapter/lib/index.js \
+BENCH_PAYLOAD=role BENCH_CONCURRENCY=8 \
+SLIPHER_REDIS_URL=redis://127.0.0.1:6379 pnpm --filter @slipher/redis-adapter bench:atomic
+```
+
+Comparison mode defaults to six samples to balance the three implementation positions. `vsReference` reports the
+median of paired throughput changes plus MAD in percentage points; a positive value means higher throughput. These
+are local microbenchmarks, not confidence intervals or production performance guarantees. Use the same Node and
+node-redis versions for the reference and current builds.
 
 Both adapters own clients they construct. Close the client during shutdown:
 

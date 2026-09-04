@@ -257,7 +257,8 @@ export class ExpirableRedisAdapter extends RedisAdapter<false> {
 	}
 
 	protected override async readBeforePatch(key: string) {
-		return (await this.readHash(this.buildKey(key))).value;
+		// Validate Redis directly; the write script owns expiration.
+		return super.get(key);
 	}
 
 	protected override getExpirationPolicy(key: string) {

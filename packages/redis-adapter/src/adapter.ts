@@ -112,13 +112,19 @@ const BULK_WRITE_SCRIPT = `${WRITE_SCRIPT_HELPERS}
 local entries = cjson.decode(ARGV[1])
 local lookupKey = KEYS[1]
 local lookupError = hash_type_error(lookupKey)
+local relationshipErrors = {}
 local prepared = {}
 local results = {}
 
 for index, entry in ipairs(entries) do
 	local valueKey = KEYS[index * 2]
 	local relationshipKey = KEYS[index * 2 + 1]
-	local message = lookupError or hash_type_error(valueKey) or hash_type_error(relationshipKey)
+	local relationshipError = relationshipErrors[relationshipKey]
+	if relationshipError == nil then
+		relationshipError = hash_type_error(relationshipKey) or false
+		relationshipErrors[relationshipKey] = relationshipError
+	end
+	local message = lookupError or hash_type_error(valueKey) or relationshipError
 	local expiresAt = nil
 	if not message then expiresAt, message = expiration_deadline(valueKey, entry[5], entry[6]) end
 	prepared[index] = {expiresAt = expiresAt, message = message}
@@ -472,14 +478,18 @@ export class RedisAdapter<SupportsAtomicCooldowns extends boolean = true> implem
 		entries: EncodedWrite[],
 		returnValues: readonly boolean[] = [],
 	): Promise<WriteOutcome[]> {
-		const preflights = await Promise.allSettled(
-			entries.map(entry => (entry.replace ? Promise.resolve() : this.readBeforePatch(entry.key))),
-		);
 		const outcomes = new Array<WriteOutcome>(entries.length);
+		if (entries.some(entry => !entry.replace)) {
+			const preflights = await Promise.allSettled(
+				entries.map(entry => (entry.replace ? Promise.resolve() : this.readBeforePatch(entry.key))),
+			);
+			for (const [index, preflight] of preflights.entries()) {
+				if (preflight.status === 'rejected') outcomes[index] = { reason: preflight.reason, status: 'rejected' };
+			}
+		}
 		const submitted: Array<{ entry: EncodedWrite; index: number; returnValue: boolean }> = [];
-		for (const [index, preflight] of preflights.entries()) {
-			if (preflight.status === 'rejected') outcomes[index] = { reason: preflight.reason, status: 'rejected' };
-			else submitted.push({ entry: entries[index]!, index, returnValue: returnValues[index] ?? false });
+		for (const [index, entry] of entries.entries()) {
+			if (!outcomes[index]) submitted.push({ entry, index, returnValue: returnValues[index] ?? false });
 		}
 		if (!submitted.length) return outcomes;
 
