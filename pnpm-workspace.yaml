@@ -8,7 +8,6 @@ allowBuilds:
   protobufjs: true
   seyfert: true
   seyfert@https://codeload.github.com/tiramisulabs/seyfert/tar.gz/4aee9b68314f38b193d3cb2a3ac27c51b0eae0af: true
-  seyfert@https://pkg.pr.new/seyfert@439: true
   youtube-dl-exec: true
 
 minimumReleaseAgeExclude:
@@ -18,3 +17,7 @@ onlyBuiltDependencies:
   - esbuild
   - protobufjs
   - seyfert
+
+# Refresh injected harness builds before their consumers run.
+syncInjectedDepsAfterScripts:
+  - build

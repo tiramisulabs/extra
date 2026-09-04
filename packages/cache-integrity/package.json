@@ -1,6 +1,6 @@
 {
-	"name": "@slipher/redis-adapter",
-	"version": "0.0.9",
+	"name": "@slipher/cache-integrity",
+	"version": "0.0.0",
 	"private": false,
 	"license": "MIT",
 	"publishConfig": {
@@ -10,28 +10,39 @@
 		"lib/**"
 	],
 	"main": "./lib/index.js",
-	"module": "./lib/index.js",
 	"types": "./lib/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./lib/index.d.ts",
+			"import": "./lib/index.js",
+			"require": "./lib/index.js",
+			"default": "./lib/index.js"
+		},
+		"./package.json": "./package.json"
+	},
 	"scripts": {
-		"bench:atomic": "pnpm build && node ./benchmarks/atomic-writes.mjs",
 		"dev": "tsc --watch",
 		"build": "tsc",
 		"lint": "biome lint --write ./src ./test",
 		"format": "biome format --write ./src ./test",
+		"checkb": "biome check --write --no-errors-on-unmatched ./src ./test",
 		"typecheck": "tsc --noEmit --project ./test/tsconfig.json",
 		"test": "pnpm typecheck && vitest run --config ./test/vitest.config.mts ./test/",
-		"checkb": "biome check --write --no-errors-on-unmatched ./src ./test",
-		"prepublish": "pnpm build"
-	},
-	"dependencies": {
-		"@redis/client": "^6.0.1"
+		"prepublishOnly": "pnpm build"
 	},
 	"devDependencies": {
+		"@slipher/testing": "workspace:*",
 		"@types/node": "^26.0.1",
 		"seyfert": "5.0.1-dev-33922311634.0",
-		"typescript": "^6.0.3"
+		"typescript": "^6.0.3",
+		"@slipher/redis-adapter": "workspace:*"
 	},
 	"peerDependencies": {
 		"seyfert": ">=5.0.1-dev-33922311634.0"
+	},
+	"dependenciesMeta": {
+		"@slipher/testing": {
+			"injected": true
+		}
 	}
 }
