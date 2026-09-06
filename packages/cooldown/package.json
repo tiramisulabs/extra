@@ -34,11 +34,11 @@
 		"@slipher/redis-adapter": "workspace:*",
 		"@slipher/testing": "workspace:*",
 		"@types/node": "^26.0.1",
-		"seyfert": "5.0.1-dev-33922311634.0",
+		"seyfert": "5.1.0",
 		"typescript": "^6.0.3"
 	},
 	"peerDependencies": {
-		"seyfert": ">=5.0.1-dev-33922311634.0"
+		"seyfert": ">=5.1.0"
 	},
 	"dependenciesMeta": {
 		"@slipher/testing": {

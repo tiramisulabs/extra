@@ -4,10 +4,9 @@ Redis-backed cache adapters for Seyfert's atomic adapter contract. Each `set` or
 relationship membership supplied by Seyfert; the removed `addToRelationship` and `bulkAddToRelationShip` calls are not
 part of this API.
 
-The package requires Redis 8.0 or newer and Seyfert `5.0.1-dev-33922311634.0` or a later release containing
-[the final atomic adapter contract](https://github.com/tiramisulabs/seyfert/pull/439). The workspace uses that published
-dev build, and the affected packages require it as their peer dependency minimum. Older Seyfert versions use incompatible
-split-write signatures.
+The package requires Redis 8.0 or newer and Seyfert `5.1.0` or a later release containing [the final atomic adapter
+contract](https://github.com/tiramisulabs/seyfert/pull/439). The workspace uses that stable release, and the affected
+packages require it as their peer dependency minimum. Older Seyfert versions use incompatible split-write signatures.
 
 ## Basic adapter
 
