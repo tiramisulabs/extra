@@ -2,11 +2,15 @@
 export function CustomId<const Pattern extends string, const Separator extends string = ':'>(
 	pattern: Pattern,
 	separator?: Separator,
-) {
-	const delimiter = separator ?? ':';
-	if (!delimiter) throw new Error('CustomId separator must not be empty');
+): ((target: { prototype: ComponentCommand }) => void) &
+	ContextExtension<{
+		filter: { params: Params<Pattern, Separator> };
+		run: { params: Params<Pattern, Separator> };
+	}>;
+export function CustomId(pattern: string, separator = ':') {
+	if (!separator) throw new Error('CustomId separator must not be empty');
 	const names = new Set<string>();
-	const segments = pattern.split(delimiter).map(segment => {
+	const segments = pattern.split(separator).map(segment => {
 		const parameter = /^\{([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(segment);
 		if (!parameter) {
 			if (/[{}]/.test(segment)) throw new Error(`Invalid CustomId segment: ${segment}`);
@@ -20,7 +24,7 @@ export function CustomId<const Pattern extends string, const Separator extends s
 	const decorate = (target: { prototype: ComponentCommand }) => {
 		const original = target.prototype.filter;
 		target.prototype.filter = function (context: ComponentContext) {
-			const values = context.customId.split(delimiter);
+			const values = context.customId.split(separator);
 			if (values.length !== segments.length) return false;
 			const params: Record<string, string> = Object.create(null);
 			for (const [index, segment] of segments.entries()) {
@@ -33,11 +37,7 @@ export function CustomId<const Pattern extends string, const Separator extends s
 			return original ? original.call(this, context) : true;
 		};
 	};
-	return decorate as typeof decorate &
-		ContextExtension<{
-			filter: { params: Params<Pattern, Separator> };
-			run: { params: Params<Pattern, Separator> };
-		}>;
+	return decorate;
 }
 
 type Params<Pattern extends string, Separator extends string> = string extends Pattern | Separator
