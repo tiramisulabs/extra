@@ -323,6 +323,8 @@ describe('proxy server', () => {
 	});
 
 	test('keeps route buckets centralized with Discord reset headers', async () => {
+		const now = Date.now();
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
 		let calls = 0;
 		const fixture = await startProxy(async () => {
 			calls++;
@@ -332,13 +334,21 @@ describe('proxy server', () => {
 				{ 'x-ratelimit-limit': '1', 'x-ratelimit-remaining': '0', 'x-ratelimit-reset-after': '0.02' },
 			);
 		});
-		cleanups.push(() => fixture.close());
+		cleanups.push(() => {
+			clock.mockRestore();
+			return fixture.close();
+		});
 
 		await fixture.handler.request('GET', '/channels/123/messages');
-		const started = Date.now();
-		await fixture.handler.request('GET', '/channels/123/messages');
+		const [bucket] = fixture.rest.ratelimits.values();
+		assert.ok(bucket);
+		const second = fixture.handler.request('GET', '/channels/123/messages');
+		await vi.waitUntil(() => bucket.queue.length === 1);
+		assert.equal(calls, 1);
+
+		clock.mockReturnValue(now + 21);
+		assert.deepEqual(await second, { ok: true });
 		assert.equal(calls, 2);
-		assert.ok(Date.now() - started >= 10);
 	});
 
 	test('snapshots the default token version before an admission wait', async () => {

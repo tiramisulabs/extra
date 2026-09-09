@@ -1,0 +1,45 @@
+{
+	"name": "@slipher/macros",
+	"version": "0.1.0",
+	"description": "Automatic Seyfert context types and user-authored TypeScript macros",
+	"license": "MIT",
+	"files": [
+		"lib/**",
+		"plugin.js",
+		"README.md"
+	],
+	"main": "./lib/context.cjs",
+	"types": "./lib/context.d.ts",
+	"exports": {
+		".": {
+			"types": "./lib/context.d.ts",
+			"default": "./lib/context.cjs"
+		},
+		"./plugin": "./plugin.js",
+		"./builtin": {
+			"types": "./lib/builtin.d.ts",
+			"default": "./lib/builtin.cjs"
+		}
+	},
+	"bin": {
+		"slipher-macros": "./lib/cli.cjs"
+	},
+	"scripts": {
+		"build": "node scripts/build.cjs",
+		"prepack": "node scripts/build.cjs",
+		"test": "vitest run --config ./test/vitest.config.mts",
+		"lint": "biome lint ./src ./scripts ./test ../../examples/macros/custom-id.ts --no-errors-on-unmatched",
+		"format": "biome format ./src ./scripts ./test ../../examples/macros/custom-id.ts --no-errors-on-unmatched",
+		"checkb": "biome check ./src ./scripts ./test ../../examples/macros/custom-id.ts --no-errors-on-unmatched"
+	},
+	"peerDependencies": {
+		"seyfert": "^5.1.0",
+		"typescript": "6.0.x"
+	},
+	"devDependencies": {
+		"@types/ts-expose-internals": "npm:ts-expose-internals@5.6.2",
+		"seyfert": "^5.1.0",
+		"typescript": "6.0.3",
+		"vitest": "^4.1.10"
+	}
+}

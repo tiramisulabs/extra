@@ -45,6 +45,7 @@ This monorepo contains the `@slipher/*` packages maintained alongside Seyfert. E
 
 | Package | Purpose | Guide |
 | --- | --- | --- |
+| [`@slipher/macros`](./packages/macros) | Automatic context types and application macros for TypeScript 6 (unpublished v1). | Package README; web guide pending publication |
 | [`@slipher/testing`](./packages/testing) | Runner-agnostic fixtures and an in-process mock bot. | [Testing](https://seyfert.dev/docs/testing) |
 | [`@slipher/eslint-plugin`](./packages/eslint-plugin) | Type-aware ESLint rules for Seyfert applications. | [ESLint](https://seyfert.dev/docs/recipes/eslint) |
 | [`@slipher/watcher`](./packages/watcher) | Development hot reload while keeping the gateway process alive. | [Hot reload](https://seyfert.dev/docs/recipes/hot-reload) |

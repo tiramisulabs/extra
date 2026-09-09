@@ -1,0 +1,3 @@
+[submodule "packages/macros/vendor/ts-macros"]
+	path = packages/macros/vendor/ts-macros
+	url = https://github.com/tiramisulabs/ts-macros.git
