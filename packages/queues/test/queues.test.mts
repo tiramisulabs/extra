@@ -57,6 +57,35 @@ describe('memory queues', () => {
 		await registry.close();
 	});
 
+	test('caps far-future delayed jobs below the 32-bit timer limit', async () => {
+		const overflowWarnings: string[] = [];
+		const onWarning = (warning: Error) => {
+			if (warning.name === 'TimeoutOverflowWarning') overflowWarnings.push(warning.message);
+		};
+		process.on('warning', onWarning);
+
+		let now = 1_000;
+		const registry = createQueues({ driver: memory({ now: () => now }) });
+		const queue = registry.get('welcome');
+		const completed = waitForEvent(queue, 'completed');
+		try {
+			queue.process(job => `welcome:${job.data.userId}`);
+			await queue.add({ userId: 'user-1' }, { delay: 2_147_483_647 + 5_000 });
+			assert.equal(queue.counts().delayed, 1);
+
+			await new Promise(resolve => setTimeout(resolve, 50));
+			assert.deepEqual(overflowWarnings, []);
+
+			now += 2_147_483_647 + 5_000;
+			queue.start();
+			const payload = await completed;
+			assert.equal(payload.result, 'welcome:user-1');
+		} finally {
+			process.off('warning', onWarning);
+			await registry.close();
+		}
+	});
+
 	test('processes delayed jobs, retries failures, and records the completed result', async () => {
 		const registry = createQueues({ driver: memory() });
 		const queue = registry.get('welcome', {

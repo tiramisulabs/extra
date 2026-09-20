@@ -27,6 +27,10 @@ interface QueueEntry<TData, TResult> {
 	sequence: number;
 }
 
+// setTimeout coerces delays above a 32-bit signed integer to 1ms, so cap far-future
+// wakeups and let schedule() re-arm the remainder when the capped timer fires.
+const MAX_TIMER_DELAY = 2_147_483_647;
+
 export class MemoryQueue<TData = unknown, TResult = unknown>
 	extends QueueEmitter<TData, TResult>
 	implements Queue<TData, TResult>
@@ -234,7 +238,7 @@ export class MemoryQueue<TData = unknown, TResult = unknown>
 		}
 
 		const delay = Math.max(this.runAt(next.job) - this.now(), 0);
-		this.timer = setTimeout(() => this.schedule(), delay);
+		this.timer = setTimeout(() => this.schedule(), Math.min(delay, MAX_TIMER_DELAY));
 	}
 
 	private drainReadyJobs(): void {
