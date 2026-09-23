@@ -57,6 +57,44 @@ describe('memory queues', () => {
 		await registry.close();
 	});
 
+	test('rejects memory queue delays above the timer limit before enqueueing', async () => {
+		const registry = createQueues({ driver: memory() });
+		const queue = registry.get('welcome');
+		try {
+			assert.throws(
+				() => queue.add({ userId: 'too-late' }, { delay: 2_147_483_648 }),
+				/Memory queue delay cannot exceed 2147483647ms/,
+			);
+			assert.equal(queue.counts().total, 0);
+
+			const job = queue.add({ userId: 'latest-supported' }, { delay: 2_147_483_647 });
+			assert.equal(job.runAt.getTime() - job.createdAt.getTime(), 2_147_483_647);
+			assert.equal(queue.counts().delayed, 1);
+		} finally {
+			await registry.close();
+		}
+	});
+
+	test('fails jobs whose resolved retry delay exceeds the timer limit', async () => {
+		const registry = createQueues({ driver: memory() });
+		const queue = registry.get('welcome', { attempts: 2, retryDelay: 2_147_483_648 });
+
+		try {
+			queue.process(() => {
+				throw new Error('processing failed');
+			});
+			const job = queue.add({ userId: 'user-1' });
+
+			assert.equal(job.status, 'failed');
+			assert.equal(job.attemptsMade, 1);
+			assert.instanceOf(job.error, AggregateError);
+			assert.instanceOf(job.error.errors[1], RangeError);
+			assert.match(job.error.errors[1].message, /Memory queue delay cannot exceed 2147483647ms/);
+		} finally {
+			await registry.close();
+		}
+	});
+
 	test('processes delayed jobs, retries failures, and records the completed result', async () => {
 		const registry = createQueues({ driver: memory() });
 		const queue = registry.get('welcome', {
