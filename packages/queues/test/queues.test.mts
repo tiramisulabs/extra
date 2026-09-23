@@ -57,31 +57,40 @@ describe('memory queues', () => {
 		await registry.close();
 	});
 
-	test('caps far-future delayed jobs below the 32-bit timer limit', async () => {
-		const overflowWarnings: string[] = [];
-		const onWarning = (warning: Error) => {
-			if (warning.name === 'TimeoutOverflowWarning') overflowWarnings.push(warning.message);
-		};
-		process.on('warning', onWarning);
-
-		let now = 1_000;
-		const registry = createQueues({ driver: memory({ now: () => now }) });
+	test('rejects memory queue delays above the timer limit before enqueueing', async () => {
+		const registry = createQueues({ driver: memory() });
 		const queue = registry.get('welcome');
-		const completed = waitForEvent(queue, 'completed');
 		try {
-			queue.process(job => `welcome:${job.data.userId}`);
-			await queue.add({ userId: 'user-1' }, { delay: 2_147_483_647 + 5_000 });
+			assert.throws(
+				() => queue.add({ userId: 'too-late' }, { delay: 2_147_483_648 }),
+				/Memory queue delay cannot exceed 2147483647ms/,
+			);
+			assert.equal(queue.counts().total, 0);
+
+			const job = queue.add({ userId: 'latest-supported' }, { delay: 2_147_483_647 });
+			assert.equal(job.runAt.getTime() - job.createdAt.getTime(), 2_147_483_647);
 			assert.equal(queue.counts().delayed, 1);
-
-			await new Promise(resolve => setTimeout(resolve, 50));
-			assert.deepEqual(overflowWarnings, []);
-
-			now += 2_147_483_647 + 5_000;
-			queue.start();
-			const payload = await completed;
-			assert.equal(payload.result, 'welcome:user-1');
 		} finally {
-			process.off('warning', onWarning);
+			await registry.close();
+		}
+	});
+
+	test('fails jobs whose resolved retry delay exceeds the timer limit', async () => {
+		const registry = createQueues({ driver: memory() });
+		const queue = registry.get('welcome', { attempts: 2, retryDelay: 2_147_483_648 });
+
+		try {
+			queue.process(() => {
+				throw new Error('processing failed');
+			});
+			const job = queue.add({ userId: 'user-1' });
+
+			assert.equal(job.status, 'failed');
+			assert.equal(job.attemptsMade, 1);
+			assert.instanceOf(job.error, AggregateError);
+			assert.instanceOf(job.error.errors[1], RangeError);
+			assert.match(job.error.errors[1].message, /Memory queue delay cannot exceed 2147483647ms/);
+		} finally {
 			await registry.close();
 		}
 	});

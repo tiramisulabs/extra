@@ -27,9 +27,15 @@ interface QueueEntry<TData, TResult> {
 	sequence: number;
 }
 
-// setTimeout coerces delays above a 32-bit signed integer to 1ms, so cap far-future
-// wakeups and let schedule() re-arm the remainder when the capped timer fires.
+// Node coerces larger setTimeout delays to 1ms.
 const MAX_TIMER_DELAY = 2_147_483_647;
+
+function validateMemoryDelay(delay: number): number {
+	if (delay > MAX_TIMER_DELAY) {
+		throw new RangeError(`Memory queue delay cannot exceed ${MAX_TIMER_DELAY}ms.`);
+	}
+	return delay;
+}
 
 export class MemoryQueue<TData = unknown, TResult = unknown>
 	extends QueueEmitter<TData, TResult>
@@ -96,7 +102,7 @@ export class MemoryQueue<TData = unknown, TResult = unknown>
 		this.assertOpen();
 		const { data, name, options } = parseQueueAddArgs<TData, TResult>(nameOrData, dataOrOptions, maybeOptions);
 		const now = this.now();
-		const delay = parseDuration(options.delay ?? 0);
+		const delay = validateMemoryDelay(parseDuration(options.delay ?? 0));
 		const attempts = options.attempts ?? this.defaultAttempts;
 		if (!Number.isInteger(attempts) || attempts <= 0) throw new RangeError('Job attempts must be a positive integer.');
 		warnRetryDelayWithoutRetries(options.retryDelay, attempts, `job "${name}" on queue "${this.name}"`);
@@ -238,7 +244,7 @@ export class MemoryQueue<TData = unknown, TResult = unknown>
 		}
 
 		const delay = Math.max(this.runAt(next.job) - this.now(), 0);
-		this.timer = setTimeout(() => this.schedule(), Math.min(delay, MAX_TIMER_DELAY));
+		this.timer = setTimeout(() => this.schedule(), delay);
 	}
 
 	private drainReadyJobs(): void {
@@ -319,7 +325,7 @@ export class MemoryQueue<TData = unknown, TResult = unknown>
 	private resolveRetryDelay(job: QueueJob<TData, TResult>, error: unknown): number {
 		const retryDelay = this.retryDelays.get(job) ?? this.retryDelay;
 		const delay = typeof retryDelay === 'function' ? retryDelay(job, error) : retryDelay;
-		return resolveRetryDelayValue(delay, job.attemptsMade);
+		return validateMemoryDelay(resolveRetryDelayValue(delay, job.attemptsMade));
 	}
 
 	private failJob(job: QueueJob<TData, TResult>, error: unknown): void {
