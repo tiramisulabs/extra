@@ -2,7 +2,15 @@
  * Two visual languages share the screen on purpose:
  * - the simulated Discord surface (dark greys + blurple) looks like the client people already know;
  * - lab instrumentation (amber) marks everything that does not exist in Discord: scenarios, pins, REST, admin changes.
+ *
+ *
+ * Sections, in cascade order (a later rule may rely on overriding an earlier one of equal specificity):
+ *  1. Tokens  2. Base  3. Layout  4. Discord surface  5. Messages  6. Embeds  7. Components
+ *  8. Composer  9. Side panels and member list  10. Lab panel  11. Shared controls
+ *  12. Launcher, modal, feedback  13. Responsive
  */
+
+/* ==================== 1. Tokens ==================== */
 :root {
 	/* Discord's current dark surfaces, sampled from the desktop client. */
 	--rail: #121214;
@@ -19,23 +27,46 @@
 	--button-border: #36363c;
 	--button-hover: #323238;
 	--divider: #29292e;
+	--neutral: #4e5058;
+	--select-open-border: #4a4a52;
 	/* Hairline that outlines the main panel and separates its columns in the current client. */
 	--shell-border: rgb(255 255 255 / 7%);
+
+	/* Text and accents. */
 	--text: #dfe0e2;
 	--strong: #fbfbfb;
 	--muted: #949599;
 	--faint: #6f7076;
+	--white: #fff;
 	--blurple: #5865f2;
 	--blurple-hover: #4752c4;
+	--mention-bg: rgb(88 101 242 / 30%);
+	--mention-text: #c9cdfb;
 	--green: #23a55a;
 	--red: #f23f43;
+	--danger: #da373c;
+	--danger-text: #fa777c;
 	--link: #00a8fc;
+
+	/* Lab instrumentation. */
 	--lab: #f0b232;
 	--lab-soft: rgb(240 178 50 / 12%);
 	--lab-line: rgb(240 178 50 / 35%);
+
+	/* Geometry. */
 	--radius: 8px;
+	--titlebar-height: 32px;
+	--rail-width: 64px;
+	--sidebar-width: 264px;
+	--header-height: 48px;
+	/* Room left under the rail and channel list for the floating user dock. */
+	--dock-clearance: 76px;
+	--message-line-height: 1.375rem;
+	--shadow-float: 0 8px 24px rgb(0 0 0 / 45%);
+
 	--font: "gg sans", "Noto Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
 	--mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+
 	color-scheme: dark;
 	font-family: var(--font);
 	font-size: 16px;
@@ -43,6 +74,7 @@
 	background: var(--rail);
 }
 
+/* ==================== 2. Base ==================== */
 *,
 *::before,
 *::after {
@@ -90,11 +122,12 @@ code {
 	}
 }
 
-/* ——— Layout: title bar over a slim rail and one outlined panel, as in the current desktop client ——— */
+/* ==================== 3. Layout ==================== */
+/* Title bar over a slim rail and one outlined panel, as in the current desktop client. */
 .app {
 	display: grid;
-	grid-template-columns: 64px minmax(0, 1fr);
-	grid-template-rows: 32px minmax(0, 1fr);
+	grid-template-columns: var(--rail-width) minmax(0, 1fr);
+	grid-template-rows: var(--titlebar-height) minmax(0, 1fr);
 	height: 100vh;
 	height: 100dvh;
 	background: var(--rail);
@@ -106,7 +139,6 @@ code {
 	justify-content: center;
 	min-width: 0;
 	padding: 0 12px;
-	color: var(--text);
 	font-size: 14px;
 	font-weight: 500;
 }
@@ -135,7 +167,7 @@ code {
 }
 .shell {
 	display: grid;
-	grid-template-columns: 264px minmax(0, 1fr);
+	grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
 	min-width: 0;
 	min-height: 0;
 	overflow: hidden;
@@ -145,14 +177,16 @@ code {
 	background: var(--chat);
 }
 .shell.with-members {
-	grid-template-columns: 264px minmax(0, 1fr) 248px;
+	grid-template-columns: var(--sidebar-width) minmax(0, 1fr) 248px;
 }
 .shell.with-lab {
-	grid-template-columns: 264px minmax(0, 1fr) minmax(360px, 420px);
+	grid-template-columns: var(--sidebar-width) minmax(0, 1fr) minmax(360px, 420px);
 }
 .scrim {
 	display: none;
 }
+
+/* ==================== 4. Discord surface ==================== */
 
 /* ——— Server rail ——— */
 .server-rail {
@@ -160,8 +194,7 @@ code {
 	flex-direction: column;
 	align-items: center;
 	gap: 8px;
-	/* The shared user dock floats over the bottom of the rail. */
-	padding: 4px 0 76px;
+	padding: 4px 0 var(--dock-clearance);
 	background: var(--rail);
 	overflow-y: auto;
 }
@@ -227,7 +260,7 @@ code {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
-	height: 48px;
+	height: var(--header-height);
 	padding: 0 16px;
 	border-bottom: 1px solid var(--shell-border);
 	color: var(--strong);
@@ -242,7 +275,7 @@ code {
 .channel-scroll {
 	flex: 1;
 	overflow-y: auto;
-	padding: 8px 8px 76px;
+	padding: 8px 8px var(--dock-clearance);
 }
 .channel-category {
 	display: flex;
@@ -268,7 +301,7 @@ code {
 	margin: 2px 0;
 	padding: 0 8px;
 	border: 0;
-	border-radius: 8px;
+	border-radius: var(--radius);
 	background: transparent;
 	color: var(--muted);
 	text-align: left;
@@ -302,13 +335,14 @@ code {
 	color: var(--muted);
 	font-size: 14px;
 }
-/* One dock across the rail and the channel list, like the current client's user area. */
+
+/* ——— User dock: one dock across the rail and the channel list, like the current client's user area ——— */
 .user-dock {
 	position: fixed;
 	bottom: 8px;
 	left: 8px;
 	z-index: 25;
-	width: calc(64px + 264px - 16px);
+	width: calc(var(--rail-width) + var(--sidebar-width) - 16px);
 	padding: 6px;
 	border: 1px solid var(--shell-border);
 	border-radius: 10px;
@@ -360,7 +394,7 @@ code {
 	list-style: none;
 	border-radius: var(--radius);
 	background: var(--floating);
-	box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
+	box-shadow: var(--shadow-float);
 }
 .actor-switcher button {
 	display: flex;
@@ -383,14 +417,14 @@ code {
 .actor-switcher button:hover,
 .actor-switcher button[aria-selected="true"] {
 	background: var(--blurple);
-	color: #fff;
+	color: var(--white);
 }
 .actor-switcher button:hover code,
 .actor-switcher button[aria-selected="true"] code {
 	color: rgb(255 255 255 / 70%);
 }
 
-/* ——— Chat ——— */
+/* ——— Chat column ——— */
 .chat {
 	display: flex;
 	flex-direction: column;
@@ -402,7 +436,7 @@ code {
 	display: flex;
 	align-items: center;
 	gap: 8px;
-	height: 48px;
+	height: var(--header-height);
 	flex: none;
 	padding: 0 8px 0 16px;
 	border-bottom: 1px solid var(--shell-border);
@@ -433,19 +467,18 @@ code {
 	background: transparent;
 	color: var(--muted);
 }
-.icon-button:hover {
-	color: var(--strong);
-}
+.icon-button:hover,
 .icon-button.active {
 	color: var(--strong);
 }
+/* The lab toggle keeps its amber even when active or hovered (beats `.icon-button.active` by order). */
 .lab-toggle,
-.lab-toggle.active,
 .lab-toggle:hover {
 	color: var(--lab);
 }
 .lab-toggle.active {
 	background: var(--lab-soft);
+	color: var(--lab);
 }
 .badge {
 	position: absolute;
@@ -456,11 +489,12 @@ code {
 	padding: 0 4px;
 	border-radius: 8px;
 	background: var(--red);
-	color: #fff;
+	color: var(--white);
 	font-size: 11px;
 	font-weight: 700;
 	line-height: 16px;
 }
+/* Drawer and floating-panel controls only appear at narrower widths (see Responsive). */
 .nav-toggle,
 .nav-close,
 .panel-close {
@@ -501,16 +535,6 @@ code {
 .date-divider + .message {
 	margin-top: 8px;
 }
-.no-access h2 {
-	margin: 8px 0 4px;
-	color: var(--strong);
-	font-size: 28px;
-	line-height: 1.2;
-}
-.no-access p {
-	margin: 0;
-	color: var(--muted);
-}
 .no-access {
 	margin: auto;
 	max-width: 440px;
@@ -519,10 +543,36 @@ code {
 	color: var(--lab);
 }
 .no-access h2 {
+	margin: 8px 0 4px;
+	color: var(--strong);
 	font-size: 22px;
+	line-height: 1.2;
 }
 
-/* ——— Messages ——— */
+/* ——— Unsent forms whose trigger is gone ——— */
+.resume-forms {
+	display: grid;
+	gap: 4px;
+	margin: 0 16px 8px;
+}
+.resume-form {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 6px 12px;
+	border: 1px solid var(--shell-border);
+	border-radius: var(--radius);
+	background: var(--card);
+	color: var(--muted);
+	font-size: 14px;
+}
+.resume-form strong {
+	color: var(--text);
+	font-weight: 500;
+}
+
+/* ==================== 5. Messages ==================== */
 .message {
 	position: relative;
 	display: grid;
@@ -530,7 +580,7 @@ code {
 	column-gap: 16px;
 	margin-top: 17px;
 	padding: 2px 48px 2px 16px;
-	line-height: 1.375rem;
+	line-height: var(--message-line-height);
 }
 .message.continued {
 	margin-top: 0;
@@ -550,24 +600,24 @@ code {
 	flex: none;
 	border-radius: 50%;
 	object-fit: cover;
-	color: #fff;
+	color: var(--white);
 	font-weight: 600;
 	user-select: none;
+}
+.message > .avatar {
+	margin-top: 2px;
 }
 .gutter-time {
 	align-self: center;
 	justify-self: end;
 	color: var(--faint);
 	font-size: 11px;
-	line-height: 1.375rem;
+	line-height: var(--message-line-height);
 	opacity: 0;
 }
 .message.continued:hover .gutter-time,
 .message.continued:focus-within .gutter-time {
 	opacity: 1;
-}
-.message > .avatar {
-	margin-top: 2px;
 }
 .message-body {
 	min-width: 0;
@@ -577,7 +627,7 @@ code {
 	align-items: center;
 	flex-wrap: wrap;
 	gap: 4px;
-	line-height: 1.375rem;
+	line-height: var(--message-line-height);
 }
 .author {
 	color: var(--strong);
@@ -590,7 +640,7 @@ code {
 	padding: 0 4px;
 	border-radius: 4px;
 	background: var(--blurple);
-	color: #fff;
+	color: var(--white);
 	font-size: 10px;
 	font-weight: 600;
 	letter-spacing: 0.01em;
@@ -607,117 +657,8 @@ code {
 	color: var(--faint);
 	font-size: 10px;
 }
-.message-content {
-	color: var(--text);
-}
 .message-content .markdown {
 	display: inline;
-}
-.markdown {
-	line-height: 1.375;
-	overflow-wrap: anywhere;
-	white-space: normal;
-}
-.markdown .md-line {
-	margin: 0;
-}
-.markdown .md-heading {
-	margin: 8px 0 4px;
-	color: var(--strong);
-	font-weight: 700;
-	line-height: 1.25;
-}
-.markdown h1.md-heading {
-	font-size: 1.5rem;
-}
-.markdown h2.md-heading {
-	font-size: 1.25rem;
-}
-.markdown h3.md-heading {
-	font-size: 1rem;
-}
-.markdown .md-subtext {
-	display: block;
-	color: var(--muted);
-	font-size: 0.8125rem;
-}
-.markdown .md-quote {
-	margin: 2px 0;
-	padding-left: 12px;
-	border-left: 4px solid #4e5058;
-}
-.markdown .md-list {
-	margin: 2px 0;
-	padding-left: 22px;
-}
-.markdown a {
-	color: var(--link);
-	text-decoration: none;
-}
-.markdown a:hover {
-	text-decoration: underline;
-}
-.markdown .spoiler {
-	padding: 0 2px;
-	border-radius: 3px;
-	background: var(--rail);
-}
-.markdown .timestamp {
-	padding: 0 2px;
-	border-radius: 3px;
-	background: rgb(255 255 255 / 6%);
-}
-.emoji {
-	display: inline-block;
-	object-fit: contain;
-	vertical-align: -0.3em;
-}
-.emoji.emoji--inline {
-	width: 1.375em;
-	height: 1.375em;
-}
-.emoji.emoji--jumbo {
-	width: 48px;
-	height: 48px;
-	margin: 2px 2px 0 0;
-	vertical-align: bottom;
-}
-.emoji.emoji--button {
-	width: 20px;
-	height: 20px;
-	vertical-align: middle;
-}
-.unicode-emoji.emoji--button {
-	font-size: 18px;
-	line-height: 20px;
-}
-.custom-emoji-fallback {
-	color: var(--muted);
-	font-size: 0.9em;
-}
-.embed-title .markdown,
-.embed-field-name .markdown {
-	line-height: inherit;
-}
-.markdown code {
-	padding: 1px 4px;
-	border-radius: 4px;
-	background: var(--card);
-}
-.markdown pre {
-	margin: 6px 0;
-	padding: 8px;
-	border: 1px solid var(--rail);
-	border-radius: 4px;
-	background: var(--sidebar);
-	overflow-x: auto;
-}
-.mention {
-	padding: 0 2px;
-	border-radius: 3px;
-	background: rgb(88 101 242 / 30%);
-	color: #c9cdfb;
-	font-weight: 500;
 }
 .thinking {
 	display: flex;
@@ -774,6 +715,7 @@ code {
 .text-link:hover {
 	text-decoration: underline;
 }
+/* Lab pins that hover over a message. */
 .message-tools {
 	position: absolute;
 	top: -14px;
@@ -806,6 +748,116 @@ code {
 .lab-mini:hover {
 	background: var(--lab-soft);
 }
+
+/* ——— Markdown ——— */
+.markdown {
+	line-height: 1.375;
+	overflow-wrap: anywhere;
+	white-space: normal;
+}
+.markdown .md-line {
+	margin: 0;
+}
+.markdown .md-heading {
+	margin: 8px 0 4px;
+	color: var(--strong);
+	font-weight: 700;
+	line-height: 1.25;
+}
+.markdown h1.md-heading {
+	font-size: 1.5rem;
+}
+.markdown h2.md-heading {
+	font-size: 1.25rem;
+}
+.markdown h3.md-heading {
+	font-size: 1rem;
+}
+.markdown .md-subtext {
+	display: block;
+	color: var(--muted);
+	font-size: 0.8125rem;
+}
+.markdown .md-quote {
+	margin: 2px 0;
+	padding-left: 12px;
+	border-left: 4px solid var(--neutral);
+}
+.markdown .md-list {
+	margin: 2px 0;
+	padding-left: 22px;
+}
+.markdown a,
+.embed a {
+	color: var(--link);
+	text-decoration: none;
+}
+.markdown a:hover,
+.embed a:hover {
+	text-decoration: underline;
+}
+.markdown .spoiler {
+	padding: 0 2px;
+	border-radius: 3px;
+	background: var(--rail);
+}
+.markdown .timestamp {
+	padding: 0 2px;
+	border-radius: 3px;
+	background: rgb(255 255 255 / 6%);
+}
+.markdown code {
+	padding: 1px 4px;
+	border-radius: 4px;
+	background: var(--card);
+}
+.markdown pre {
+	margin: 6px 0;
+	padding: 8px;
+	border: 1px solid var(--rail);
+	border-radius: 4px;
+	background: var(--sidebar);
+	overflow-x: auto;
+}
+.mention {
+	padding: 0 2px;
+	border-radius: 3px;
+	background: var(--mention-bg);
+	color: var(--mention-text);
+	font-weight: 500;
+}
+
+/* ——— Emoji (`emoji--${size}`: inline | jumbo | button) ——— */
+.emoji {
+	display: inline-block;
+	object-fit: contain;
+	vertical-align: -0.3em;
+}
+.emoji.emoji--inline {
+	width: 1.375em;
+	height: 1.375em;
+}
+.emoji.emoji--jumbo {
+	width: 48px;
+	height: 48px;
+	margin: 2px 2px 0 0;
+	vertical-align: bottom;
+}
+.emoji.emoji--button {
+	width: 20px;
+	height: 20px;
+	vertical-align: middle;
+}
+.unicode-emoji.emoji--button {
+	font-size: 18px;
+	line-height: 20px;
+}
+.custom-emoji-fallback {
+	color: var(--muted);
+	font-size: 0.9em;
+}
+
+/* ==================== 6. Embeds ==================== */
 .embed {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr);
@@ -829,15 +881,11 @@ code {
 	min-width: 0;
 	padding-top: 4px;
 }
-.embed-description {
-	color: var(--text);
-}
 .embed-author {
 	display: flex;
 	align-items: center;
 	gap: 8px;
 	color: var(--strong);
-	font-size: 14px;
 	font-weight: 600;
 }
 .embed-author img,
@@ -847,18 +895,15 @@ code {
 	border-radius: 50%;
 	object-fit: cover;
 }
-.embed a {
-	color: var(--link);
-	text-decoration: none;
-}
-.embed a:hover {
-	text-decoration: underline;
-}
 .embed-title {
 	color: var(--strong);
 	font-size: 16px;
 	font-weight: 600;
-	line-height: 1.375rem;
+	line-height: var(--message-line-height);
+}
+.embed-title .markdown,
+.embed-field-name .markdown {
+	line-height: inherit;
 }
 .embed-fields {
 	display: grid;
@@ -901,6 +946,7 @@ code {
 	font-weight: 500;
 	line-height: 1rem;
 }
+/* Unloadable media. Must follow `.embed-image`/`.embed-thumbnail`, which share its element. */
 .media-placeholder,
 .file-placeholder {
 	display: grid;
@@ -931,6 +977,8 @@ code {
 	min-height: 0;
 	background: var(--sidebar);
 }
+
+/* ==================== 7. Components (buttons, select menus, containers) ==================== */
 .action-row {
 	display: flex;
 	flex-wrap: wrap;
@@ -946,8 +994,8 @@ code {
 	height: 32px;
 	padding: 2px 12px;
 	border: 1px solid transparent;
-	border-radius: 8px;
-	color: #fff;
+	border-radius: var(--radius);
+	color: var(--white);
 	font-size: 14px;
 	font-weight: 500;
 	line-height: 16px;
@@ -958,6 +1006,7 @@ code {
 .component-button:disabled {
 	opacity: 0.5;
 }
+/* `button-style-${style}`: 1 primary, 2 secondary, 3 success, 4 danger, 5 link. */
 .button-style-1 {
 	background: var(--blurple);
 }
@@ -982,11 +1031,13 @@ code {
 	background: #047a38;
 }
 .button-style-4 {
-	background: #da373c;
+	background: var(--danger);
 }
 .button-style-4:hover:not(:disabled) {
 	background: #a12828;
 }
+
+/* ——— Select menus ——— */
 .select-menu {
 	position: relative;
 	max-width: 400px;
@@ -1001,7 +1052,7 @@ code {
 	min-height: 40px;
 	padding: 8px 8px 8px 12px;
 	border: 1px solid var(--button-border);
-	border-radius: 8px;
+	border-radius: var(--radius);
 	background: var(--input);
 	color: var(--text);
 	font-size: 15px;
@@ -1011,8 +1062,8 @@ code {
 	opacity: 0.5;
 }
 .select-menu.open .select-trigger {
-	border-color: #4a4a52;
-	border-radius: 8px 8px 0 0;
+	border-color: var(--select-open-border);
+	border-radius: var(--radius) var(--radius) 0 0;
 }
 .select-trigger svg {
 	flex: none;
@@ -1043,9 +1094,9 @@ code {
 	left: 0;
 	z-index: 12;
 	overflow: hidden;
-	border: 1px solid #4a4a52;
+	border: 1px solid var(--select-open-border);
 	border-top: 0;
-	border-radius: 0 0 8px 8px;
+	border-radius: 0 0 var(--radius) var(--radius);
 	background: var(--input);
 	box-shadow: 0 8px 16px rgb(0 0 0 / 30%);
 }
@@ -1104,6 +1155,18 @@ code {
 		url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='m6 12 4 4 8-8' fill='none' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E")
 		center / 16px no-repeat;
 }
+.select-empty {
+	padding: 12px;
+	color: var(--muted);
+}
+.select-footer {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 8px;
+	padding: 8px 12px;
+	border-top: 1px solid var(--divider);
+}
 .select-count {
 	margin-right: auto;
 	color: var(--muted);
@@ -1117,25 +1180,11 @@ code {
 	max-width: none;
 	margin-top: 0;
 }
-.modal-field .select-trigger {
-	background: var(--input);
-}
 .modal-field .select-popover {
 	position: static;
-	background: var(--input);
 }
-.select-empty {
-	padding: 12px;
-	color: var(--muted);
-}
-.select-footer {
-	display: flex;
-	align-items: center;
-	justify-content: flex-end;
-	gap: 8px;
-	padding: 8px 12px;
-	border-top: 1px solid var(--divider);
-}
+
+/* ——— Layout components ——— */
 .component-container {
 	display: grid;
 	gap: 8px;
@@ -1144,7 +1193,7 @@ code {
 	padding: 16px;
 	border: 1px solid var(--divider);
 	border-left: 4px solid var(--divider);
-	border-radius: 8px;
+	border-radius: var(--radius);
 	background: var(--embed);
 }
 .component-container > * {
@@ -1168,6 +1217,7 @@ code {
 .component-separator.blank {
 	border-color: transparent;
 }
+/* Must precede `.option-pill`, which shares its element in the composer. */
 .unsupported {
 	margin-top: 6px;
 	padding: 6px 10px;
@@ -1178,34 +1228,11 @@ code {
 	font-size: 13px;
 }
 .field-error {
-	color: #fa777c;
+	color: var(--danger-text);
 	font-size: 12px;
 }
 
-/* ——— Unsent forms whose trigger is gone ——— */
-.resume-forms {
-	display: grid;
-	gap: 4px;
-	margin: 0 16px 8px;
-}
-.resume-form {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 12px;
-	padding: 6px 12px;
-	border: 1px solid var(--shell-border);
-	border-radius: 8px;
-	background: var(--card);
-	color: var(--muted);
-	font-size: 14px;
-}
-.resume-form strong {
-	color: var(--text);
-	font-weight: 500;
-}
-
-/* ——— Composer ——— */
+/* ==================== 8. Composer ==================== */
 .composer {
 	position: relative;
 	flex: none;
@@ -1226,7 +1253,7 @@ code {
 	min-height: 52px;
 	padding: 6px 8px 6px 16px;
 	border: 1px solid var(--embed-border);
-	border-radius: 8px;
+	border-radius: var(--radius);
 	background: var(--input);
 	color: var(--muted);
 }
@@ -1257,8 +1284,8 @@ code {
 	gap: 4px;
 	padding: 2px 4px 2px 8px;
 	border-radius: 4px;
-	background: rgb(88 101 242 / 30%);
-	color: #c9cdfb;
+	background: var(--mention-bg);
+	color: var(--mention-text);
 	font-weight: 600;
 }
 .command-chip button {
@@ -1277,20 +1304,20 @@ code {
 	display: inline-flex;
 	align-items: center;
 	overflow: hidden;
-	border: 1px solid #4e5058;
+	border: 1px solid var(--neutral);
 	border-radius: 4px;
 	background: var(--card);
 	font-size: 14px;
 }
 .option-pill > span {
 	padding: 4px 8px;
-	background: #4e5058;
+	background: var(--neutral);
 	color: var(--strong);
 	font-weight: 500;
 }
 .option-pill.required > span::after {
 	content: " *";
-	color: #fa777c;
+	color: var(--danger-text);
 }
 .option-pill input,
 .option-pill select {
@@ -1316,10 +1343,10 @@ code {
 	border: 0;
 	border-radius: 6px;
 	background: var(--blurple);
-	color: #fff;
+	color: var(--white);
 }
 .send-button:disabled {
-	background: #4e5058;
+	background: var(--neutral);
 	color: var(--faint);
 }
 .composer-hint {
@@ -1374,7 +1401,7 @@ code {
 	color: var(--muted);
 }
 
-/* ——— Side panels ——— */
+/* ==================== 9. Side panels and member list ==================== */
 .side-panel {
 	position: relative;
 	display: flex;
@@ -1386,9 +1413,10 @@ code {
 	overflow: hidden;
 }
 .side-panel.lab {
-	border-left: 1px solid var(--lab-line);
+	border-left-color: var(--lab-line);
 	background: #25262a;
 }
+/* Shown only when the panel floats (see Responsive). */
 .panel-close {
 	position: absolute;
 	top: 8px;
@@ -1425,7 +1453,7 @@ code {
 	height: 42px;
 	padding: 0 8px;
 	border: 0;
-	border-radius: 8px;
+	border-radius: var(--radius);
 	background: transparent;
 	text-align: left;
 	color: var(--muted);
@@ -1474,13 +1502,14 @@ code {
 }
 .member-line .bot-tag {
 	flex: none;
-	margin-left: 0;
 }
 .member-name small {
 	color: var(--lab);
 	font-size: 11px;
 	font-weight: 400;
 }
+
+/* ——— Profile card ——— */
 .profile-card {
 	position: relative;
 	z-index: 10;
@@ -1488,7 +1517,7 @@ code {
 	overflow: hidden;
 	border-radius: var(--radius);
 	background: var(--floating);
-	box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
+	box-shadow: var(--shadow-float);
 	outline: none;
 }
 .profile-banner {
@@ -1500,7 +1529,7 @@ code {
 	top: 8px;
 	right: 8px;
 	background: rgb(0 0 0 / 40%);
-	color: #fff;
+	color: var(--white);
 }
 .profile-head {
 	display: flex;
@@ -1600,7 +1629,7 @@ code {
 	margin: 0 12px 12px;
 }
 
-/* ——— Lab panel ——— */
+/* ==================== 10. Lab panel ==================== */
 .lab-panel {
 	display: flex;
 	flex-direction: column;
@@ -1611,7 +1640,8 @@ code {
 	display: flex;
 	align-items: center;
 	gap: 10px;
-	min-height: 48px;
+	min-height: var(--header-height);
+	/* The right padding leaves room for `.panel-close`. */
 	padding: 8px 48px 8px 16px;
 	border-bottom: 1px solid var(--lab-line);
 }
@@ -1685,7 +1715,7 @@ a.revision-chip[href]:hover {
 }
 .tab-count.danger {
 	background: var(--red);
-	color: #fff;
+	color: var(--white);
 }
 .lab-body {
 	flex: 1;
@@ -1699,11 +1729,6 @@ a.revision-chip[href]:hover {
 }
 .lab-section h3 {
 	margin: 0 0 8px;
-	color: var(--muted);
-	font-size: 12px;
-	font-weight: 700;
-	letter-spacing: 0.02em;
-	text-transform: uppercase;
 }
 .lab-empty {
 	margin: 8px 0;
@@ -1726,14 +1751,20 @@ a.revision-chip[href]:hover {
 	border-left-color: var(--green);
 	background: rgb(35 165 90 / 12%);
 }
-.lab-entries {
+
+/* ——— Entry lists: REST/admin log, pending modals, expectations ——— */
+.lab-entries,
+.pending-list,
+.expectations {
 	display: grid;
 	gap: 6px;
 	margin: 0;
 	padding: 0;
 	list-style: none;
 }
-.lab-entries li {
+.lab-entries li,
+.pending-list li,
+.expectations li {
 	padding: 8px 10px;
 	border-radius: 6px;
 	background: var(--card);
@@ -1770,6 +1801,7 @@ a.revision-chip[href]:hover {
 	border-radius: 6px;
 	background: var(--rail);
 }
+/* `kind-badge ${kind}`: user | admin | local, plus `failed`. */
 .kind-badge {
 	flex: none;
 	padding: 0 5px;
@@ -1781,8 +1813,8 @@ a.revision-chip[href]:hover {
 	text-transform: uppercase;
 }
 .kind-badge.user {
-	background: rgb(88 101 242 / 30%);
-	color: #c9cdfb;
+	background: var(--mention-bg);
+	color: var(--mention-text);
 }
 .kind-badge.admin {
 	background: var(--lab-soft);
@@ -1794,8 +1826,46 @@ a.revision-chip[href]:hover {
 }
 .kind-badge.failed {
 	background: rgb(242 63 67 / 20%);
-	color: #fa777c;
+	color: var(--danger-text);
 }
+.pending-list li {
+	display: grid;
+	gap: 2px;
+}
+.pending-list strong {
+	color: var(--strong);
+}
+.pending-list code,
+.pending-list span {
+	color: var(--muted);
+	font-size: 12px;
+}
+.pending-list .button {
+	justify-self: start;
+	margin-top: 4px;
+}
+.expectations {
+	margin-bottom: 12px;
+}
+.expectations li {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	gap: 2px 8px;
+	border-left: 3px solid var(--lab);
+	border-radius: 0 6px 6px 0;
+}
+.expectations code {
+	grid-column: 1;
+	color: var(--faint);
+	font-size: 11px;
+	overflow-wrap: anywhere;
+}
+.expectations .icon-button {
+	grid-row: 1 / span 2;
+	grid-column: 2;
+}
+
+/* ——— Key/value summaries ——— */
 .refs,
 .world-summary {
 	display: grid;
@@ -1830,58 +1900,8 @@ a.revision-chip[href]:hover {
 	grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
 	margin-bottom: 12px;
 }
-.pending-list {
-	display: grid;
-	gap: 6px;
-	margin: 0;
-	padding: 0;
-	list-style: none;
-}
-.pending-list li {
-	display: grid;
-	gap: 2px;
-	padding: 8px 10px;
-	border-radius: 6px;
-	background: var(--card);
-}
-.pending-list strong {
-	color: var(--strong);
-}
-.pending-list code,
-.pending-list span {
-	color: var(--muted);
-	font-size: 12px;
-}
-.pending-list .button {
-	justify-self: start;
-	margin-top: 4px;
-}
-.expectations {
-	display: grid;
-	gap: 6px;
-	margin: 0 0 12px;
-	padding: 0;
-	list-style: none;
-}
-.expectations li {
-	display: grid;
-	grid-template-columns: minmax(0, 1fr) auto;
-	gap: 2px 8px;
-	padding: 8px 10px;
-	border-left: 3px solid var(--lab);
-	border-radius: 0 6px 6px 0;
-	background: var(--card);
-}
-.expectations code {
-	grid-column: 1;
-	color: var(--faint);
-	font-size: 11px;
-	overflow-wrap: anywhere;
-}
-.expectations .icon-button {
-	grid-row: 1 / span 2;
-	grid-column: 2;
-}
+
+/* ——— Checkpoint forms ——— */
 .inline-form {
 	display: flex;
 	flex-wrap: wrap;
@@ -1931,7 +1951,7 @@ a.revision-chip[href]:hover {
 	font-size: 12px;
 }
 
-/* ——— Forms and buttons ——— */
+/* ==================== 11. Shared controls: buttons, fields, toggles, scenario picker ==================== */
 .button {
 	display: inline-flex;
 	align-items: center;
@@ -1940,7 +1960,7 @@ a.revision-chip[href]:hover {
 	min-height: 38px;
 	padding: 2px 16px;
 	border: 1px solid var(--button-border);
-	border-radius: 8px;
+	border-radius: var(--radius);
 	background: var(--button);
 	color: var(--text);
 	font-size: 14px;
@@ -1957,7 +1977,7 @@ a.revision-chip[href]:hover {
 .button.primary {
 	border-color: transparent;
 	background: var(--blurple);
-	color: #fff;
+	color: var(--white);
 }
 .button.primary:hover:not(:disabled) {
 	background: var(--blurple-hover);
@@ -1968,7 +1988,7 @@ a.revision-chip[href]:hover {
 	font-size: 13px;
 }
 .button.lab {
-	border: 1px solid var(--lab-line);
+	border-color: var(--lab-line);
 	background: var(--lab-soft);
 	color: var(--lab);
 }
@@ -1989,17 +2009,20 @@ a.revision-chip[href]:hover {
 .button.wide {
 	width: 100%;
 }
-.field {
-	display: grid;
-	gap: 6px;
-	margin-bottom: 12px;
-}
-.field-label {
+/* Small uppercase labels used across the lab. */
+.lab-section h3,
+.field-label,
+.scenario-form legend {
 	color: var(--muted);
 	font-size: 12px;
 	font-weight: 700;
 	letter-spacing: 0.02em;
 	text-transform: uppercase;
+}
+.field {
+	display: grid;
+	gap: 6px;
+	margin-bottom: 12px;
 }
 .field-label code {
 	margin-left: 4px;
@@ -2016,16 +2039,18 @@ a.revision-chip[href]:hover {
 	border-radius: 4px;
 	background: var(--rail);
 }
+/* Native inputs kept for accessibility behind custom visuals. */
+.toggle-field input,
+.scenario-card input {
+	position: absolute;
+	opacity: 0;
+}
 .toggle-field {
 	display: flex;
 	align-items: center;
 	gap: 10px;
 	margin-bottom: 12px;
 	cursor: pointer;
-}
-.toggle-field input {
-	position: absolute;
-	opacity: 0;
 }
 .toggle-track {
 	position: relative;
@@ -2044,7 +2069,7 @@ a.revision-chip[href]:hover {
 	width: 18px;
 	height: 18px;
 	border-radius: 50%;
-	background: #fff;
+	background: var(--white);
 	transition: transform 150ms ease;
 }
 .toggle-field input:checked + .toggle-track {
@@ -2068,11 +2093,6 @@ a.revision-chip[href]:hover {
 }
 .scenario-form legend {
 	margin-bottom: 8px;
-	color: var(--muted);
-	font-size: 12px;
-	font-weight: 700;
-	letter-spacing: 0.02em;
-	text-transform: uppercase;
 }
 .scenario-list {
 	display: grid;
@@ -2090,10 +2110,6 @@ a.revision-chip[href]:hover {
 	background: var(--card);
 	cursor: pointer;
 }
-.scenario-card input {
-	position: absolute;
-	opacity: 0;
-}
 .scenario-card strong {
 	color: var(--strong);
 	font-weight: 600;
@@ -2109,6 +2125,8 @@ a.revision-chip[href]:hover {
 	outline: 2px solid var(--link);
 	outline-offset: 2px;
 }
+
+/* ==================== 12. Launcher, modal, feedback ==================== */
 
 /* ——— Launcher ——— */
 .launcher {
@@ -2126,6 +2144,7 @@ a.revision-chip[href]:hover {
 	font-size: 28px;
 	line-height: 1.2;
 }
+/* Also restyles the `.lab-callout` paragraphs placed directly in the card. */
 .launcher-card > p {
 	margin: 0 0 20px;
 	color: var(--muted);
@@ -2203,12 +2222,11 @@ a.revision-chip[href]:hover {
 	color: var(--red);
 }
 .modal-field input,
-.modal-field textarea,
-.modal-field select {
+.modal-field textarea {
 	width: 100%;
 	padding: 10px 12px;
 	border: 1px solid var(--button-border);
-	border-radius: 8px;
+	border-radius: var(--radius);
 	background: var(--input);
 	color: var(--text);
 }
@@ -2217,15 +2235,15 @@ a.revision-chip[href]:hover {
 	border-color: var(--blurple);
 	outline: none;
 }
+.modal-field textarea {
+	min-height: 96px;
+	resize: vertical;
+}
 .modal-field-description {
 	margin: -4px 0 0;
 	color: var(--muted);
 	font-size: 14px;
 	line-height: 1.35;
-}
-.modal-field textarea {
-	min-height: 96px;
-	resize: vertical;
 }
 .modal-actions {
 	display: flex;
@@ -2247,17 +2265,17 @@ a.revision-chip[href]:hover {
 	max-width: min(640px, calc(100vw - 32px));
 	padding: 10px 8px 10px 16px;
 	border-radius: var(--radius);
-	background: #da373c;
-	color: #fff;
+	background: var(--danger);
+	color: var(--white);
 	font-size: 14px;
-	box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
+	box-shadow: var(--shadow-float);
 	transform: translateX(-50%);
 }
 .toast span {
 	overflow-wrap: anywhere;
 }
 .toast .icon-button {
-	color: #fff;
+	color: var(--white);
 }
 .connection-screen {
 	display: grid;
@@ -2278,15 +2296,17 @@ a.revision-chip[href]:hover {
 	color: var(--muted);
 }
 
+/* ==================== 13. Responsive ==================== */
+
 /* ——— Medium: right panel floats over the chat ——— */
 @media (max-width: 1180px) {
 	.shell.with-members,
 	.shell.with-lab {
-		grid-template-columns: 264px minmax(0, 1fr);
+		grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
 	}
 	.side-panel {
 		position: fixed;
-		top: 32px;
+		top: var(--titlebar-height);
 		right: 0;
 		bottom: 0;
 		z-index: 30;
@@ -2298,9 +2318,6 @@ a.revision-chip[href]:hover {
 	}
 	.panel-close {
 		display: inline-grid;
-	}
-	.lab-header {
-		padding-right: 48px;
 	}
 	.member-list {
 		padding-top: 48px;
@@ -2327,24 +2344,24 @@ a.revision-chip[href]:hover {
 	.server-rail,
 	.channel-sidebar {
 		position: fixed;
-		top: 32px;
+		top: var(--titlebar-height);
 		bottom: 0;
 		z-index: 40;
 	}
 	.server-rail {
 		left: 0;
-		width: 64px;
+		width: var(--rail-width);
 		transform: translateX(-120%);
 	}
 	.channel-sidebar {
-		left: 64px;
-		width: min(280px, calc(100vw - 64px));
+		left: var(--rail-width);
+		width: min(280px, calc(100vw - var(--rail-width)));
 		/* Offset by the rail too, so no sliver of the closed drawer stays on screen. */
 		transform: translateX(calc(-100% - 80px));
 	}
 	.user-dock {
 		z-index: 41;
-		width: calc(64px + min(280px, calc(100vw - 64px)) - 16px);
+		width: calc(var(--rail-width) + min(280px, calc(100vw - var(--rail-width))) - 16px);
 		transform: translateX(calc(-100% - 16px));
 	}
 	.nav-open .server-rail,
@@ -2354,7 +2371,7 @@ a.revision-chip[href]:hover {
 	}
 	.nav-open .scrim {
 		position: fixed;
-		inset: 32px 0 0;
+		inset: var(--titlebar-height) 0 0;
 		z-index: 35;
 		display: block;
 		border: 0;
