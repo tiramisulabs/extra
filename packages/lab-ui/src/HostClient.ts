@@ -104,21 +104,9 @@ function hostError(response: Response, body: unknown): HostError {
 	});
 }
 
-/** `session.inspect` reports pending interactions and REST calls as JSON; these are the fields the lab shows. */
-interface InspectedPending {
-	modals?: PendingModal[];
-	collectors?: { messageId: string; customIds?: string[]; kind: string }[];
-}
-interface InspectedRestCall {
-	method?: string;
-	route?: string;
-	error?: unknown;
-	response?: { status?: number };
-}
 const detail = (value: unknown) => (typeof value === 'string' ? value : JSON.stringify(value));
 
 function inspectorEntries(log: SessionLog, inspect: InspectorSnapshot): LabSnapshot['inspector'] {
-	const rest = (Array.isArray(inspect.rest) ? inspect.rest : []) as InspectedRestCall[];
 	return {
 		actions: log.entries.map(({ seq, action, outcome }) => ({
 			id: `action-${seq}`,
@@ -127,9 +115,9 @@ function inspectorEntries(log: SessionLog, inspect: InspectorSnapshot): LabSnaps
 			detail: detail(outcome.error ?? outcome.summary),
 			failed: !outcome.ok,
 		})),
-		rest: rest.map((call, index) => ({
+		rest: inspect.rest.map((call, index) => ({
 			id: `rest-${index}`,
-			label: `${call.response?.status ?? ''} · ${call.method ?? ''} ${call.route ?? ''}`,
+			label: `${call.method} ${call.route}`,
 			detail: detail(call.error ?? call.response ?? ''),
 			failed: Boolean(call.error),
 		})),
@@ -137,8 +125,8 @@ function inspectorEntries(log: SessionLog, inspect: InspectorSnapshot): LabSnaps
 	};
 }
 
-const collectorEntries = (pending: InspectedPending): InspectorEntry[] =>
-	(pending.collectors ?? []).map((collector, index) => ({
+const collectorEntries = (pending: InspectorSnapshot['pending']): InspectorEntry[] =>
+	pending.collectors.map((collector, index) => ({
 		id: `collector-${index}`,
 		label: `${collector.kind} · ${collector.customIds?.join(', ') ?? ''}`,
 		detail: collector.messageId,
@@ -496,8 +484,9 @@ export class HostClient implements LabClient, CheckpointClient {
 			this.loadProjections(project),
 		]);
 		if (generation !== this.generation) return;
-		const pending = inspect.pending as InspectedPending;
-		const modals = pending.modals ?? [];
+		const pending = inspect.pending;
+		// The lab renders modal payloads through its own looser component shape.
+		const modals = pending.modals as unknown as PendingModal[];
 		this.syncClosedModals(modals);
 		this.snapshot = {
 			error: this.snapshot?.error,
