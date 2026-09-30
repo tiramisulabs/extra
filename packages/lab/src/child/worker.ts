@@ -5,6 +5,7 @@ import {
 	type BridgeEvent,
 	type BridgeRequest,
 	type BridgeResponse,
+	isRecord,
 	PROTOCOL_VERSION,
 	type ProjectDescription,
 	validateBridgeRequest,
@@ -84,7 +85,7 @@ async function handle(request: BridgeRequest): Promise<JsonValue> {
 
 /** The request ID to answer with, even when the request itself is invalid. */
 function requestId(message: unknown): number {
-	const id = typeof message === 'object' && message !== null && 'id' in message ? message.id : undefined;
+	const id = isRecord(message) ? message.id : undefined;
 	return typeof id === 'number' && Number.isSafeInteger(id) ? id : 0;
 }
 

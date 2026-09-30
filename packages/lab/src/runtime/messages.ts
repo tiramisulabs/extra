@@ -47,5 +47,10 @@ export const messageShows = (message: VisibleMessage, contains: string): boolean
 
 export function hasCustomId(components: unknown, customId: string): boolean {
 	if (Array.isArray(components)) return components.some(item => hasCustomId(item, customId));
-	return isRecord(components) && (components.custom_id === customId || hasCustomId(components.components, customId));
+	return (
+		isRecord(components) &&
+		(components.custom_id === customId ||
+			hasCustomId(components.components, customId) ||
+			hasCustomId(components.accessory, customId))
+	);
 }

@@ -14,6 +14,20 @@ export function positiveInteger(value: number, name: string): number {
 	return value;
 }
 
+export interface ChildTimeouts {
+	startTimeoutMs?: number;
+	disposeTimeoutMs?: number;
+	rpcTimeoutMs?: number;
+}
+
+/** Rejects zero, negative or non-integer timeouts before they reach `setTimeout`. */
+export function validateTimeouts(options: ChildTimeouts): void {
+	for (const name of ['startTimeoutMs', 'disposeTimeoutMs', 'rpcTimeoutMs'] as const) {
+		const value = options[name];
+		if (value !== undefined) positiveInteger(value, name);
+	}
+}
+
 /** Checkpoints replay only on the lab version that recorded them. */
 export function assertLabVersion(checkpoint: Pick<Checkpoint, 'labVersion'>): void {
 	if (checkpoint.labVersion !== LAB_VERSION)

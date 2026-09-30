@@ -9,7 +9,7 @@ import {
 	validateLabAction,
 	validateProjectDescription,
 } from '../protocol';
-import { createObservers, DEFAULT_DISPOSE_TIMEOUT_MS, errorText, positiveInteger } from '../shared';
+import { createObservers, DEFAULT_DISPOSE_TIMEOUT_MS, errorText, validateTimeouts } from '../shared';
 
 const DEFAULT_START_TIMEOUT_MS = 10000;
 const DEFAULT_RPC_TIMEOUT_MS = 30000;
@@ -134,7 +134,7 @@ interface PendingCall {
 
 /** Runs the Session API in a forked process; see the package README for timeouts and module formats. */
 export function createChildSession(options: ChildSessionOptions): Session {
-	if (options.rpcTimeoutMs !== undefined) positiveInteger(options.rpcTimeoutMs, 'rpcTimeoutMs');
+	validateTimeouts(options);
 	const rpcTimeoutMs = options.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
 	const disposeTimeoutMs = options.disposeTimeoutMs ?? DEFAULT_DISPOSE_TIMEOUT_MS;
 	const observers = createObservers();

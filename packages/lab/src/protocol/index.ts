@@ -84,7 +84,7 @@ export interface ProjectDescription {
 }
 export type BridgeMessage = BridgeRequest | BridgeResponse | BridgeEvent;
 
-/** A plain object: not null and not an array. */
+/** @internal A plain object: not null and not an array. */
 export const isRecord = (value: unknown): value is Record<string, unknown> =>
 	value !== null && typeof value === 'object' && !Array.isArray(value);
 /** Protocol identifiers and labels are never empty. */
@@ -95,6 +95,7 @@ const isTextMap = (value: unknown): boolean => isRecord(value) && Object.values(
 const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 const isNonNegativeInteger = (value: unknown): value is number =>
 	typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+/** @internal */
 export const isPositiveInteger = (value: unknown): value is number => isNonNegativeInteger(value) && value > 0;
 const isOneOf = <T>(options: readonly T[], value: unknown): value is T => options.some(option => option === value);
 const isActionIndex = (value: unknown, actionCount: number): boolean =>

@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { describeChildProject } from '../child';
 import type { BuildInfo, ProjectDescription } from '../protocol';
-import { positiveInteger } from '../shared';
+import { positiveInteger, validateTimeouts } from '../shared';
 import { HostedRuns, type HostLimits, LocalRuns } from './registry';
 import { createRequestListener, type HostContext } from './routes';
 
@@ -52,6 +52,7 @@ const DEFAULT_IDLE_TTL_MS = 30 * 60_000;
 const DEFAULT_MAX_RUN_MS = 2 * 60 * 60_000;
 
 /** Hosted options after validation and defaults. */
+/** @internal */
 export interface HostedConfig {
 	publicOrigin: URL;
 	access: HostAccess;
@@ -93,7 +94,7 @@ export async function startHost(options: HostOptions): Promise<LabHost> {
 	if (!options.hosted && !LOCAL_BIND_HOSTNAMES.includes(hostname))
 		throw new TypeError('Host must bind to 127.0.0.1, ::1 or localhost');
 	const hosted = options.hosted && resolveHostedConfig(options.hosted, options);
-	if (options.rpcTimeoutMs !== undefined) positiveInteger(options.rpcTimeoutMs, 'rpcTimeoutMs');
+	validateTimeouts(options);
 	if (!isAbsolute(options.projectModule)) throw new TypeError('projectModule must be an absolute path');
 	if (!Number.isInteger(port) || port < 0 || port > 65535) throw new TypeError('Invalid port');
 
