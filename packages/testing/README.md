@@ -47,6 +47,6 @@ const bot = await createMockBot({ world });
 ## Observe a running bot
 
 - `bot.observe(listener)` streams REST requests, dispatches, world diffs, and pending interaction changes. It returns an unsubscribe function.
-- `bot.conversation({ userId, channelId })` returns what that user can see: channel permissions and overwrites apply, ephemeral messages are shown only to their owner, and without `ReadMessageHistory` only messages received while the user had access are visible. `bot.inspectChannel(channelId)` returns every message, including hidden ones.
+- `bot.conversation({ userId, channelId })` returns what that user can see: channel permissions and overwrites apply, ephemeral messages are shown only to their owner, and without `ReadMessageHistory` only messages received while the user had access are visible. `bot.inspectChannel(channelId)` returns every message, including hidden and deleted ones.
 - `bot.pendingInteractions()` lists open modals and live component collectors. `await bot.commandSchemas()` returns the full JSON of every registered command, loading deferred commands first.
 - `await bot.admin.addMemberRole({ guildId, userId, roleId })` and `removeMemberRole(...)` simulate a role change made outside the bot, dispatching `GUILD_MEMBER_UPDATE`. They ignore the bot's own permissions.

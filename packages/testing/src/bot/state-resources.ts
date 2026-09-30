@@ -32,7 +32,7 @@ import {
 } from './payloads';
 import type { ChannelOverwriteLike } from './permissions';
 import { apiError, DiscordErrors } from './rest';
-import { WorldStateMutationCore } from './state-mutations';
+import { type AddMessageOptions, WorldStateMutationCore } from './state-mutations';
 import type { ChannelView, GuildMemberView, MessageView } from './state-support';
 import {
 	arrayValue,
@@ -440,28 +440,17 @@ export class WorldState extends WorldStateMutationCore {
 		channel.permission_overwrites = channel.permission_overwrites.filter(current => current.id !== overwriteId);
 	}
 
-	private markInteractionMessage(channelId: string, messageId: string, token: string): void {
-		const entry = this.world.messages.find(
-			candidate => candidate.channelId === channelId && candidate.message.id === messageId,
-		);
+	/** Attribute an interaction response to the user and interaction behind its token. */
+	private responseOwnership(token: string): AddMessageOptions {
 		const interaction = this.interactionForToken(token);
-		if (entry && interaction) {
-			entry.ownerId = interaction.userId;
-			entry.interactionId = interaction.interactionId;
-		}
+		return interaction ? { ownerId: interaction.userId, interactionId: interaction.interactionId } : {};
 	}
 
 	/** @internal For an interaction's first visible reply. */
 	addOriginalResponse(token: string, channelId: string, raw: Record<string, unknown>, authorId: string): RawMessage {
 		if (this.deletedOriginalTokens.has(token)) apiError(DiscordErrors.UnknownMessage);
 		this.registerInteractionToken(token, channelId);
-		const view = this.addMessage(
-			channelId,
-			{ ...raw, author_id: authorId },
-			false,
-			this.interactionForToken(token)?.userId,
-		);
-		this.markInteractionMessage(channelId, view.id, token);
+		const view = this.addMessage(channelId, { ...raw, author_id: authorId }, this.responseOwnership(token));
 		this.deletedOriginalTokens.delete(token);
 		this.messageIdByToken.set(token, view.id);
 		return this.rawMessageOr(channelId, view.id);
@@ -473,12 +462,10 @@ export class WorldState extends WorldStateMutationCore {
 		const view = this.addMessage(
 			channelId,
 			{ flags: (flags & MESSAGE_FLAG_EPHEMERAL) | MESSAGE_FLAG_LOADING, author_id: authorId },
-			true,
-			this.interactionForToken(token)?.userId,
+			{ loading: true, ...this.responseOwnership(token) },
 		);
-		this.markInteractionMessage(channelId, view.id, token);
 		this.messageIdByToken.set(token, view.id);
-		this.deferredFollowupTokens.add(token);
+		this.loadingOriginalTokens.add(token);
 		return this.rawMessageOr(channelId, view.id);
 	}
 
@@ -495,7 +482,8 @@ export class WorldState extends WorldStateMutationCore {
 		const messageId = this.messageIdByToken.get(token);
 		if (!messageId) return this.addOriginalResponse(token, channelId, raw, authorId);
 		this.editMessage(channelId, messageId, raw);
-		this.deferredFollowupTokens.delete(token);
+		// The first edit fills a deferred loading placeholder.
+		this.loadingOriginalTokens.delete(token);
 		const entry = this.world.messages.find(
 			candidate => candidate.channelId === channelId && candidate.message.id === messageId,
 		);
@@ -522,16 +510,10 @@ export class WorldState extends WorldStateMutationCore {
 	/** @internal For webhook followups. */
 	addFollowup(token: string, raw: Record<string, unknown>, authorId: string): RawMessage | Record<string, never> {
 		if (!this.acknowledgedTokens.has(token)) apiError(DiscordErrors.UnknownWebhook);
-		if (this.deferredFollowupTokens.has(token)) return this.upsertOriginalResponse(token, raw, authorId);
+		if (this.loadingOriginalTokens.has(token)) return this.upsertOriginalResponse(token, raw, authorId);
 		const channelId = this.channelIdByToken.get(token);
 		if (!channelId) return {};
-		const view = this.addMessage(
-			channelId,
-			{ ...raw, author_id: authorId },
-			false,
-			this.interactionForToken(token)?.userId,
-		);
-		this.markInteractionMessage(channelId, view.id, token);
+		const view = this.addMessage(channelId, { ...raw, author_id: authorId }, this.responseOwnership(token));
 		return this.rawMessageOr(channelId, view.id);
 	}
 

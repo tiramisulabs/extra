@@ -102,7 +102,9 @@ export abstract class MockBotSurface {
 		string,
 		{ customId?: string; inputIds: Set<string>; dispatchId?: number; pending?: PendingModal }
 	>();
+	/** Live component collectors, reported by the dispatch hooks. */
 	protected readonly pendingCollectors = new Set<PendingCollector>();
+	/** Called when a modal or collector opens or closes; the public MockBot relays it to observers. */
 	protected onInteractionChange(_change: PendingInteractionChange): void {}
 	/** Dispatches whose type-9 callback was captured eagerly by the modal registration hook. */
 	protected readonly modalRenderCapturedDispatches = new Set<number>();
@@ -536,33 +538,31 @@ export abstract class MockBotSurface {
 			if (dispatchId !== undefined && action.dispatchId !== dispatchId) continue;
 			const callback = /^\/interactions\/([^/]+)\/([^/]+)\/callback$/.exec(action.route);
 			if (!callback) continue;
-			const body = action.body as { type?: number; data?: Record<string, unknown> } | undefined;
+			const body = action.body as { type?: number; data?: PendingModal['payload'] } | undefined;
 			if (body?.type !== 9) continue;
-			const details = this._state.interactionForToken(callback[2]);
-			if (details?.userId !== userId || details.interactionId !== callback[1]) continue;
-			const data = body.data ?? {};
+			const [, interactionId, token] = callback;
+			const opener = this._state.interactionForToken(token);
+			if (opener?.userId !== userId || opener.interactionId !== interactionId) continue;
+			const data = body.data;
 			const inputIds = new Set<string>();
-			collectComponentCustomIds(data.components, inputIds);
-			const pending: PendingModal | undefined =
-				typeof data.custom_id === 'string' && details
-					? {
-							userId,
-							interactionId: details.interactionId,
-							customId: data.custom_id,
-							payload: structuredClone(data) as unknown as PendingModal['payload'],
-							...(action.sessionKey === undefined ? {} : { sessionKey: action.sessionKey }),
-							...(details.source === undefined ? {} : { source: details.source }),
-						}
-					: undefined;
+			collectComponentCustomIds(data?.components, inputIds);
+			const pending: PendingModal | undefined = data && {
+				userId,
+				interactionId,
+				customId: data.custom_id,
+				payload: structuredClone(data),
+				...(action.sessionKey === undefined ? {} : { sessionKey: action.sessionKey }),
+				...(opener.source === undefined ? {} : { source: opener.source }),
+			};
 			this.displayedModals.set(userId, {
-				customId: data.custom_id as string | undefined,
+				customId: data?.custom_id,
 				inputIds,
 				...(dispatchId === undefined ? {} : { dispatchId }),
 				...(pending === undefined ? {} : { pending }),
 			});
 			if (pending) this.onInteractionChange({ kind: 'modal', phase: 'opened', modal: pending });
 			if (dispatchId !== undefined) this.modalRenderCapturedDispatches.add(dispatchId);
-			return data.custom_id as string | undefined;
+			return data?.custom_id;
 		}
 		return undefined;
 	}
@@ -622,6 +622,11 @@ export abstract class MockBotSurface {
 					`Known inputs: ${known}.`,
 			);
 		}
+	}
+
+	protected forgetModalOwner(userId: string): void {
+		this.modalOwners.delete(userId);
+		this.completedModalOwners.delete(userId);
 	}
 
 	protected closeDisplayedModal(userId: string): void {
@@ -798,15 +803,15 @@ export abstract class MockBotSurface {
 			? this._state.rawMessage(source.channel_id, source.id)
 			: this._state.rawMessageById(source.id);
 		if (stored) {
-			if (isEphemeral(stored) && userId) {
-				const entry = this._state
-					.channelTimeline(stored.channel_id)
-					.find(candidate => candidate.message.id === stored.id);
-				if (entry?.ownerId !== undefined && entry.ownerId !== userId) {
-					throw new TypeError(
-						`${strict?.verb ?? 'component'}: ephemeral source message "${source.id}" is visible only to its owner.`,
-					);
-				}
+			// Only a known owner is enforced: fixtures may seed ephemeral sources without one.
+			const ownerId = isEphemeral(stored)
+				? this._world?.messages.find(entry => entry.channelId === stored.channel_id && entry.message.id === stored.id)
+						?.ownerId
+				: undefined;
+			if (userId && ownerId !== undefined && ownerId !== userId) {
+				throw new TypeError(
+					`${strict?.verb ?? 'component'}: ephemeral source message "${source.id}" is visible only to its owner.`,
+				);
 			}
 			return stored;
 		}

@@ -259,6 +259,8 @@ interface Interceptor {
 
 type NotifyPhase = 'pending' | 'settled';
 
+type ActionObserver = (action: RecordedAction, phase: NotifyPhase) => void;
+
 interface ActionListener {
 	onAction(action: RecordedAction, phase: NotifyPhase): void;
 	timer: ReturnType<typeof setTimeout>;
@@ -389,7 +391,7 @@ export class MockApiHandler extends ApiHandler {
 	/** @internal */
 	readonly actions: RecordedAction[] = [];
 	private listeners: ActionListener[] = [];
-	private readonly observers = new Set<(action: RecordedAction, phase: NotifyPhase) => void>();
+	private readonly observers = new Set<ActionObserver>();
 	private interceptors: Interceptor[] = [];
 	private defaultInterceptors: Interceptor[] = [];
 	private gates: RequestGate[] = [];
@@ -658,22 +660,14 @@ export class MockApiHandler extends ApiHandler {
 		return { hit, release: g.release };
 	}
 
-	observeActions(observer: (action: RecordedAction, phase: NotifyPhase) => void): () => void {
+	/** @internal Persistent notification of every action's start and settlement; MockBot relays it to observers. */
+	observeActions(observer: ActionObserver): void {
 		this.observers.add(observer);
-		return () => {
-			this.observers.delete(observer);
-		};
 	}
 
 	private notifyListeners(action: RecordedAction, phase: NotifyPhase): void {
 		for (const listener of [...this.listeners]) listener.onAction(action, phase);
-		for (const observer of [...this.observers]) {
-			try {
-				observer(action, phase);
-			} catch (error) {
-				console.warn('[@slipher/testing] observer failed:', error);
-			}
-		}
+		for (const observer of this.observers) observer(action, phase);
 	}
 
 	private observerRequest(

@@ -30,22 +30,30 @@ export interface VisibleConversation {
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
+/**
+ * What opened a modal, so two modals with the same customId stay distinguishable. Component openers carry the
+ * message, customId and selected values; chat-input openers carry the command path and its options.
+ */
+export interface ModalOpenerSource {
+	channelId?: string;
+	messageId?: string;
+	customId?: string;
+	values?: string[];
+	commandName?: string;
+	group?: string;
+	subcommand?: string;
+	/** Leaf command options keyed by name, in name order. */
+	options?: JsonValue;
+}
+
 export interface PendingModal {
 	userId: string;
 	sessionKey?: string;
+	/** The interaction that opened the modal. */
 	interactionId: string;
 	customId: string;
 	payload: APIModalInteractionResponseCallbackData;
-	source?: {
-		channelId?: string;
-		messageId?: string;
-		customId?: string;
-		values?: string[];
-		commandName?: string;
-		group?: string;
-		subcommand?: string;
-		options?: JsonValue;
-	};
+	source?: ModalOpenerSource;
 }
 
 export interface PendingCollector {

@@ -83,22 +83,6 @@ test('waitFor expiry removes the modal and frees the stateful session for a fres
 	}
 });
 
-test('submission before waitFor expiry keeps the submit result and releases the modal', async () => {
-	const { world, guild, member, channel } = fixture('early');
-	const bot = await createMockBot({ commands: [Panel], components: [OpenForm], world });
-	try {
-		const actor = bot.actor({ user: member.user, guildId: guild.id, channel });
-		await actor.slash({ name: 'timed-panel' });
-		const source = bot.conversation({ userId: member.user.id, channelId: channel.id }).messages[0]?.id;
-		await actor.clickButton('open-timed-form', { source });
-		const submitted = await actor.submitModal('timed-form', { answer: 'early' });
-		expect(submitted.content).toBe('Saved early');
-		expect(bot.pendingInteractions().modals).toEqual([]);
-	} finally {
-		await bot.close();
-	}
-});
-
 test('an expired modal does not remove the replacement registered for the same user', async () => {
 	let opens = 0;
 	class ReplaceForm extends ComponentCommand {

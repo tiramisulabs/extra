@@ -257,6 +257,7 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 				}
 			}
 		}
+		// DeferredChannelMessageWithSource (5) posts the original right away as a loading placeholder.
 		if (body.type === 5) {
 			const channelId = hooks.state.channelForToken(params.token);
 			if (channelId)

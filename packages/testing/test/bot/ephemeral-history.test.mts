@@ -8,105 +8,135 @@ import {
 	PermissionFlagsBits,
 } from 'seyfert';
 import { expect, test } from 'vitest';
-import { createMockBot } from '../../src';
+import { createMockBot, type MockBot } from '../../src';
+import type { VisibleMessage } from '../../src/bot/observation';
 import { memberAddEvent } from '../../src/bot/payload-events';
 import { apiUser } from '../../src/bot/payloads';
 import { mockWorld } from '../../src/bot/world';
 
-test('deferred ephemeral button reply stays private after editOrReply without flags', async () => {
+function visibilityFixture(tag: string) {
 	const world = mockWorld();
-	const guild = world.registerGuild({ id: 'ephemeral-guild', everyonePermissions: ['ViewChannel'] });
+	const guild = world.registerGuild({ id: `${tag}-guild`, everyonePermissions: ['ViewChannel'] });
 	const channel = world.registerChannel(guild.id);
-	const owner = world.registerMember(guild.id, { user: apiUser({ id: 'ephemeral-owner' }) });
-	const other = world.registerMember(guild.id, { user: apiUser({ id: 'ephemeral-other' }) });
-	world.registerMessage(channel.id, {
-		id: 'ephemeral-button-source',
-		components: [{ type: 1, components: [{ type: 2, style: 1, label: 'Open', custom_id: 'ephemeral-open' }] }],
-	});
-	class Open extends ComponentCommand {
-		componentType = 'Button' as const;
-		customId = 'ephemeral-open';
-		async run(ctx: ComponentContext<'Button'>) {
-			await ctx.interaction.deferReply(MessageFlags.Ephemeral);
+	const owner = world.registerMember(guild.id, { user: apiUser({ id: `${tag}-owner` }) });
+	const other = world.registerMember(guild.id, { user: apiUser({ id: `${tag}-other` }) });
+	return { world, guild, channel, owner, other };
+}
+
+function contents(bot: MockBot, userId: string, channelId: string): (string | undefined)[] {
+	return bot.conversation({ userId, channelId }).messages.map(message => message.payload.content);
+}
+
+type Seen = [content: string, visibility: 'public' | 'ephemeral'][];
+
+test.each<{ name: string; respond: (ctx: CommandContext) => Promise<unknown>; owner: Seen; other: Seen }>([
+	{
+		name: 'an ephemeral defer edited without flags stays private',
+		respond: async ctx => {
+			await ctx.deferReply(true);
 			await ctx.editOrReply({ content: 'owner only' });
+		},
+		owner: [['owner only', 'ephemeral']],
+		other: [],
+	},
+	{
+		name: 'the first followup fills an ephemeral defer; later followups keep their own flags',
+		respond: async ctx => {
+			await ctx.deferReply(true);
+			await ctx.followup({ content: 'first followup' });
+			await ctx.followup({ content: 'second followup', flags: MessageFlags.Ephemeral });
+		},
+		owner: [
+			['first followup', 'ephemeral'],
+			['second followup', 'ephemeral'],
+		],
+		other: [],
+	},
+	{
+		name: 'the first followup fills a public defer even when flagged ephemeral',
+		respond: async ctx => {
+			await ctx.deferReply();
+			await ctx.followup({ content: 'public first followup', flags: MessageFlags.Ephemeral });
+		},
+		owner: [['public first followup', 'public']],
+		other: [['public first followup', 'public']],
+	},
+	{
+		name: 'an ephemeral original stays private after editResponse',
+		respond: async ctx => {
+			await ctx.write({ content: 'private original', flags: MessageFlags.Ephemeral });
+			await ctx.editResponse({ content: 'private edited' });
+		},
+		owner: [['private edited', 'ephemeral']],
+		other: [],
+	},
+	{
+		name: 'an ephemeral followup after a public original is private',
+		respond: async ctx => {
+			await ctx.write({ content: 'public original' });
+			await ctx.followup({ content: 'private followup', flags: MessageFlags.Ephemeral });
+		},
+		owner: [
+			['public original', 'public'],
+			['private followup', 'ephemeral'],
+		],
+		other: [['public original', 'public']],
+	},
+])('$name', async ({ respond, owner: ownerSees, other: otherSees }) => {
+	const { world, guild, channel, owner, other } = visibilityFixture('visibility');
+	@Declare({ name: 'respond', description: 'Respond' })
+	class Respond extends Command {
+		async run(ctx: CommandContext) {
+			await respond(ctx);
 		}
 	}
-	const bot = await createMockBot({ components: [Open], world });
+	const bot = await createMockBot({ commands: [Respond], world });
 	try {
-		await bot.clickButton('ephemeral-open', { source: 'ephemeral-button-source', user: owner.user, channel });
-		const owned = bot.conversation({ userId: owner.user.id, channelId: channel.id });
-		const reply = owned.messages.find(message => message.payload.content === 'owner only');
-		expect((reply?.payload.flags ?? 0) & MessageFlags.Ephemeral).toBe(MessageFlags.Ephemeral);
-		expect(reply?.ownerId).toBe(owner.user.id);
-		expect(bot.conversation({ userId: other.user.id, channelId: channel.id }).messages).not.toContainEqual(reply);
-		expect(bot.inspectChannel(channel.id).messages).toContainEqual(
-			expect.objectContaining({
-				id: reply?.id,
-				ownerId: owner.user.id,
-				visibility: 'ephemeral',
-			}),
-		);
+		await bot.slash({ name: 'respond', user: owner.user, guildId: guild.id, channel });
+		const seen = (userId: string) =>
+			bot
+				.conversation({ userId, channelId: channel.id })
+				.messages.map(message => [message.payload.content, message.visibility]);
+		expect(seen(owner.user.id)).toEqual(ownerSees);
+		expect(seen(other.user.id)).toEqual(otherSees);
+		const ephemeral = bot.inspectChannel(channel.id).messages.filter(message => message.visibility === 'ephemeral');
+		for (const message of ephemeral) {
+			expect(message).toMatchObject({ ownerId: owner.user.id, liveRecipientIds: [owner.user.id] });
+		}
 	} finally {
 		await bot.close();
 	}
 });
 
-test('loading and first followup retain the deferred original visibility', async () => {
-	const world = mockWorld();
-	const guild = world.registerGuild({ id: 'followup-guild', everyonePermissions: ['ViewChannel'] });
-	const channel = world.registerChannel(guild.id);
-	const owner = world.registerMember(guild.id, { user: apiUser({ id: 'followup-owner' }) });
-	const other = world.registerMember(guild.id, { user: apiUser({ id: 'followup-other' }) });
-	let loadingFlags = 0;
-	let otherSawLoading = false;
+test('a deferred reply is an owner-only loading placeholder until a followup fills it', async () => {
+	const { world, guild, channel, owner, other } = visibilityFixture('loading');
 	let bot: Awaited<ReturnType<typeof createMockBot>>;
-	@Declare({ name: 'deferred-followup', description: 'Deferred followup' })
+	let ownerLoading: VisibleMessage[] = [];
+	let otherLoading: VisibleMessage[] = [];
+	@Declare({ name: 'deferred', description: 'Deferred reply' })
 	class Deferred extends Command {
 		async run(ctx: CommandContext) {
 			await ctx.deferReply(true);
-			loadingFlags = bot.conversation({ userId: owner.user.id, channelId: channel.id }).messages[0]?.payload.flags ?? 0;
-			otherSawLoading = bot.conversation({ userId: other.user.id, channelId: channel.id }).messages.length > 0;
-			await ctx.followup({ content: 'first followup' });
-			await ctx.followup({ content: 'second followup', flags: MessageFlags.Ephemeral });
+			ownerLoading = bot.conversation({ userId: owner.user.id, channelId: channel.id }).messages;
+			otherLoading = bot.conversation({ userId: other.user.id, channelId: channel.id }).messages;
+			await ctx.followup({ content: 'done' });
 		}
 	}
-	@Declare({ name: 'public-deferred', description: 'Public deferred followup' })
-	class PublicDeferred extends Command {
-		async run(ctx: CommandContext) {
-			await ctx.deferReply();
-			await ctx.followup({ content: 'public first followup', flags: MessageFlags.Ephemeral });
-		}
-	}
-	bot = await createMockBot({ commands: [Deferred, PublicDeferred], world });
+	bot = await createMockBot({ commands: [Deferred], world });
 	try {
-		await bot.slash({ name: 'deferred-followup', user: owner.user, guildId: guild.id, channel });
-		expect(loadingFlags & 192).toBe(192);
-		expect(otherSawLoading).toBe(false);
-		const ownerMessages = bot.conversation({ userId: owner.user.id, channelId: channel.id }).messages;
-		expect(ownerMessages.map(message => message.payload.content)).toEqual(['first followup', 'second followup']);
-		expect((ownerMessages[0].payload.flags ?? 0) & 192).toBe(64);
-		expect((ownerMessages[1].payload.flags ?? 0) & 64).toBe(64);
-		expect(bot.conversation({ userId: other.user.id, channelId: channel.id }).messages).toEqual([]);
-		await bot.slash({ name: 'public-deferred', user: owner.user, guildId: guild.id, channel });
+		await bot.slash({ name: 'deferred', user: owner.user, guildId: guild.id, channel });
+		expect(ownerLoading.map(message => message.payload.flags)).toEqual([MessageFlags.Ephemeral | MessageFlags.Loading]);
+		expect(otherLoading).toEqual([]);
 		expect(
-			bot
-				.conversation({ userId: other.user.id, channelId: channel.id })
-				.messages.map(message => message.payload.content),
-		).toEqual(['public first followup']);
-		expect(
-			(bot.conversation({ userId: other.user.id, channelId: channel.id }).messages[0]?.payload.flags ?? 0) & 64,
-		).toBe(0);
+			bot.conversation({ userId: owner.user.id, channelId: channel.id }).messages.map(message => message.payload.flags),
+		).toEqual([MessageFlags.Ephemeral]);
 	} finally {
 		await bot.close();
 	}
 });
 
 test('deferred component update edits the source without changing its ephemeral owner', async () => {
-	const world = mockWorld();
-	const guild = world.registerGuild({ id: 'update-guild', everyonePermissions: ['ViewChannel'] });
-	const channel = world.registerChannel(guild.id);
-	const owner = world.registerMember(guild.id, { user: apiUser({ id: 'update-owner' }) });
-	const other = world.registerMember(guild.id, { user: apiUser({ id: 'update-other' }) });
+	const { world, channel, owner, other } = visibilityFixture('update');
 	world.registerMessage(channel.id, {
 		id: 'private-source',
 		ownerId: owner.user.id,
@@ -134,61 +164,32 @@ test('deferred component update edits the source without changing its ephemeral 
 	}
 });
 
-test('direct and later ephemeral followups keep their visibility after edits', async () => {
-	const world = mockWorld();
-	const guild = world.registerGuild({ id: 'direct-guild', everyonePermissions: ['ViewChannel'] });
-	const channel = world.registerChannel(guild.id);
-	const owner = world.registerMember(guild.id, { user: apiUser({ id: 'direct-owner' }) });
-	const other = world.registerMember(guild.id, { user: apiUser({ id: 'direct-other' }) });
-	@Declare({ name: 'direct-private', description: 'Private reply' })
-	class Private extends Command {
-		async run(ctx: CommandContext) {
-			await ctx.write({ content: 'private original', flags: MessageFlags.Ephemeral });
-			await ctx.editResponse({ content: 'private edited' });
-		}
-	}
-	@Declare({ name: 'public-then-private', description: 'Public then private' })
-	class Public extends Command {
+test('editing an ephemeral followup with flags: 0 keeps it private', async () => {
+	const { world, guild, channel, owner, other } = visibilityFixture('edit-flags');
+	@Declare({ name: 'private-followup', description: 'Private followup' })
+	class PrivateFollowup extends Command {
 		async run(ctx: CommandContext) {
 			await ctx.write({ content: 'public original' });
 			await ctx.followup({ content: 'private followup', flags: MessageFlags.Ephemeral });
 		}
 	}
-	const bot = await createMockBot({ commands: [Private, Public], world });
+	const bot = await createMockBot({ commands: [PrivateFollowup], world });
 	try {
-		await bot.slash({ name: 'direct-private', user: owner.user, guildId: guild.id, channel });
-		const result = await bot.slash({ name: 'public-then-private', user: owner.user, guildId: guild.id, channel });
-		const ownerMessages = bot.conversation({ userId: owner.user.id, channelId: channel.id }).messages;
-		const privateFollowup = ownerMessages.find(message => message.payload.content === 'private followup');
-		expect(
-			bot
-				.inspectChannel(channel.id)
-				.messages.filter(message => message.visibility === 'ephemeral')
-				.map(message => message.liveRecipientIds),
-		).toEqual([[owner.user.id], [owner.user.id]]);
-		expect((ownerMessages.find(message => message.payload.content === 'private edited')?.payload.flags ?? 0) & 64).toBe(
-			64,
-		);
-		expect(
-			bot
-				.conversation({ userId: other.user.id, channelId: channel.id })
-				.messages.map(message => message.payload.content),
-		).toEqual(['public original']);
-		const route = result.actions.find(action => action.route.includes('/webhooks/') && action.method === 'POST')?.route;
-		if (!route || !privateFollowup) throw new Error('expected private followup route and message');
-		await bot.rest.request('PATCH', `${route}/messages/${privateFollowup.id}` as `/${string}`, {
+		const result = await bot.slash({ name: 'private-followup', user: owner.user, guildId: guild.id, channel });
+		const followup = result.actions.find(action => action.route.includes('/webhooks/') && action.method === 'POST');
+		const privateFollowup = bot
+			.conversation({ userId: owner.user.id, channelId: channel.id })
+			.messages.find(message => message.payload.content === 'private followup');
+		if (!followup || !privateFollowup) throw new Error('expected private followup route and message');
+		await bot.rest.request('PATCH', `${followup.route}/messages/${privateFollowup.id}` as `/${string}`, {
 			body: { content: 'private followup edited', flags: 0 },
 		});
 		expect(
-			(bot
-				.conversation({ userId: owner.user.id, channelId: channel.id })
-				.messages.find(message => message.id === privateFollowup.id)?.payload.flags ?? 0) & 64,
-		).toBe(64);
-		expect(
 			bot
-				.conversation({ userId: other.user.id, channelId: channel.id })
-				.messages.map(message => message.payload.content),
-		).toEqual(['public original']);
+				.conversation({ userId: owner.user.id, channelId: channel.id })
+				.messages.find(message => message.id === privateFollowup.id),
+		).toMatchObject({ visibility: 'ephemeral', payload: { content: 'private followup edited' } });
+		expect(contents(bot, other.user.id, channel.id)).toEqual(['public original']);
 	} finally {
 		await bot.close();
 	}
@@ -227,17 +228,11 @@ test('history permission and overwrites use current permissions', async () => {
 	world.registerMessage(allowed.id, { content: 'allowed seed' });
 	const bot = await createMockBot({ world });
 	try {
-		expect(
-			bot
-				.conversation({ userId: alice.user.id, channelId: channel.id })
-				.messages.map(message => message.payload.content),
-		).toEqual(['mine']);
+		expect(contents(bot, alice.user.id, channel.id)).toEqual(['mine']);
 		expect(bot.conversation({ userId: alice.user.id, channelId: channel.id }).diagnostics).toContain(
 			'history-hidden:1',
 		);
-		expect(
-			bot.conversation({ userId: bob.user.id, channelId: channel.id }).messages.map(message => message.payload.content),
-		).toEqual(['seed']);
+		expect(contents(bot, bob.user.id, channel.id)).toEqual(['seed']);
 		expect(bot.conversation({ userId: bob.user.id, channelId: denied.id }).diagnostics).toContain('history-hidden:1');
 		expect(bot.conversation({ userId: alice.user.id, channelId: allowed.id }).messages).toHaveLength(1);
 		expect(bot.conversation({ userId: carol.user.id, channelId: denied.id }).messages).toHaveLength(1);
@@ -247,34 +242,18 @@ test('history permission and overwrites use current permissions', async () => {
 			{ id: 'history-private', ownerId: alice.user.id, isHistory: true },
 		]);
 		await bot.rest.request('POST', `/channels/${channel.id}/messages`, { body: { content: 'live' } });
-		expect(
-			bot
-				.conversation({ userId: alice.user.id, channelId: channel.id })
-				.messages.map(message => message.payload.content),
-		).toEqual(['mine', 'live']);
+		expect(contents(bot, alice.user.id, channel.id)).toEqual(['mine', 'live']);
 		await bot.admin.addMemberRole({ guildId: guild.id, userId: alice.user.id, roleId: read.id });
-		expect(
-			bot
-				.conversation({ userId: alice.user.id, channelId: channel.id })
-				.messages.map(message => message.payload.content),
-		).toEqual(['seed', 'mine', 'live']);
+		expect(contents(bot, alice.user.id, channel.id)).toEqual(['seed', 'mine', 'live']);
 		await bot.admin.removeMemberRole({ guildId: guild.id, userId: alice.user.id, roleId: read.id });
-		expect(
-			bot
-				.conversation({ userId: alice.user.id, channelId: channel.id })
-				.messages.map(message => message.payload.content),
-		).toEqual(['mine', 'live']);
+		expect(contents(bot, alice.user.id, channel.id)).toEqual(['mine', 'live']);
 		expect(bot.conversation({ userId: alice.user.id, channelId: channel.id }).diagnostics).toContain(
 			'history-hidden:1',
 		);
 		await bot.rest.request('PUT', `/channels/${channel.id}/permissions/${alice.user.id}`, {
 			body: { type: 1, allow: PermissionFlagsBits.ReadMessageHistory.toString(), deny: '0' },
 		});
-		expect(
-			bot
-				.conversation({ userId: alice.user.id, channelId: channel.id })
-				.messages.map(message => message.payload.content),
-		).toEqual(['seed', 'mine', 'live']);
+		expect(contents(bot, alice.user.id, channel.id)).toEqual(['seed', 'mine', 'live']);
 		await bot.rest.request('PUT', `/channels/${channel.id}/permissions/${alice.user.id}`, {
 			body: { type: 1, allow: '0', deny: PermissionFlagsBits.ReadMessageHistory.toString() },
 		});
@@ -311,20 +290,10 @@ test('live receipts preserve permission-at-delivery across role changes, edits, 
 		await bot.rest.request('PATCH', `/channels/${channel.id}/messages/${after.id}`, {
 			body: { content: 'edited live' },
 		});
-		expect(
-			bot
-				.conversation({ userId: alice.user.id, channelId: channel.id })
-				.messages.map(message => message.payload.content),
-		).toEqual(['edited live']);
-		expect(
-			bot.conversation({ userId: bob.user.id, channelId: channel.id }).messages.map(message => message.payload.content),
-		).toEqual(['before view', 'edited live']);
+		expect(contents(bot, alice.user.id, channel.id)).toEqual(['edited live']);
+		expect(contents(bot, bob.user.id, channel.id)).toEqual(['before view', 'edited live']);
 		await bot.admin.addMemberRole({ guildId: guild.id, userId: alice.user.id, roleId: read.id });
-		expect(
-			bot
-				.conversation({ userId: alice.user.id, channelId: channel.id })
-				.messages.map(message => message.payload.content),
-		).toEqual(['before view', 'edited live']);
+		expect(contents(bot, alice.user.id, channel.id)).toEqual(['before view', 'edited live']);
 		await bot.admin.removeMemberRole({ guildId: guild.id, userId: alice.user.id, roleId: view.id });
 		expect(bot.conversation({ userId: alice.user.id, channelId: channel.id })).toMatchObject({
 			messages: [],
@@ -349,9 +318,7 @@ test('a joining member receives only later messages without history permission',
 		});
 		expect(bot.conversation({ userId: newcomer.id, channelId: channel.id }).messages).toEqual([]);
 		await bot.rest.request('POST', `/channels/${channel.id}/messages`, { body: { content: 'after join' } });
-		expect(
-			bot.conversation({ userId: newcomer.id, channelId: channel.id }).messages.map(message => message.payload.content),
-		).toEqual(['after join']);
+		expect(contents(bot, newcomer.id, channel.id)).toEqual(['after join']);
 		expect(bot.inspectChannel(channel.id).messages.map(message => message.liveRecipientIds)).toEqual([
 			[],
 			[newcomer.id],

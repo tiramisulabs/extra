@@ -231,7 +231,6 @@ test('seeded ephemeral views enforce channel access while component actions only
 test('admin role changes preserve member data, cache and event semantics, and change bot REST permissions', async () => {
 	const world = mockWorld();
 	const guild = world.registerGuild({ id: 'lab-roles', ownerId: 'lab-owner' });
-	const channel = world.registerChannel(guild.id);
 	const manage = world.registerRole(guild.id, { id: 'lab-manage', permissions: ['ManageRoles'], position: 10 });
 	const assigned = world.registerRole(guild.id, { id: 'lab-assigned', position: 1 });
 	const other = world.registerGuild({ id: 'lab-other' });
@@ -276,7 +275,6 @@ test('admin role changes preserve member data, cache and event semantics, and ch
 		await bot.rest.request('PUT', `/guilds/${guild.id}/members/${target.user.id}/roles/${assigned.id}`);
 		expect(bot.world.query.member({ guildId: guild.id, userId: target.user.id })?.roles).toContain(assigned.id);
 		expect((await bot.client.cache.members?.raw(target.user.id, guild.id))?.roles).toContain(assigned.id);
-		void channel;
 	} finally {
 		await bot.close();
 	}
@@ -472,18 +470,14 @@ test('a collector continuation exposes its modal with the opening interaction id
 	bot.observe(event => events.push(event));
 	try {
 		await bot.slash({ name: 'join-flow', guildId: guild.id, channel, user: actor.user });
-		await bot.commandSchemas();
 		const join = bot.conversation({ userId: actor.user.id, channelId: channel.id }).messages.at(-1);
 		expect(join?.payload.content).toBe('Join');
 		await bot.clickButton('join-flow-button', { guildId: guild.id, channel, user: actor.user, source: join?.id });
-		await bot.commandSchemas();
 		const tos = bot.conversation({ userId: actor.user.id, channelId: channel.id }).messages.at(-1);
 		expect(tos?.payload.content).toBe('Terms');
 		expect(bot.pendingInteractions().collectors).toHaveLength(1);
 		const before = bot.restCalls().length;
 		await bot.clickButton('agree-tos', { guildId: guild.id, channel, user: actor.user, source: tos?.id });
-		await bot.commandSchemas();
-		bot.conversation({ userId: actor.user.id, channelId: channel.id });
 		const modalCallback = bot
 			.restCalls()
 			.slice(before)

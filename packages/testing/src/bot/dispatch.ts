@@ -22,6 +22,7 @@ export interface DispatchOptions<T> {
 	/** This dispatch's id, used to scope recorded actions and stateful ownership. */
 	dispatchId?: number;
 	executor: () => Promise<T>;
+	/** What started the dispatch, reported to observers: the gateway event name, or `'interaction'` by default. */
 	kind?: string;
 	/** Resolves when seyfert registers a modal for the given userId; supplied by MockBot. */
 	modalWaiter?: (userId: string, dispatchId: number | undefined) => ModalWaitRegistration;
@@ -40,6 +41,8 @@ export interface DispatchOptions<T> {
 	snapshotter?: () => T;
 }
 
+type DispatchObserver = (phase: 'start' | 'end', error?: unknown) => void;
+
 /** Lazy, step-able handle returned by every verb of an un-sessioned dispatcher (`bot.actor({ session: false })`). */
 export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 	private execution?: Promise<T>;
@@ -52,7 +55,7 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 	readonly dispatchId: number | undefined;
 	private readonly executor: () => Promise<T>;
 	readonly kind: string;
-	private observer?: (phase: 'start' | 'end', error?: unknown) => void;
+	private observer?: DispatchObserver;
 	private readonly modalWaiter?: DispatchOptions<T>['modalWaiter'];
 	private readonly modalFiller?: DispatchOptions<T>['modalFiller'];
 	private readonly modalCleaner?: DispatchOptions<T>['modalCleaner'];
@@ -74,29 +77,29 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 	}
 
 	/** @internal Attach persistent observation without changing lazy execution. */
-	observe(observer: (phase: 'start' | 'end', error?: unknown) => void): void {
+	observe(observer: DispatchObserver): void {
 		this.observer = observer;
 	}
 
 	private start(): Promise<T> {
-		if (!this.execution) {
-			this.observer?.('start');
-			this.execution = this.executor()
-				.then(
-					value => {
-						this.observer?.('end');
-						return value;
-					},
-					error => {
-						this.observer?.('end', error);
-						throw error;
-					},
-				)
-				.finally(() => {
-					this.completed = true;
-				});
-		}
+		this.execution ??= this.observedExecution().finally(() => {
+			this.completed = true;
+		});
 		return this.execution;
+	}
+
+	private observedExecution(): Promise<T> {
+		this.observer?.('start');
+		return this.executor().then(
+			value => {
+				this.observer?.('end');
+				return value;
+			},
+			(error: unknown) => {
+				this.observer?.('end', error);
+				throw error;
+			},
+		);
 	}
 
 	get started(): boolean {

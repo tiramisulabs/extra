@@ -1,8 +1,7 @@
 import { emojiPayload } from './emoji';
 import { isEphemeral } from './message-flags';
-import type { PendingModal } from './observation';
 import { type ApiMessage, type ApiVoiceState, apiMessage, type RawMessage } from './payloads';
-import { WorldStateQueryCore } from './state-query';
+import { type InteractionIdentity, WorldStateQueryCore } from './state-query';
 import type {
 	AuditLogEntrySnapshot,
 	AutoModRuleSnapshot,
@@ -34,7 +33,10 @@ import type {
 	WorldSnapshot,
 } from './state-support';
 import { deepFreeze, diffEntities, roleView } from './state-support';
-import type { WorldData } from './world';
+import type { WorldMessageEntry } from './world';
+
+/** A message in a channel's history; deleted ones are only kept for developer inspection. */
+export type ChannelTimelineEntry = WorldMessageEntry & { deleted?: boolean };
 
 export abstract class WorldStateReadCore extends WorldStateQueryCore {
 	protected abstract reactionKey(channelId: string, messageId: string): string;
@@ -420,11 +422,7 @@ export abstract class WorldStateReadCore extends WorldStateQueryCore {
 		channelId: string,
 		originType?: number,
 		applicationId?: string,
-		interaction?: {
-			userId: string;
-			interactionId: string;
-			source?: PendingModal['source'];
-		},
+		interaction?: InteractionIdentity,
 	): void {
 		if (interaction) this.interactionByToken.set(token, interaction);
 		this.channelIdByToken.set(token, channelId);
@@ -432,17 +430,12 @@ export abstract class WorldStateReadCore extends WorldStateQueryCore {
 		if (applicationId !== undefined) this.applicationIdByToken.set(token, applicationId);
 	}
 
-	interactionForToken(token: string):
-		| {
-				userId: string;
-				interactionId: string;
-				source?: PendingModal['source'];
-		  }
-		| undefined {
+	interactionForToken(token: string): InteractionIdentity | undefined {
 		return this.interactionByToken.get(token);
 	}
 
-	channelTimeline(channelId: string): (WorldData['messages'][number] & { deleted?: boolean })[] {
+	/** Every message created in the channel, deleted ones included, in creation order. */
+	channelTimeline(channelId: string): ChannelTimelineEntry[] {
 		return [
 			...this.world.messages.filter(entry => entry.channelId === channelId),
 			...[...this.deletedMessages.values()]
@@ -451,6 +444,7 @@ export abstract class WorldStateReadCore extends WorldStateQueryCore {
 		].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
 	}
 
+	/** Whether `channelId` is the DM channel opened with `userId`. */
 	verifiedDmRecipient(userId: string, channelId: string): boolean {
 		return this.verifiedDmRecipients.has(userId) && this.dmChannelByUser.get(userId) === channelId;
 	}

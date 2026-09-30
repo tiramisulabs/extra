@@ -551,10 +551,7 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 				modalWaiter: (id, ownerDispatchId) => this.onModalRegistered(id, ownerDispatchId),
 				dispatchId,
 				modalFiller: user ? (customId, fields) => this.dispatchSubmitModal(customId, fields, { user }) : undefined,
-				modalCleaner: id => {
-					this.modalOwners.delete(id);
-					this.completedModalOwners.delete(id);
-				},
+				modalCleaner: id => this.forgetModalOwner(id),
 				componentAwaiter: (customId, scopeId, execution, timeoutMs) =>
 					this.awaitRenderedComponent(customId, scopeId, execution, timeoutMs),
 				snapshotter: () => {
@@ -583,10 +580,7 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 				modalWaiter: (id, ownerDispatchId) => this.onModalRegistered(id, ownerDispatchId),
 				dispatchId,
 				modalFiller: user ? (customId, fields) => this.dispatchSubmitModal(customId, fields, { user }) : undefined,
-				modalCleaner: id => {
-					this.modalOwners.delete(id);
-					this.completedModalOwners.delete(id);
-				},
+				modalCleaner: id => this.forgetModalOwner(id),
 				componentAwaiter: (customId, scopeId, execution, timeoutMs) =>
 					this.awaitRenderedComponent(customId, scopeId, execution, timeoutMs),
 				snapshotter: () => this.snapshotInteraction(payload, dispatchId),
@@ -829,8 +823,7 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 			onModalDisplayed: (userId, dispatchId) => this.captureDisplayedModal(userId, dispatchId),
 			onModalTimedOut: (userId, dispatchId) => {
 				if (this.modalOwners.get(userId) !== dispatchId) return;
-				this.modalOwners.delete(userId);
-				this.completedModalOwners.delete(userId);
+				this.forgetModalOwner(userId);
 				this.closeDisplayedModal(userId);
 				this.sessions.discardModal(dispatchId, userId);
 			},

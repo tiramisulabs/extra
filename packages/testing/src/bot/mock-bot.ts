@@ -64,7 +64,7 @@ import {
 } from './interactions';
 import { isEphemeral } from './message-flags';
 import { MockBotDispatchCore } from './mock-bot-dispatch';
-import type { PendingModal } from './observation';
+import type { ModalOpenerSource } from './observation';
 import { CommandOptionType, prepareAutocompleteOptions, prepareChatInputOptions } from './option-validation';
 import {
 	type ApiChannel,
@@ -95,34 +95,44 @@ const INPUT_SHUTDOWN_GRACE_MS = 250;
 const realSetTimeout = setTimeout.bind(globalThis);
 const realClearTimeout = clearTimeout.bind(globalThis);
 
-function openerSource(payload: ApiInteractionPayload): NonNullable<PendingModal['source']> {
-	const source: NonNullable<PendingModal['source']> = { channelId: payload.channel_id };
-	const data = payload.data;
+type CommandDataOptions = NonNullable<ApiInteractionPayload['data']['options']>;
+
+/** Identify what opened a modal, so two modals with the same customId stay distinguishable. */
+function openerSource(payload: ApiInteractionPayload): ModalOpenerSource {
+	const { data } = payload;
 	if (payload.type === InteractionType.MessageComponent) {
-		if (payload.message) source.messageId = payload.message.id;
-		if (data.custom_id) source.customId = data.custom_id;
-		if (data.values) source.values = [...data.values];
+		return {
+			channelId: payload.channel_id,
+			...(payload.message ? { messageId: payload.message.id } : {}),
+			...(data.custom_id ? { customId: data.custom_id } : {}),
+			...(data.values ? { values: [...data.values] } : {}),
+		};
 	}
 	if (payload.type === InteractionType.ApplicationCommand && data.type === ApplicationCommandType.ChatInput) {
-		if (data.name) source.commandName = data.name;
-		let options = data.options ?? [];
-		const first = options[0];
-		if (first?.type === CommandOptionType.SubcommandGroup) {
-			source.group = first.name;
-			options = first.options ?? [];
-		}
-		const subcommand = options[0];
-		if (subcommand?.type === CommandOptionType.Subcommand) {
-			source.subcommand = subcommand.name;
-			options = subcommand.options ?? [];
-		}
-		source.options = Object.fromEntries(
-			options
+		return {
+			channelId: payload.channel_id,
+			...(data.name ? { commandName: data.name } : {}),
+			...chatInputRoute(data.options ?? []),
+		};
+	}
+	return { channelId: payload.channel_id };
+}
+
+/** The group/subcommand path of a chat-input command and its leaf options, sorted by name. */
+function chatInputRoute(options: CommandDataOptions): Pick<ModalOpenerSource, 'group' | 'subcommand' | 'options'> {
+	const group = options[0]?.type === CommandOptionType.SubcommandGroup ? options[0] : undefined;
+	const groupOptions = group ? (group.options ?? []) : options;
+	const subcommand = groupOptions[0]?.type === CommandOptionType.Subcommand ? groupOptions[0] : undefined;
+	const leaves = subcommand ? (subcommand.options ?? []) : groupOptions;
+	return {
+		...(group ? { group: group.name } : {}),
+		...(subcommand ? { subcommand: subcommand.name } : {}),
+		options: Object.fromEntries(
+			leaves
 				.flatMap(option => (option.value === undefined ? [] : [[option.name, option.value] as const]))
 				.sort(([a], [b]) => a.localeCompare(b)),
-		);
-	}
-	return source;
+		),
+	};
 }
 
 export class MockBot extends MockBotDispatchCore {
@@ -201,8 +211,7 @@ export class MockBot extends MockBotDispatchCore {
 			if (isModalPayload && userId) {
 				if (this.modalOwners.get(userId) === causalOwnerDispatchId) {
 					modalRegistry(this.client).delete(userId);
-					this.modalOwners.delete(userId);
-					this.completedModalOwners.delete(userId);
+					this.forgetModalOwner(userId);
 				}
 			}
 		}

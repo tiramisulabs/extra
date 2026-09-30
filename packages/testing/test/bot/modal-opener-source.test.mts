@@ -93,22 +93,29 @@ test('slash modal source distinguishes grouped subcommands and keeps normalized 
 			subcommand: 'second',
 			options: {},
 		});
-		expect(second).not.toEqual(first);
 		await actor.submitModal('source-form', { answer: 'ok' });
 	} finally {
 		await bot.close();
 	}
 });
 
-test('button modal source distinguishes messages with the same customId', async () => {
+test('component modal sources distinguish source messages and selected values', async () => {
+	const components = [
+		new ActionRow<Button>().setComponents([
+			new Button().setCustomId('same-opener').setLabel('Open').setStyle(ButtonStyle.Primary),
+		]),
+		new ActionRow<StringSelectMenu>().setComponents([
+			new StringSelectMenu()
+				.setCustomId('same-select')
+				.setOptions([
+					new StringSelectOption().setLabel('One').setValue('one'),
+					new StringSelectOption().setLabel('Two').setValue('two'),
+				]),
+		]),
+	];
 	@Declare({ name: 'two-panels', description: 'Post two panels' })
 	class TwoPanels extends Command {
 		async run(ctx: CommandContext) {
-			const components = [
-				new ActionRow<Button>().setComponents([
-					new Button().setCustomId('same-opener').setLabel('Open').setStyle(ButtonStyle.Primary),
-				]),
-			];
 			await ctx.write({ content: 'First panel', components });
 			await ctx.interaction.followup({ content: 'Second panel', components });
 		}
@@ -120,46 +127,6 @@ test('button modal source distinguishes messages with the same customId', async 
 			await ctx.interaction.modal(form(), { waitFor: 2000 });
 		}
 	}
-	const { world, guild, channel, member } = fixture('button-source');
-	const bot = await createMockBot({ commands: [TwoPanels], components: [OpenButton], world });
-	try {
-		const actor = bot.actor({ user: member.user, guildId: guild.id, channel });
-		await actor.slash({ name: 'two-panels' });
-		const messages = bot.conversation({ userId: member.user.id, channelId: channel.id }).messages;
-		expect(messages).toHaveLength(2);
-		await actor.clickButton('same-opener', { source: messages[0].id });
-		const first = bot.pendingInteractions().modals[0]?.source;
-		expect(first).toEqual({ channelId: channel.id, messageId: messages[0].id, customId: 'same-opener' });
-		await actor.submitModal('source-form', { answer: 'ok' });
-		await actor.clickButton('same-opener', { source: messages[1].id });
-		const second = bot.pendingInteractions().modals[0]?.source;
-		expect(second).toEqual({ channelId: channel.id, messageId: messages[1].id, customId: 'same-opener' });
-		expect(second).not.toEqual(first);
-		await actor.submitModal('source-form', { answer: 'ok' });
-	} finally {
-		await bot.close();
-	}
-});
-
-test('select modal source distinguishes selected values', async () => {
-	@Declare({ name: 'select-panel', description: 'Post a select' })
-	class SelectPanel extends Command {
-		async run(ctx: CommandContext) {
-			await ctx.write({
-				content: 'Choose',
-				components: [
-					new ActionRow<StringSelectMenu>().setComponents([
-						new StringSelectMenu()
-							.setCustomId('same-select')
-							.setOptions([
-								new StringSelectOption().setLabel('One').setValue('one'),
-								new StringSelectOption().setLabel('Two').setValue('two'),
-							]),
-					]),
-				],
-			});
-		}
-	}
 	class OpenSelect extends ComponentCommand {
 		componentType = 'StringSelect' as const;
 		customId = 'same-select';
@@ -167,22 +134,37 @@ test('select modal source distinguishes selected values', async () => {
 			await ctx.interaction.modal(form(), { waitFor: 2000 });
 		}
 	}
-	const { world, guild, channel, member } = fixture('select-source');
-	const bot = await createMockBot({ commands: [SelectPanel], components: [OpenSelect], world });
+	const { world, guild, channel, member } = fixture('component-source');
+	const bot = await createMockBot({ commands: [TwoPanels], components: [OpenButton, OpenSelect], world });
 	try {
 		const actor = bot.actor({ user: member.user, guildId: guild.id, channel });
-		await actor.slash({ name: 'select-panel' });
-		const source = bot.conversation({ userId: member.user.id, channelId: channel.id }).messages[0]?.id;
-		expect(source).toBeTruthy();
-		await actor.selectMenu('same-select', ['one'], { source });
-		const first = bot.pendingInteractions().modals[0]?.source;
-		expect(first).toEqual({ channelId: channel.id, messageId: source, customId: 'same-select', values: ['one'] });
-		await actor.submitModal('source-form', { answer: 'ok' });
-		await actor.selectMenu('same-select', ['two'], { source });
-		const second = bot.pendingInteractions().modals[0]?.source;
-		expect(second).toEqual({ channelId: channel.id, messageId: source, customId: 'same-select', values: ['two'] });
-		expect(second).not.toEqual(first);
-		await actor.submitModal('source-form', { answer: 'ok' });
+		await actor.slash({ name: 'two-panels' });
+		const [first, second] = bot.conversation({ userId: member.user.id, channelId: channel.id }).messages;
+		const button = { channelId: channel.id, customId: 'same-opener' };
+		const select = { channelId: channel.id, customId: 'same-select' };
+		const openers = [
+			{
+				open: () => actor.clickButton('same-opener', { source: first.id }),
+				source: { ...button, messageId: first.id },
+			},
+			{
+				open: () => actor.clickButton('same-opener', { source: second.id }),
+				source: { ...button, messageId: second.id },
+			},
+			{
+				open: () => actor.selectMenu('same-select', ['one'], { source: first.id }),
+				source: { ...select, messageId: first.id, values: ['one'] },
+			},
+			{
+				open: () => actor.selectMenu('same-select', ['two'], { source: first.id }),
+				source: { ...select, messageId: first.id, values: ['two'] },
+			},
+		];
+		for (const { open, source } of openers) {
+			await open();
+			expect(bot.pendingInteractions().modals[0]?.source).toEqual(source);
+			await actor.submitModal('source-form', { answer: 'ok' });
+		}
 	} finally {
 		await bot.close();
 	}

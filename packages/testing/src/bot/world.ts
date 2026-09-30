@@ -58,6 +58,19 @@ import {
 import type { PermissionInput } from './permissions';
 import { permissionBits } from './permissions';
 
+export interface WorldMessageEntry {
+	channelId: string;
+	message: ApiMessage;
+	/** Creation order in this world. */
+	sequence?: number;
+	/** The user an ephemeral message belongs to. */
+	ownerId?: string;
+	/** The interaction whose response created the message. */
+	interactionId?: string;
+	/** Users who received the message when it was created; without ReadMessageHistory only they see it. */
+	liveRecipientIds?: string[];
+}
+
 /**
  * The built world: plain, cloneable data, which is what `createMockBot({ world })` seeds into the cache.
  *
@@ -72,18 +85,11 @@ export interface WorldData {
 	users: ApiUser[];
 	members: { guildId: string; member: ApiMember }[];
 	roles: { guildId: string; role: ApiRole }[];
-	messages: {
-		channelId: string;
-		message: ApiMessage;
-		sequence?: number;
-		ownerId?: string;
-		interactionId?: string;
-		liveRecipientIds?: string[];
-	}[];
+	messages: WorldMessageEntry[];
 	/** Last allocated message creation sequence, independent of fixture timestamps. */
 	messageSequence?: number;
-	/** Connection sequence for actors in this world. */
-	connections?: Record<string, number>;
+	/** The message sequence at which each user joined; only later messages reach them live. */
+	joinSequence?: Record<string, number>;
 	voiceStates?: { guildId: string; voiceState: ApiVoiceState }[];
 	guildEmojis?: { guildId: string; emoji: ApiEmoji }[];
 	invites?: ApiInvite[];
@@ -131,6 +137,7 @@ function needsNamespaceAlias(
 	return typeof namespace === 'string' && id.startsWith(namespace) && resource?.hashId?.(id) !== `${namespace}.${id}`;
 }
 
+/** Seyfert 5.1 dropped `addToRelationship`; its `bulkSet` takes the guild relationship in each entry instead. */
 function usesRelationshipEntries(resource: GuildRelatedCacheResource): boolean {
 	return typeof resource.addToRelationship !== 'function';
 }
@@ -187,6 +194,12 @@ export type WorldBotMemberOptions = { roles?: string[]; botId?: string };
 /** One profile for the mock client, seeded guild members, and authored messages. */
 export type BotUserOptions = Omit<ApiUserOptions, 'bot'>;
 
+/** Allocate the next message creation sequence; fixture timestamps cannot order messages reliably. */
+export function nextMessageSequence(world: WorldData): number {
+	world.messageSequence = (world.messageSequence ?? 0) + 1;
+	return world.messageSequence;
+}
+
 /** The default matches the existing seeded bot member name. */
 export function defaultBotUser(options: BotUserOptions = {}): ApiUser {
 	return apiUser({
@@ -240,30 +253,29 @@ export class WorldBuilder {
 			webhooks: [],
 		};
 		if (botId) {
-			this.pinnedBotId = botId;
+			this.pinnedBot = { id: botId, statedBy: 'the running bot' };
 			this.botIdentity = this.world.users.find(user => user.id === botId && user.bot);
 		}
 	}
 
-	/** Bot id explicitly given to registerBotMember, if any. */
-	private pinnedBotId?: string;
-	private pinnedBotIdSource?: 'botUser' | 'registerBotMember';
+	/** The bot id stated for this world, and the call that stated it (named in conflict errors). */
+	private pinnedBot?: { id: string; statedBy: string };
 	private botIdentity?: ApiUser;
 
 	/** Return the one mutable bot user; options configure it before `createMockBot` clones the world. */
 	botUser(options: BotUserOptions = {}): ApiUser {
-		if (options.id !== undefined && this.pinnedBotId !== undefined && options.id !== this.pinnedBotId) {
-			throw new TypeError(`mockWorld: botUser id "${options.id}" conflicts with botId "${this.pinnedBotId}".`);
+		const pinned = this.pinnedBot;
+		if (options.id !== undefined && pinned && options.id !== pinned.id) {
+			throw new TypeError(`mockWorld: botUser id "${options.id}" conflicts with botId "${pinned.id}".`);
 		}
 		if (options.id !== undefined) {
-			this.pinnedBotIdSource ??= 'botUser';
-			this.pinnedBotId = options.id;
+			this.pinnedBot ??= { id: options.id, statedBy: `world.botUser({ id: "${options.id}" })` };
 		}
 		const user = (this.botIdentity ??= defaultBotUser());
 		Object.assign(
 			user,
 			defaultBotUser({
-				id: this.pinnedBotId ?? user.id,
+				id: this.pinnedBot?.id ?? user.id,
 				username: options.username ?? user.username,
 				globalName: 'globalName' in options ? options.globalName : (options.username ?? user.global_name),
 				avatar: 'avatar' in options ? options.avatar : user.avatar,
@@ -542,18 +554,17 @@ export class WorldBuilder {
 	}
 
 	registerBotMember(guildId: string, options: WorldBotMemberOptions = {}): ApiMember {
-		if (options.botId !== undefined && this.pinnedBotId !== undefined && options.botId !== this.pinnedBotId) {
+		const pinned = this.pinnedBot;
+		if (options.botId !== undefined && pinned && options.botId !== pinned.id) {
 			throw new TypeError(
-				`mockWorld: registerBotMember is already pinned to botId "${this.pinnedBotId}" but got "${options.botId}". ` +
+				`mockWorld: registerBotMember is already pinned to botId "${pinned.id}" but got "${options.botId}". ` +
 					'A world has one bot; seed the other guild without botId.',
 			);
 		}
-		if (options.botId !== undefined && this.pinnedBotId === undefined) this.pinnedBotIdSource = 'registerBotMember';
-		const member = this.registerMember(guildId, {
-			user: this.botUser(options.botId === undefined ? {} : { id: options.botId }),
-			roles: options.roles,
-		});
-		return member;
+		if (options.botId !== undefined) {
+			this.pinnedBot ??= { id: options.botId, statedBy: `registerBotMember({ botId: "${options.botId}" })` };
+		}
+		return this.registerMember(guildId, { user: this.botUser(), roles: options.roles });
 	}
 
 	/**
@@ -567,17 +578,14 @@ export class WorldBuilder {
 	 * Returns the stated bot id, or `undefined` when neither side stated one (leaving the default in place).
 	 */
 	adoptBotId(explicit?: string): string | undefined {
-		if (explicit !== undefined && this.pinnedBotId !== undefined && explicit !== this.pinnedBotId) {
-			const source =
-				this.pinnedBotIdSource === 'registerBotMember'
-					? `registerBotMember({ botId: "${this.pinnedBotId}" })`
-					: `world.botUser({ id: "${this.pinnedBotId}" })`;
+		const pinned = this.pinnedBot;
+		if (explicit !== undefined && pinned && explicit !== pinned.id) {
 			throw new TypeError(
-				`createMockBot: botId "${explicit}" conflicts with ${source}. ` +
+				`createMockBot: botId "${explicit}" conflicts with ${pinned.statedBy}. ` +
 					'State the bot id once, or use the same id in both places.',
 			);
 		}
-		const stated = explicit ?? this.pinnedBotId;
+		const stated = explicit ?? pinned?.id;
 		if (stated !== undefined) this.botUser({ id: stated });
 		return stated;
 	}
@@ -602,9 +610,12 @@ export class WorldBuilder {
 			channelId,
 			...(channel.guild_id === undefined ? {} : { guildId: channel.guild_id }),
 		});
-		const sequence = (this.world.messageSequence ?? 0) + 1;
-		this.world.messageSequence = sequence;
-		this.world.messages.push({ channelId, message, sequence, ...(ownerId === undefined ? {} : { ownerId }) });
+		this.world.messages.push({
+			channelId,
+			message,
+			sequence: nextMessageSequence(this.world),
+			...(ownerId === undefined ? {} : { ownerId }),
+		});
 		return message;
 	}
 

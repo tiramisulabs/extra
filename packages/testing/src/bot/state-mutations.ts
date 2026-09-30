@@ -1,6 +1,6 @@
 import { mockTimestamp } from '../id';
 import { decodeEmoji } from './emoji';
-import { isEphemeral, MESSAGE_FLAG_EPHEMERAL } from './message-flags';
+import { MESSAGE_FLAG_EPHEMERAL } from './message-flags';
 import { assertNameBounds, assertSendableMessage } from './message-validation';
 import { liveRecipients } from './message-visibility';
 import {
@@ -30,6 +30,14 @@ import {
 	numberValue,
 	stringValue,
 } from './state-support';
+import { nextMessageSequence } from './world';
+
+export interface AddMessageOptions {
+	/** A deferred response's loading placeholder has no body yet, so it skips sendable-message validation. */
+	loading?: boolean;
+	ownerId?: string;
+	interactionId?: string;
+}
 
 export abstract class WorldStateMutationCore extends WorldStateReadCore {
 	/** @internal When Discord creates a channel. */
@@ -160,8 +168,8 @@ export abstract class WorldStateMutationCore extends WorldStateReadCore {
 	}
 
 	/** @internal When Discord creates a message. */
-	addMessage(channelId: string, raw: Record<string, unknown>, deferred = false, ownerId?: string): MessageView {
-		if (!deferred) assertSendableMessage(raw, 'create');
+	addMessage(channelId: string, raw: Record<string, unknown>, options: AddMessageOptions = {}): MessageView {
+		if (!options.loading) assertSendableMessage(raw, 'create');
 		const channel = this.world.channels.find(entry => entry.id === channelId);
 		const rawAuthor = asRecord(raw.author);
 		const author: ApiUser =
@@ -227,15 +235,14 @@ export abstract class WorldStateMutationCore extends WorldStateReadCore {
 			this.pollVotersByMessage.set(this.reactionKey(channelId, message.id), voters);
 		}
 		this.deletedMessages.delete(message.id);
-		const sequence = (this.world.messageSequence ?? 0) + 1;
-		this.world.messageSequence = sequence;
-		this.world.messages.push({
+		const entry = {
 			channelId,
 			message,
-			sequence,
-			...(ownerId === undefined ? {} : { ownerId }),
-			liveRecipientIds: liveRecipients(this.world, channelId, sequence, ownerId, isEphemeral(message)),
-		});
+			sequence: nextMessageSequence(this.world),
+			...(options.ownerId === undefined ? {} : { ownerId: options.ownerId }),
+			...(options.interactionId === undefined ? {} : { interactionId: options.interactionId }),
+		};
+		this.world.messages.push({ ...entry, liveRecipientIds: liveRecipients(this.world, entry) });
 		return this.buildMessageView(message);
 	}
 
@@ -252,6 +259,7 @@ export abstract class WorldStateMutationCore extends WorldStateReadCore {
 		if ('attachments' in raw && raw.attachments !== undefined)
 			entry.message.attachments = normalizeAttachments(raw.attachments);
 		if (raw.flags !== undefined) {
+			// An edit cannot make a message ephemeral or public; the EPHEMERAL bit stays as created.
 			const next = numberValue(raw.flags) ?? entry.message.flags;
 			entry.message.flags = (next & ~MESSAGE_FLAG_EPHEMERAL) | (entry.message.flags & MESSAGE_FLAG_EPHEMERAL);
 		}
@@ -269,7 +277,7 @@ export abstract class WorldStateMutationCore extends WorldStateReadCore {
 	/** @internal When Discord deletes a message. */
 	deleteMessage(channelId: string, messageId: string): void {
 		const deleted = this.world.messages.find(entry => entry.channelId === channelId && entry.message.id === messageId);
-		if (deleted) this.deletedMessages.set(messageId, structuredClone(deleted));
+		if (deleted) this.deletedMessages.set(messageId, deleted);
 		this.world.messages = this.world.messages.filter(
 			message => message.channelId !== channelId || message.message.id !== messageId,
 		);
@@ -356,23 +364,27 @@ export abstract class WorldStateMutationCore extends WorldStateReadCore {
 		const disabledUntil =
 			raw.communication_disabled_until === null ? null : stringValue(raw.communication_disabled_until);
 		const existing = this.world.members.find(entry => entry.guildId === guildId && entry.member.user.id === userId);
+		const user = { ...apiUser({ id: userId }), ...rawUser } as ApiUser;
+		const roles = arrayValue(raw.roles).map(String);
+		const nick = stringValue(raw.nick) ?? null;
 		const { guild_id: _guildId, ...memberFields } = raw;
 		const member: ApiMember = {
 			...apiMember({
-				user: { ...apiUser({ id: userId }), ...rawUser } as ApiUser,
-				roles: arrayValue(raw.roles).map(String),
-				nick: stringValue(raw.nick) ?? null,
+				user,
+				roles,
+				nick,
 				...('communication_disabled_until' in raw ? { communicationDisabledUntil: disabledUntil ?? null } : {}),
 			}),
+			// The payload's other member fields (joined_at, flags, ...) replace the factory defaults.
 			...memberFields,
-			user: { ...apiUser({ id: userId }), ...rawUser } as ApiUser,
-			roles: arrayValue(raw.roles).map(String),
-			nick: stringValue(raw.nick) ?? null,
+			user,
+			roles,
+			nick,
 		};
 		if (existing) existing.member = member;
 		else {
 			this.world.members.push({ guildId, member });
-			(this.world.connections ??= {})[userId] = this.world.messageSequence ?? 0;
+			(this.world.joinSequence ??= {})[userId] = this.world.messageSequence ?? 0;
 		}
 	}
 

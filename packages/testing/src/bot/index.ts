@@ -106,6 +106,7 @@ export {
 export type {
 	CommandSchema,
 	MockBotEvent,
+	ModalOpenerSource,
 	PendingCollector,
 	PendingInteractionChange,
 	PendingModal,

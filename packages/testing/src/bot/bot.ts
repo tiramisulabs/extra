@@ -15,7 +15,7 @@ import type { Dispatch } from './dispatch';
 import { dispatchStore } from './dispatch-context';
 import { MockGateway } from './gateway';
 import { isEphemeral } from './message-flags';
-import { messageAccess } from './message-visibility';
+import { channelAccess, type MessageDenial, messageDenial } from './message-visibility';
 import { MockBot as MockBotCore } from './mock-bot';
 import type {
 	CommandSchema,
@@ -38,22 +38,32 @@ import {
 	mockClientUser,
 } from './seyfert-internals';
 import { type WorldSnapshot, WorldState, type WorldStateReader } from './state';
+import type { ChannelTimelineEntry } from './state-read';
 import { cloneWorld, defaultBotUser, seedCachedRole, seedWorld } from './world';
 
 export * from './contracts';
 export { Dispatch, type DispatchOptions } from './dispatch';
 export { WORLD_EVENT_NAMES } from './world-events';
 
+export interface MemberRoleChange {
+	guildId: string;
+	userId: string;
+	roleId: string;
+}
+
 /** Public facade kept in this module so the declaration entrypoint remains stable across internal collaborators. */
 export class MockBot extends MockBotCore {
 	private readonly observers = new Set<(event: MockBotEvent) => void>();
+	/** World snapshots taken when an observed REST call started, diffed once it settles. */
 	private readonly restSnapshots = new Map<number, WorldSnapshot>();
+	/** Messages up to this sequence were seeded before the bot started. */
 	private readonly startupSequence = this._world?.messageSequence ?? 0;
 
 	override get world(): WorldStateReader {
 		return super.world;
 	}
 
+	/** A failing observer is reported and skipped so it cannot break the bot it watches. */
 	private publish(event: MockBotEvent): void {
 		for (const observer of [...this.observers]) {
 			try {
@@ -86,6 +96,7 @@ export class MockBot extends MockBotCore {
 		});
 	}
 
+	/** Stream REST calls, dispatches, world diffs and pending interaction changes. Returns an unsubscribe. */
 	observe(observer: (event: MockBotEvent) => void): () => void {
 		this.observers.add(observer);
 		return () => {
@@ -119,67 +130,64 @@ export class MockBot extends MockBotCore {
 		this.publish({ type: 'interaction', change });
 	}
 
+	private visibleMessage(entry: ChannelTimelineEntry): VisibleMessage {
+		const { message } = entry;
+		return {
+			id: message.id,
+			channelId: entry.channelId,
+			payload: structuredClone(message) as VisibleMessage['payload'],
+			visibility: isEphemeral(message) ? 'ephemeral' : 'public',
+			sequence: entry.sequence,
+			...(entry.ownerId === undefined ? {} : { ownerId: entry.ownerId }),
+			...(entry.interactionId === undefined ? {} : { interactionId: entry.interactionId }),
+			...(message.edited_timestamp === null ? {} : { editedAt: message.edited_timestamp }),
+		};
+	}
+
+	/** Every message in the channel, including hidden and deleted ones, with delivery details. */
 	inspectChannel(channelId: string): { messages: (VisibleMessage & { deleted?: boolean })[]; diagnostics: string[] } {
-		const channel = this._world?.channels.find(entry => entry.id === channelId);
-		if (!channel) return { messages: [], diagnostics: ['unknown-channel'] };
+		if (!this._world?.channels.some(entry => entry.id === channelId)) {
+			return { messages: [], diagnostics: ['unknown-channel'] };
+		}
 		const timeline = this._state.channelTimeline(channelId);
 		const diagnostics = ['developer-inspection'];
-		if (
-			timeline.some(entry =>
-				messageAccess(this._world, this._state, channelId, undefined, entry).diagnostics.includes(
-					'ephemeral-owner-unknown',
-				),
-			)
-		) {
+		if (timeline.some(entry => isEphemeral(entry.message) && entry.ownerId === undefined)) {
 			diagnostics.push('ephemeral-owner-unknown');
 		}
 		return {
 			messages: timeline.map(entry => ({
-				id: entry.message.id,
-				channelId,
-				payload: structuredClone(entry.message) as unknown as VisibleMessage['payload'],
-				visibility: isEphemeral(entry.message) ? 'ephemeral' : 'public',
-				sequence: entry.sequence,
+				...this.visibleMessage(entry),
 				liveRecipientIds: [...(entry.liveRecipientIds ?? [])],
 				isHistory: (entry.sequence ?? 0) <= this.startupSequence,
-				...(entry.ownerId === undefined ? {} : { ownerId: entry.ownerId }),
-				...(entry.interactionId === undefined ? {} : { interactionId: entry.interactionId }),
-				...(entry.message.edited_timestamp === null ? {} : { editedAt: entry.message.edited_timestamp }),
 				...(entry.deleted ? { deleted: true } : {}),
 			})),
 			diagnostics,
 		};
 	}
 
+	/** What `userId` can see in the channel; diagnostics count the messages hidden from them and why. */
 	conversation(query: { userId: string; channelId: string }): VisibleConversation {
-		const channelAccess = messageAccess(this._world, this._state, query.channelId, query.userId);
-		if (!channelAccess.visible) {
-			return { channelId: query.channelId, messages: [], diagnostics: channelAccess.diagnostics };
-		}
-		const diagnostics = [...channelAccess.diagnostics];
-		const visibleIds = new Set<string>();
-		let hiddenUnknownOwnerCount = 0;
-		let hiddenHistoryCount = 0;
-		for (const entry of this._state.channelTimeline(query.channelId)) {
-			if (entry.deleted) continue;
-			const access = messageAccess(this._world, this._state, query.channelId, query.userId, entry);
-			if (access.visible) visibleIds.add(entry.message.id);
-			if (access.diagnostics.includes('ephemeral-owner-unknown')) hiddenUnknownOwnerCount++;
-			if (access.diagnostics.includes('history-hidden')) hiddenHistoryCount++;
-		}
-		if (hiddenUnknownOwnerCount) diagnostics.push(`ephemeral-owner-unknown:${hiddenUnknownOwnerCount}-hidden`);
-		if (hiddenHistoryCount) diagnostics.push(`history-hidden:${hiddenHistoryCount}`);
+		const { userId, channelId } = query;
+		const access = channelAccess(this._world, this._state, channelId, userId);
+		if (!access.visible) return { channelId, messages: [], diagnostics: [access.denial] };
+		const timeline = this._state
+			.channelTimeline(channelId)
+			.filter(entry => !entry.deleted)
+			.map(entry => ({ entry, denial: messageDenial(entry, userId, access.permissions) }));
+		const hidden = (denial: MessageDenial) => timeline.filter(item => item.denial === denial).length;
+		const diagnostics: string[] = [];
+		const unknownOwner = hidden('ephemeral-owner-unknown');
+		if (unknownOwner) diagnostics.push(`ephemeral-owner-unknown:${unknownOwner}-hidden`);
+		const history = hidden('history-hidden');
+		if (history) diagnostics.push(`history-hidden:${history}`);
 		return {
-			channelId: query.channelId,
-			messages: this.inspectChannel(query.channelId)
-				.messages.filter(message => !message.deleted && visibleIds.has(message.id))
-				.map(
-					({ deleted: _deleted, isHistory: _isHistory, liveRecipientIds: _liveRecipientIds, ...message }) => message,
-				),
+			channelId,
+			messages: timeline.filter(item => item.denial === undefined).map(item => this.visibleMessage(item.entry)),
 			diagnostics,
 		};
 	}
 
+	/** Open modals and live component collectors. */
 	pendingInteractions(): { modals: PendingModal[]; collectors: PendingCollector[] } {
 		return {
 			modals: [...this.displayedModals.values()].flatMap(value =>
@@ -192,40 +200,33 @@ export class MockBot extends MockBotCore {
 	/** Loads any deferred directory commands before returning their full Seyfert JSON schemas. */
 	async commandSchemas(): Promise<CommandSchema[]> {
 		await this.ensureAllCommandsLoaded();
-		const commands = [...this.client.commands.values];
-		const entryPoint = (
-			this.client.commands as typeof this.client.commands & { entryPoint?: (typeof commands)[number] | null }
-		).entryPoint;
-		if (entryPoint) commands.push(entryPoint);
-		return commands.map(command => command.toJSON() as CommandSchema);
+		const { values, entryPoint } = this.client.commands;
+		return [...values, ...(entryPoint ? [entryPoint] : [])].map(command => command.toJSON() as CommandSchema);
 	}
 
+	/** Role changes made outside the bot: they dispatch GUILD_MEMBER_UPDATE and ignore the bot's permissions. */
 	readonly admin = {
-		addMemberRole: async (input: { guildId: string; userId: string; roleId: string }): Promise<void> =>
-			this.changeMemberRole(input, true),
-		removeMemberRole: async (input: { guildId: string; userId: string; roleId: string }): Promise<void> =>
-			this.changeMemberRole(input, false),
+		addMemberRole: (input: MemberRoleChange): Promise<void> =>
+			this.changeMemberRole(input, roles => [...new Set([...roles, input.roleId])]),
+		removeMemberRole: (input: MemberRoleChange): Promise<void> =>
+			this.changeMemberRole(input, roles => roles.filter(roleId => roleId !== input.roleId)),
 	};
 
-	private async changeMemberRole(
-		input: { guildId: string; userId: string; roleId: string },
-		add: boolean,
-	): Promise<void> {
-		const guild = this._world?.guilds.find(entry => entry.id === input.guildId);
-		if (!guild) throw new TypeError(`admin: guild "${input.guildId}" is not in the world.`);
-		const member = this._world?.members.find(
-			entry => entry.guildId === input.guildId && entry.member.user.id === input.userId,
-		);
-		if (!member) throw new TypeError(`admin: member "${input.userId}" is not in guild "${input.guildId}".`);
-		if (!this._world?.roles.some(entry => entry.guildId === input.guildId && entry.role.id === input.roleId)) {
-			throw new TypeError(`admin: role "${input.roleId}" is not in guild "${input.guildId}".`);
+	private async changeMemberRole(input: MemberRoleChange, nextRoles: (roles: string[]) => string[]): Promise<void> {
+		const { guildId, userId, roleId } = input;
+		if (!this._world?.guilds.some(entry => entry.id === guildId)) {
+			throw new TypeError(`admin: guild "${guildId}" is not in the world.`);
 		}
-		const roles = add
-			? [...new Set([...member.member.roles, input.roleId])]
-			: member.member.roles.filter(roleId => roleId !== input.roleId);
-		await this.emit('GUILD_MEMBER_UPDATE', memberUpdateEvent(member.member, { guildId: guild.id, roles }), {
-			allowNoHandler: true,
-		});
+		const member = this._world.members.find(entry => entry.guildId === guildId && entry.member.user.id === userId);
+		if (!member) throw new TypeError(`admin: member "${userId}" is not in guild "${guildId}".`);
+		if (!this._world.roles.some(entry => entry.guildId === guildId && entry.role.id === roleId)) {
+			throw new TypeError(`admin: role "${roleId}" is not in guild "${guildId}".`);
+		}
+		await this.emit(
+			'GUILD_MEMBER_UPDATE',
+			memberUpdateEvent(member.member, { guildId, roles: nextRoles(member.member.roles) }),
+			{ allowNoHandler: true },
+		);
 	}
 }
 
@@ -237,9 +238,8 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	if (profileId !== undefined && options.botId !== undefined && profileId !== options.botId)
 		throw new TypeError(`createMockBot: botUser id "${profileId}" conflicts with botId "${options.botId}".`);
 	if (options.world && options.botUser) options.world.botUser(options.botUser);
-	const statedBotId = options.world
-		? options.world.adoptBotId(options.botId ?? profileId)
-		: (options.botId ?? profileId);
+	const requestedBotId = options.botId ?? profileId;
+	const statedBotId = options.world ? options.world.adoptBotId(requestedBotId) : requestedBotId;
 	const botId = statedBotId ?? TEST_BOT_ID;
 	const prefixList = [...(options.prefixes ?? []), ...(options.mentionAsPrefix ? [`<@${botId}>`, `<@!${botId}>`] : [])];
 	const clientOptionsBase: ClientOptions | undefined = options.clientOptions
@@ -312,6 +312,7 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	}
 	client.botId = statedBotId ?? ((options.client && client.botId) || botId);
 	client.applicationId = options.applicationId ?? ((options.client && client.applicationId) || TEST_APPLICATION_ID);
+	// A caller-supplied client may carry its own bot id; the world's bot user follows the id the client runs as.
 	options.world?.adoptBotId(client.botId);
 	const botUser = options.world?.botUser() ?? defaultBotUser({ ...options.botUser, id: client.botId });
 	const built = options.world?.build();
