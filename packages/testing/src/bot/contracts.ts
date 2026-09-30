@@ -628,6 +628,8 @@ export interface MockBotOptions {
 	shardLatency?: number;
 	/** Bot user id used by the mock client identity. */
 	botId?: string;
+	/** Bot profile shared by client.me, seeded members, and authored messages. */
+	botUser?: import('./world').BotUserOptions;
 	/** Application id used for interactions and webhook routes. */
 	applicationId?: string;
 	/**

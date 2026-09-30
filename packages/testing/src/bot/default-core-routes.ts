@@ -36,6 +36,7 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 		requireChannel,
 		requireMessage,
 		requirePerm,
+		botGuildPerms,
 		requireChannelPerm,
 		requireThreadPerm,
 	} = context;
@@ -76,6 +77,13 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 	});
 	rest.intercept(Routes.fetchMessages, (pending, params) => {
 		requireChannel(params.channelId);
+		const channel = world?.channels.find(entry => entry.id === params.channelId);
+		if (channel?.guild_id) {
+			requireChannelPerm(params.channelId, PermissionFlagsBits.ViewChannel);
+			if (channel.type === 2) requireChannelPerm(params.channelId, PermissionFlagsBits.Connect);
+			const permissions = botGuildPerms(channel.guild_id, params.channelId);
+			if (permissions !== undefined && !(permissions & PermissionFlagsBits.ReadMessageHistory)) return [];
+		}
 		return hooks.state.channelMessages(params.channelId, messageQuery(pending.query));
 	});
 	interceptFetchOne(
@@ -83,6 +91,12 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 		Routes.fetchMessage,
 		params => {
 			requireChannel(params.channelId);
+			const channel = world?.channels.find(entry => entry.id === params.channelId);
+			if (channel?.guild_id) {
+				requireChannelPerm(params.channelId, PermissionFlagsBits.ViewChannel);
+				if (channel.type === 2) requireChannelPerm(params.channelId, PermissionFlagsBits.Connect);
+				requireChannelPerm(params.channelId, PermissionFlagsBits.ReadMessageHistory);
+			}
 			return hooks.state.rawMessage(params.channelId, params.messageId);
 		},
 		params => apiMessage({ id: params.messageId, channelId: params.channelId }),
@@ -256,6 +270,12 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 					);
 				}
 			}
+		}
+		if (body.type === 5) {
+			const channelId = hooks.state.channelForToken(params.token);
+			if (channelId)
+				hooks.state.addDeferredResponse(params.token, channelId, Number(body.data?.flags ?? 0), hooks.botId);
+			return callbackResult();
 		}
 		if (body.type !== 4) return callbackResult();
 		assertAttachmentRefs(body.data ?? {}, pending.files);

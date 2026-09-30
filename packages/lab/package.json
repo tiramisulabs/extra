@@ -1,0 +1,70 @@
+{
+	"name": "@slipher/lab",
+	"version": "0.0.0",
+	"private": true,
+	"license": "MIT",
+	"files": ["lib/**"],
+	"exports": {
+		".": {
+			"types": "./lib/index.d.ts",
+			"require": "./lib/index.js",
+			"import": "./lib/index.js",
+			"default": "./lib/index.js"
+		},
+		"./runtime": {
+			"types": "./lib/runtime/index.d.ts",
+			"require": "./lib/runtime/index.js",
+			"import": "./lib/runtime/index.js",
+			"default": "./lib/runtime/index.js"
+		},
+		"./child": {
+			"types": "./lib/child/index.d.ts",
+			"require": "./lib/child/index.js",
+			"import": "./lib/child/index.js",
+			"default": "./lib/child/index.js"
+		},
+		"./protocol": {
+			"types": "./lib/protocol/index.d.ts",
+			"require": "./lib/protocol/index.js",
+			"import": "./lib/protocol/index.js",
+			"default": "./lib/protocol/index.js"
+		},
+		"./host": {
+			"types": "./lib/host/index.d.ts",
+			"require": "./lib/host/index.js",
+			"import": "./lib/host/index.js",
+			"default": "./lib/host/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"bin": { "slipher-lab": "./lib/host/cli.js" },
+	"scripts": {
+		"build": "tsc",
+		"lint": "biome lint --write ./src ./test",
+		"format": "biome format --write ./src ./test",
+		"checkb": "biome check --write --no-errors-on-unmatched ./src ./test",
+		"typecheck": "tsc --noEmit --project ./test/tsconfig.json",
+		"test": "pnpm typecheck && vitest run --passWithNoTests --config ./test/vitest.config.mts ./test/"
+	},
+	"peerDependencies": {
+		"seyfert": ">=5.0.0",
+		"@slipher/testing": "workspace:*",
+		"@slipher/lab-ui": "workspace:*"
+	},
+	"peerDependenciesMeta": {
+		"@slipher/lab-ui": { "optional": true }
+	},
+	"dependenciesMeta": {
+		"@slipher/testing": {
+			"injected": true
+		}
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.1",
+		"@types/node": "^26.0.1",
+		"@slipher/testing": "workspace:*",
+		"seyfert": "5.1.0",
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.9"
+	}
+}

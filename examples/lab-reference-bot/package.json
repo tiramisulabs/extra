@@ -1,0 +1,29 @@
+{
+	"name": "lab-reference-bot",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"build": "tsc",
+		"test": "vitest run",
+		"lab:check": "node dist/lab/check.js"
+	},
+	"dependencies": {
+		"seyfert": "5.1.0",
+		"@slipher/testing": "workspace:*",
+		"@slipher/lab": "workspace:*"
+	},
+	"dependenciesMeta": {
+		"@slipher/testing": {
+			"injected": true
+		},
+		"@slipher/lab": {
+			"injected": true
+		}
+	},
+	"devDependencies": {
+		"@types/node": "^26.0.1",
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.9"
+	}
+}

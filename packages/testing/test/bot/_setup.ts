@@ -27,9 +27,8 @@ import { type DiscordErrorInit, isDiscordError } from '../../src/bot/rest';
 import { mockWorld } from '../../src/bot/world';
 
 /**
- * The descriptive text Discord sent. seyfert's `parseError` names the error `API_<statusText>_<code>` and uses
- * that as `.message` — a Missing Permissions failure reads `Api Forbidden 50013` — but it keeps the body it
- * parsed on `metadata.response`, which is where the per-call copy survives.
+ * The descriptive text Discord sent. Seyfert 5.0 and 5.1 format Error.message differently, but both keep
+ * the parsed body on `metadata.response`, where the per-call copy survives.
  */
 export function discordErrorDetail(error: unknown): string | undefined {
 	const response = (error as { metadata?: { response?: { message?: unknown } } } | null | undefined)?.metadata

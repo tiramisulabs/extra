@@ -440,13 +440,45 @@ export class WorldState extends WorldStateMutationCore {
 		channel.permission_overwrites = channel.permission_overwrites.filter(current => current.id !== overwriteId);
 	}
 
+	private markInteractionMessage(channelId: string, messageId: string, token: string): void {
+		const entry = this.world.messages.find(
+			candidate => candidate.channelId === channelId && candidate.message.id === messageId,
+		);
+		const interaction = this.interactionForToken(token);
+		if (entry && interaction) {
+			entry.ownerId = interaction.userId;
+			entry.interactionId = interaction.interactionId;
+		}
+	}
+
 	/** @internal For an interaction's first visible reply. */
 	addOriginalResponse(token: string, channelId: string, raw: Record<string, unknown>, authorId: string): RawMessage {
 		if (this.deletedOriginalTokens.has(token)) apiError(DiscordErrors.UnknownMessage);
 		this.registerInteractionToken(token, channelId);
-		const view = this.addMessage(channelId, { ...raw, author_id: authorId });
+		const view = this.addMessage(
+			channelId,
+			{ ...raw, author_id: authorId },
+			false,
+			this.interactionForToken(token)?.userId,
+		);
+		this.markInteractionMessage(channelId, view.id, token);
 		this.deletedOriginalTokens.delete(token);
 		this.messageIdByToken.set(token, view.id);
+		return this.rawMessageOr(channelId, view.id);
+	}
+
+	/** @internal A type 5 callback creates the original loading response immediately. */
+	addDeferredResponse(token: string, channelId: string, flags: number, authorId: string): RawMessage {
+		this.registerInteractionToken(token, channelId);
+		const view = this.addMessage(
+			channelId,
+			{ flags: (flags & 64) | 128, author_id: authorId },
+			true,
+			this.interactionForToken(token)?.userId,
+		);
+		this.markInteractionMessage(channelId, view.id, token);
+		this.messageIdByToken.set(token, view.id);
+		this.deferredFollowupTokens.add(token);
 		return this.rawMessageOr(channelId, view.id);
 	}
 
@@ -463,6 +495,11 @@ export class WorldState extends WorldStateMutationCore {
 		const messageId = this.messageIdByToken.get(token);
 		if (!messageId) return this.addOriginalResponse(token, channelId, raw, authorId);
 		this.editMessage(channelId, messageId, raw);
+		this.deferredFollowupTokens.delete(token);
+		const entry = this.world.messages.find(
+			candidate => candidate.channelId === channelId && candidate.message.id === messageId,
+		);
+		if (entry) entry.message.flags &= ~128;
 		return this.rawMessageOr(channelId, messageId);
 	}
 
@@ -485,9 +522,16 @@ export class WorldState extends WorldStateMutationCore {
 	/** @internal For webhook followups. */
 	addFollowup(token: string, raw: Record<string, unknown>, authorId: string): RawMessage | Record<string, never> {
 		if (!this.acknowledgedTokens.has(token)) apiError(DiscordErrors.UnknownWebhook);
+		if (this.deferredFollowupTokens.has(token)) return this.upsertOriginalResponse(token, raw, authorId);
 		const channelId = this.channelIdByToken.get(token);
 		if (!channelId) return {};
-		const view = this.addMessage(channelId, { ...raw, author_id: authorId });
+		const view = this.addMessage(
+			channelId,
+			{ ...raw, author_id: authorId },
+			false,
+			this.interactionForToken(token)?.userId,
+		);
+		this.markInteractionMessage(channelId, view.id, token);
 		return this.rawMessageOr(channelId, view.id);
 	}
 

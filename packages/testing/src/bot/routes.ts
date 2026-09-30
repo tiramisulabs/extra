@@ -280,6 +280,10 @@ export const Routes = {
 		method: 'POST',
 		route: '/guilds/:guildId/bulk-bans',
 	}),
+	bulkBanSingular: defineRoute<API.RESTPostAPIGuildBulkBanJSONBody, API.RESTPostAPIGuildBulkBanResult>()({
+		method: 'POST',
+		route: '/guilds/:guildId/bulk-ban',
+	}),
 	fetchAutoModRules: defineRoute<never, API.RESTGetAPIAutoModerationRulesResult>()({
 		method: 'GET',
 		route: '/guilds/:guildId/auto-moderation/rules',
@@ -511,6 +515,7 @@ export const ROUTE_COVERAGE = {
 	fetchInvite: 'handled',
 	deleteInvite: 'handled',
 	bulkBan: 'handled',
+	bulkBanSingular: 'handled',
 	fetchAutoModRules: 'handled',
 	createAutoModRule: 'handled',
 	fetchAutoModRule: 'handled',

@@ -103,6 +103,15 @@ export {
 	userCommandInteraction,
 	userOption,
 } from './interactions';
+export type {
+	CommandSchema,
+	MockBotEvent,
+	PendingCollector,
+	PendingInteractionChange,
+	PendingModal,
+	VisibleConversation,
+	VisibleMessage,
+} from './lab-contracts';
 export {
 	type ApiAttachment,
 	type ApiAttachmentOptions,
@@ -319,6 +328,7 @@ export {
 	type WorldWebhookQuery,
 } from './state';
 export {
+	type BotUserOptions,
 	type ChannelOverwriteInput,
 	mockWorld,
 	type WorldBotMemberOptions,

@@ -22,6 +22,7 @@ export interface DispatchOptions<T> {
 	/** This dispatch's id, used to scope recorded actions and stateful ownership. */
 	dispatchId?: number;
 	executor: () => Promise<T>;
+	kind?: string;
 	/** Resolves when seyfert registers a modal for the given userId; supplied by MockBot. */
 	modalWaiter?: (userId: string, dispatchId: number | undefined) => ModalWaitRegistration;
 	/** Submits a modal as this dispatch's user; supplied by MockBot so submitModal needs no bot handle. */
@@ -50,6 +51,8 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 	readonly userId: string | undefined;
 	readonly dispatchId: number | undefined;
 	private readonly executor: () => Promise<T>;
+	readonly kind: string;
+	private observer?: (phase: 'start' | 'end', error?: unknown) => void;
 	private readonly modalWaiter?: DispatchOptions<T>['modalWaiter'];
 	private readonly modalFiller?: DispatchOptions<T>['modalFiller'];
 	private readonly modalCleaner?: DispatchOptions<T>['modalCleaner'];
@@ -62,6 +65,7 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		this.userId = options.userId;
 		this.dispatchId = options.dispatchId;
 		this.executor = options.executor;
+		this.kind = options.kind ?? 'interaction';
 		this.modalWaiter = options.modalWaiter;
 		this.modalFiller = options.modalFiller;
 		this.modalCleaner = options.modalCleaner;
@@ -69,10 +73,29 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		this.snapshotter = options.snapshotter;
 	}
 
+	/** @internal Attach persistent observation without changing lazy execution. */
+	observe(observer: (phase: 'start' | 'end', error?: unknown) => void): void {
+		this.observer = observer;
+	}
+
 	private start(): Promise<T> {
-		this.execution ??= this.executor().finally(() => {
-			this.completed = true;
-		});
+		if (!this.execution) {
+			this.observer?.('start');
+			this.execution = this.executor()
+				.then(
+					value => {
+						this.observer?.('end');
+						return value;
+					},
+					error => {
+						this.observer?.('end', error);
+						throw error;
+					},
+				)
+				.finally(() => {
+					this.completed = true;
+				});
+		}
 		return this.execution;
 	}
 

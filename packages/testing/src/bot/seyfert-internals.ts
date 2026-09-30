@@ -1,5 +1,7 @@
-import type { Client, UsingClient } from 'seyfert';
+import type { ApplicationFlags, Client, UsingClient } from 'seyfert';
+import { Transformers } from 'seyfert/lib/client/transformers';
 import { isGatewayEventName, normalizeEventName } from 'seyfert/lib/events/utils';
+import type { ApiUser } from './payloads';
 
 /*
  * The mock bot drives a REAL seyfert Client, which means it reaches into a handful of seyfert internals that are
@@ -108,6 +110,11 @@ export function clientLifecycle(client: Client): ClientLifecycleInternals {
 /** Seed a fresh world into the client cache — `seedWorld` needs the `UsingClient` cache/rest surface. */
 export function asUsingClient(client: Client): UsingClient {
 	return client as unknown as UsingClient;
+}
+
+/** Seed `client.me` through the same transformer the gateway READY event uses. */
+export function mockClientUser(client: Client, user: ApiUser, applicationId: string): Client['me'] {
+	return Transformers.ClientUser(asUsingClient(client), user, { id: applicationId, flags: 0 as ApplicationFlags });
 }
 
 /** Cast the MockGateway to the concrete ShardManager type `Client#setServices` expects (no public ctor type). */

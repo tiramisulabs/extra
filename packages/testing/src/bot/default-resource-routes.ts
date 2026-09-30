@@ -19,7 +19,7 @@ import {
 	apiUser,
 	messageReactionAddEvent,
 } from './payloads';
-import { apiError, DiscordErrors, MockApiError, type RouteMatcher } from './rest';
+import { apiError, DiscordErrors, MockApiError, type PendingAction, type RouteMatcher } from './rest';
 import { AUDIT_ACTION, ROUTE_COVERAGE, Routes } from './routes';
 
 export function registerWorldResourceRoutes(context: WorldDefaultContext): void {
@@ -136,7 +136,7 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 		if (world && !hooks.state.invite(params.code)) apiError(DiscordErrors.UnknownInvite);
 		return hooks.state.removeInvite(params.code) ?? apiInvite({ code: params.code });
 	});
-	rest.intercept(Routes.bulkBan, async (pending, params) => {
+	const handleBulkBan = async (pending: PendingAction, params: Record<string, string>) => {
 		requireGuild(params.guildId);
 		requirePerm(params.guildId, PermissionFlagsBits.BanMembers);
 		const rawIds = bodyRecord(pending.body).user_ids;
@@ -167,7 +167,10 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 			banned.push(userId);
 		}
 		return { banned_users: banned, failed_users: failed };
-	});
+	};
+	rest.intercept(Routes.bulkBan, handleBulkBan);
+	// Seyfert 5.1 changed the shorters route from /bulk-bans to /bulk-ban.
+	rest.intercept(Routes.bulkBanSingular, handleBulkBan);
 	registerGuildCrud(rest, {
 		idParam: 'ruleId',
 		create: Routes.createAutoModRule,

@@ -97,10 +97,8 @@ export function apiError(error: DiscordErrorInit, message?: string): never {
 /**
  * Narrow an unknown caught value to a Discord REST error, by the fields Discord actually sends.
  *
- * `error.message` is not one of them: seyfert's `parseError` names the error `API_<statusText>_<code>` and
- * uses that as the message, so a Missing Permissions failure reads `Api Forbidden 50013`. The status and the
- * code are the contract — the descriptive copy stays on `error.metadata.response.message` for the handful of
- * errors whose text carries per-call detail (Invalid Form Body naming the offending field).
+ * `error.message` is not one of them: Seyfert 5.0 and 5.1 format it differently. The status and code are the
+ * contract; Discord's descriptive copy stays on `error.metadata.response.message`, including per-call detail.
  *
  * ```ts
  * catch (error) {
@@ -391,6 +389,7 @@ export class MockApiHandler extends ApiHandler {
 	/** @internal */
 	readonly actions: RecordedAction[] = [];
 	private listeners: ActionListener[] = [];
+	private readonly observers = new Set<(action: RecordedAction, phase: NotifyPhase) => void>();
 	private interceptors: Interceptor[] = [];
 	private defaultInterceptors: Interceptor[] = [];
 	private gates: RequestGate[] = [];
@@ -659,8 +658,22 @@ export class MockApiHandler extends ApiHandler {
 		return { hit, release: g.release };
 	}
 
+	observeActions(observer: (action: RecordedAction, phase: NotifyPhase) => void): () => void {
+		this.observers.add(observer);
+		return () => {
+			this.observers.delete(observer);
+		};
+	}
+
 	private notifyListeners(action: RecordedAction, phase: NotifyPhase): void {
 		for (const listener of [...this.listeners]) listener.onAction(action, phase);
+		for (const observer of [...this.observers]) {
+			try {
+				observer(action, phase);
+			} catch (error) {
+				console.warn('[@slipher/testing] observer failed:', error);
+			}
+		}
 	}
 
 	private observerRequest(

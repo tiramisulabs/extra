@@ -1,8 +1,10 @@
 import { mockTimestamp } from '../id';
 import { decodeEmoji } from './emoji';
 import { assertNameBounds, assertSendableMessage } from './message-validation';
+import { liveRecipients } from './message-visibility';
 import {
 	type ApiChannel,
+	type ApiMember,
 	type ApiRole,
 	type ApiUser,
 	type ApiVoiceState,
@@ -103,10 +105,12 @@ export abstract class WorldStateMutationCore extends WorldStateReadCore {
 	registerDm(userId: string, raw: Record<string, unknown>): Record<string, unknown> {
 		const channel = this.addChannel(undefined, { ...raw, type: raw.type ?? 1 });
 		this.dmChannelByUser.set(userId, String(channel.id));
+		this.verifiedDmRecipients.add(userId);
 		return channel;
 	}
 
 	protected resolveUser(id: string): ApiUser {
+		if (id === this.botId) return this.botUser;
 		const user = this.world.users.find(entry => entry.id === id);
 		if (user) return user;
 		const member = this.world.members.find(entry => entry.member.user.id === id);
@@ -155,8 +159,8 @@ export abstract class WorldStateMutationCore extends WorldStateReadCore {
 	}
 
 	/** @internal When Discord creates a message. */
-	addMessage(channelId: string, raw: Record<string, unknown>): MessageView {
-		assertSendableMessage(raw, 'create');
+	addMessage(channelId: string, raw: Record<string, unknown>, deferred = false, ownerId?: string): MessageView {
+		if (!deferred) assertSendableMessage(raw, 'create');
 		const channel = this.world.channels.find(entry => entry.id === channelId);
 		const rawAuthor = asRecord(raw.author);
 		const author: ApiUser =
@@ -165,7 +169,7 @@ export abstract class WorldStateMutationCore extends WorldStateReadCore {
 						...apiUser({ id: String(rawAuthor.id) }),
 						...rawAuthor,
 					} as ApiUser)
-				: apiUser({ id: stringValue(raw.author_id) ?? this.botId, bot: true });
+				: this.resolveUser(stringValue(raw.author_id) ?? this.botId);
 		const content = stringValue(raw.content) ?? '';
 		const message = apiMessage({
 			id: stringValue(raw.id),
@@ -221,7 +225,16 @@ export abstract class WorldStateMutationCore extends WorldStateReadCore {
 			for (const answer of poll.answers) voters.set(answer.answer_id, new Set());
 			this.pollVotersByMessage.set(this.reactionKey(channelId, message.id), voters);
 		}
-		this.world.messages.push({ channelId, message });
+		this.deletedMessages.delete(message.id);
+		const sequence = (this.world.messageSequence ?? 0) + 1;
+		this.world.messageSequence = sequence;
+		this.world.messages.push({
+			channelId,
+			message,
+			sequence,
+			...(ownerId === undefined ? {} : { ownerId }),
+			liveRecipientIds: liveRecipients(this.world, channelId, sequence, ownerId, Boolean(message.flags & 64)),
+		});
 		return this.buildMessageView(message);
 	}
 
@@ -237,7 +250,10 @@ export abstract class WorldStateMutationCore extends WorldStateReadCore {
 		if (raw.components !== undefined) entry.message.components = arrayValue(raw.components);
 		if ('attachments' in raw && raw.attachments !== undefined)
 			entry.message.attachments = normalizeAttachments(raw.attachments);
-		if (raw.flags !== undefined) entry.message.flags = numberValue(raw.flags) ?? entry.message.flags;
+		if (raw.flags !== undefined) {
+			const next = numberValue(raw.flags) ?? entry.message.flags;
+			entry.message.flags = (next & ~64) | (entry.message.flags & 64);
+		}
 		if ('content' in raw || 'allowed_mentions' in raw) {
 			const derived = this.deriveMentions(entry.message.content, raw.allowed_mentions);
 			entry.message.mention_everyone = derived.mention_everyone;
@@ -251,6 +267,8 @@ export abstract class WorldStateMutationCore extends WorldStateReadCore {
 
 	/** @internal When Discord deletes a message. */
 	deleteMessage(channelId: string, messageId: string): void {
+		const deleted = this.world.messages.find(entry => entry.channelId === channelId && entry.message.id === messageId);
+		if (deleted) this.deletedMessages.set(messageId, structuredClone(deleted));
 		this.world.messages = this.world.messages.filter(
 			message => message.channelId !== channelId || message.message.id !== messageId,
 		);
@@ -329,22 +347,32 @@ export abstract class WorldStateMutationCore extends WorldStateReadCore {
 		}));
 	}
 
-	/** @internal When Discord adds a member. Idempotent (replace-or-push). */
+	/** @internal When Discord adds a member. A repeated add replaces the previous membership. */
 	addMember(guildId: string, raw: Record<string, unknown>): void {
 		const rawUser = asRecord(raw.user);
 		const userId = stringValue(rawUser.id);
 		if (!userId) return;
 		const disabledUntil =
 			raw.communication_disabled_until === null ? null : stringValue(raw.communication_disabled_until);
-		const member = apiMember({
+		const existing = this.world.members.find(entry => entry.guildId === guildId && entry.member.user.id === userId);
+		const { guild_id: _guildId, ...memberFields } = raw;
+		const member: ApiMember = {
+			...apiMember({
+				user: { ...apiUser({ id: userId }), ...rawUser } as ApiUser,
+				roles: arrayValue(raw.roles).map(String),
+				nick: stringValue(raw.nick) ?? null,
+				...('communication_disabled_until' in raw ? { communicationDisabledUntil: disabledUntil ?? null } : {}),
+			}),
+			...memberFields,
 			user: { ...apiUser({ id: userId }), ...rawUser } as ApiUser,
 			roles: arrayValue(raw.roles).map(String),
 			nick: stringValue(raw.nick) ?? null,
-			...('communication_disabled_until' in raw ? { communicationDisabledUntil: disabledUntil ?? null } : {}),
-		});
-		const existing = this.world.members.find(entry => entry.guildId === guildId && entry.member.user.id === userId);
+		};
 		if (existing) existing.member = member;
-		else this.world.members.push({ guildId, member });
+		else {
+			this.world.members.push({ guildId, member });
+			(this.world.connections ??= {})[userId] = this.world.messageSequence ?? 0;
+		}
 	}
 
 	/** @internal When Discord removes a member. */

@@ -85,4 +85,13 @@ describe('mockWorld', () => {
 		const cached = await bot.client.cache.voiceStates?.get(member.user.id, guild.id);
 		expect(cached?.channelId).toBe(channel.id);
 	});
+
+	test('seeds a role whose ID starts with the cache namespace', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'prefixed-role-guild' });
+		world.registerRole(guild.id, { id: 'role.foo', name: 'Prefixed' });
+		await using bot = await createMockBot({ world });
+		expect((await bot.client.cache.roles?.get('role.foo'))?.name).toBe('Prefixed');
+		expect((await bot.client.cache.roles?.values(guild.id))?.some(role => role.id === 'role.foo')).toBe(true);
+	});
 });

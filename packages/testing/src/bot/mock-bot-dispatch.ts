@@ -551,7 +551,10 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 				modalWaiter: (id, ownerDispatchId) => this.onModalRegistered(id, ownerDispatchId),
 				dispatchId,
 				modalFiller: user ? (customId, fields) => this.dispatchSubmitModal(customId, fields, { user }) : undefined,
-				modalCleaner: id => this.modalOwners.delete(id),
+				modalCleaner: id => {
+					this.modalOwners.delete(id);
+					this.completedModalOwners.delete(id);
+				},
 				componentAwaiter: (customId, scopeId, execution, timeoutMs) =>
 					this.awaitRenderedComponent(customId, scopeId, execution, timeoutMs),
 				snapshotter: () => {
@@ -580,7 +583,10 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 				modalWaiter: (id, ownerDispatchId) => this.onModalRegistered(id, ownerDispatchId),
 				dispatchId,
 				modalFiller: user ? (customId, fields) => this.dispatchSubmitModal(customId, fields, { user }) : undefined,
-				modalCleaner: id => this.modalOwners.delete(id),
+				modalCleaner: id => {
+					this.modalOwners.delete(id);
+					this.completedModalOwners.delete(id);
+				},
 				componentAwaiter: (customId, scopeId, execution, timeoutMs) =>
 					this.awaitRenderedComponent(customId, scopeId, execution, timeoutMs),
 				snapshotter: () => this.snapshotInteraction(payload, dispatchId),
@@ -648,6 +654,10 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 			if (typeof d.guild_id !== 'string' || typeof user?.id !== 'string') {
 				throw new TypeError('emit GUILD_MEMBER_UPDATE requires guild_id and user.id before world/cache mutation.');
 			}
+			const previous = this._world?.members.find(
+				entry => entry.guildId === d.guild_id && entry.member.user.id === user.id,
+			)?.member;
+			if (previous) return { ...previous, ...d, user: { ...previous.user, ...user } };
 		}
 		if (name === 'THREAD_CREATE' && typeof d.guild_id !== 'string') {
 			throw new TypeError('emit THREAD_CREATE requires guild_id; Seyfert cache ignores guildless threads.');
@@ -796,11 +806,32 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 		const capabilities = installDispatchHooksImpl(this.client, {
 			modalWaiters: this.modalWaiters,
 			modalOwners: this.modalOwners,
+			isModalOwnerCompleted: userId => {
+				if (this.completedModalOwners.has(userId)) return true;
+				const owner = this.modalOwners.get(userId);
+				return (
+					owner !== undefined && this.dispatches.some(dispatch => dispatch.dispatchId === owner && dispatch.isCompleted)
+				);
+			},
+			onModalReplaced: userId => {
+				this.closeDisplayedModal(userId);
+				this.completedModalOwners.delete(userId);
+			},
+			onCollectorRegistered: collector => {
+				this.pendingCollectors.add(collector);
+				this.onInteractionChange({ kind: 'collector', phase: 'opened', collector });
+				return () => {
+					if (!this.pendingCollectors.delete(collector)) return;
+					this.onInteractionChange({ kind: 'collector', phase: 'closed', collector });
+				};
+			},
 			drainUntilQuiescent: (dispatchId, aborted) => this.drainUntilQuiescent(dispatchId, aborted),
 			onModalDisplayed: (userId, dispatchId) => this.captureDisplayedModal(userId, dispatchId),
 			onModalTimedOut: (userId, dispatchId) => {
-				if (this.modalOwners.get(userId) === dispatchId) this.modalOwners.delete(userId);
-				this.displayedModals.delete(userId);
+				if (this.modalOwners.get(userId) !== dispatchId) return;
+				this.modalOwners.delete(userId);
+				this.completedModalOwners.delete(userId);
+				this.closeDisplayedModal(userId);
 				this.sessions.discardModal(dispatchId, userId);
 			},
 			onCheckpoint: checkpoint => this.sessions.recordCheckpoint(checkpoint),
