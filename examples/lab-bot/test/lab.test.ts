@@ -1,3 +1,4 @@
+import type { Session } from '@slipher/lab';
 import { createSession, replay } from '@slipher/lab/runtime';
 import { describe, expect, test } from 'vitest';
 import { project } from '../lab/project.js';
@@ -9,7 +10,7 @@ const preset = (botCanManageRoles = true) => ({
 
 async function withSession(
 	botCanManageRoles: boolean,
-	run: (session: ReturnType<typeof createSession>) => Promise<void>,
+	run: (session: Session) => Promise<void>,
 ) {
 	const session = createSession(project, preset(botCanManageRoles));
 	await session.start();
@@ -20,7 +21,7 @@ async function withSession(
 	}
 }
 
-async function sendRequest(session: ReturnType<typeof createSession>, details: string) {
+async function sendRequest(session: Session, details: string) {
 	await session.act({ kind: 'user', actor: 'member', verb: 'slash', command: 'support' });
 	return session.act({
 		kind: 'user',
@@ -40,7 +41,7 @@ const claim = (actor: string) =>
 		source: { channel: 'channel.staff', customId: 'support:claim' },
 	}) as const;
 
-const texts = async (session: ReturnType<typeof createSession>, actor: string, channel: string) =>
+const texts = async (session: Session, actor: string, channel: string) =>
 	(await session.view(actor, channel)).messages.map(message => message.payload.content);
 
 describe('lab bot', () => {
