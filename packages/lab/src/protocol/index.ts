@@ -1,7 +1,7 @@
 export const PROTOCOL_VERSION = 1;
 export type { CommandSchema, PendingModal, VisibleConversation, VisibleMessage } from '@slipher/testing';
 
-import type { Checkpoint } from '../index';
+import type { Checkpoint, Expectation, ParamDefinition, SessionLog } from '../index';
 
 export type {
 	ActionOutcome,
@@ -56,24 +56,13 @@ export type BridgeResponse = {
 	error?: string;
 };
 export type BridgeEvent = { version: typeof PROTOCOL_VERSION; type: 'event'; event: JsonValue };
-export type BridgeView = { actor: string; channelId: string; conversation: JsonValue };
-export type BridgeInspector = { world: JsonValue; rest: JsonValue; pending: JsonValue; diagnostics: string[] };
-export type BridgeLog = { preset: JsonValue; entries: JsonValue[] };
 export interface ProjectDescription {
 	name: string;
 	scenarios: {
 		id: string;
 		version: number;
 		title: string;
-		params: Record<
-			string,
-			{
-				kind: 'boolean' | 'string' | 'number' | 'enum';
-				default: string | number | boolean;
-				label?: string;
-				values?: readonly (string | number | boolean)[];
-			}
-		>;
+		params: Record<string, ParamDefinition>;
 	}[];
 	services: Record<string, { default: string; variants: string[] }>;
 	inspectors: string[];
@@ -137,9 +126,10 @@ export function validateHostInfo(value: unknown): asserts value is HostInfo {
 	}
 }
 
+export const isCheckpointName = (value: unknown): value is string =>
+	string(value) && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(value);
 export function validateCheckpointName(value: unknown): asserts value is string {
-	if (!string(value) || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(value))
-		fail('checkpoint name: use 1-80 letters, numbers, _ or -');
+	if (!isCheckpointName(value)) fail('checkpoint name: use 1-80 letters, numbers, _ or -');
 }
 
 const jsonValue = (value: unknown): boolean =>
@@ -424,4 +414,30 @@ export function isBridgeMessage(value: unknown): value is BridgeMessage {
 	} catch {
 		return false;
 	}
+}
+
+export function createCheckpoint(
+	log: SessionLog,
+	name: string,
+	arrival: Expectation[] = [],
+	projectModule?: string,
+): Checkpoint {
+	const checkpoint: Checkpoint = {
+		version: 1,
+		labVersion: log.labVersion,
+		protocolVersion: log.protocolVersion,
+		name,
+		preset: log.preset,
+		actions: log.entries.map(entry => entry.action),
+		outcomes: log.entries.map((entry, action) => ({
+			action,
+			ok: entry.outcome.ok,
+			...(entry.outcome.error ? { error: `^${entry.outcome.error.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$` } : {}),
+			dispatchCount: entry.outcome.dispatchIds.length,
+		})),
+		arrival,
+		...(projectModule ? { projectModule } : {}),
+	};
+	validateCheckpoint(checkpoint);
+	return checkpoint;
 }

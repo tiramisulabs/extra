@@ -331,7 +331,7 @@ export function Message({
 	const payload = message.payload;
 	const author = payload.author?.global_name ?? payload.author?.username ?? 'Bot';
 	const ephemeral = isEphemeral(message);
-	const thinking = message.deferred || Boolean((payload.flags ?? 0) & 128);
+	const thinking = Boolean((payload.flags ?? 0) & 128);
 	const plainOnly = !payload.embeds?.length && !payload.components?.length;
 	return (
 		<article

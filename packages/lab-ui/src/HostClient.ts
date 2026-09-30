@@ -10,7 +10,12 @@ import type {
 	SessionDescription,
 	SessionLog,
 } from '@slipher/lab/protocol';
-import { PROTOCOL_VERSION, validateHostInfo, validateProjectDescription } from '@slipher/lab/protocol';
+import {
+	createCheckpoint,
+	PROTOCOL_VERSION,
+	validateHostInfo,
+	validateProjectDescription,
+} from '@slipher/lab/protocol';
 import type {
 	InspectorEntry,
 	JsonValue,
@@ -64,11 +69,6 @@ export function shortRevision(revision: string): string {
 	return revision.replace(/^((?:content-)?[0-9a-f]{7})[0-9a-f]+/i, '$1');
 }
 
-/** The pending modal instance; a later modal with the same custom ID is a different instance. */
-export function modalKey(modal: { interactionId?: string; userId: string; customId: string }): string {
-	return modal.interactionId ?? `${modal.userId}:${modal.customId}`;
-}
-
 const REPLAY_NOTICE = 'Session ended to replay a checkpoint.';
 const STREAM_LOST = 'Event stream lost; reconnecting…';
 const WATCH_MAX_MS = 10_000;
@@ -92,6 +92,10 @@ export class HostClient implements LabClient {
 	private localCloses = new Set<string>();
 	private dismissing = new Set<string>();
 	private refreshing?: Promise<void>;
+	/** Set when an event arrives during a load, so the load runs again with the newer state. */
+	private stale = false;
+	/** Bumped by `stop`, so a load that finishes afterwards cannot bring back the stopped session. */
+	private generation = 0;
 	private checking?: Promise<boolean>;
 	private watchTimer?: ReturnType<typeof setTimeout>;
 	private active = false;
@@ -117,7 +121,8 @@ export class HostClient implements LabClient {
 	}
 	private async json<T>(path: string, init?: RequestInit): Promise<T> {
 		const response = await this.request(`${this.base}${path}`, init);
-		const body: unknown = await response.json();
+		// Proxies can answer errors with HTML; keep the status instead of failing on the body.
+		const body: unknown = response.ok ? await response.json() : await response.json().catch(() => ({}));
 		if (!response.ok) {
 			const fields = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
 			const code = typeof fields.code === 'string' ? fields.code : undefined;
@@ -165,7 +170,7 @@ export class HostClient implements LabClient {
 			conversations: {},
 			commands: [],
 			pending: { modals: [], collectors: [] },
-			inspector: { actions: [], rest: [], world: [], diagnostics: [], project: [] },
+			inspector: { actions: [], rest: [], diagnostics: [] },
 			host: this.host,
 		};
 	}
@@ -342,6 +347,7 @@ export class HostClient implements LabClient {
 	private stop(notice: string, { clearError = false } = {}): void {
 		if (!this.project) return;
 		this.active = false;
+		this.generation++;
 		if (this.timer) clearTimeout(this.timer);
 		this.forgetClosedModals();
 		this.snapshot = { ...this.blank(this.project), notice, error: clearError ? undefined : this.snapshot?.error };
@@ -361,10 +367,16 @@ export class HostClient implements LabClient {
 	}
 	private async refresh(): Promise<void> {
 		if (this.refreshing) {
+			this.stale = true;
 			await this.refreshing;
 			return;
 		}
-		this.refreshing = this.load();
+		this.refreshing = (async () => {
+			do {
+				this.stale = false;
+				await this.load();
+			} while (this.stale && this.active);
+		})();
 		try {
 			await this.refreshing;
 		} finally {
@@ -373,6 +385,7 @@ export class HostClient implements LabClient {
 	}
 	private async load(): Promise<void> {
 		if (!this.project) throw new Error('Project description is unavailable');
+		const generation = this.generation;
 		const [description, inspect, log, commands] = await Promise.all([
 			this.rpc<SessionDescription>('session.describe'),
 			this.rpc<InspectorSnapshot>('session.inspect'),
@@ -395,27 +408,27 @@ export class HostClient implements LabClient {
 				}),
 			),
 		);
+		if (generation !== this.generation) return;
 		const pending = inspect.pending as {
 			modals?: LabSnapshot['pending']['modals'];
 			collectors?: { messageId: string; customIds?: string[]; kind: string }[];
 		};
 		const modals = pending.modals ?? [];
-		this.serverClosed = new Set(modals.filter(item => item.closed).map(modalKey));
+		this.serverClosed = new Set(modals.filter(item => item.closed).map(item => item.interactionId));
 		for (const key of this.localCloses)
-			if (this.serverClosed.has(key) || !modals.some(item => modalKey(item) === key)) this.localCloses.delete(key);
+			if (this.serverClosed.has(key) || !modals.some(item => item.interactionId === key)) this.localCloses.delete(key);
 		const rest = Array.isArray(inspect.rest) ? inspect.rest : [];
 		const projectionValues: Record<string, JsonValue> = {};
-		const projections = await Promise.all(
+		await Promise.all(
 			this.project.inspectors.map(async name => {
 				try {
-					const value = await this.rpc<JsonValue>('session.inspectProject', { name, args: null });
-					projectionValues[name] = value;
-					return entry(name, name, value);
+					projectionValues[name] = await this.rpc<JsonValue>('session.inspectProject', { name, args: null });
 				} catch (error) {
-					return entry(name, name, message(error), true);
+					projectionValues[name] = { error: message(error) };
 				}
 			}),
 		);
+		if (generation !== this.generation) return;
 		this.snapshot = {
 			connection: 'connected',
 			error: this.snapshot?.error,
@@ -460,9 +473,7 @@ export class HostClient implements LabClient {
 						Boolean(call.error),
 					);
 				}),
-				world: [entry('world', 'Discord state', inspect.world)],
 				diagnostics: inspect.diagnostics.map((text, index) => entry(`diagnostic-${index}`, text, '')),
-				project: projections,
 			},
 			closedModals: this.closedKeys(),
 			names: description.names,
@@ -501,7 +512,7 @@ export class HostClient implements LabClient {
 				body: JSON.stringify({
 					preset: {
 						scenario: { id: scenario.id, version: scenario.version },
-						params: input.params,
+						params: Object.fromEntries(Object.entries(input.params).filter(([, value]) => value !== null)),
 						services: input.services,
 					},
 				}),
@@ -538,22 +549,7 @@ export class HostClient implements LabClient {
 		}
 	}
 	async saveCheckpoint(name: string, arrival: Expectation[]): Promise<Checkpoint> {
-		const log = await this.rpc<SessionLog>('session.log');
-		const checkpoint: Checkpoint = {
-			version: 1,
-			labVersion: log.labVersion,
-			protocolVersion: log.protocolVersion,
-			name,
-			preset: log.preset,
-			actions: log.entries.map(item => item.action),
-			outcomes: log.entries.map((item, action) => ({
-				action,
-				ok: item.outcome.ok,
-				dispatchCount: item.outcome.dispatchIds.length,
-				...(item.outcome.error ? { error: `^${item.outcome.error.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$` } : {}),
-			})),
-			arrival,
-		};
+		const checkpoint = createCheckpoint(await this.rpc<SessionLog>('session.log'), name, arrival);
 		await this.json('/api/checkpoints', {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
@@ -614,14 +610,14 @@ export class HostClient implements LabClient {
 				item.customId === customId && this.snapshot?.actors.find(value => value.key === actor)?.userId === item.userId,
 		);
 		if (!modal || !this.snapshot) return;
-		const key = modalKey(modal);
+		const key = modal.interactionId;
 		this.localCloses.add(key);
 		this.snapshot = { ...this.snapshot, closedModals: this.closedKeys() };
 		this.emit();
 		this.sendLocal({ kind: 'local', op: 'closeModal', actor, customId }, () => this.localCloses.delete(key));
 	}
 	reopenModal(key: string): void {
-		const modal = this.snapshot?.pending.modals.find(item => modalKey(item) === key);
+		const modal = this.snapshot?.pending.modals.find(item => item.interactionId === key);
 		const actor = this.snapshot?.actors.find(item => item.userId === modal?.userId)?.key;
 		if (!modal || !actor || !this.snapshot) return;
 		const wasClosed = this.serverClosed.has(key);

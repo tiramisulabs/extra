@@ -62,9 +62,9 @@ import {
 	type UserCommandInteractionOptions,
 	userCommandInteraction,
 } from './interactions';
-import type { PendingModal } from './lab-contracts';
 import { isEphemeral } from './message-flags';
 import { MockBotDispatchCore } from './mock-bot-dispatch';
+import type { PendingModal } from './observation';
 import { CommandOptionType, prepareAutocompleteOptions, prepareChatInputOptions } from './option-validation';
 import {
 	type ApiChannel,

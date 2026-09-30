@@ -24,11 +24,11 @@ importers:
         specifier: ^4.1.9
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(vite@8.1.3(@types/node@26.1.1)(esbuild@0.28.2)(tsx@4.23.12))
 
-  examples/lab-reference-bot:
+  examples/lab-bot:
     dependencies:
       '@slipher/lab':
         specifier: workspace:*
-        version: link:../../packages/lab
+        version: file:packages/lab(@slipher/lab-ui@packages+lab-ui)(@slipher/testing@file:packages/testing(seyfert@5.1.0))(seyfert@5.1.0)
       '@slipher/testing':
         specifier: workspace:*
         version: file:packages/testing(seyfert@5.1.0)
@@ -41,6 +41,12 @@ importers:
       '@slipher/testing':
         injected: true
     devDependencies:
+      '@biomejs/biome':
+        specifier: 2.5.1
+        version: 2.5.1
+      '@slipher/lab-ui':
+        specifier: workspace:*
+        version: link:../../packages/lab-ui
       '@types/node':
         specifier: ^26.0.1
         version: 26.1.1
@@ -1274,6 +1280,17 @@ packages:
 
   '@rolldown/pluginutils@1.0.1':
     resolution: {integrity: sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw==}
+
+  '@slipher/lab@file:packages/lab':
+    resolution: {directory: packages/lab, type: directory}
+    hasBin: true
+    peerDependencies:
+      '@slipher/lab-ui': workspace:*
+      '@slipher/testing': workspace:*
+      seyfert: '>=5.0.0'
+    peerDependenciesMeta:
+      '@slipher/lab-ui':
+        optional: true
 
   '@slipher/testing@file:packages/testing':
     resolution: {directory: packages/testing, type: directory}
@@ -3044,6 +3061,13 @@ snapshots:
     optional: true
 
   '@rolldown/pluginutils@1.0.1': {}
+
+  '@slipher/lab@file:packages/lab(@slipher/lab-ui@packages+lab-ui)(@slipher/testing@file:packages/testing(seyfert@5.1.0))(seyfert@5.1.0)':
+    dependencies:
+      '@slipher/testing': file:packages/testing(seyfert@5.1.0)
+      seyfert: 5.1.0
+    optionalDependencies:
+      '@slipher/lab-ui': link:packages/lab-ui
 
   '@slipher/testing@file:packages/testing(seyfert@5.1.0)':
     dependencies:

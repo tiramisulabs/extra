@@ -598,7 +598,7 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 	private consumeCausalModalOwner(payload: ApiInteractionPayload, userId: string | undefined): number | undefined {
 		if (payload.type !== InteractionType.ModalSubmit || userId === undefined) return undefined;
 		const owner = this.displayedModals.get(userId)?.dispatchId ?? this.modalOwners.get(userId);
-		this.consumeDisplayedModal(userId);
+		this.closeDisplayedModal(userId);
 		return owner;
 	}
 

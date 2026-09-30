@@ -1,6 +1,6 @@
 import { emojiPayload } from './emoji';
-import type { PendingModal } from './lab-contracts';
 import { isEphemeral } from './message-flags';
+import type { PendingModal } from './observation';
 import { type ApiMessage, type ApiVoiceState, apiMessage, type RawMessage } from './payloads';
 import { WorldStateQueryCore } from './state-query';
 import type {

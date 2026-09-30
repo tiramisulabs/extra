@@ -14,6 +14,9 @@ import { registerWorldDefaults } from './defaults';
 import type { Dispatch } from './dispatch';
 import { dispatchStore } from './dispatch-context';
 import { MockGateway } from './gateway';
+import { isEphemeral } from './message-flags';
+import { messageAccess } from './message-visibility';
+import { MockBot as MockBotCore } from './mock-bot';
 import type {
 	CommandSchema,
 	MockBotEvent,
@@ -22,10 +25,7 @@ import type {
 	PendingModal,
 	VisibleConversation,
 	VisibleMessage,
-} from './lab-contracts';
-import { isEphemeral } from './message-flags';
-import { messageAccess } from './message-visibility';
-import { MockBot as MockBotCore } from './mock-bot';
+} from './observation';
 import { memberUpdateEvent } from './payload-events';
 import { type ApiRole } from './payloads';
 import { MockApiHandler } from './rest';
@@ -42,7 +42,6 @@ import { cloneWorld, defaultBotUser, seedCachedRole, seedWorld } from './world';
 
 export * from './contracts';
 export { Dispatch, type DispatchOptions } from './dispatch';
-export * from './lab-contracts';
 export { WORLD_EVENT_NAMES } from './world-events';
 
 /** Public facade kept in this module so the declaration entrypoint remains stable across internal collaborators. */
@@ -97,15 +96,14 @@ export class MockBot extends MockBotCore {
 	protected override track<T>(dispatch: Dispatch<T>): Dispatch<T> {
 		dispatch.observe((phase, error) => {
 			if (dispatch.dispatchId === undefined) return;
+			const sessionKey = this.sessions.keyForDispatch(dispatch.dispatchId);
 			this.publish({
 				type: 'dispatch',
 				phase,
 				dispatchId: dispatch.dispatchId,
 				kind: dispatch.kind,
 				...(error === undefined ? {} : { error }),
-				...(this.sessions.keyForDispatch(dispatch.dispatchId) === undefined
-					? {}
-					: { sessionKey: this.sessions.keyForDispatch(dispatch.dispatchId) }),
+				...(sessionKey === undefined ? {} : { sessionKey }),
 			});
 		});
 		return super.track(dispatch);
@@ -180,13 +178,6 @@ export class MockBot extends MockBotCore {
 				),
 			diagnostics,
 		};
-	}
-
-	/** Start or restart one actor's live connection at the current message sequence. */
-	connect(userId: string): number {
-		const sequence = this._world?.messageSequence ?? 0;
-		if (this._world) (this._world.connections ??= {})[userId] = sequence;
-		return sequence;
 	}
 
 	pendingInteractions(): { modals: PendingModal[]; collectors: PendingCollector[] } {

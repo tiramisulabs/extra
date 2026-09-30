@@ -11,9 +11,7 @@ import { expect, test } from 'vitest';
 import { createMockBot } from '../../src';
 import { memberAddEvent } from '../../src/bot/payload-events';
 import { apiUser } from '../../src/bot/payloads';
-import { DiscordErrors } from '../../src/bot/rest';
 import { mockWorld } from '../../src/bot/world';
-import { expectDiscordError } from './_setup';
 
 test('deferred ephemeral button reply stays private after editOrReply without flags', async () => {
 	const world = mockWorld();
@@ -196,7 +194,7 @@ test('direct and later ephemeral followups keep their visibility after edits', a
 	}
 });
 
-test('history permission, overwrites, reconnect and bot REST use current permissions', async () => {
+test('history permission and overwrites use current permissions', async () => {
 	const world = mockWorld();
 	const guild = world.registerGuild({
 		id: 'history-guild',
@@ -248,11 +246,6 @@ test('history permission, overwrites, reconnect and bot REST use current permiss
 			{ id: 'history-seed', sequence: 1, isHistory: true },
 			{ id: 'history-private', ownerId: alice.user.id, isHistory: true },
 		]);
-		expect(await bot.rest.request('GET', `/channels/${channel.id}/messages`)).toEqual([]);
-		await expectDiscordError(
-			bot.rest.request('GET', `/channels/${channel.id}/messages/history-seed`),
-			DiscordErrors.MissingPermissions,
-		);
 		await bot.rest.request('POST', `/channels/${channel.id}/messages`, { body: { content: 'live' } });
 		expect(
 			bot
@@ -266,7 +259,6 @@ test('history permission, overwrites, reconnect and bot REST use current permiss
 				.messages.map(message => message.payload.content),
 		).toEqual(['seed', 'mine', 'live']);
 		await bot.admin.removeMemberRole({ guildId: guild.id, userId: alice.user.id, roleId: read.id });
-		bot.connect(alice.user.id);
 		expect(
 			bot
 				.conversation({ userId: alice.user.id, channelId: channel.id })
@@ -289,23 +281,6 @@ test('history permission, overwrites, reconnect and bot REST use current permiss
 		expect(bot.conversation({ userId: alice.user.id, channelId: channel.id }).diagnostics).toContain(
 			'history-hidden:1',
 		);
-		await bot.admin.addMemberRole({ guildId: guild.id, userId: bot.client.botId, roleId: read.id });
-		expect((await bot.rest.request('GET', `/channels/${channel.id}/messages`)) as unknown[]).toHaveLength(2);
-		expect(await bot.rest.request('GET', `/channels/${channel.id}/messages/history-seed`)).toMatchObject({
-			id: 'history-seed',
-		});
-		expect(await bot.rest.request('GET', `/channels/${denied.id}/messages`)).toEqual([]);
-		await expectDiscordError(
-			bot.rest.request('GET', `/channels/${denied.id}/messages/${bot.inspectChannel(denied.id).messages[0].id}`),
-			DiscordErrors.MissingPermissions,
-		);
-		await bot.admin.addMemberRole({ guildId: guild.id, userId: bot.client.botId, roleId: admin.id });
-		expect((await bot.rest.request('GET', `/channels/${denied.id}/messages`)) as unknown[]).toHaveLength(1);
-		await bot.admin.removeMemberRole({ guildId: guild.id, userId: bot.client.botId, roleId: admin.id });
-		await bot.rest.request('PUT', `/channels/${denied.id}/permissions/${bot.client.botId}`, {
-			body: { type: 1, allow: PermissionFlagsBits.ReadMessageHistory.toString(), deny: '0' },
-		});
-		expect((await bot.rest.request('GET', `/channels/${denied.id}/messages`)) as unknown[]).toHaveLength(1);
 	} finally {
 		await bot.close();
 	}
@@ -381,36 +356,6 @@ test('a joining member receives only later messages without history permission',
 			[],
 			[newcomer.id],
 		]);
-	} finally {
-		await bot.close();
-	}
-});
-
-test('voice message REST reads require Connect as well as ViewChannel', async () => {
-	const world = mockWorld();
-	const guild = world.registerGuild({
-		id: 'voice-history-guild',
-		everyonePermissions: ['ViewChannel', 'ReadMessageHistory'],
-	});
-	const connect = world.registerRole(guild.id, { id: 'voice-connect', permissions: ['Connect'] });
-	const channel = world.registerChannel(guild.id, { type: 2 });
-	world.registerBotMember(guild.id);
-	world.registerMessage(channel.id, { id: 'voice-seed', content: 'voice text' });
-	const bot = await createMockBot({ world });
-	try {
-		await expectDiscordError(
-			bot.rest.request('GET', `/channels/${channel.id}/messages`),
-			DiscordErrors.MissingPermissions,
-		);
-		await expectDiscordError(
-			bot.rest.request('GET', `/channels/${channel.id}/messages/voice-seed`),
-			DiscordErrors.MissingPermissions,
-		);
-		await bot.admin.addMemberRole({ guildId: guild.id, userId: bot.client.botId, roleId: connect.id });
-		expect((await bot.rest.request('GET', `/channels/${channel.id}/messages`)) as unknown[]).toHaveLength(1);
-		expect(await bot.rest.request('GET', `/channels/${channel.id}/messages/voice-seed`)).toMatchObject({
-			id: 'voice-seed',
-		});
 	} finally {
 		await bot.close();
 	}

@@ -4,13 +4,16 @@ import { lstat, mkdir, open, readdir, realpath, rename, rm, stat, unlink, writeF
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { type AddressInfo } from 'node:net';
 import { dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { invokeSession } from '../bridge';
 import { createChildSession, describeChildProject } from '../child';
 import type { Checkpoint, JsonValue, Preset, Session, SessionEvent } from '../index';
 import {
-	type BridgeRequest,
 	type BridgeResponse,
+	type BuildInfo,
 	type HostInfo,
+	isCheckpointName,
 	PROTOCOL_VERSION,
+	type RunEndReason,
 	validateBridgeRequest,
 	validateCheckpoint,
 	validateCheckpointName,
@@ -36,12 +39,7 @@ export interface HostOptions {
 	childEnv?: string[];
 	exportModule?: string;
 }
-export interface BuildInfo {
-	revision: string;
-	ref?: string;
-	url?: string;
-	builtAt?: string;
-}
+export type { BuildInfo };
 export type HostAccess =
 	| { mode: 'trusted-proxy' }
 	| { mode: 'authorize'; authorize(req: IncomingMessage): boolean | Promise<boolean> };
@@ -79,7 +77,6 @@ class HttpError extends Error {
 		super(message);
 	}
 }
-type RunEndReason = 'expired' | 'max-lifetime' | 'stopped' | 'shutdown';
 interface Run {
 	id: string;
 	state: 'active' | 'ending' | 'ended';
@@ -177,30 +174,6 @@ function errorText(error: unknown): string {
 }
 function bridgeResponse(id: number, ok: boolean, value?: JsonValue, error?: string): BridgeResponse {
 	return { version: PROTOCOL_VERSION, id, type: 'result', ok, ...(ok ? { value: value ?? null } : { error }) };
-}
-async function invoke(session: Session, request: BridgeRequest): Promise<JsonValue> {
-	switch (request.type) {
-		case 'session.act':
-			return (await session.act(request.payload as unknown as Parameters<Session['act']>[0])) as unknown as JsonValue;
-		case 'session.view': {
-			const { actor, channelRef } = request.payload as { actor: string; channelRef: string };
-			return (await session.view(actor, channelRef)) as unknown as JsonValue;
-		}
-		case 'session.inspect':
-			return (await session.inspect()) as unknown as JsonValue;
-		case 'session.describe':
-			return (await session.describe()) as unknown as JsonValue;
-		case 'session.commandSchemas':
-			return (await session.commandSchemas()) as unknown as JsonValue;
-		case 'session.inspectProject': {
-			const { name, args } = request.payload as { name: string; args?: JsonValue };
-			return await session.inspectProject(name, args);
-		}
-		case 'session.log':
-			return (await session.log()) as unknown as JsonValue;
-		default:
-			throw new HttpError(400, `Use /api/session for ${request.type}`);
-	}
 }
 
 export async function startHost(options: HostOptions): Promise<LabHost> {
@@ -337,6 +310,16 @@ export async function startHost(options: HostOptions): Promise<LabHost> {
 		}
 		return file;
 	};
+	const checkedCheckpoint = async (value: unknown): Promise<Checkpoint> => {
+		try {
+			validateCheckpoint(value, cachedDescription ?? (await describeChildProject(childOptions)));
+			if (value.labVersion !== LAB_VERSION)
+				throw new Error(`Checkpoint lab version ${value.labVersion} is not supported (current ${LAB_VERSION})`);
+			return value;
+		} catch (error) {
+			throw new HttpError(400, errorText(error));
+		}
+	};
 	const loadCheckpoint = async (run: Run, name: string): Promise<Checkpoint> => {
 		let value: unknown;
 		try {
@@ -355,14 +338,7 @@ export async function startHost(options: HostOptions): Promise<LabHost> {
 			if (error instanceof SyntaxError) throw new HttpError(400, `Checkpoint "${name}" contains invalid JSON`);
 			throw error;
 		}
-		try {
-			validateCheckpoint(value, cachedDescription ?? (await describeChildProject(childOptions)));
-			if (value.labVersion !== LAB_VERSION)
-				throw new Error(`Checkpoint lab version ${value.labVersion} is not supported (current ${LAB_VERSION})`);
-		} catch (error) {
-			throw new HttpError(400, errorText(error));
-		}
-		return value;
+		return checkedCheckpoint(value);
 	};
 	const checkRevision = (checkpoint: Checkpoint, accept: boolean): void => {
 		if (options.build && checkpoint.build && checkpoint.build.revision !== options.build.revision && !accept)
@@ -577,7 +553,7 @@ export async function startHost(options: HostOptions): Promise<LabHost> {
 					names = (await readdir(run.checkpointsDir))
 						.filter(name => name.endsWith('.json'))
 						.map(name => name.slice(0, -5))
-						.filter(name => /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(name))
+						.filter(isCheckpointName)
 						.sort();
 				} catch (error) {
 					if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') names = [];
@@ -591,19 +567,11 @@ export async function startHost(options: HostOptions): Promise<LabHost> {
 				const input = await body(req);
 				if (!input || typeof input !== 'object' || !('checkpoint' in input))
 					throw new HttpError(400, 'Expected { checkpoint }');
-				const checkpoint: Record<string, unknown> = { ...(input.checkpoint as object) };
-				if (hosted) delete (checkpoint as { projectModule?: string }).projectModule;
-				else checkpoint.projectModule = options.projectModule;
-				if (options.build && checkpoint.build === undefined) checkpoint.build = { revision: options.build.revision };
-				try {
-					validateCheckpoint(checkpoint, cachedDescription ?? (await describeChildProject(childOptions)));
-					if (checkpoint.labVersion !== LAB_VERSION)
-						throw new Error(
-							`Checkpoint lab version ${checkpoint.labVersion} is not supported (current ${LAB_VERSION})`,
-						);
-				} catch (error) {
-					throw new HttpError(400, errorText(error));
-				}
+				const draft: Record<string, unknown> = { ...(input.checkpoint as object) };
+				if (hosted) delete draft.projectModule;
+				else draft.projectModule = options.projectModule;
+				if (options.build && draft.build === undefined) draft.build = { revision: options.build.revision };
+				const checkpoint = await checkedCheckpoint(draft);
 				checkRevision(checkpoint, (input as { acceptRevision?: unknown }).acceptRevision === true);
 				await queued(run, async () => {
 					await mkdir(run.checkpointsDir, { recursive: true });
@@ -707,6 +675,8 @@ export async function startHost(options: HostOptions): Promise<LabHost> {
 						if (event.type === 'error') publish(run, 'session-error', event as unknown as JsonValue);
 						if (event.type === 'error' && event.origin === 'child') {
 							if (run.session === next) run.session = undefined;
+							// The process may still be alive after a protocol or IPC error.
+							void next.dispose().catch(() => {});
 							publish(run, 'child-exit', event as unknown as JsonValue);
 						}
 					});
@@ -751,7 +721,7 @@ export async function startHost(options: HostOptions): Promise<LabHost> {
 				const result = await queued(run, async () => {
 					if (!run.session) throw new HttpError(409, 'Session is not started');
 					try {
-						return bridgeResponse(request.id, true, await invoke(run.session, request));
+						return bridgeResponse(request.id, true, await invokeSession(run.session, request));
 					} catch (error) {
 						return bridgeResponse(request.id, false, undefined, errorText(error));
 					}
@@ -773,7 +743,7 @@ export async function startHost(options: HostOptions): Promise<LabHost> {
 				error: errorText(error),
 				...(error instanceof HttpError ? error.detail : {}),
 			});
-			if (!(error instanceof HttpError)) publish(run ?? localRun, 'session-error', { error: errorText(error) });
+			if (!(error instanceof HttpError)) publish(run ?? localRun, 'session-error', { detail: errorText(error) });
 		});
 	});
 	try {

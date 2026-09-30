@@ -39,8 +39,8 @@ import {
 	type ModalFields,
 	type SelectMenuInteractionOptions,
 } from './interactions';
-import type { PendingCollector, PendingInteractionChange, PendingModal } from './lab-contracts';
 import { isEphemeral } from './message-flags';
+import type { PendingCollector, PendingInteractionChange, PendingModal } from './observation';
 import { type ApiMember, type ApiMessage, type ApiUser, apiMessage, apiUser, memberOptionsFrom } from './payloads';
 import { computeChannelPermissions } from './permissions';
 import { MockApiHandler, type RecordedAction, type RestCall, type RouteMatcher, type RouteParams } from './rest';
@@ -628,10 +628,6 @@ export abstract class MockBotSurface {
 		const modal = this.displayedModals.get(userId)?.pending;
 		this.displayedModals.delete(userId);
 		if (modal) this.onInteractionChange({ kind: 'modal', phase: 'closed', modal });
-	}
-
-	protected consumeDisplayedModal(userId: string): void {
-		this.closeDisplayedModal(userId);
 	}
 
 	/** Whether this session opened `customId` for `userId` and is still parked on it, or rendered it this step. */

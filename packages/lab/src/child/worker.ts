@@ -1,4 +1,5 @@
 import { pathToFileURL } from 'node:url';
+import { invokeSession } from '../bridge';
 import type { JsonValue, Project, Session } from '../index';
 import {
 	type BridgeRequest,
@@ -30,7 +31,6 @@ async function loadProject(): Promise<Project> {
 }
 async function handle(request: BridgeRequest): Promise<JsonValue> {
 	if (request.type === 'project.describe') {
-		if (session) throw new Error('Cannot describe an active session');
 		const project = await loadProject();
 		const description: ProjectDescription = {
 			name: project.name,
@@ -60,32 +60,10 @@ async function handle(request: BridgeRequest): Promise<JsonValue> {
 		return null;
 	}
 	if (!session) throw new Error('Session is not started');
-	switch (request.type) {
-		case 'session.dispose':
-			await session.dispose();
-			session = undefined;
-			return null;
-		case 'session.commandSchemas':
-			return (await session.commandSchemas()) as unknown as JsonValue;
-		case 'session.log':
-			return (await session.log()) as unknown as JsonValue;
-		case 'session.inspect':
-			return (await session.inspect()) as unknown as JsonValue;
-		case 'session.describe':
-			return (await session.describe()) as unknown as JsonValue;
-		case 'session.act':
-			return (await session.act(request.payload as unknown as import('../index').LabAction)) as unknown as JsonValue;
-		case 'session.view': {
-			const { actor, channelRef } = request.payload as { actor: string; channelRef: string };
-			return (await session.view(actor, channelRef)) as unknown as JsonValue;
-		}
-		case 'session.inspectProject': {
-			const { name, args } = request.payload as { name: string; args: JsonValue };
-			return await session.inspectProject(name, args);
-		}
-		default:
-			throw new Error('Unknown child request');
-	}
+	if (request.type !== 'session.dispose') return invokeSession(session, request);
+	await session.dispose();
+	session = undefined;
+	return null;
 }
 process.on('message', message => {
 	queue = queue.then(async () => {

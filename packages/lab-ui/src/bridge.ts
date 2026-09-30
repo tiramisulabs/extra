@@ -7,6 +7,7 @@ import type {
 	JsonValue,
 	LabAction,
 	ProjectDescription,
+	PendingModal as ProtocolPendingModal,
 	VisibleMessage as ProtocolVisibleMessage,
 	SessionDescription,
 	SessionLog,
@@ -69,31 +70,16 @@ export interface MessagePayload {
 	author?: { id?: string; username?: string; global_name?: string | null; avatar?: string | null; bot?: boolean };
 	timestamp?: string;
 }
-export type VisibleMessage = Omit<ProtocolVisibleMessage, 'payload'> & { payload: MessagePayload; deferred?: boolean };
+export type VisibleMessage = Omit<ProtocolVisibleMessage, 'payload'> & { payload: MessagePayload };
 export interface ModalPayload {
 	custom_id: string;
 	title: string;
 	components: ComponentPayload[];
 }
-export interface PendingModalSource {
-	channelId?: string;
-	messageId?: string;
-	customId?: string;
-	values?: string[];
-	commandName?: string;
-	group?: string;
-	subcommand?: string;
-	options?: JsonValue;
-}
-export interface PendingModal {
-	userId: string;
-	interactionId?: string;
-	customId: string;
+export interface PendingModal extends Omit<ProtocolPendingModal, 'payload' | 'sessionKey'> {
 	payload: ModalPayload;
 	/** Closed by its user; the bot is still waiting and the original trigger reopens it. */
 	closed?: boolean;
-	/** What opened it; only this exact trigger reopens it. */
-	source?: PendingModalSource;
 }
 export type CommandOption = NonNullable<CommandSchema['options']>[number];
 export interface InspectorEntry {
@@ -120,9 +106,7 @@ export interface LabSnapshot {
 	inspector: {
 		actions: InspectorEntry[];
 		rest: InspectorEntry[];
-		world: InspectorEntry[];
 		diagnostics: InspectorEntry[];
-		project: InspectorEntry[];
 	};
 	log?: SessionLog;
 	rawInspect?: InspectorSnapshot;

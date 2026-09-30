@@ -9,7 +9,7 @@ import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { type HostedOptions, type LabHost, startHost } from '@slipher/lab/host';
 import type { LabSnapshot } from '../src/bridge';
-import { HostClient, modalKey, shortRevision } from '../src/HostClient';
+import { HostClient, shortRevision } from '../src/HostClient';
 
 test('HostClient drives a child session through HTTP and exposes action failures', async () => {
 	const host = await startHost({ projectModule: resolve(process.cwd(), '../lab/test/fixtures/project.cjs') });
@@ -50,7 +50,7 @@ test('HostClient drives a child session through HTTP and exposes action failures
 		assert.ok(modal);
 		client.closeModal('alice', modal.customId);
 		assert.ok(snapshots.at(-1)?.pending.modals.some(item => item.customId === modal.customId));
-		assert.ok(snapshots.at(-1)?.closedModals?.includes(modal.interactionId ?? `${modal.userId}:${modal.customId}`));
+		assert.ok(snapshots.at(-1)?.closedModals?.includes(modal.interactionId));
 		await new Promise<void>((done, reject) => {
 			const timeout = setTimeout(() => reject(new Error('local action was not logged')), 1000);
 			const stop = client.subscribe(snapshot => {
@@ -544,13 +544,13 @@ test('a closed modal keeps its flow: its trigger reopens it, the submit complete
 			const closed = await waitFor(client, snapshot =>
 				snapshot.pending.modals.some(item => item.customId === 'answer' && item.closed),
 			);
-			assert.ok(closed.closedModals?.includes(modalKey(opened)));
+			assert.ok(closed.closedModals?.includes(opened.interactionId));
 			await click();
 			const reopened = await client.connect();
 			const modal = reopened.pending.modals.find(item => item.customId === 'answer');
 			assert.equal(modal?.interactionId, opened.interactionId, 'the same modal instance, not a new interaction');
 			assert.equal(modal?.closed, false);
-			assert.equal(reopened.closedModals?.includes(modalKey(opened)), false);
+			assert.equal(reopened.closedModals?.includes(opened.interactionId), false);
 			assert.deepEqual(reopened.log?.entries.at(-1)?.outcome.dispatchIds, []);
 		}
 		await client.act({
@@ -629,9 +629,9 @@ test('a close the host refuses (the modal timed out meanwhile) undoes the optimi
 		// The bot stops waiting after 30 ms; this tab has not refreshed yet.
 		await new Promise(done => setTimeout(done, 150));
 		client.closeModal('alice', 'short-answer');
-		assert.ok((await client.connect()).closedModals?.includes(modalKey(stale)), 'hidden at once');
+		assert.ok((await client.connect()).closedModals?.includes(stale.interactionId), 'hidden at once');
 		const settled = await waitFor(client, snapshot => Boolean(snapshot.error));
-		assert.equal(settled.closedModals?.includes(modalKey(stale)), false);
+		assert.equal(settled.closedModals?.includes(stale.interactionId), false);
 		const refreshed = await waitFor(client, snapshot => snapshot.pending.modals.length === 0);
 		assert.equal(refreshed.closedModals?.length ?? 0, 0);
 	} finally {

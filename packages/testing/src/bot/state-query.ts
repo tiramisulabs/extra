@@ -1,7 +1,7 @@
 import { TEST_BOT_ID } from './constants';
 import { decodeEmoji } from './emoji';
-import type { PendingModal } from './lab-contracts';
 import { isEphemeral } from './message-flags';
+import type { PendingModal } from './observation';
 import {
 	type ApiAuditLogEntry,
 	type ApiAutoModRule,

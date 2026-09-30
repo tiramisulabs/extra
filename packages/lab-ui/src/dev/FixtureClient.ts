@@ -26,11 +26,11 @@ const initial: LabSnapshot = {
 				},
 			},
 		],
-		services: { respuestas: { default: 'normal', variants: ['normal', 'failure', 'pending'] } },
+		services: { replies: { default: 'normal', variants: ['normal', 'failure', 'pending'] } },
 		inspectors: [],
 	},
 	session: {
-		preset: { scenario: { id: 'welcome', version: 1 }, params: {}, services: { respuestas: 'normal' } },
+		preset: { scenario: { id: 'welcome', version: 1 }, params: {}, services: { replies: 'normal' } },
 		refs: { guild: 'guild', general: 'general', staff: 'staff', alice: '101', bob: '102' },
 		actors: [],
 		guilds: [
@@ -112,7 +112,7 @@ const initial: LabSnapshot = {
 					},
 				}),
 				message('m2', 'Your request is under review.', { visibility: 'ephemeral', ownerId: '101' }),
-				message('m3', '', { deferred: true }),
+				message('m3', '', { payload: { id: 'm3', author: bot, content: '', flags: 128 } }),
 				message('m4', '', {
 					payload: {
 						id: 'm4',
@@ -219,14 +219,12 @@ const initial: LabSnapshot = {
 		rest: [
 			{
 				id: 'rest-1',
-				label: '403 · PUT /guilds/guild/members/101/roles/reviewer',
+				label: '403 · PUT /guilds/guild/members/101/roles/moderator',
 				detail: 'Missing Permissions',
 				failed: true,
 			},
 		],
-		world: [{ id: 'world-1', label: 'Alice · roles', detail: 'Member' }],
 		diagnostics: [{ id: 'diag-1', label: 'no-view-channel', detail: 'alice → staff' }],
-		project: [{ id: 'project-1', label: 'fixture', detail: 'Synthetic data' }],
 	},
 	names: {
 		users: { '101': 'Alice', '102': 'Bob' },
@@ -285,11 +283,7 @@ export class FixtureClient implements LabClient {
 	closeModal(actor: string, customId: string) {
 		const userId = this.snapshot.actors.find(item => item.key === actor)?.userId;
 		const modal = this.snapshot.pending.modals.find(item => item.customId === customId && item.userId === userId);
-		if (modal)
-			this.snapshot.closedModals = [
-				...(this.snapshot.closedModals ?? []),
-				modal.interactionId ?? `${modal.userId}:${modal.customId}`,
-			];
+		if (modal) this.snapshot.closedModals = [...(this.snapshot.closedModals ?? []), modal.interactionId];
 		this.snapshot.inspector.actions.unshift({ id: crypto.randomUUID(), label: 'LOCAL · closeModal', detail: customId });
 		this.emit();
 	}

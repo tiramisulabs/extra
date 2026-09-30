@@ -1,7 +1,7 @@
 import { ActionRow, Button, ButtonStyle, MessageFlags, ModalCommand, type ModalContext } from 'seyfert';
 
-export default class SubmitForm extends ModalCommand {
-	customId = /^support:submit:(question|bug)$/;
+export default class SupportForm extends ModalCommand {
+	customId = 'support:form';
 
 	override async run(ctx: ModalContext) {
 		const guildId = ctx.guildId;
@@ -16,16 +16,14 @@ export default class SubmitForm extends ModalCommand {
 		const requesterRole = (await ctx.client.roles.list(guildId)).find(role => role.name === 'Requester');
 		if (!staffChannel || !requesterRole) {
 			await ctx.write({
-				content: 'Support is not configured: the #staff channel and Requester role are required.',
+				content: 'Support needs a #staff channel and a Requester role.',
 				flags: MessageFlags.Ephemeral,
 			});
 			return;
 		}
 
-		const topic = ctx.customId.split(':')[2];
-		const details = ctx.getInputValue('details', true);
 		await ctx.client.messages.write(staffChannel.id, {
-			content: `Support request from ${ctx.author.username} (${ctx.author.id}) · ${topic}\n${details}`,
+			content: `Request from ${ctx.author.username}: ${ctx.getInputValue('details', true)}`,
 			allowed_mentions: { parse: [] },
 			components: [
 				new ActionRow<Button>().setComponents([
@@ -39,8 +37,7 @@ export default class SubmitForm extends ModalCommand {
 			await ctx.write({ content: 'Request sent to staff.', flags: MessageFlags.Ephemeral });
 		} catch {
 			await ctx.write({
-				content:
-					'Request sent to staff, but I could not assign the Requester role. Check my Manage Roles permission and role position.',
+				content: 'Request sent to staff, but I could not assign the Requester role.',
 				flags: MessageFlags.Ephemeral,
 			});
 		}

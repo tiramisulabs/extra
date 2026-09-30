@@ -1,31 +1,7 @@
-import type { Checkpoint, Expectation, SessionLog } from '../index';
+import type { Checkpoint } from '../index';
 import { validateCheckpoint } from '../protocol';
 
-export function createCheckpoint(
-	log: SessionLog,
-	name: string,
-	arrival: Expectation[] = [],
-	projectModule?: string,
-): Checkpoint {
-	const checkpoint: Checkpoint = {
-		version: 1,
-		labVersion: log.labVersion,
-		protocolVersion: log.protocolVersion,
-		name,
-		preset: log.preset,
-		actions: log.entries.map(entry => entry.action),
-		outcomes: log.entries.map((entry, action) => ({
-			action,
-			ok: entry.outcome.ok,
-			...(entry.outcome.error ? { error: `^${entry.outcome.error.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$` } : {}),
-			dispatchCount: entry.outcome.dispatchIds.length,
-		})),
-		arrival,
-		...(projectModule ? { projectModule } : {}),
-	};
-	validateCheckpoint(checkpoint);
-	return checkpoint;
-}
+export { createCheckpoint } from '../protocol';
 
 export function exportTest(
 	checkpoint: Checkpoint,

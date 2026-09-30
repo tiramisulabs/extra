@@ -111,7 +111,7 @@ export type {
 	PendingModal,
 	VisibleConversation,
 	VisibleMessage,
-} from './lab-contracts';
+} from './observation';
 export {
 	type ApiAttachment,
 	type ApiAttachmentOptions,

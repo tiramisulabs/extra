@@ -51,9 +51,8 @@ export interface PendingModal {
 export interface PendingCollector {
 	messageId: string;
 	channelId?: string;
-	userId?: string;
 	customIds?: string[];
-	kind: string;
+	kind: 'run' | 'waitFor';
 }
 
 export type PendingInteractionChange =

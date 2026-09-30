@@ -71,7 +71,11 @@ function ParameterField({
 					id={id}
 					type={definition.kind === 'number' ? 'number' : 'text'}
 					value={String(value ?? '')}
-					onChange={event => onChange(definition.kind === 'number' ? Number(event.target.value) : event.target.value)}
+					onChange={event => {
+						const raw = event.target.value;
+						// An empty number field falls back to the default when the session starts.
+						onChange(definition.kind === 'number' ? (raw === '' ? null : Number(raw)) : raw);
+					}}
 				/>
 			)}
 		</label>
@@ -127,7 +131,7 @@ export function ScenarioForm({
 							key={name}
 							name={name}
 							definition={definition}
-							value={choice.params[name] ?? definition.default}
+							value={name in choice.params ? choice.params[name] : definition.default}
 							onChange={value => onChange({ ...choice, params: { ...choice.params, [name]: value } })}
 						/>
 					))}

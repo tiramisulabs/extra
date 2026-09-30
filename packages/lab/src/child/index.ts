@@ -112,7 +112,6 @@ export function createChildSession(options: ChildSessionOptions): Session {
 	let sequence = 0;
 	let started = false;
 	let intentionalExit = false;
-	let stopping = false;
 	let stopTask: Promise<void> | undefined;
 	const listeners = new Set<(event: SessionEvent) => void>();
 	const diagnostics: string[] = [];
@@ -172,7 +171,7 @@ export function createChildSession(options: ChildSessionOptions): Session {
 					if (waiter?.owner === target) {
 						const error = new Error(`${type} timed out after ${timeoutMs}ms; external cleanup may be pending`);
 						rejectFor(target, error);
-						if (type !== 'session.start' && type !== 'session.dispose' && !stopping) {
+						if (type !== 'session.start' && type !== 'session.dispose' && !stopTask) {
 							started = false;
 							emit({ type: 'error', origin: 'child', detail: error.message });
 							void stop().catch(cleanupError =>
@@ -297,13 +296,13 @@ export function createChildSession(options: ChildSessionOptions): Session {
 		if (stopTask) return stopTask;
 		const target = child;
 		if (!target) return Promise.resolve();
-		stopping = true;
 		started = false;
 		intentionalExit = true;
 		stopTask = (async () => {
 			let cleanupError: unknown;
 			try {
-				await call('session.dispose', undefined, options.disposeTimeoutMs ?? 5000);
+				// The worker closes the bot and then disposes resources, each with its own deadline.
+				await call('session.dispose', undefined, 2 * (options.disposeTimeoutMs ?? 5000) + 250);
 			} catch (error) {
 				cleanupError = error;
 				target.kill('SIGKILL');
@@ -324,7 +323,6 @@ export function createChildSession(options: ChildSessionOptions): Session {
 		})();
 		return stopTask.finally(() => {
 			stopTask = undefined;
-			stopping = false;
 		});
 	};
 	return {

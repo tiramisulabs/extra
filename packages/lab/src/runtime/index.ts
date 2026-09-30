@@ -292,7 +292,7 @@ export function createSession<R>(
 			const previous = bot;
 			bot = undefined;
 			try {
-				await deadline(previous.close(), options.disposeTimeoutMs ?? project.resources?.timeoutMs ?? 5000, 'bot close');
+				await deadline(previous.close(), options.disposeTimeoutMs ?? 5000, 'bot close');
 			} catch (error) {
 				failures.push(error);
 			}
@@ -304,7 +304,7 @@ export function createSession<R>(
 			try {
 				await deadline(
 					Promise.resolve(project.resources.dispose(previous)),
-					options.disposeTimeoutMs ?? project.resources.timeoutMs ?? 5000,
+					options.disposeTimeoutMs ?? 5000,
 					'resources dispose',
 				);
 			} catch (error) {
@@ -576,16 +576,8 @@ export function createSession<R>(
 						userId: resolve(action.member),
 						roleId: resolve(action.role),
 					};
-					switch (action.op) {
-						case 'addRole':
-							await current.admin.addMemberRole(input);
-							break;
-						case 'removeRole':
-							await current.admin.removeMemberRole(input);
-							break;
-						default:
-							throw new Error(`Unknown admin operation "${String((action as { op: unknown }).op)}"`);
-					}
+					if (action.op === 'addRole') await current.admin.addMemberRole(input);
+					else await current.admin.removeMemberRole(input);
 				}
 				if (action.kind === 'user') {
 					const actor = actors[action.actor];
@@ -593,27 +585,19 @@ export function createSession<R>(
 					const pending = current
 						.pendingInteractions()
 						.modals.find(modal => modal.userId === resolve(actorSpecs[action.actor].userId));
-					const opener = pending?.source as
-						| (PendingModal['source'] & {
-								channelId?: string;
-								values?: string[];
-								group?: string;
-								subcommand?: string;
-								options?: JsonValue;
-						  })
-						| undefined;
+					const opener = pending?.source;
 					let sourceId: string | undefined;
-					let channelId: string | undefined;
+					let channel: ReturnType<typeof actionChannel> | undefined;
 					if (action.verb === 'click' || action.verb === 'select') {
-						channelId = actionChannel(current, action.actor, action.source.channel).id;
+						channel = actionChannel(current, action.actor, action.source.channel);
 						sourceId = locate(current, action.actor, action.source);
 					} else if (action.verb === 'slash') {
-						channelId = actionChannel(current, action.actor, action.channel ?? actorSpecs[action.actor].channelId).id;
+						channel = actionChannel(current, action.actor, action.channel ?? actorSpecs[action.actor].channelId);
 					}
 					if (
 						pending &&
 						opener?.channelId &&
-						opener.channelId === channelId &&
+						opener.channelId === channel?.id &&
 						((action.verb === 'slash' &&
 							!opener.messageId &&
 							opener.commandName === action.command &&
@@ -632,30 +616,23 @@ export function createSession<R>(
 						try {
 							switch (action.verb) {
 								case 'slash':
-									{
-										const channel = actionChannel(
-											current,
-											action.actor,
-											action.channel ?? actorSpecs[action.actor].channelId,
-										);
-										result = await actor.slash({
-											name: action.command,
-											channel,
-											group: action.group,
-											subcommand: action.subcommand,
-											options: action.options as ChatInputInteractionOptions['options'],
-										});
-									}
+									result = await actor.slash({
+										name: action.command,
+										channel: channel as NonNullable<typeof channel>,
+										group: action.group,
+										subcommand: action.subcommand,
+										options: action.options as ChatInputInteractionOptions['options'],
+									});
 									break;
 								case 'click':
 									result = await actor.clickButton(action.customId, {
-										channel: actionChannel(current, action.actor, action.source.channel),
+										channel: channel as NonNullable<typeof channel>,
 										source: sourceId as string,
 									});
 									break;
 								case 'select':
 									result = await actor.selectMenu(action.customId, action.values, {
-										channel: actionChannel(current, action.actor, action.source.channel),
+										channel: channel as NonNullable<typeof channel>,
 										source: sourceId as string,
 									});
 									break;
@@ -664,8 +641,6 @@ export function createSession<R>(
 										channel: actionChannel(current, action.actor, action.channel ?? actorSpecs[action.actor].channelId),
 									});
 									break;
-								default:
-									throw new Error(`Unknown user verb "${String((action as { verb: unknown }).verb)}"`);
 							}
 						} catch (error) {
 							if (pending && errorText(error).includes('already has a pending flow')) {
@@ -678,8 +653,6 @@ export function createSession<R>(
 							throw error;
 						}
 				}
-				if (action.kind !== 'user' && action.kind !== 'admin' && action.kind !== 'local')
-					throw new Error(`Unknown action kind "${String((action as { kind: unknown }).kind)}"`);
 				outcome = {
 					ok: true,
 					dispatchIds: [
@@ -835,8 +808,6 @@ export async function replay<R>(
 ): Promise<{ log: SessionLog; inspect: InspectorSnapshot }> {
 	const checkpoint: Checkpoint = 'entries' in input ? createCheckpoint(input, 'replay', expectations ?? []) : input;
 	validateCheckpoint(checkpoint);
-	if (checkpoint.labVersion !== LAB_VERSION)
-		throw new Error(`Checkpoint lab version ${checkpoint.labVersion} is not supported (current ${LAB_VERSION})`);
 	if (
 		!project.scenarios.some(
 			item => item.id === checkpoint.preset.scenario.id && item.version === checkpoint.preset.scenario.version,
@@ -967,5 +938,3 @@ function compareOutcome(
 			`Checkpoint "${name}" failed action ${index + 1}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`,
 		);
 }
-
-export type { Expectation };

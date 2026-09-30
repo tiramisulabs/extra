@@ -205,7 +205,7 @@ export function CheckpointsTab({
 						<input
 							id="checkpoint-name"
 							value={name}
-							placeholder="support_claimed"
+							placeholder="my_checkpoint"
 							onChange={event => setName(event.target.value)}
 						/>
 					</label>

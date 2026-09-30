@@ -7,9 +7,9 @@ import type {
 	VisibleConversation,
 	WorldBuilder,
 } from '@slipher/testing';
-import type { PROTOCOL_VERSION } from './protocol';
+import type { JsonValue, PROTOCOL_VERSION } from './protocol';
 
-export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+export type { JsonValue };
 export type Params = Record<string, boolean | string | number>;
 export interface ParamDefinition<T extends boolean | string | number = boolean | string | number> {
 	kind: 'boolean' | 'string' | 'number' | 'enum';
@@ -64,7 +64,6 @@ export interface Project<R = unknown> {
 	resources?: {
 		setup: (ctx: { preset: Preset }) => R | Promise<R>;
 		dispose: (resources: R) => void | Promise<void>;
-		timeoutMs?: number;
 	};
 	bot?: (ctx: { world: WorldBuilder; resources: R }) => MockBotOptions | MockBot | Promise<MockBotOptions | MockBot>;
 	services?: Record<

@@ -33,8 +33,8 @@ describe('bot identity is stated once', () => {
 		const world = mockWorld();
 		const identity = world.botUser({
 			id: '900000000000000099',
-			username: 'support-bot',
-			globalName: 'Support Bot',
+			username: 'my-bot',
+			globalName: 'My Bot',
 			avatar: 'avatar-hash',
 		});
 		const first = world.registerGuild({ id: 'profile-a' });
@@ -57,8 +57,8 @@ describe('bot identity is stated once', () => {
 		await using bot = await createMockBot({ world, commands: [Identity] });
 		const expected = {
 			id: identity.id,
-			username: 'support-bot',
-			global_name: 'Support Bot',
+			username: 'my-bot',
+			global_name: 'My Bot',
 			avatar: 'avatar-hash',
 			bot: true,
 		};
@@ -66,8 +66,8 @@ describe('bot identity is stated once', () => {
 		expect(bot.world.snapshot().botUser).toMatchObject(expected);
 		expect(bot.client.me).toMatchObject({
 			id: identity.id,
-			username: 'support-bot',
-			globalName: 'Support Bot',
+			username: 'my-bot',
+			globalName: 'My Bot',
 			avatar: 'avatar-hash',
 			bot: true,
 		});

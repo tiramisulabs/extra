@@ -1,6 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Expectation, LabAction, LabClient, LabSnapshot, MessageIntent, MessagePayload } from '../bridge';
-import { modalKey } from '../HostClient';
 import { continues } from '../render/grouping';
 import { LOCALE } from '../render/locale';
 import { Avatar, Message } from '../render/Message';
@@ -107,7 +106,7 @@ export function App({ client }: { client: LabClient }) {
 		} else if (current.guildId !== guildId) setGuildId(current.guildId);
 	}, [snapshot, running, actors, actor, channel, guildId, guilds, choice]);
 
-	const pendingKeys = snapshot?.pending.modals.map(modalKey).join('|') ?? '';
+	const pendingKeys = snapshot?.pending.modals.map(item => item.interactionId).join('|') ?? '';
 	useEffect(() => {
 		const live = new Set(pendingKeys.split('|'));
 		for (const key of drafts.current.keys()) if (!live.has(key)) drafts.current.delete(key);
@@ -152,7 +151,7 @@ export function App({ client }: { client: LabClient }) {
 	const canView = Boolean(current?.visibleTo.includes(actor));
 	const conversation = snapshot.conversations[`${actor}:${channel}`];
 	const modal = snapshot.pending.modals.find(
-		item => item.userId === viewer?.userId && !snapshot.closedModals?.includes(modalKey(item)),
+		item => item.userId === viewer?.userId && !snapshot.closedModals?.includes(item.interactionId),
 	);
 	const failures = snapshot.inspector.rest.filter(item => item.failed).length;
 	// The member list only exists for a running session; the lab panel is useful before one starts.
@@ -549,10 +548,10 @@ export function App({ client }: { client: LabClient }) {
 			)}
 			{modal && (
 				<Modal
-					key={modal.interactionId ?? modal.customId}
+					key={modal.interactionId}
 					modal={modal}
-					draft={drafts.current.get(modalKey(modal))}
-					onDraft={values => drafts.current.set(modalKey(modal), values)}
+					draft={drafts.current.get(modal.interactionId)}
+					onDraft={values => drafts.current.set(modal.interactionId, values)}
 					onClose={() => client.closeModal(actor, modal.customId)}
 					onSubmit={submission =>
 						// A reopened form belongs to the channel it was opened in, not the one on screen now.

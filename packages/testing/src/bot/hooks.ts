@@ -2,7 +2,7 @@ import { type Client, Interaction, Modal } from 'seyfert';
 import type { ModalWaiter } from './dispatch';
 import { dispatchStore } from './dispatch-context';
 import type { InputCheckpoint } from './interaction-session';
-import type { PendingCollector } from './lab-contracts';
+import type { PendingCollector } from './observation';
 import { type ComponentCollectorMatch, componentInternals, modalRegistry } from './seyfert-internals';
 
 type MiddlewareControl = (...args: unknown[]) => unknown;
@@ -182,7 +182,7 @@ export function installDispatchHooks(client: Client, deps: DispatchHookDeps): Di
 			const run = collector.run.bind(collector);
 			const live = collectorClosers.get(messageId) ?? new Set<() => void>();
 			collectorClosers.set(messageId, live);
-			const register = (match: ComponentCollectorMatch, kind: string): (() => void) => {
+			const register = (match: ComponentCollectorMatch, kind: PendingCollector['kind']): (() => void) => {
 				const customIds = typeof match === 'string' ? [match] : Array.isArray(match) ? [...match] : undefined;
 				const close = state.deps.onCollectorRegistered?.({
 					messageId,

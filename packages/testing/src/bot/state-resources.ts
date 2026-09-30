@@ -1,6 +1,6 @@
 import { mockId } from '../id';
 import { decodeEmoji } from './emoji';
-import { isEphemeral, MESSAGE_FLAG_COMPONENTS_V2 } from './message-flags';
+import { isEphemeral, MESSAGE_FLAG_COMPONENTS_V2, MESSAGE_FLAG_EPHEMERAL, MESSAGE_FLAG_LOADING } from './message-flags';
 import { assertNameBounds } from './message-validation';
 import {
 	type ApiAuditLogEntry,
@@ -472,7 +472,7 @@ export class WorldState extends WorldStateMutationCore {
 		this.registerInteractionToken(token, channelId);
 		const view = this.addMessage(
 			channelId,
-			{ flags: (flags & 64) | 128, author_id: authorId },
+			{ flags: (flags & MESSAGE_FLAG_EPHEMERAL) | MESSAGE_FLAG_LOADING, author_id: authorId },
 			true,
 			this.interactionForToken(token)?.userId,
 		);
@@ -499,7 +499,7 @@ export class WorldState extends WorldStateMutationCore {
 		const entry = this.world.messages.find(
 			candidate => candidate.channelId === channelId && candidate.message.id === messageId,
 		);
-		if (entry) entry.message.flags &= ~128;
+		if (entry) entry.message.flags &= ~MESSAGE_FLAG_LOADING;
 		return this.rawMessageOr(channelId, messageId);
 	}
 

@@ -1,5 +1,4 @@
 import type { PendingModal, VisibleMessage } from '../bridge';
-import { modalKey } from '../HostClient';
 
 /**
  * Closed forms the bot still waits for, whose trigger is not on screen (dismissed, hidden or elsewhere).
@@ -14,7 +13,7 @@ export function unreachableForms(
 	return modals.filter(
 		item =>
 			item.userId === viewerId &&
-			closed.includes(modalKey(item)) &&
+			closed.includes(item.interactionId) &&
 			!visible.some(message => message.id === item.source?.messageId && hasLiveTrigger(message, item.source.customId)),
 	);
 }
@@ -36,11 +35,11 @@ export function ResumeForms({ forms, onReopen }: { forms: PendingModal[]; onReop
 	return (
 		<div className="resume-forms">
 			{forms.map(form => (
-				<div className="resume-form" key={modalKey(form)}>
+				<div className="resume-form" key={form.interactionId}>
 					<span>
 						Unsent form <strong>{form.payload.title}</strong>
 					</span>
-					<button type="button" className="text-link" onClick={() => onReopen(modalKey(form))}>
+					<button type="button" className="text-link" onClick={() => onReopen(form.interactionId)}>
 						Reopen
 					</button>
 				</div>

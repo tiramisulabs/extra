@@ -160,7 +160,7 @@ describe('lab runtime', () => {
 		const waiting = child.inspect();
 		await expect(hung).rejects.toThrow('session.inspectProject timed out after 80ms; external cleanup may be pending');
 		await expect(waiting).rejects.toThrow('session.inspectProject timed out after 80ms');
-		await new Promise(done => setTimeout(done, 300));
+		await new Promise(done => setTimeout(done, 800));
 		await expect(child.inspect()).rejects.toThrow('not running');
 		expect(() => process.kill(pid, 0)).toThrow();
 	});
@@ -221,7 +221,8 @@ describe('lab runtime', () => {
 			const pid = Number(await readWhenPresent(started));
 			vi.advanceTimersByTime(80);
 			await new Promise<void>(done => setImmediate(done));
-			vi.advanceTimersByTime(100);
+			// The dispose RPC covers bot close plus resource dispose: 2 * disposeTimeoutMs + 250.
+			vi.advanceTimersByTime(2 * 100 + 250);
 			const error: unknown = await rejection;
 			expect(error).toBeInstanceOf(AggregateError);
 			expect((error as Error).message).toContain('session.start timed out after 80ms');

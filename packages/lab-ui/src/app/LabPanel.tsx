@@ -176,7 +176,7 @@ export function LabPanel({
 							{snapshot.pending.modals.length ? (
 								<ul className="pending-list">
 									{snapshot.pending.modals.map(modal => {
-										const key = modal.interactionId ?? `${modal.userId}:${modal.customId}`;
+										const key = modal.interactionId;
 										const owner = snapshot.actors.find(item => item.userId === modal.userId);
 										const closed = snapshot.closedModals?.includes(key);
 										return (

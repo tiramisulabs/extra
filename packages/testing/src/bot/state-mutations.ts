@@ -1,5 +1,6 @@
 import { mockTimestamp } from '../id';
 import { decodeEmoji } from './emoji';
+import { isEphemeral, MESSAGE_FLAG_EPHEMERAL } from './message-flags';
 import { assertNameBounds, assertSendableMessage } from './message-validation';
 import { liveRecipients } from './message-visibility';
 import {
@@ -233,7 +234,7 @@ export abstract class WorldStateMutationCore extends WorldStateReadCore {
 			message,
 			sequence,
 			...(ownerId === undefined ? {} : { ownerId }),
-			liveRecipientIds: liveRecipients(this.world, channelId, sequence, ownerId, Boolean(message.flags & 64)),
+			liveRecipientIds: liveRecipients(this.world, channelId, sequence, ownerId, isEphemeral(message)),
 		});
 		return this.buildMessageView(message);
 	}
@@ -252,7 +253,7 @@ export abstract class WorldStateMutationCore extends WorldStateReadCore {
 			entry.message.attachments = normalizeAttachments(raw.attachments);
 		if (raw.flags !== undefined) {
 			const next = numberValue(raw.flags) ?? entry.message.flags;
-			entry.message.flags = (next & ~64) | (entry.message.flags & 64);
+			entry.message.flags = (next & ~MESSAGE_FLAG_EPHEMERAL) | (entry.message.flags & MESSAGE_FLAG_EPHEMERAL);
 		}
 		if ('content' in raw || 'allowed_mentions' in raw) {
 			const derived = this.deriveMentions(entry.message.content, raw.allowed_mentions);
