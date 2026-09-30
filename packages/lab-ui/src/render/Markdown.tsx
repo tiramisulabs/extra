@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Emoji } from './Emoji';
-import { LOCALE } from './locale';
+import { markdownTimestamp } from './time';
 
 export interface NameMap {
 	users?: Record<string, string>;
@@ -28,24 +28,6 @@ const INLINE = new RegExp(
 	].join('|'),
 	'g',
 );
-
-function timestamp(seconds: string, style = 'f'): string {
-	const date = new Date(Number(seconds) * 1000);
-	if (Number.isNaN(date.getTime())) return seconds;
-	if (style === 'R') {
-		const minutes = Math.round((date.getTime() - Date.now()) / 60_000);
-		return new Intl.RelativeTimeFormat(LOCALE, { numeric: 'auto' }).format(minutes, 'minute');
-	}
-	const options: Record<string, Intl.DateTimeFormatOptions> = {
-		t: { timeStyle: 'short' },
-		T: { timeStyle: 'medium' },
-		d: { dateStyle: 'short' },
-		D: { dateStyle: 'long' },
-		f: { dateStyle: 'long', timeStyle: 'short' },
-		F: { dateStyle: 'full', timeStyle: 'short' },
-	};
-	return date.toLocaleString(LOCALE, options[style] ?? options.f);
-}
 
 function inline(value: string, names: NameMap, jumbo = false): ReactNode[] {
 	const nodes: ReactNode[] = [];
@@ -90,13 +72,14 @@ function inline(value: string, names: NameMap, jumbo = false): ReactNode[] {
 					{name ?? id}
 				</span>,
 			);
-		} else if (group.time)
+		} else if (group.time) {
+			const time = markdownTimestamp(group.timeValue, group.timeStyle);
 			nodes.push(
-				<time key={key} className="timestamp" dateTime={new Date(Number(group.timeValue) * 1000).toISOString()}>
-					{timestamp(group.timeValue, group.timeStyle)}
+				<time key={key} className="timestamp" dateTime={time.dateTime}>
+					{time.text}
 				</time>,
 			);
-		else if (group.url)
+		} else if (group.url)
 			nodes.push(
 				<a key={key} href={group.url} target="_blank" rel="noreferrer">
 					{group.url}

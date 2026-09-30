@@ -8,9 +8,9 @@ const CDN = 'https://cdn.discordapp.com';
 const SNOWFLAKE = /^\d{17,20}$/;
 const IMAGE_HASH = /^(a_)?[0-9a-f]{32}$/;
 
-export type CdnSize = 64 | 128;
+type CdnSize = 64 | 128;
 
-export const isSnowflake = (value: unknown): value is string => typeof value === 'string' && SNOWFLAKE.test(value);
+const isSnowflake = (value: unknown): value is string => typeof value === 'string' && SNOWFLAKE.test(value);
 
 export function emojiUrl(emoji: { id?: string | null; animated?: boolean }, size: CdnSize = 64): string | undefined {
 	if (!isSnowflake(emoji.id)) return undefined;

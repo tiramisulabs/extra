@@ -1,6 +1,20 @@
 import { type FormEvent, type KeyboardEvent, useMemo, useRef, useState } from 'react';
 import type { CommandOption, JsonValue, LabSnapshot } from '../bridge';
-import { CloseIcon, SendIcon, SlashIcon } from './icons';
+import { CloseIcon, SendIcon, SlashIcon } from '../icons';
+
+/** Discord application command option types. */
+const OptionType = {
+	Subcommand: 1,
+	SubcommandGroup: 2,
+	Integer: 4,
+	Boolean: 5,
+	User: 6,
+	Channel: 7,
+	Role: 8,
+	Mentionable: 9,
+	Number: 10,
+	Attachment: 11,
+} as const;
 
 interface CommandEntry {
 	key: string;
@@ -11,15 +25,12 @@ interface CommandEntry {
 	options: CommandOption[];
 }
 
-const SUBCOMMAND = 1;
-const SUBCOMMAND_GROUP = 2;
-
 /** Flattens schemas into the executable leaves Discord offers in its picker: command, group + subcommand, or subcommand. */
-export function commandEntries(snapshot: LabSnapshot): CommandEntry[] {
+function commandEntries(snapshot: LabSnapshot): CommandEntry[] {
 	return snapshot.commands.flatMap(command => {
 		const options = command.options ?? [];
-		const groups = options.filter(option => option.type === SUBCOMMAND_GROUP);
-		const subcommands = options.filter(option => option.type === SUBCOMMAND);
+		const groups = options.filter(option => option.type === OptionType.SubcommandGroup);
+		const subcommands = options.filter(option => option.type === OptionType.Subcommand);
 		if (!groups.length && !subcommands.length)
 			return [
 				{
@@ -32,7 +43,7 @@ export function commandEntries(snapshot: LabSnapshot): CommandEntry[] {
 		return [
 			...groups.flatMap(group =>
 				(group.options ?? [])
-					.filter(option => option.type === SUBCOMMAND)
+					.filter(option => option.type === OptionType.Subcommand)
 					.map(leaf => ({
 						key: `${command.name} ${group.name} ${leaf.name}`,
 						command: command.name,
@@ -53,24 +64,36 @@ export function commandEntries(snapshot: LabSnapshot): CommandEntry[] {
 	});
 }
 
-function optionChoices(option: CommandOption, snapshot: LabSnapshot, guildId?: string) {
+/** A fixed list to pick from, when the option has one: its choices, booleans, or the guild's entities. */
+function optionChoices(option: CommandOption, snapshot: LabSnapshot, guildId: string) {
 	const guild = snapshot.session?.guilds.find(item => item.id === guildId);
 	if ('choices' in option && option.choices?.length)
 		return option.choices.map(choice => ({ label: choice.name, value: String(choice.value) }));
-	if (option.type === 5)
+	if (option.type === OptionType.Boolean)
 		return [
 			{ label: 'True', value: 'true' },
 			{ label: 'False', value: 'false' },
 		];
 	const members = guild?.members.map(member => ({ label: `@${member.name}`, value: member.id })) ?? [];
+	// The @everyone role shares the guild's ID and cannot be mentioned as an option.
 	const roles =
 		guild?.roles.filter(role => role.id !== guild.id).map(role => ({ label: `@${role.name}`, value: role.id })) ?? [];
-	if (option.type === 6) return members;
-	if (option.type === 8) return roles;
-	if (option.type === 9) return [...members, ...roles];
-	if (option.type === 7)
+	if (option.type === OptionType.User) return members;
+	if (option.type === OptionType.Role) return roles;
+	if (option.type === OptionType.Mentionable) return [...members, ...roles];
+	if (option.type === OptionType.Channel)
 		return guild?.channels.map(channel => ({ label: `#${channel.name}`, value: channel.id })) ?? [];
 	return undefined;
+}
+
+const isNumeric = (option: CommandOption) => option.type === OptionType.Integer || option.type === OptionType.Number;
+
+/** A cleared field omits the option; everything else is typed the way the option declares. */
+function optionValue(option: CommandOption, raw: string): JsonValue | undefined {
+	if (!raw) return undefined;
+	if (option.type === OptionType.Boolean) return raw === 'true';
+	if (isNumeric(option)) return Number(raw);
+	return raw;
 }
 
 function OptionPill({
@@ -84,12 +107,11 @@ function OptionPill({
 	value: JsonValue | undefined;
 	onChange: (value: JsonValue | undefined) => void;
 	snapshot: LabSnapshot;
-	guildId?: string;
+	guildId: string;
 }) {
 	const id = `option-${option.name}`;
 	const choices = optionChoices(option, snapshot, guildId);
-	const numeric = option.type === 4 || option.type === 10;
-	if (option.type === 11)
+	if (option.type === OptionType.Attachment)
 		return (
 			<span className="option-pill unsupported" title="Attachments are not simulated">
 				{option.name}: unsupported attachment
@@ -103,12 +125,7 @@ function OptionPill({
 					id={id}
 					required={option.required}
 					value={value === undefined ? '' : String(value)}
-					onChange={event => {
-						const raw = event.target.value;
-						if (!raw) onChange(undefined);
-						else if (option.type === 5) onChange(raw === 'true');
-						else onChange(numeric ? Number(raw) : raw);
-					}}>
+					onChange={event => onChange(optionValue(option, event.target.value))}>
 					<option value="">{choices.length ? 'Choose' : 'No options'}</option>
 					{choices.map(choice => (
 						<option key={choice.value} value={choice.value}>
@@ -119,15 +136,12 @@ function OptionPill({
 			) : (
 				<input
 					id={id}
-					type={numeric ? 'number' : 'text'}
-					step={option.type === 10 ? 'any' : undefined}
+					type={isNumeric(option) ? 'number' : 'text'}
+					step={option.type === OptionType.Number ? 'any' : undefined}
 					required={option.required}
 					placeholder={option.description}
 					value={value === undefined ? '' : String(value)}
-					onChange={event => {
-						const raw = event.target.value;
-						onChange(raw === '' ? undefined : numeric ? Number(raw) : raw);
-					}}
+					onChange={event => onChange(optionValue(option, event.target.value))}
 				/>
 			)}
 		</label>
@@ -143,7 +157,7 @@ export function Composer({
 }: {
 	snapshot: LabSnapshot;
 	channelName: string;
-	guildId?: string;
+	guildId: string;
 	canView: boolean;
 	onRun: (entry: { command: string; group?: string; subcommand?: string; options: Record<string, JsonValue> }) => void;
 }) {
@@ -151,21 +165,22 @@ export function Composer({
 	const [query, setQuery] = useState('');
 	const [picking, setPicking] = useState(false);
 	const [highlight, setHighlight] = useState(0);
-	const [selected, setSelected] = useState<CommandEntry>();
+	const [selectedKey, setSelectedKey] = useState<string>();
 	const [values, setValues] = useState<Record<string, JsonValue | undefined>>({});
 	const input = useRef<HTMLInputElement>(null);
 	const search = query.replace(/^\//, '').trim().toLowerCase();
 	const matches = entries.filter(entry => entry.key.includes(search));
-	const current = selected && entries.find(entry => entry.key === selected.key);
+	// Resolved on every render so a schema update reaches a command already chosen.
+	const current = entries.find(entry => entry.key === selectedKey);
 
 	function choose(entry: CommandEntry) {
-		setSelected(entry);
+		setSelectedKey(entry.key);
 		setValues({});
 		setQuery('');
 		setPicking(false);
 	}
 	function clear() {
-		setSelected(undefined);
+		setSelectedKey(undefined);
 		setValues({});
 		setQuery('');
 		input.current?.focus();
@@ -183,10 +198,7 @@ export function Composer({
 		clear();
 	}
 	function navigate(event: KeyboardEvent<HTMLInputElement>) {
-		if (event.key === 'Escape') {
-			setPicking(false);
-			if (!query && current) clear();
-		}
+		if (event.key === 'Escape') setPicking(false);
 		if (!picking || !matches.length) return;
 		if (event.key === 'ArrowDown') {
 			event.preventDefault();

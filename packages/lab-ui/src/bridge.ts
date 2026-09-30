@@ -13,7 +13,7 @@ import type {
 	SessionLog,
 } from '@slipher/lab/protocol';
 
-export type { HostInfo, JsonValue, LabAction, ProjectDescription, SessionDescription };
+export type { Expectation, JsonValue, LabAction, ProjectDescription };
 
 export interface ComponentPayload {
 	type: number;
@@ -71,7 +71,7 @@ export interface MessagePayload {
 	timestamp?: string;
 }
 export type VisibleMessage = Omit<ProtocolVisibleMessage, 'payload'> & { payload: MessagePayload };
-export interface ModalPayload {
+interface ModalPayload {
 	custom_id: string;
 	title: string;
 	components: ComponentPayload[];
@@ -85,24 +85,26 @@ export type CommandOption = NonNullable<CommandSchema['options']>[number];
 export interface InspectorEntry {
 	id: string;
 	label: string;
+	/** Who performed a logged action; shown as a badge. */
+	kind?: LabAction['kind'];
 	detail?: string;
 	failed?: boolean;
 }
+export type Guild = SessionDescription['guilds'][number];
 export interface LabSnapshot {
-	connection: 'connecting' | 'connected' | 'disconnected' | 'error';
 	error?: string;
 	/** Why the host stopped the previous session, shown until a new one starts. */
 	notice?: string;
 	project: ProjectDescription;
+	/** Present while a session runs. */
 	session?: SessionDescription;
-	scenarioId: string;
-	params: Record<string, JsonValue>;
 	actors: SessionDescription['actors'];
-	channels: (SessionDescription['guilds'][number]['channels'][number] & { guildId: string })[];
+	channels: (Guild['channels'][number] & { guildId: string })[];
 	conversations: Record<string, { messages: VisibleMessage[]; diagnostics: string[] }>;
 	commands: CommandSchema[];
 	pending: { modals: PendingModal[]; collectors: InspectorEntry[] };
-	closedModals?: string[];
+	/** Interaction IDs of pending modals hidden from their user. */
+	closedModals: string[];
 	inspector: {
 		actions: InspectorEntry[];
 		rest: InspectorEntry[];
@@ -111,31 +113,43 @@ export interface LabSnapshot {
 	log?: SessionLog;
 	rawInspect?: InspectorSnapshot;
 	projections?: Record<string, JsonValue>;
-	names?: SessionDescription['names'];
 	/** Host mode, build and this browser's run, when the client talks to a real host. */
 	host?: HostInfo;
+}
+type ParamValue = boolean | string | number;
+/** What Start sends: a scenario of the project's catalogue with its parameters and service variants. */
+export interface ScenarioChoice {
+	scenarioId: string;
+	/** `null` is an emptied number field. */
+	params: Record<string, ParamValue | null>;
+	services: Record<string, string>;
+}
+/** The preset's parameters: emptied fields are left out so the scenario's defaults apply. */
+export function presetParams(choice: ScenarioChoice): Record<string, ParamValue> {
+	const params: Record<string, ParamValue> = {};
+	for (const [name, value] of Object.entries(choice.params)) if (value !== null) params[name] = value;
+	return params;
 }
 export type MessageIntent = { verb: 'click' | 'select'; customId: string; messageId: string; values?: string[] };
 export interface LabClient {
 	connect(): Promise<LabSnapshot>;
 	subscribe(listener: (snapshot: LabSnapshot) => void): () => void;
-	start(input: {
-		scenarioId: string;
-		params: Record<string, JsonValue>;
-		services: Record<string, string>;
-	}): Promise<void>;
+	start(choice: ScenarioChoice): Promise<void>;
 	act(action: LabAction): Promise<void>;
 	closeModal(actor: string, customId: string): void;
 	/** Shows a closed modal again; the bot never learned it was closed. */
-	reopenModal?(key: string): void;
+	reopenModal(key: string): void;
 	/** Hides one of the actor's own ephemeral messages for that actor only. */
-	dismissMessage?(actor: string, channel: string, message: VisibleMessage): Promise<void>;
+	dismissMessage(actor: string, channel: string, message: VisibleMessage): Promise<void>;
 	clearError(): void;
-	listCheckpoints?(): Promise<string[]>;
-	saveCheckpoint?(name: string, arrival: Expectation[]): Promise<Checkpoint>;
-	loadCheckpoint?(name: string): Promise<Checkpoint>;
-	/** Rejects with `code: 'revision-mismatch'` when the checkpoint was recorded on another build. */
-	replayCheckpoint?(name: string, options?: { acceptRevision?: boolean }): Promise<void>;
-	exportCheckpoint?(name: string, format: 'vitest' | 'node'): Promise<string>;
 }
-export type { Checkpoint, Expectation };
+/** Saved checkpoints live on a lab host; a client without one cannot offer them. */
+export interface CheckpointClient {
+	listCheckpoints(): Promise<string[]>;
+	saveCheckpoint(name: string, arrival: Expectation[]): Promise<Checkpoint>;
+	loadCheckpoint(name: string): Promise<Checkpoint>;
+	/** Rejects with `code: 'revision-mismatch'` when the checkpoint was recorded on another build. */
+	replayCheckpoint(name: string, options?: { acceptRevision?: boolean }): Promise<void>;
+	exportCheckpoint(name: string, format: 'vitest' | 'node'): Promise<string>;
+}
+export const hasCheckpoints = (client: LabClient): client is LabClient & CheckpointClient => 'saveCheckpoint' in client;

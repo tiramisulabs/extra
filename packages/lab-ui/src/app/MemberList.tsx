@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Expectation, LabSnapshot } from '../bridge';
-import { Avatar } from '../render/Message';
-import { CloseIcon, EyeIcon, PinIcon } from './icons';
+import type { Expectation, Guild, LabSnapshot } from '../bridge';
+import { CloseIcon, EyeIcon, PinIcon } from '../icons';
+import { Avatar } from '../render/Avatar';
 
-type Guild = NonNullable<LabSnapshot['session']>['guilds'][number];
+type Member = Guild['members'][number];
+type RoleOp = 'addRole' | 'removeRole';
 
 function Profile({
 	snapshot,
 	guild,
-	memberId,
-	isBot,
+	member,
 	onClose,
 	onRole,
 	onPin,
@@ -17,16 +17,15 @@ function Profile({
 }: {
 	snapshot: LabSnapshot;
 	guild: Guild;
-	memberId: string;
-	isBot: boolean;
+	member: Member;
 	onClose: () => void;
-	onRole: (op: 'addRole' | 'removeRole', roleId: string) => void;
+	onRole: (op: RoleOp, roleId: string) => void;
 	onPin?: (expectation: Expectation) => void;
 	onViewAs?: () => void;
 }) {
 	const card = useRef<HTMLDivElement>(null);
 	const [adding, setAdding] = useState('');
-	const member = guild.members.find(item => item.id === memberId);
+	const memberId = member.id;
 	const actor = snapshot.actors.find(item => item.userId === memberId);
 	const assigned = actor?.roles[guild.id] ?? [];
 	const assignable = guild.roles
@@ -41,24 +40,20 @@ function Profile({
 		document.addEventListener('keydown', onKey);
 		return () => document.removeEventListener('keydown', onKey);
 	}, []);
-	const roleName = (id: string) => guild.roles.find(role => role.id === id)?.name ?? snapshot.names?.roles[id] ?? id;
+	const roleName = (id: string) =>
+		guild.roles.find(role => role.id === id)?.name ?? snapshot.session?.names.roles[id] ?? id;
 	return (
-		<div
-			className="profile-card"
-			role="dialog"
-			aria-label={`${member?.name ?? memberId} profile`}
-			ref={card}
-			tabIndex={-1}>
+		<div className="profile-card" role="dialog" aria-label={`${member.name} profile`} ref={card} tabIndex={-1}>
 			<div className="profile-banner" />
 			<button type="button" className="icon-button profile-close" aria-label="Close profile" onClick={onClose}>
 				<CloseIcon />
 			</button>
 			<div className="profile-head">
-				<Avatar name={member?.name ?? memberId} user={{ id: memberId }} size={72} />
+				<Avatar name={member.name} user={{ id: memberId }} size={72} />
 				<div>
 					<strong>
-						{member?.name ?? memberId}
-						{isBot && <span className="bot-tag">APP</span>}
+						{member.name}
+						{member.bot && <span className="bot-tag">APP</span>}
 					</strong>
 					<code className="id-code">{memberId}</code>
 				</div>
@@ -126,7 +121,7 @@ function Profile({
 			</section>
 			{onViewAs && (
 				<button type="button" className="button primary wide" onClick={onViewAs}>
-					<EyeIcon /> View as {member?.name ?? memberId}
+					<EyeIcon /> View as {member.name}
 				</button>
 			)}
 		</div>
@@ -136,7 +131,6 @@ function Profile({
 export function MemberList({
 	snapshot,
 	guild,
-	botIds,
 	viewer,
 	onRole,
 	onPin,
@@ -144,18 +138,17 @@ export function MemberList({
 }: {
 	snapshot: LabSnapshot;
 	guild: Guild;
-	botIds: Set<string>;
-	viewer?: string;
-	onRole: (memberId: string, op: 'addRole' | 'removeRole', roleId: string) => void;
+	viewer: string;
+	onRole: (memberId: string, op: RoleOp, roleId: string) => void;
 	onPin?: (expectation: Expectation) => void;
 	onViewAs: (actorKey: string) => void;
 }) {
 	const [open, setOpen] = useState<string>();
 	const actorIds = new Set(snapshot.actors.map(actor => actor.userId));
 	const groups = [
-		{ title: 'Actors', members: guild.members.filter(member => actorIds.has(member.id) && !botIds.has(member.id)) },
-		{ title: 'Bots', members: guild.members.filter(member => botIds.has(member.id)) },
-		{ title: 'Members', members: guild.members.filter(member => !actorIds.has(member.id) && !botIds.has(member.id)) },
+		{ title: 'Actors', members: guild.members.filter(member => actorIds.has(member.id) && !member.bot) },
+		{ title: 'Bots', members: guild.members.filter(member => member.bot) },
+		{ title: 'Members', members: guild.members.filter(member => !actorIds.has(member.id) && !member.bot) },
 	].filter(group => group.members.length);
 	return (
 		<div className="member-list">
@@ -180,7 +173,7 @@ export function MemberList({
 										<span className="member-name">
 											<span className="member-line">
 												<span className="member-label">{member.name}</span>
-												{botIds.has(member.id) && <span className="bot-tag">APP</span>}
+												{member.bot && <span className="bot-tag">APP</span>}
 											</span>
 											{actor?.key === viewer && <small>Viewing</small>}
 										</span>
@@ -189,8 +182,7 @@ export function MemberList({
 										<Profile
 											snapshot={snapshot}
 											guild={guild}
-											memberId={member.id}
-											isBot={botIds.has(member.id)}
+											member={member}
 											onClose={() => setOpen(undefined)}
 											onRole={(op, roleId) => onRole(member.id, op, roleId)}
 											onPin={onPin}

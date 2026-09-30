@@ -6,11 +6,13 @@ import { ResumeForms, unreachableForms } from '../src/app/ResumeForms';
 import type { PendingModal } from '../src/bridge';
 import { FixtureClient } from '../src/dev/FixtureClient';
 import { semanticAction } from '../src/HostClient';
+import { messageText } from '../src/messages';
+import { Component } from '../src/render/Component';
 import { avatarUrl, mediaUrl } from '../src/render/cdn';
 import { Emoji } from '../src/render/Emoji';
 import { continues } from '../src/render/grouping';
 import { Markdown } from '../src/render/Markdown';
-import { Component, Message } from '../src/render/Message';
+import { Message } from '../src/render/Message';
 import { Modal } from '../src/render/Modal';
 
 test('modal prefill and StringSelect defaults survive rendering; multi-select waits for a valid choice', () => {
@@ -112,6 +114,29 @@ test('UI clicks use a semantic locator and reject a missing visible source', asy
 				snapshot,
 			),
 		/Visible source message stale-id is unavailable/,
+	);
+});
+
+test('the text that identifies a message is its content, then an embed, then the first text display it shows', () => {
+	assert.equal(messageText({ content: 'Hello', embeds: [{ title: 'Embed' }] }), 'Hello');
+	assert.equal(messageText({ embeds: [{ color: 1 }, { description: 'Second embed' }] }), 'Second embed');
+	assert.equal(
+		messageText({
+			components: [
+				{
+					type: 17,
+					components: [
+						{ type: 9, components: [{ type: 10, content: 'Inside a section' }] },
+						{ type: 10, content: 'After the section' },
+					],
+				},
+			],
+		}),
+		'Inside a section',
+	);
+	assert.equal(
+		messageText({ components: [{ type: 1, components: [{ type: 2, label: 'Only a button' }] }] }),
+		undefined,
 	);
 });
 

@@ -1,4 +1,5 @@
 import type { PendingModal, VisibleMessage } from '../bridge';
+import { componentTree } from '../messages';
 
 /**
  * Closed forms the bot still waits for, whose trigger is not on screen (dismissed, hidden or elsewhere).
@@ -20,13 +21,9 @@ export function unreachableForms(
 
 /** The trigger only counts while its component is still rendered and enabled on the message. */
 function hasLiveTrigger(message: VisibleMessage, customId: string | undefined): boolean {
-	const stack = [...(message.payload.components ?? [])];
-	while (stack.length) {
-		const component = stack.shift();
-		if (!component) continue;
+	if (!customId) return false;
+	for (const component of componentTree(message.payload.components))
 		if (component.custom_id === customId) return !component.disabled;
-		stack.push(...(component.components ?? []), ...(component.accessory ? [component.accessory] : []));
-	}
 	return false;
 }
 

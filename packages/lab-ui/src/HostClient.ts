@@ -6,6 +6,9 @@ import type {
 	Expectation,
 	HostInfo,
 	InspectorSnapshot,
+	JsonValue,
+	LabAction,
+	ProjectDescription,
 	RunEndReason,
 	SessionDescription,
 	SessionLog,
@@ -17,22 +20,23 @@ import {
 	validateProjectDescription,
 } from '@slipher/lab/protocol';
 import type {
+	CheckpointClient,
 	InspectorEntry,
-	JsonValue,
-	LabAction,
 	LabClient,
 	LabSnapshot,
-	ProjectDescription,
+	PendingModal,
+	ScenarioChoice,
 	VisibleMessage,
 } from './bridge';
+import { presetParams } from './bridge';
+import { messageText } from './messages';
 
-function message(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
-}
-function entry(id: string, label: string, value: unknown, failed = false): InspectorEntry {
-	return { id, label, detail: typeof value === 'string' ? value : JSON.stringify(value), failed };
-}
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
+/**
+ * A click or select recorded against a message ID only replays in the session that produced it, so the UI's
+ * exact reference becomes a locator the runtime can find again: the channel, the component and the message text.
+ */
 export function semanticAction(action: LabAction, snapshot?: LabSnapshot): LabAction {
 	if (action.kind !== 'user' || (action.verb !== 'click' && action.verb !== 'select') || !action.source.messageRef)
 		return action;
@@ -43,13 +47,10 @@ export function semanticAction(action: LabAction, snapshot?: LabSnapshot): LabAc
 		item => item.id === action.source.messageRef,
 	);
 	if (!source) throw new Error(`Visible source message ${action.source.messageRef} is unavailable`);
+	const contains = messageText(source.payload);
 	return {
 		...action,
-		source: {
-			channel: action.source.channel,
-			customId: action.customId,
-			...(source.payload.content ? { contains: source.payload.content } : {}),
-		},
+		source: { channel: action.source.channel, customId: action.customId, ...(contains ? { contains } : {}) },
 	};
 }
 
@@ -70,7 +71,11 @@ export function shortRevision(revision: string): string {
 }
 
 const REPLAY_NOTICE = 'Session ended to replay a checkpoint.';
+const HOST_ENDED_NOTICE = 'The host ended the session.';
 const STREAM_LOST = 'Event stream lost; reconnecting…';
+/** Host events arrive in bursts; one refresh follows the last of them. */
+const REFRESH_DEBOUNCE_MS = 100;
+const WATCH_MIN_MS = 1000;
 const WATCH_MAX_MS = 10_000;
 const RUN_NOTICES: Record<RunEndReason, string> = {
 	expired: 'Run expired after inactivity.',
@@ -79,13 +84,71 @@ const RUN_NOTICES: Record<RunEndReason, string> = {
 	stopped: 'Run ended.',
 	shutdown: 'The preview stopped.',
 };
+const isRunEndReason = (value: unknown): value is RunEndReason => typeof value === 'string' && value in RUN_NOTICES;
+const optionalString = (value: unknown) => (typeof value === 'string' ? value : undefined);
+/** A run that is gone or never existed; the launcher notice reports it, not an error. */
+const isRunGone = (error: unknown) =>
+	error instanceof HostError && (error.code === 'run-ended' || error.code === 'run-missing');
 
-export class HostClient implements LabClient {
+function hostError(response: Response, body: unknown): HostError {
+	const fields: Record<string, unknown> = body && typeof body === 'object' ? { ...body } : {};
+	const code = optionalString(fields.code);
+	let text = `${response.status} ${response.statusText}`;
+	if (code === 'run-limit') text = 'Run limit reached. Try again later.';
+	else if ('error' in fields) text = String(fields.error);
+	return new HostError(response.status, text, code, {
+		reason: isRunEndReason(fields.reason) ? fields.reason : undefined,
+		checkpointRevision: optionalString(fields.checkpointRevision),
+		currentRevision: optionalString(fields.currentRevision),
+	});
+}
+
+/** `session.inspect` reports pending interactions and REST calls as JSON; these are the fields the lab shows. */
+interface InspectedPending {
+	modals?: PendingModal[];
+	collectors?: { messageId: string; customIds?: string[]; kind: string }[];
+}
+interface InspectedRestCall {
+	method?: string;
+	route?: string;
+	error?: unknown;
+	response?: { status?: number };
+}
+const detail = (value: unknown) => (typeof value === 'string' ? value : JSON.stringify(value));
+
+function inspectorEntries(log: SessionLog, inspect: InspectorSnapshot): LabSnapshot['inspector'] {
+	const rest = (Array.isArray(inspect.rest) ? inspect.rest : []) as InspectedRestCall[];
+	return {
+		actions: log.entries.map(({ seq, action, outcome }) => ({
+			id: `action-${seq}`,
+			kind: action.kind,
+			label: 'verb' in action ? action.verb : action.op,
+			detail: detail(outcome.error ?? outcome.summary),
+			failed: !outcome.ok,
+		})),
+		rest: rest.map((call, index) => ({
+			id: `rest-${index}`,
+			label: `${call.response?.status ?? ''} · ${call.method ?? ''} ${call.route ?? ''}`,
+			detail: detail(call.error ?? call.response ?? ''),
+			failed: Boolean(call.error),
+		})),
+		diagnostics: inspect.diagnostics.map((text, index) => ({ id: `diagnostic-${index}`, label: text, detail: '' })),
+	};
+}
+
+const collectorEntries = (pending: InspectedPending): InspectorEntry[] =>
+	(pending.collectors ?? []).map((collector, index) => ({
+		id: `collector-${index}`,
+		label: `${collector.kind} · ${collector.customIds?.join(', ') ?? ''}`,
+		detail: collector.messageId,
+	}));
+
+export class HostClient implements LabClient, CheckpointClient {
 	private listeners = new Set<(snapshot: LabSnapshot) => void>();
 	private project?: ProjectDescription;
 	private snapshot?: LabSnapshot;
 	private stream?: EventSource;
-	private timer?: ReturnType<typeof setTimeout>;
+	private refreshTimer?: ReturnType<typeof setTimeout>;
 	private requestId = 0;
 	/** Modals the server reports closed, plus closes sent but not yet confirmed. */
 	private serverClosed = new Set<string>();
@@ -98,6 +161,7 @@ export class HostClient implements LabClient {
 	private generation = 0;
 	private checking?: Promise<boolean>;
 	private watchTimer?: ReturnType<typeof setTimeout>;
+	/** This tab follows a running session. */
 	private active = false;
 	private host?: HostInfo;
 
@@ -110,66 +174,54 @@ export class HostClient implements LabClient {
 	private emit(): void {
 		if (this.snapshot) for (const listener of this.listeners) listener(this.snapshot);
 	}
+	private update(changes: Partial<LabSnapshot>): void {
+		if (!this.snapshot) return;
+		this.snapshot = { ...this.snapshot, ...changes };
+		this.emit();
+	}
 	private fail(error: unknown): never {
-		// An ended run is reported by the launcher notice, not as an error.
-		const ended = error instanceof HostError && (error.code === 'run-ended' || error.code === 'run-missing');
-		if (this.snapshot && !ended) {
-			this.snapshot = { ...this.snapshot, error: message(error) };
-			this.emit();
-		}
+		if (!isRunGone(error)) this.update({ error: errorText(error) });
 		throw error;
 	}
 	private async json<T>(path: string, init?: RequestInit): Promise<T> {
 		const response = await this.request(`${this.base}${path}`, init);
+		if (response.ok) return response.json();
 		// Proxies can answer errors with HTML; keep the status instead of failing on the body.
-		const body: unknown = response.ok ? await response.json() : await response.json().catch(() => ({}));
-		if (!response.ok) {
-			const fields = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
-			const code = typeof fields.code === 'string' ? fields.code : undefined;
-			const text =
-				code === 'run-limit'
-					? 'Run limit reached. Try again later.'
-					: 'error' in fields
-						? String(fields.error)
-						: `${response.status} ${response.statusText}`;
-			const error = new HostError(response.status, text, code, {
-				reason: typeof fields.reason === 'string' ? (fields.reason as RunEndReason) : undefined,
-				checkpointRevision: typeof fields.checkpointRevision === 'string' ? fields.checkpointRevision : undefined,
-				currentRevision: typeof fields.currentRevision === 'string' ? fields.currentRevision : undefined,
-			});
-			if (code === 'run-ended' || (code === 'run-missing' && this.active)) this.endRun(error.details.reason);
-			throw error;
-		}
-		return body as T;
+		const error = hostError(response, await response.json().catch(() => ({})));
+		if (error.code === 'run-ended' || (error.code === 'run-missing' && this.active)) this.endRun(error.details.reason);
+		throw error;
 	}
-	private async rpc<T>(type: string, payload?: JsonValue): Promise<T> {
-		const response = await this.json<BridgeResponse>('/api/rpc', {
+	private post<T>(path: string, body: unknown): Promise<T> {
+		return this.json<T>(path, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({
-				version: PROTOCOL_VERSION,
-				id: ++this.requestId,
-				type,
-				...(payload === undefined ? {} : { payload }),
-			}),
+			body: JSON.stringify(body),
+		});
+	}
+	private async rpc<T>(type: string, payload?: JsonValue | LabAction): Promise<T> {
+		const response = await this.post<BridgeResponse>('/api/rpc', {
+			version: PROTOCOL_VERSION,
+			id: ++this.requestId,
+			type,
+			...(payload === undefined ? {} : { payload }),
 		});
 		if (!response.ok) throw new Error(response.error ?? `${type} failed`);
 		return response.value as T;
 	}
+	private async fetchProject(): Promise<ProjectDescription> {
+		const project = await this.json<unknown>('/api/describe');
+		validateProjectDescription(project);
+		return project;
+	}
 	private blank(project: ProjectDescription): LabSnapshot {
-		const scenario = project.scenarios[0];
 		return {
-			connection: 'disconnected',
 			project,
-			scenarioId: scenario?.id ?? '',
-			params: Object.fromEntries(
-				Object.entries(scenario?.params ?? {}).map(([name, definition]) => [name, definition.default]),
-			),
 			actors: [],
 			channels: [],
 			conversations: {},
 			commands: [],
 			pending: { modals: [], collectors: [] },
+			closedModals: [],
 			inspector: { actions: [], rest: [], diagnostics: [] },
 			host: this.host,
 		};
@@ -180,14 +232,15 @@ export class HostClient implements LabClient {
 			const host = await this.json<unknown>('/api/host');
 			validateHostInfo(host);
 			this.host = host;
-			const project = await this.json<unknown>('/api/describe');
-			validateProjectDescription(project);
+			const project = await this.fetchProject();
 			this.project = project;
 			this.snapshot = this.blank(project);
 			if (host.run.state === 'ended') this.snapshot.notice = RUN_NOTICES[host.run.reason ?? 'stopped'];
 			// A hosted browser has no events to follow until Start creates its run.
-			if (host.run.state === 'active') this.openStream();
-			if (host.run.state === 'active' && host.run.session) await this.adoptRunningSession(project);
+			if (host.run.state === 'active') {
+				this.openStream();
+				if (host.run.session) await this.adoptRunningSession(project);
+			}
 			this.emit();
 			return this.snapshot;
 		} catch (error) {
@@ -202,32 +255,27 @@ export class HostClient implements LabClient {
 			stream.addEventListener(type, event => {
 				// The run keeps one session; one started from another tab is the session this tab shows too.
 				if (type === 'session-started') this.active = true;
-				if (type === 'session-error' && this.snapshot) {
+				if (type === 'session-error') {
 					const payload: unknown = JSON.parse(event.data);
-					this.snapshot = {
-						...this.snapshot,
+					this.update({
 						error: payload && typeof payload === 'object' && 'detail' in payload ? String(payload.detail) : event.data,
-					};
-					this.emit();
+					});
 				}
 				if (this.active) this.scheduleRefresh();
 			});
 		stream.addEventListener('session-stopped', event => {
 			const payload: unknown = JSON.parse(event.data);
-			const reason = payload && typeof payload === 'object' && 'reason' in payload ? String(payload.reason) : '';
+			const reason = payload && typeof payload === 'object' && 'reason' in payload ? payload.reason : undefined;
 			if (reason === 'replay') this.stop(REPLAY_NOTICE);
-			else if (reason in RUN_NOTICES) this.endRun(reason as RunEndReason);
-			else this.stop('The host ended the session.');
+			else if (isRunEndReason(reason)) this.endRun(reason);
+			else this.stop(HOST_ENDED_NOTICE);
 		});
 		stream.addEventListener('child-exit', event => {
 			this.stop(`Session process exited: ${event.data}`);
 		});
 		stream.onerror = () => {
 			if (this.stream !== stream) return;
-			if (this.snapshot) {
-				this.snapshot = { ...this.snapshot, error: STREAM_LOST };
-				this.emit();
-			}
+			this.update({ error: STREAM_LOST });
 			void this.checkHost();
 			this.watchForReplacement();
 		};
@@ -244,18 +292,22 @@ export class HostClient implements LabClient {
 		const next = await this.json<unknown>('/api/host');
 		validateHostInfo(next);
 		const previous = this.host;
-		if (previous && next.instanceId !== previous.instanceId) {
-			const project = await this.json<unknown>('/api/describe');
-			validateProjectDescription(project);
-			this.project = project;
+		if (!previous || next.instanceId === previous.instanceId) {
 			this.host = next;
-			const revision = next.build?.revision;
-			if (revision && revision !== previous.build?.revision)
-				return `The preview was updated to ${shortRevision(revision)}.`;
-			return next.mode === 'local' ? 'The lab host restarted.' : RUN_NOTICES.restarted;
+			return undefined;
 		}
+		this.project = await this.fetchProject();
 		this.host = next;
-		return undefined;
+		const revision = next.build?.revision;
+		if (revision && revision !== previous.build?.revision)
+			return `The preview was updated to ${shortRevision(revision)}.`;
+		return next.mode === 'local' ? 'The lab host restarted.' : RUN_NOTICES.restarted;
+	}
+	/** A replaced host never keeps the old run: stop following it and say why. */
+	private leaveReplacedHost(notice: string): void {
+		this.stopWatching();
+		this.closeStream();
+		this.stop(notice, { clearError: true });
 	}
 	/** Tells a lost stream apart from a restarted or redeployed host, which never keeps the old run; false while unreachable. */
 	private checkHost(): Promise<boolean> {
@@ -264,9 +316,7 @@ export class HostClient implements LabClient {
 				const ended = this.host?.run.state === 'ended';
 				const replaced = await this.syncHost();
 				if (replaced) {
-					this.stopWatching();
-					this.closeStream();
-					this.stop(replaced, { clearError: true });
+					this.leaveReplacedHost(replaced);
 					if (this.host?.mode === 'local') this.openStream();
 				} else if (this.host?.run.state === 'ended' && !ended) this.endRun(this.host.run.reason);
 				else if (this.snapshot?.error === STREAM_LOST) this.clearError();
@@ -284,7 +334,7 @@ export class HostClient implements LabClient {
 	 * A shutdown or a dropped stream leaves nothing to notice the replacement, so host metadata is polled until a
 	 * new instance answers, or the same instance answers with the run still alive (a passing network loss).
 	 */
-	private watchForReplacement(delay = 1000): void {
+	private watchForReplacement(delay = WATCH_MIN_MS): void {
 		if (this.watchTimer) return;
 		const known = this.host?.instanceId;
 		this.watchTimer = setTimeout(async () => {
@@ -302,15 +352,16 @@ export class HostClient implements LabClient {
 	}
 	/** A run is gone for good: nothing reattaches to it, and only an explicit Start creates a new one. */
 	private endRun(reason?: RunEndReason): void {
+		const hosted = this.host?.mode === 'hosted';
 		if (reason === 'shutdown') {
 			this.closeStream();
-			if (this.host?.mode === 'hosted') this.host = { ...this.host, run: { state: 'ended', reason } };
-			this.stop(this.host?.mode === 'hosted' ? RUN_NOTICES.shutdown : 'The lab host stopped.', { clearError: true });
+			if (this.host && hosted) this.host = { ...this.host, run: { state: 'ended', reason } };
+			this.stop(hosted ? RUN_NOTICES.shutdown : 'The lab host stopped.', { clearError: true });
 			this.watchForReplacement();
 			return;
 		}
-		if (this.host?.mode !== 'hosted') {
-			this.stop('The host ended the session.');
+		if (!this.host || !hosted) {
+			this.stop(HOST_ENDED_NOTICE);
 			return;
 		}
 		this.closeStream();
@@ -336,7 +387,7 @@ export class HostClient implements LabClient {
 			if (!this.listeners.size) {
 				this.closeStream();
 				this.stopWatching();
-				if (this.timer) clearTimeout(this.timer);
+				clearTimeout(this.refreshTimer);
 			}
 		};
 	}
@@ -348,22 +399,16 @@ export class HostClient implements LabClient {
 		if (!this.project) return;
 		this.active = false;
 		this.generation++;
-		if (this.timer) clearTimeout(this.timer);
+		clearTimeout(this.refreshTimer);
 		this.forgetClosedModals();
 		this.snapshot = { ...this.blank(this.project), notice, error: clearError ? undefined : this.snapshot?.error };
 		this.emit();
 	}
 	private scheduleRefresh(): void {
-		if (this.timer) clearTimeout(this.timer);
-		this.timer = setTimeout(() => {
-			if (!this.active) return;
-			void this.refresh().catch(error => {
-				if (this.snapshot) {
-					this.snapshot = { ...this.snapshot, error: message(error) };
-					this.emit();
-				}
-			});
-		}, 100);
+		clearTimeout(this.refreshTimer);
+		this.refreshTimer = setTimeout(() => {
+			if (this.active) void this.refresh().catch(error => this.update({ error: errorText(error) }));
+		}, REFRESH_DEBOUNCE_MS);
 	}
 	private async refresh(): Promise<void> {
 		if (this.refreshing) {
@@ -383,100 +428,82 @@ export class HostClient implements LabClient {
 			this.refreshing = undefined;
 		}
 	}
+	/** Every actor's view of every channel, keyed `actor:channel`. */
+	private async loadConversations(
+		actors: SessionDescription['actors'],
+		channels: LabSnapshot['channels'],
+	): Promise<LabSnapshot['conversations']> {
+		const conversations: LabSnapshot['conversations'] = {};
+		await Promise.all(
+			actors.flatMap(actor =>
+				channels.map(async channel => {
+					conversations[`${actor.key}:${channel.id}`] = await this.rpc('session.view', {
+						actor: actor.key,
+						channelRef: channel.id,
+					});
+				}),
+			),
+		);
+		return conversations;
+	}
+	/** Each project inspector's value; one that throws shows its error instead. */
+	private async loadProjections(project: ProjectDescription): Promise<Record<string, JsonValue>> {
+		const projections: Record<string, JsonValue> = {};
+		await Promise.all(
+			project.inspectors.map(async name => {
+				try {
+					projections[name] = await this.rpc<JsonValue>('session.inspectProject', { name, args: null });
+				} catch (error) {
+					projections[name] = { error: errorText(error) };
+				}
+			}),
+		);
+		return projections;
+	}
+	/** Server-closed modals replace the known set; a local close is confirmed once the server reports it or the modal is gone. */
+	private syncClosedModals(modals: PendingModal[]): void {
+		this.serverClosed = new Set(modals.filter(item => item.closed).map(item => item.interactionId));
+		for (const key of this.localCloses)
+			if (this.serverClosed.has(key) || !modals.some(item => item.interactionId === key)) this.localCloses.delete(key);
+	}
 	private async load(): Promise<void> {
-		if (!this.project) throw new Error('Project description is unavailable');
+		const project = this.project;
+		if (!project) throw new Error('Project description is unavailable');
 		const generation = this.generation;
-		const [description, inspect, log, commands] = await Promise.all([
+		const [session, inspect, log, commands] = await Promise.all([
 			this.rpc<SessionDescription>('session.describe'),
 			this.rpc<InspectorSnapshot>('session.inspect'),
 			this.rpc<SessionLog>('session.log'),
 			this.rpc<CommandSchema[]>('session.commandSchemas'),
 		]);
-		const channels = description.guilds.flatMap(guild =>
+		const channels = session.guilds.flatMap(guild =>
 			guild.channels.map(channel => ({ ...channel, guildId: guild.id })),
 		);
-		const actors = description.actors.filter(actor => actor.channelId);
-		const conversations: LabSnapshot['conversations'] = {};
-		await Promise.all(
-			actors.flatMap(actor =>
-				channels.map(async channel => {
-					const view = await this.rpc<{ messages: VisibleMessage[]; diagnostics: string[] }>('session.view', {
-						actor: actor.key,
-						channelRef: channel.id,
-					});
-					conversations[`${actor.key}:${channel.id}`] = view;
-				}),
+		const [conversations, projections] = await Promise.all([
+			this.loadConversations(
+				session.actors.filter(actor => actor.channelId),
+				channels,
 			),
-		);
+			this.loadProjections(project),
+		]);
 		if (generation !== this.generation) return;
-		const pending = inspect.pending as {
-			modals?: LabSnapshot['pending']['modals'];
-			collectors?: { messageId: string; customIds?: string[]; kind: string }[];
-		};
+		const pending = inspect.pending as InspectedPending;
 		const modals = pending.modals ?? [];
-		this.serverClosed = new Set(modals.filter(item => item.closed).map(item => item.interactionId));
-		for (const key of this.localCloses)
-			if (this.serverClosed.has(key) || !modals.some(item => item.interactionId === key)) this.localCloses.delete(key);
-		const rest = Array.isArray(inspect.rest) ? inspect.rest : [];
-		const projectionValues: Record<string, JsonValue> = {};
-		await Promise.all(
-			this.project.inspectors.map(async name => {
-				try {
-					projectionValues[name] = await this.rpc<JsonValue>('session.inspectProject', { name, args: null });
-				} catch (error) {
-					projectionValues[name] = { error: message(error) };
-				}
-			}),
-		);
-		if (generation !== this.generation) return;
+		this.syncClosedModals(modals);
 		this.snapshot = {
-			connection: 'connected',
 			error: this.snapshot?.error,
-			project: this.project,
-			session: description,
-			scenarioId: description.preset.scenario.id,
-			params: description.preset.params ?? {},
-			actors: description.actors,
+			project,
+			session,
+			actors: session.actors,
 			channels,
 			conversations,
 			commands,
 			log,
 			rawInspect: inspect,
-			projections: projectionValues,
-			pending: {
-				modals: pending.modals ?? [],
-				collectors: (pending.collectors ?? []).map((collector, index) =>
-					entry(
-						`collector-${index}`,
-						`${collector.kind} · ${collector.customIds?.join(', ') ?? ''}`,
-						collector.messageId,
-					),
-				),
-			},
-			inspector: {
-				actions: [
-					...log.entries.map(item =>
-						entry(
-							`action-${item.seq}`,
-							`${item.action.kind.toUpperCase()} · ${'verb' in item.action ? item.action.verb : item.action.op}`,
-							item.outcome.error ?? item.outcome.summary,
-							!item.outcome.ok,
-						),
-					),
-				],
-				rest: rest.map((item, index) => {
-					const call = item as { method?: string; route?: string; error?: unknown; response?: { status?: number } };
-					return entry(
-						`rest-${index}`,
-						`${call.response?.status ?? ''} · ${call.method ?? ''} ${call.route ?? ''}`,
-						call.error ?? call.response ?? '',
-						Boolean(call.error),
-					);
-				}),
-				diagnostics: inspect.diagnostics.map((text, index) => entry(`diagnostic-${index}`, text, '')),
-			},
+			projections,
+			pending: { modals, collectors: collectorEntries(pending) },
 			closedModals: this.closedKeys(),
-			names: description.names,
+			inspector: inspectorEntries(log, inspect),
 			host: this.host,
 		};
 		this.emit();
@@ -491,35 +518,24 @@ export class HostClient implements LabClient {
 			if (error instanceof HostError) throw error;
 			throw new Error('The preview is not reachable. Try again in a moment.');
 		}
-		if (!replaced) return;
-		this.stopWatching();
-		this.closeStream();
-		this.stop(replaced, { clearError: true });
+		if (replaced) this.leaveReplacedHost(replaced);
 	}
-	async start(input: {
-		scenarioId: string;
-		params: Record<string, JsonValue>;
-		services: Record<string, string>;
-	}): Promise<void> {
+	async start(choice: ScenarioChoice): Promise<void> {
 		try {
 			await this.syncBeforeStart();
-			if (!this.project) throw new Error('Project description is unavailable');
-			const scenario = this.project.scenarios.find(item => item.id === input.scenarioId);
-			if (!scenario) throw new Error(`Unknown scenario ${input.scenarioId}`);
-			await this.json('/api/session', {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({
-					preset: {
-						scenario: { id: scenario.id, version: scenario.version },
-						params: Object.fromEntries(Object.entries(input.params).filter(([, value]) => value !== null)),
-						services: input.services,
-					},
-				}),
+			const scenario = this.project?.scenarios.find(item => item.id === choice.scenarioId);
+			if (!scenario) throw new Error(`Unknown scenario ${choice.scenarioId}`);
+			await this.post('/api/session', {
+				preset: {
+					scenario: { id: scenario.id, version: scenario.version },
+					params: presetParams(choice),
+					services: choice.services,
+				},
 			});
 			this.forgetClosedModals();
 			this.active = true;
 			if (this.host?.mode === 'hosted') this.host = { ...this.host, run: { state: 'active', session: true } };
+			// The refresh below emits the new session; clearing here must not flash an empty launcher first.
 			if (this.snapshot) this.snapshot = { ...this.snapshot, error: undefined, notice: undefined };
 			this.openStream();
 			await this.refresh();
@@ -529,8 +545,7 @@ export class HostClient implements LabClient {
 	}
 	async act(action: LabAction): Promise<void> {
 		try {
-			const recorded = semanticAction(action, this.snapshot);
-			const outcome = await this.rpc<ActionOutcome>('session.act', recorded as unknown as JsonValue);
+			const outcome = await this.rpc<ActionOutcome>('session.act', semanticAction(action, this.snapshot));
 			if (!outcome.ok) throw new Error(outcome.error ?? 'Action failed');
 			if (this.snapshot) this.snapshot = { ...this.snapshot, error: undefined };
 			await this.refresh();
@@ -544,17 +559,13 @@ export class HostClient implements LabClient {
 			return (await this.json<{ names: string[] }>('/api/checkpoints')).names;
 		} catch (error) {
 			// Hosted checkpoints belong to a run; a browser without one has none.
-			if (error instanceof HostError && (error.code === 'run-missing' || error.code === 'run-ended')) return [];
+			if (isRunGone(error)) return [];
 			throw error;
 		}
 	}
 	async saveCheckpoint(name: string, arrival: Expectation[]): Promise<Checkpoint> {
 		const checkpoint = createCheckpoint(await this.rpc<SessionLog>('session.log'), name, arrival);
-		await this.json('/api/checkpoints', {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ checkpoint }),
-		});
+		await this.post('/api/checkpoints', { checkpoint });
 		return checkpoint;
 	}
 	async loadCheckpoint(name: string): Promise<Checkpoint> {
@@ -564,11 +575,10 @@ export class HostClient implements LabClient {
 		// The host stops the visual session before replaying, whether or not the replay passes;
 		// a revision mismatch is refused before anything stops.
 		try {
-			await this.json(`/api/checkpoints/${encodeURIComponent(name)}/replay`, {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify(options?.acceptRevision ? { acceptRevision: true } : {}),
-			});
+			await this.post(
+				`/api/checkpoints/${encodeURIComponent(name)}/replay`,
+				options?.acceptRevision ? { acceptRevision: true } : {},
+			);
 		} catch (error) {
 			if (!(error instanceof HostError && error.code === 'revision-mismatch') && this.active) this.stop(REPLAY_NOTICE);
 			throw error;
@@ -586,18 +596,15 @@ export class HostClient implements LabClient {
 		this.serverClosed.clear();
 		this.localCloses.clear();
 	}
-	/** Sends a client-state action; the runtime may refuse it (the modal timed out meanwhile), which undoes `optimistic`. */
+	/** Sends a client-state action; the runtime may refuse it (the modal timed out meanwhile), which runs `undo`. */
 	private sendLocal(action: LabAction, undo: () => void): void {
-		void this.rpc<ActionOutcome>('session.act', action as unknown as JsonValue)
+		void this.rpc<ActionOutcome>('session.act', action)
 			.then(outcome => {
 				if (!outcome.ok) throw new Error(outcome.error ?? `${action.kind} action failed`);
 			})
 			.catch(error => {
 				undo();
-				if (this.snapshot) {
-					this.snapshot = { ...this.snapshot, closedModals: this.closedKeys(), error: message(error) };
-					this.emit();
-				}
+				this.update({ closedModals: this.closedKeys(), error: errorText(error) });
 			})
 			.finally(() => {
 				void this.refresh().catch(() => undefined);
@@ -605,26 +612,22 @@ export class HostClient implements LabClient {
 	}
 	/** Closing is client state on the host: the bot keeps waiting, and the modal's own trigger reopens it. */
 	closeModal(actor: string, customId: string): void {
-		const modal = this.snapshot?.pending.modals.find(
-			item =>
-				item.customId === customId && this.snapshot?.actors.find(value => value.key === actor)?.userId === item.userId,
-		);
-		if (!modal || !this.snapshot) return;
+		const userId = this.snapshot?.actors.find(item => item.key === actor)?.userId;
+		const modal = this.snapshot?.pending.modals.find(item => item.customId === customId && item.userId === userId);
+		if (!modal) return;
 		const key = modal.interactionId;
 		this.localCloses.add(key);
-		this.snapshot = { ...this.snapshot, closedModals: this.closedKeys() };
-		this.emit();
+		this.update({ closedModals: this.closedKeys() });
 		this.sendLocal({ kind: 'local', op: 'closeModal', actor, customId }, () => this.localCloses.delete(key));
 	}
 	reopenModal(key: string): void {
 		const modal = this.snapshot?.pending.modals.find(item => item.interactionId === key);
-		const actor = this.snapshot?.actors.find(item => item.userId === modal?.userId)?.key;
-		if (!modal || !actor || !this.snapshot) return;
+		const actor = modal && this.snapshot?.actors.find(item => item.userId === modal.userId)?.key;
+		if (!modal || !actor) return;
 		const wasClosed = this.serverClosed.has(key);
 		this.localCloses.delete(key);
 		this.serverClosed.delete(key);
-		this.snapshot = { ...this.snapshot, closedModals: this.closedKeys() };
-		this.emit();
+		this.update({ closedModals: this.closedKeys() });
 		this.sendLocal({ kind: 'local', op: 'reopenModal', actor, customId: modal.customId }, () => {
 			if (wasClosed) this.serverClosed.add(key);
 		});
@@ -632,27 +635,17 @@ export class HostClient implements LabClient {
 	/** Hides one of the actor's own ephemeral messages for that actor only, as Discord's Dismiss message does. */
 	async dismissMessage(actor: string, channel: string, visible: VisibleMessage): Promise<void> {
 		// A second click before the refresh must not reach the host: it targets exactly this message.
+		// The runtime records the message text replay needs to find it again.
 		const key = `${actor}:${visible.id}`;
 		if (this.dismissing.has(key)) return;
 		this.dismissing.add(key);
-		const payload = visible.payload;
-		// The content locator is only what replay uses when message IDs differ; the live action is exact.
-		const contains = payload.content || payload.embeds?.[0]?.title || payload.embeds?.[0]?.description;
 		try {
-			await this.act({
-				kind: 'local',
-				op: 'dismissMessage',
-				actor,
-				source: { channel, messageRef: visible.id, ...(contains ? { contains } : {}) },
-			});
+			await this.act({ kind: 'local', op: 'dismissMessage', actor, source: { channel, messageRef: visible.id } });
 		} finally {
 			this.dismissing.delete(key);
 		}
 	}
 	clearError(): void {
-		if (this.snapshot) {
-			this.snapshot = { ...this.snapshot, error: undefined };
-			this.emit();
-		}
+		this.update({ error: undefined });
 	}
 }

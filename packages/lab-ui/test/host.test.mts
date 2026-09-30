@@ -16,7 +16,7 @@ test('HostClient drives a child session through HTTP and exposes action failures
 	try {
 		const client = new HostClient(host.url);
 		const initial = await client.connect();
-		assert.equal(initial.connection, 'disconnected');
+		assert.equal(initial.session, undefined);
 		assert.equal(initial.project.name, 'fixture');
 		const snapshots: LabSnapshot[] = [];
 		const unsubscribe = client.subscribe(snapshot => snapshots.push(snapshot));
@@ -27,7 +27,7 @@ test('HostClient drives a child session through HTTP and exposes action failures
 		await client.act({ kind: 'user', actor: 'alice', verb: 'slash', command: 'flow', channel: 'channel' });
 		const current = snapshots.at(-1);
 		assert.ok(current);
-		assert.equal(current?.connection, 'connected');
+		assert.ok(current.session);
 		assert.equal(current.session?.refs.guild, current.session?.guilds[0].id);
 		const messageId = current.conversations[`alice:${current.session?.refs.channel}`].messages.find(
 			item => item.payload.content === 'Panel',
@@ -54,7 +54,7 @@ test('HostClient drives a child session through HTTP and exposes action failures
 		await new Promise<void>((done, reject) => {
 			const timeout = setTimeout(() => reject(new Error('local action was not logged')), 1000);
 			const stop = client.subscribe(snapshot => {
-				if (snapshot.inspector.actions.some(item => item.label === 'LOCAL · closeModal')) {
+				if (snapshot.inspector.actions.some(item => item.kind === 'local' && item.label === 'closeModal')) {
 					clearTimeout(timeout);
 					stop();
 					done();
@@ -100,13 +100,13 @@ test('a reloaded tab shows the session the host is still running', async () => {
 		await first.act({ kind: 'user', actor: 'alice', verb: 'slash', command: 'flow', channel: 'channel' });
 
 		const reloaded = await new HostClient(host.url).connect();
-		assert.equal(reloaded.connection, 'connected');
+		assert.ok(reloaded.session);
 		const channelId = reloaded.session?.refs.channel;
 		assert.ok(reloaded.conversations[`alice:${channelId}`].messages.some(item => item.payload.content === 'Panel'));
 
 		await fetch(`${host.url}/api/session`, { method: 'DELETE' });
 		const idle = await new HostClient(host.url).connect();
-		assert.equal(idle.connection, 'disconnected');
+		assert.equal(idle.session, undefined);
 		assert.equal(idle.error, undefined);
 	} finally {
 		await host.close();
@@ -243,7 +243,7 @@ test('hosted browsers get isolated runs and the catalogue needs none', async () 
 		const a = new HostClient(host.url, tabA);
 		const b = new HostClient(host.url, tabB);
 		const catalogue = await a.connect();
-		assert.equal(catalogue.connection, 'disconnected');
+		assert.equal(catalogue.session, undefined);
 		assert.equal(catalogue.project.name, 'fixture');
 		assert.equal(catalogue.host?.mode, 'hosted');
 		assert.deepEqual(catalogue.host?.run, { state: 'none' });
@@ -256,7 +256,7 @@ test('hosted browsers get isolated runs and the catalogue needs none', async () 
 		assert.ok(panelIn(await a.connect()));
 		// A reload in B's tab adopts B's run, which never saw A's command.
 		const reloadedB = await new HostClient(host.url, tabB).connect();
-		assert.equal(reloadedB.connection, 'connected');
+		assert.ok(reloadedB.session);
 		assert.equal(panelIn(reloadedB), false);
 		await a.saveCheckpoint('mine', []);
 		assert.deepEqual(await a.listCheckpoints(), ['mine']);
@@ -280,12 +280,12 @@ test('an expired hosted run ends with a notice and Start creates a new one', asy
 			client.act({ kind: 'user', actor: 'alice', verb: 'slash', command: 'flow', channel: 'channel' }),
 		);
 		const ended = await client.connect();
-		assert.equal(ended.connection, 'disconnected');
+		assert.equal(ended.session, undefined);
 		assert.equal(ended.notice, 'Run expired after inactivity.');
 		assert.equal(ended.error, undefined);
 		assert.deepEqual(ended.host?.run, { state: 'ended', reason: 'expired' });
 		await client.start({ scenarioId: 'flow', params: { label: 'Panel' }, services: {} });
-		assert.equal((await client.connect()).connection, 'connected');
+		assert.ok((await client.connect()).session);
 	} finally {
 		await host.close();
 	}
@@ -306,9 +306,9 @@ test('a redeployed preview reports the new revision and never reattaches the old
 		);
 		const updated = await waitFor(client, snapshot => /updated/.test(snapshot.notice ?? ''));
 		assert.equal(updated.notice, 'The preview was updated to bbbbbbb.');
-		assert.equal(updated.connection, 'disconnected');
+		assert.equal(updated.session, undefined);
 		assert.equal(updated.host?.build?.revision, 'bbbbbbb2222');
-		assert.equal((await new HostClient(second.host.url, tab).connect()).connection, 'disconnected');
+		assert.equal((await new HostClient(second.host.url, tab).connect()).session, undefined);
 	} finally {
 		await second.host.close();
 	}
@@ -351,7 +351,7 @@ test('a lost stream followed by a restart or an expiry leaves only the launcher 
 			stream.onerror?.();
 			const restarted = await waitFor(client, snapshot => snapshot.notice === 'The preview restarted.');
 			assert.equal(restarted.error, undefined);
-			assert.equal(restarted.connection, 'disconnected');
+			assert.equal(restarted.session, undefined);
 			assert.ok(stream.closed);
 
 			await client.start({ scenarioId: 'flow', params: { label: 'Panel' }, services: {} });
@@ -433,7 +433,7 @@ test('a graceful redeploy ends the run and the replacement host is found with it
 		live.splice(live.indexOf(host), 1);
 		const stopped = await waitFor(client, snapshot => snapshot.notice === 'The preview stopped.');
 		assert.equal(stopped.error, undefined);
-		assert.equal(stopped.connection, 'disconnected');
+		assert.equal(stopped.session, undefined);
 	};
 	try {
 		const first = await replace('aaaaaaa1111');
@@ -451,7 +451,6 @@ test('a graceful redeploy ends the run and the replacement host is found with it
 		const second = await replace('aaaaaaa1111');
 		const restarted = await waitFor(client, snapshot => snapshot.notice === 'The preview restarted.', 10000);
 		assert.equal(restarted.error, undefined);
-		assert.equal(restarted.connection, 'disconnected');
 		assert.equal(restarted.session, undefined);
 		assert.equal(WireEventSource.instances.at(-1), firstStream, 'nothing reattached or restarted a run');
 
@@ -474,7 +473,7 @@ test('a graceful redeploy ends the run and the replacement host is found with it
 		await replace('ccccccc3333');
 		await client.start({ scenarioId: 'flow', params: { label: 'Panel' }, services: {} });
 		const current = await client.connect();
-		assert.equal(current.connection, 'connected');
+		assert.ok(current.session);
 		assert.equal(current.host?.build?.revision, 'ccccccc3333');
 		assert.deepEqual(
 			current.project.scenarios.map(item => item.id),
@@ -518,7 +517,7 @@ test('an abruptly killed host is replaced and found without a shutdown event', a
 		replacement = (await hostedHost(port, 'aaaaaaa1111')).host;
 		const restarted = await waitFor(client, snapshot => snapshot.notice === 'The preview restarted.', 10000);
 		assert.equal(restarted.error, undefined);
-		assert.equal(restarted.connection, 'disconnected');
+		assert.equal(restarted.session, undefined);
 	} finally {
 		unsubscribe();
 		if (cli.exitCode === null) cli.kill('SIGKILL');

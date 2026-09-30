@@ -1,7 +1,18 @@
 import { type FormEvent, useEffect, useRef, useState } from 'react';
 import type { ComponentPayload, PendingModal } from '../bridge';
+import { CloseIcon } from '../icons';
+import { ComponentType } from '../messages';
 import { Markdown } from './Markdown';
-import { SelectMenu } from './SelectMenu';
+import { SelectMenu, selectionHint } from './SelectMenu';
+
+export type ModalValues = Record<string, string | string[]>;
+
+const PARAGRAPH_STYLE = 2;
+
+/** A select in a modal is required unless marked otherwise, and takes one value unless it says more. */
+function selectBounds(input: ComponentPayload): { min: number; max: number } {
+	return { min: input.min_values ?? (input.required === false ? 0 : 1), max: input.max_values ?? 1 };
+}
 
 function FieldHeading({
 	id,
@@ -50,11 +61,12 @@ function ModalField({
 	label: string;
 	description?: string;
 	input: ComponentPayload;
-	values: Record<string, string | string[]>;
-	setValues: (next: Record<string, string | string[]>) => void;
+	values: ModalValues;
+	setValues: (next: ModalValues) => void;
 }) {
 	const id = input.custom_id ?? '';
-	if (input.type === 4) {
+	const value = values[id];
+	if (input.type === ComponentType.TextInput) {
 		const shared = {
 			id,
 			name: id,
@@ -63,20 +75,19 @@ function ModalField({
 			maxLength: input.max_length,
 			placeholder: input.placeholder,
 			'aria-describedby': description ? `${id}-description` : undefined,
-			value: typeof values[id] === 'string' ? (values[id] as string) : '',
+			value: typeof value === 'string' ? value : '',
 			onChange: (event: { target: { value: string } }) => setValues({ ...values, [id]: event.target.value }),
 		};
 		return (
 			<div className="modal-field">
 				<FieldHeading id={id} label={label} description={description} required={shared.required} />
-				{input.style === 2 ? <textarea {...shared} rows={4} /> : <input {...shared} type="text" />}
+				{input.style === PARAGRAPH_STYLE ? <textarea {...shared} rows={4} /> : <input {...shared} type="text" />}
 			</div>
 		);
 	}
-	if (input.type === 3) {
-		const selected = Array.isArray(values[id]) ? values[id] : [];
-		const min = input.min_values ?? (input.required === false ? 0 : 1);
-		const max = input.max_values ?? 1;
+	if (input.type === ComponentType.StringSelect) {
+		const selected = Array.isArray(value) ? value : [];
+		const { min, max } = selectBounds(input);
 		return (
 			<div className="modal-field">
 				<FieldHeading id={id} label={label} description={description} required={min > 0} group />
@@ -91,7 +102,7 @@ function ModalField({
 					placeholder={input.placeholder ?? 'Make a selection'}
 				/>
 				{(selected.length < min || selected.length > max) && (
-					<span className="field-error">Select {min === max ? min : `${min}–${max}`}.</span>
+					<span className="field-error">{selectionHint(min, max)}.</span>
 				)}
 			</div>
 		);
@@ -99,14 +110,12 @@ function ModalField({
 	return <div className="unsupported">Unsupported field type {input.type}</div>;
 }
 
-export type ModalValues = Record<string, string | string[]>;
-
 function initialModalValues(modal: PendingModal): ModalValues {
 	const values: ModalValues = {};
 	for (const component of modal.payload.components) {
 		const input = component.component;
 		if (!input?.custom_id) continue;
-		if (input.type === 3)
+		if (input.type === ComponentType.StringSelect)
 			values[input.custom_id] = input.options?.filter(option => option.default).map(option => option.value) ?? [];
 		else if (input.value !== undefined) values[input.custom_id] = input.value;
 	}
@@ -168,10 +177,11 @@ export function Modal({
 		event.preventDefault();
 		for (const component of modal.payload.components) {
 			const input = component.component;
-			if (input?.type !== 3 || !input.custom_id) continue;
-			const count = Array.isArray(values[input.custom_id]) ? values[input.custom_id].length : 0;
-			const min = input.min_values ?? (input.required === false ? 0 : 1);
-			if (count < min || count > (input.max_values ?? 1)) return;
+			if (input?.type !== ComponentType.StringSelect || !input.custom_id) continue;
+			const value = values[input.custom_id];
+			const count = Array.isArray(value) ? value.length : 0;
+			const { min, max } = selectBounds(input);
+			if (count < min || count > max) return;
 		}
 		onSubmit({ customId: modal.customId, fields: values });
 	}
@@ -181,16 +191,15 @@ export function Modal({
 				<div className="modal-heading">
 					<h2 id="modal-title">{modal.payload.title}</h2>
 					<button type="button" className="icon-button" aria-label="Close" onClick={onClose}>
-						<svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-							<path d="M6 6l12 12M18 6 6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-						</svg>
+						<CloseIcon size={20} />
 					</button>
 				</div>
 				<form onSubmit={submit}>
 					<div className="modal-content">
 						{modal.payload.components.map((component, index) => {
-							if (component.type === 10) return <Markdown key={component.id ?? index} text={component.content ?? ''} />;
-							if (component.type === 18 && component.component)
+							if (component.type === ComponentType.TextDisplay)
+								return <Markdown key={component.id ?? index} text={component.content ?? ''} />;
+							if (component.type === ComponentType.Label && component.component)
 								return (
 									<ModalField
 										key={component.id ?? index}

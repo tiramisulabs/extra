@@ -1,8 +1,12 @@
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import type { ComponentPayload } from '../bridge';
+import { ChevronIcon } from '../icons';
 import { EmojiLabel } from './Markdown';
 
 export type SelectOption = NonNullable<ComponentPayload['options']>[number];
+
+/** How many values a select still needs, as Discord words it. */
+export const selectionHint = (min: number, max: number) => `Select ${min === max ? min : `${min}–${max}`}`;
 
 /**
  * Discord's select menu: a closed trigger that summarises the choice and a listbox that opens below it.
@@ -66,13 +70,8 @@ export function SelectMenu({
 			onConfirm?.([value]);
 			return;
 		}
-		onChange(
-			selected.includes(value)
-				? selected.filter(item => item !== value)
-				: selected.length < max
-					? [...selected, value]
-					: selected,
-		);
+		if (selected.includes(value)) onChange(selected.filter(item => item !== value));
+		else if (selected.length < max) onChange([...selected, value]);
 	}
 	function moveFocus(event: KeyboardEvent<HTMLUListElement>) {
 		if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
@@ -105,9 +104,7 @@ export function SelectMenu({
 							))
 						: placeholder}
 				</span>
-				<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-					<path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-				</svg>
+				<ChevronIcon size={18} />
 			</button>
 			{open && (
 				<div className="select-popover">
@@ -138,7 +135,7 @@ export function SelectMenu({
 					{multiple && (
 						<div className="select-footer">
 							<span className={valid ? 'select-count' : 'field-error'}>
-								{valid ? `${selected.length}/${max}` : `Select ${min === max ? min : `${min}–${max}`}`}
+								{valid ? `${selected.length}/${max}` : selectionHint(min, max)}
 							</span>
 							{selected.length > 0 && min === 0 && (
 								<button type="button" className="button link small" onClick={() => onChange([])}>

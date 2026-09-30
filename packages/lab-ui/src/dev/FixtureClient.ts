@@ -1,4 +1,5 @@
-import type { LabAction, LabClient, LabSnapshot, VisibleMessage } from '../bridge';
+import type { InspectorEntry, LabAction, LabClient, LabSnapshot, ScenarioChoice, VisibleMessage } from '../bridge';
+import { presetParams } from '../bridge';
 
 const bot = { id: 'bot', username: 'Seyfert', bot: true };
 const message = (id: string, content: string, extra: Partial<VisibleMessage> = {}): VisibleMessage => ({
@@ -10,7 +11,6 @@ const message = (id: string, content: string, extra: Partial<VisibleMessage> = {
 });
 
 const initial: LabSnapshot = {
-	connection: 'connected',
 	project: {
 		name: 'Reference bot',
 		scenarios: [
@@ -30,7 +30,11 @@ const initial: LabSnapshot = {
 		inspectors: [],
 	},
 	session: {
-		preset: { scenario: { id: 'welcome', version: 1 }, params: {}, services: { replies: 'normal' } },
+		preset: {
+			scenario: { id: 'welcome', version: 1 },
+			params: { greeting: 'Hello', requireReview: true, attempts: 2, mode: 'manual' },
+			services: { replies: 'normal' },
+		},
 		refs: { guild: 'guild', general: 'general', staff: 'staff', alice: '101', bob: '102' },
 		actors: [],
 		guilds: [
@@ -56,11 +60,9 @@ const initial: LabSnapshot = {
 		names: {
 			users: { '101': 'Alice', '102': 'Bob' },
 			roles: { member: 'Member', moderator: 'Moderator' },
-			channels: { general: 'general', staff: 'staff' },
+			channels: { general: 'general', staff: 'staff', '222': 'general' },
 		},
 	},
-	scenarioId: 'welcome',
-	params: { greeting: 'Hello', requireReview: true, attempts: 2, mode: 'manual' },
 	actors: [
 		{
 			key: 'alice',
@@ -214,6 +216,7 @@ const initial: LabSnapshot = {
 		],
 		collectors: [{ id: 'collector-1', label: 'Button approve', detail: 'Waiting for input' }],
 	},
+	closedModals: [],
 	inspector: {
 		actions: [{ id: 'start', label: 'Scenario started', detail: 'welcome v1' }],
 		rest: [
@@ -225,11 +228,6 @@ const initial: LabSnapshot = {
 			},
 		],
 		diagnostics: [{ id: 'diag-1', label: 'no-view-channel', detail: 'alice → staff' }],
-	},
-	names: {
-		users: { '101': 'Alice', '102': 'Bob' },
-		roles: { member: 'Member', moderator: 'Moderator' },
-		channels: { '222': 'general' },
 	},
 };
 
@@ -249,29 +247,23 @@ export class FixtureClient implements LabClient {
 		const current = structuredClone(this.snapshot);
 		for (const listener of this.listeners) listener(current);
 	}
-	async start(input: {
-		scenarioId: string;
-		params: Record<string, import('../bridge').JsonValue>;
-		services: Record<string, string>;
-	}) {
-		this.snapshot.scenarioId = input.scenarioId;
-		this.snapshot.params = input.params;
+	private log(entry: Omit<InspectorEntry, 'id'>) {
+		this.snapshot.inspector.actions.unshift({ id: crypto.randomUUID(), ...entry });
+	}
+	async start(choice: ScenarioChoice) {
+		const version = this.snapshot.project.scenarios.find(item => item.id === choice.scenarioId)?.version ?? 1;
+		if (this.snapshot.session)
+			this.snapshot.session.preset = {
+				scenario: { id: choice.scenarioId, version },
+				params: presetParams(choice),
+				services: choice.services,
+			};
 		this.snapshot.closedModals = [];
-		for (const [name, variant] of Object.entries(input.services))
-			if (this.snapshot.project.services[name]) this.snapshot.project.services[name].default = variant;
-		this.snapshot.inspector.actions.unshift({
-			id: crypto.randomUUID(),
-			label: 'Scenario restarted',
-			detail: input.scenarioId,
-		});
+		this.log({ label: 'Scenario restarted', detail: choice.scenarioId });
 		this.emit();
 	}
 	async act(action: LabAction) {
-		this.snapshot.inspector.actions.unshift({
-			id: crypto.randomUUID(),
-			label: 'verb' in action ? action.verb : action.op,
-			detail: JSON.stringify(action),
-		});
+		this.log({ kind: action.kind, label: 'verb' in action ? action.verb : action.op, detail: JSON.stringify(action) });
 		if ('verb' in action && action.verb === 'submitModal') {
 			const userId = this.snapshot.actors.find(actor => actor.key === action.actor)?.userId;
 			this.snapshot.pending.modals = this.snapshot.pending.modals.filter(
@@ -283,22 +275,18 @@ export class FixtureClient implements LabClient {
 	closeModal(actor: string, customId: string) {
 		const userId = this.snapshot.actors.find(item => item.key === actor)?.userId;
 		const modal = this.snapshot.pending.modals.find(item => item.customId === customId && item.userId === userId);
-		if (modal) this.snapshot.closedModals = [...(this.snapshot.closedModals ?? []), modal.interactionId];
-		this.snapshot.inspector.actions.unshift({ id: crypto.randomUUID(), label: 'LOCAL · closeModal', detail: customId });
+		if (modal) this.snapshot.closedModals = [...this.snapshot.closedModals, modal.interactionId];
+		this.log({ kind: 'local', label: 'closeModal', detail: customId });
 		this.emit();
 	}
 	async dismissMessage(actor: string, channel: string, dismissed: VisibleMessage) {
 		const view = this.snapshot.conversations[`${actor}:${channel}`];
 		if (view) view.messages = view.messages.filter(item => item.id !== dismissed.id);
-		this.snapshot.inspector.actions.unshift({
-			id: crypto.randomUUID(),
-			label: 'LOCAL · dismissMessage',
-			detail: dismissed.id,
-		});
+		this.log({ kind: 'local', label: 'dismissMessage', detail: dismissed.id });
 		this.emit();
 	}
 	reopenModal(key: string) {
-		this.snapshot.closedModals = (this.snapshot.closedModals ?? []).filter(item => item !== key);
+		this.snapshot.closedModals = this.snapshot.closedModals.filter(item => item !== key);
 		this.emit();
 	}
 	clearError() {
