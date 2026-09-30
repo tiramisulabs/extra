@@ -19,6 +19,7 @@ import { channelAccess, type MessageDenial, messageDenial } from './message-visi
 import { MockBot as MockBotCore } from './mock-bot';
 import type {
 	CommandSchema,
+	InspectedMessage,
 	MockBotEvent,
 	PendingCollector,
 	PendingInteractionChange,
@@ -145,7 +146,7 @@ export class MockBot extends MockBotCore {
 	}
 
 	/** Every message in the channel, including hidden and deleted ones, with delivery details. */
-	inspectChannel(channelId: string): { messages: (VisibleMessage & { deleted?: boolean })[]; diagnostics: string[] } {
+	inspectChannel(channelId: string): { messages: InspectedMessage[]; diagnostics: string[] } {
 		if (!this._world?.channels.some(entry => entry.id === channelId)) {
 			return { messages: [], diagnostics: ['unknown-channel'] };
 		}

@@ -84,12 +84,13 @@ export function defineScenario<R = unknown>(scenario: Scenario<R>): Scenario<R> 
 export function defineProject<R = unknown>(project: Project<R>): Project<R> {
 	return project;
 }
-export interface Preset {
+/** A type alias rather than an interface so a preset is assignable to `JsonValue`. */
+export type Preset = {
 	scenario: { id: string; version: number };
 	params?: Params;
 	services?: Record<string, string>;
 	refs?: Record<string, string>;
-}
+};
 export interface Locator {
 	channel: string;
 	messageRef?: string;

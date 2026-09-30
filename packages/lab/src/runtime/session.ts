@@ -22,12 +22,10 @@ import type {
 	SessionLog,
 } from '../index';
 import { isParamValue, PROTOCOL_VERSION, validateLabAction } from '../protocol';
-import { createObservers, errorText } from '../shared';
+import { createObservers, errorText, LAB_VERSION } from '../shared';
 import { performAction } from './actions';
 import { jsonCopy, toJson } from './json';
 import { conversation, describeRun, inspectRun, type Run, requireActor, resolveRef, unknownRefError } from './run';
-
-export const LAB_VERSION: string = require('../../package.json').version;
 
 const DEFAULT_DISPOSE_TIMEOUT_MS = 5000;
 

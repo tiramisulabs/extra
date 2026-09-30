@@ -1,5 +1,7 @@
 import type { Session, SessionEvent } from './index';
 
+export const LAB_VERSION: string = require('../package.json').version;
+
 export const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 type Listener = (event: SessionEvent) => void;

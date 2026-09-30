@@ -105,6 +105,7 @@ export {
 } from './interactions';
 export type {
 	CommandSchema,
+	InspectedMessage,
 	MockBotEvent,
 	ModalOpenerSource,
 	PendingCollector,

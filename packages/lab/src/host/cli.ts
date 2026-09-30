@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { dirname, resolve } from 'node:path';
-import { errorText } from './http';
+import { errorText } from '../shared';
 import { type BuildInfo, type HostedOptions, startHost } from './index';
 
 const USAGE =

@@ -3,7 +3,8 @@ import { mkdir, rm } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { resolve } from 'node:path';
 import type { HostInfo, RunEndReason } from '../protocol';
-import { errorText, HttpError } from './http';
+import { errorText } from '../shared';
+import { HttpError } from './http';
 import { createRun, enqueue, enqueueTeardown, publish, type Run, stopSession } from './run';
 
 export interface HostLimits {

@@ -11,8 +11,9 @@ import type {
 	SessionLog,
 } from '../index';
 import { createCheckpoint, validateCheckpoint } from '../protocol';
+import { LAB_VERSION } from '../shared';
 import { messageShows } from './messages';
-import { createSession, LAB_VERSION } from './session';
+import { createSession } from './session';
 
 export interface ReplayResult {
 	log: SessionLog;

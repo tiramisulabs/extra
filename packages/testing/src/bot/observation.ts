@@ -15,11 +15,16 @@ export interface VisibleMessage {
 	interactionId?: string;
 	/** Monotonic creation order in this world. */
 	sequence?: number;
-	/** Whether the message existed when the mock bot started. Only set by inspectChannel. */
-	isHistory?: boolean;
-	/** User IDs that received this message when it was created. Only set by inspectChannel. */
-	liveRecipientIds?: string[];
 	editedAt?: string;
+}
+
+/** A message as `inspectChannel` reports it, including delivery details hidden from actors. */
+export interface InspectedMessage extends VisibleMessage {
+	/** Whether the message existed when the mock bot started. */
+	isHistory: boolean;
+	/** User IDs that received this message when it was created. */
+	liveRecipientIds: string[];
+	deleted?: boolean;
 }
 
 export interface VisibleConversation {

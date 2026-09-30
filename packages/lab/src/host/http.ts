@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { isAbsolute, relative, sep } from 'node:path';
+import { errorText } from '../shared';
 
 const MAX_BODY_BYTES = 1024 * 1024;
 
@@ -12,10 +13,6 @@ export class HttpError extends Error {
 	) {
 		super(message);
 	}
-}
-
-export function errorText(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
 }
 
 export function isErrnoCode(error: unknown, code: string): boolean {

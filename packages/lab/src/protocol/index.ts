@@ -246,7 +246,7 @@ function validateExpectation(value: unknown, actionCount: number): void {
 	} else if (typeof value.path !== 'string' || !Object.hasOwn(value, 'equals')) fail('checkpoint path expectation');
 }
 
-function validatePreset(value: unknown): asserts value is Preset {
+export function validatePreset(value: unknown): asserts value is Preset {
 	if (!isRecord(value) || !isRecord(value.scenario)) fail('session.start payload');
 	requireText(value.scenario.id, 'scenario.id');
 	if (!Number.isSafeInteger(value.scenario.version)) fail('scenario.version');

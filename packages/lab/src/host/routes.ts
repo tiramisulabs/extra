@@ -1,7 +1,7 @@
 import type { IncomingMessage, RequestListener, ServerResponse } from 'node:http';
 import { invokeSession } from '../bridge';
 import { type ChildSessionOptions, createChildSession } from '../child';
-import type { Checkpoint, JsonValue, Preset, Session, SessionEvent } from '../index';
+import type { Checkpoint, Preset, Session, SessionEvent } from '../index';
 import {
 	type BridgeResponse,
 	type HostInfo,
@@ -10,18 +10,19 @@ import {
 	validateBridgeRequest,
 	validateCheckpoint,
 	validateCheckpointName,
+	validatePreset,
 } from '../protocol';
 import { replaySession } from '../runtime';
 import { exportTest } from '../runtime/checkpoint';
+import { errorText, LAB_VERSION } from '../shared';
 import { listCheckpoints, readCheckpoint, writeCheckpoint } from './checkpoints';
 import { isLocalRequest, isPublicOriginRequest } from './guards';
-import { errorText, HttpError, isRecord, readJsonBody, sendJson, validated } from './http';
+import { HttpError, isRecord, readJsonBody, sendJson, validated } from './http';
 import type { HostAccess, HostOptions } from './index';
 import type { RunScope } from './registry';
 import { assertActive, enqueue, openEventStream, publish, type Run, stopSession } from './run';
 import { serveUi } from './static';
 
-const LAB_VERSION: string = require('../../package.json').version;
 const CHECKPOINT_PREFIX = '/api/checkpoints/';
 const HOSTED_EXPORT_MODULE = './lab/project';
 /** Bridge requests with a dedicated endpoint, so `/api/rpc` cannot bypass run bookkeeping. */
@@ -147,13 +148,14 @@ async function startSession(host: HostContext, exchange: Exchange): Promise<void
 	sendJson(res, 201, { ok: true });
 }
 
-/** The protocol validates a preset as the payload of a `session.start` bridge request. */
-function validatedPreset(value: unknown): Preset & JsonValue {
-	validated(() => validateBridgeRequest({ version: PROTOCOL_VERSION, id: 0, type: 'session.start', payload: value }));
-	return value as Preset & JsonValue;
+function validatedPreset(value: unknown): Preset {
+	return validated(() => {
+		validatePreset(value);
+		return value;
+	});
 }
 
-async function startRunSession(host: HostContext, run: Run, preset: Preset & JsonValue): Promise<void> {
+async function startRunSession(host: HostContext, run: Run, preset: Preset): Promise<void> {
 	await stopSession(run);
 	assertActive(run);
 	const session = createChildSession({ ...host.childOptions, preset });
