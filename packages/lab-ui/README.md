@@ -24,7 +24,7 @@ Pass `--ui <dir>` to serve another build. Without this package the host still ru
   and a slash command composer built from the registered command schemas.
 - "Viewing as": switch actors from the user bar or a member's profile.
 - Live roles: add or remove roles from a member profile. These are external changes (like an admin in Discord) and
-  are logged as `ADMIN` actions.
+  appear in the Lab log with an `admin` badge.
 - Lab tooling, marked in amber: pin a visible message or a role as an expected result, save the session as a
   checkpoint, replay it in a fresh session, and export a test.
 

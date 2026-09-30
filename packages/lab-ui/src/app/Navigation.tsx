@@ -1,4 +1,4 @@
-import type { Guild, LabSnapshot } from '../bridge';
+import type { Channel, Guild } from '../bridge';
 import { ChevronIcon, CloseIcon, FlaskIcon, HashIcon, LockedHashIcon } from '../icons';
 
 /** Server icons without artwork show initials, like Discord. */
@@ -61,7 +61,7 @@ export function ChannelSidebar({
 	onClose,
 }: {
 	title: string;
-	channels: LabSnapshot['channels'];
+	channels: Channel[];
 	channel: string;
 	actor: string;
 	viewerName: string;

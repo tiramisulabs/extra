@@ -13,7 +13,7 @@ import type {
 	SessionLog,
 } from '@slipher/lab/protocol';
 
-export type { Expectation, JsonValue, LabAction, ProjectDescription };
+export type { CommandSchema, Expectation, JsonValue, LabAction, ProjectDescription };
 
 export interface ComponentPayload {
 	type: number;
@@ -91,6 +91,8 @@ export interface InspectorEntry {
 	failed?: boolean;
 }
 export type Guild = SessionDescription['guilds'][number];
+export type Actor = SessionDescription['actors'][number];
+export type Channel = Guild['channels'][number] & { guildId: string };
 export interface LabSnapshot {
 	error?: string;
 	/** Why the host stopped the previous session, shown until a new one starts. */
@@ -98,8 +100,6 @@ export interface LabSnapshot {
 	project: ProjectDescription;
 	/** Present while a session runs. */
 	session?: SessionDescription;
-	actors: SessionDescription['actors'];
-	channels: (Guild['channels'][number] & { guildId: string })[];
 	conversations: Record<string, { messages: VisibleMessage[]; diagnostics: string[] }>;
 	commands: CommandSchema[];
 	pending: { modals: PendingModal[]; collectors: InspectorEntry[] };
@@ -116,6 +116,11 @@ export interface LabSnapshot {
 	/** Host mode, build and this browser's run, when the client talks to a real host. */
 	host?: HostInfo;
 }
+/** The session's actors; none before a session starts. */
+export const sessionActors = (session?: SessionDescription): Actor[] => session?.actors ?? [];
+/** Every channel of the session's guilds, tagged with its guild. */
+export const sessionChannels = (session?: SessionDescription): Channel[] =>
+	session?.guilds.flatMap(guild => guild.channels.map(channel => ({ ...channel, guildId: guild.id }))) ?? [];
 type ParamValue = boolean | string | number;
 /** What Start sends: a scenario of the project's catalogue with its parameters and service variants. */
 export interface ScenarioChoice {
@@ -143,12 +148,25 @@ export interface LabClient {
 	dismissMessage(actor: string, channel: string, message: VisibleMessage): Promise<void>;
 	clearError(): void;
 }
+/** A replay refused because the checkpoint was recorded on another build; the user may accept and replay anyway. */
+export interface RevisionMismatch {
+	code: 'revision-mismatch';
+	details: { checkpointRevision?: string; currentRevision?: string };
+}
+export const isRevisionMismatch = (error: unknown): error is RevisionMismatch =>
+	typeof error === 'object' &&
+	error !== null &&
+	'code' in error &&
+	error.code === 'revision-mismatch' &&
+	'details' in error &&
+	typeof error.details === 'object' &&
+	error.details !== null;
 /** Saved checkpoints live on a lab host; a client without one cannot offer them. */
 export interface CheckpointClient {
 	listCheckpoints(): Promise<string[]>;
 	saveCheckpoint(name: string, arrival: Expectation[]): Promise<Checkpoint>;
 	loadCheckpoint(name: string): Promise<Checkpoint>;
-	/** Rejects with `code: 'revision-mismatch'` when the checkpoint was recorded on another build. */
+	/** Rejects with a {@link RevisionMismatch} when the checkpoint was recorded on another build. */
 	replayCheckpoint(name: string, options?: { acceptRevision?: boolean }): Promise<void>;
 	exportCheckpoint(name: string, format: 'vitest' | 'node'): Promise<string>;
 }

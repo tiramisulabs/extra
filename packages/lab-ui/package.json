@@ -13,11 +13,11 @@
 	},
 	"scripts": {
 		"build": "tsc --noEmit && vite build",
-		"typecheck": "tsc --noEmit",
+		"typecheck": "tsc --noEmit && tsc -p test",
 		"lint": "biome lint --write ./src ./test",
 		"format": "biome format --write ./src ./test",
 		"checkb": "biome check --write --no-errors-on-unmatched ./src ./test",
-		"test": "tsx --test test/host.test.mts test/render.test.mts"
+		"test": "tsc -p test && tsx --test test/host.test.mts test/render.test.mts test/view.test.mts"
 	},
 	"devDependencies": {
 		"@slipher/lab": "workspace:*",

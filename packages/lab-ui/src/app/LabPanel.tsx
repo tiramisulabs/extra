@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import type { InspectorEntry, JsonValue, LabClient, LabSnapshot } from '../bridge';
-import { shortRevision } from '../HostClient';
+import { type InspectorEntry, type JsonValue, type LabClient, type LabSnapshot, sessionActors } from '../bridge';
+import { shortRevision } from '../format';
 import { type CheckpointDraft, CheckpointsTab } from './CheckpointsTab';
 import { ScenarioForm, type ScenarioLauncher } from './ScenarioForm';
 
@@ -41,7 +41,7 @@ function Json({ value }: { value: JsonValue | undefined }) {
 /** Restart form and the session's refs; before a session the launcher in the conversation area holds the form. */
 function ScenarioTab({ snapshot, launcher }: { snapshot: LabSnapshot; launcher: ScenarioLauncher }) {
 	const { session } = snapshot;
-	if (!session) return null;
+	if (!session) return <p className="lab-empty">Start a scenario to restart it here and see its refs.</p>;
 	return (
 		<>
 			<ScenarioForm project={snapshot.project} launcher={launcher} running />
@@ -71,7 +71,7 @@ function PendingTab({ snapshot, client, actor }: { snapshot: LabSnapshot; client
 					<ul className="pending-list">
 						{snapshot.pending.modals.map(modal => {
 							const key = modal.interactionId;
-							const owner = snapshot.actors.find(item => item.userId === modal.userId);
+							const owner = sessionActors(snapshot.session).find(item => item.userId === modal.userId);
 							const closed = snapshot.closedModals.includes(key);
 							return (
 								<li key={key}>

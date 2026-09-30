@@ -1,5 +1,5 @@
-import { type FormEvent, type KeyboardEvent, useMemo, useRef, useState } from 'react';
-import type { CommandOption, JsonValue, LabSnapshot } from '../bridge';
+import { type FormEvent, type KeyboardEvent, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { CommandOption, CommandSchema, Guild, JsonValue } from '../bridge';
 import { CloseIcon, SendIcon, SlashIcon } from '../icons';
 
 /** Discord application command option types. */
@@ -26,8 +26,8 @@ interface CommandEntry {
 }
 
 /** Flattens schemas into the executable leaves Discord offers in its picker: command, group + subcommand, or subcommand. */
-function commandEntries(snapshot: LabSnapshot): CommandEntry[] {
-	return snapshot.commands.flatMap(command => {
+function commandEntries(commands: CommandSchema[]): CommandEntry[] {
+	return commands.flatMap(command => {
 		const options = command.options ?? [];
 		const groups = options.filter(option => option.type === OptionType.SubcommandGroup);
 		const subcommands = options.filter(option => option.type === OptionType.Subcommand);
@@ -65,8 +65,7 @@ function commandEntries(snapshot: LabSnapshot): CommandEntry[] {
 }
 
 /** A fixed list to pick from, when the option has one: its choices, booleans, or the guild's entities. */
-function optionChoices(option: CommandOption, snapshot: LabSnapshot, guildId: string) {
-	const guild = snapshot.session?.guilds.find(item => item.id === guildId);
+function optionChoices(option: CommandOption, guild: Guild | undefined) {
 	if ('choices' in option && option.choices?.length)
 		return option.choices.map(choice => ({ label: choice.name, value: String(choice.value) }));
 	if (option.type === OptionType.Boolean)
@@ -100,17 +99,16 @@ function OptionPill({
 	option,
 	value,
 	onChange,
-	snapshot,
-	guildId,
+	guild,
 }: {
 	option: CommandOption;
 	value: JsonValue | undefined;
 	onChange: (value: JsonValue | undefined) => void;
-	snapshot: LabSnapshot;
-	guildId: string;
+	/** The open channel's guild, whose members, roles and channels are the entity options' choices. */
+	guild?: Guild;
 }) {
 	const id = `option-${option.name}`;
-	const choices = optionChoices(option, snapshot, guildId);
+	const choices = optionChoices(option, guild);
 	if (option.type === OptionType.Attachment)
 		return (
 			<span className="option-pill unsupported" title="Attachments are not simulated">
@@ -149,29 +147,38 @@ function OptionPill({
 }
 
 export function Composer({
-	snapshot,
+	commands,
+	projectName,
 	channelName,
-	guildId,
+	guild,
 	canView,
 	onRun,
 }: {
-	snapshot: LabSnapshot;
+	commands: CommandSchema[];
+	projectName: string;
 	channelName: string;
-	guildId: string;
+	guild?: Guild;
 	canView: boolean;
 	onRun: (entry: { command: string; group?: string; subcommand?: string; options: Record<string, JsonValue> }) => void;
 }) {
-	const entries = useMemo(() => commandEntries(snapshot), [snapshot]);
+	const entries = useMemo(() => commandEntries(commands), [commands]);
 	const [query, setQuery] = useState('');
 	const [picking, setPicking] = useState(false);
 	const [highlight, setHighlight] = useState(0);
 	const [selectedKey, setSelectedKey] = useState<string>();
 	const [values, setValues] = useState<Record<string, JsonValue | undefined>>({});
 	const input = useRef<HTMLInputElement>(null);
+	/** Set by `clear`: the command input returns once it replaces the cleared draft. */
+	const refocus = useRef(false);
 	const search = query.replace(/^\//, '').trim().toLowerCase();
 	const matches = entries.filter(entry => entry.key.includes(search));
 	// Resolved on every render so a schema update reaches a command already chosen.
 	const current = entries.find(entry => entry.key === selectedKey);
+	useLayoutEffect(() => {
+		if (current || !refocus.current) return;
+		refocus.current = false;
+		input.current?.focus();
+	}, [current]);
 
 	function choose(entry: CommandEntry) {
 		setSelectedKey(entry.key);
@@ -183,7 +190,7 @@ export function Composer({
 		setSelectedKey(undefined);
 		setValues({});
 		setQuery('');
-		input.current?.focus();
+		refocus.current = true;
 	}
 	function submit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
@@ -221,7 +228,7 @@ export function Composer({
 		<form className="composer" onSubmit={submit}>
 			{picking && !current && (
 				<div className="command-picker" role="listbox" id="command-picker" aria-label="Commands">
-					<div className="picker-heading">{snapshot.project.name}</div>
+					<div className="picker-heading">{projectName}</div>
 					{matches.length ? (
 						matches.map((entry, index) => (
 							<button
@@ -257,8 +264,7 @@ export function Composer({
 								key={option.name}
 								option={option}
 								value={values[option.name]}
-								snapshot={snapshot}
-								guildId={guildId}
+								guild={guild}
 								onChange={value => setValues(existing => ({ ...existing, [option.name]: value }))}
 							/>
 						))}

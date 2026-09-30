@@ -1,9 +1,7 @@
 import { useState } from 'react';
-import type { LabSnapshot } from '../bridge';
+import type { Actor } from '../bridge';
 import { ChevronIcon } from '../icons';
 import { Avatar } from '../render/Avatar';
-
-type Actor = LabSnapshot['actors'][number];
 
 /** The actor the conversation is seen as, with a switcher to view as another. */
 export function UserDock({

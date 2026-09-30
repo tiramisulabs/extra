@@ -20,6 +20,8 @@ import {
 	validateProjectDescription,
 } from '@slipher/lab/protocol';
 import type {
+	Actor,
+	Channel,
 	CheckpointClient,
 	InspectorEntry,
 	LabClient,
@@ -28,10 +30,9 @@ import type {
 	ScenarioChoice,
 	VisibleMessage,
 } from './bridge';
-import { presetParams } from './bridge';
+import { isRevisionMismatch, presetParams, sessionActors, sessionChannels } from './bridge';
+import { errorText, shortRevision } from './format';
 import { messageText } from './messages';
-
-const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /**
  * A click or select recorded against a message ID only replays in the session that produced it, so the UI's
@@ -42,8 +43,13 @@ export function semanticAction(action: LabAction, snapshot?: LabSnapshot): LabAc
 		return action;
 	const channelId = snapshot?.session?.refs[action.source.channel] ?? action.source.channel;
 	// The runtime owns the access rule; a channel the actor cannot view must fail there, not be rewritten here.
-	if (!snapshot?.channels.find(item => item.id === channelId)?.visibleTo.includes(action.actor)) return action;
-	const source = snapshot.conversations[`${action.actor}:${channelId}`]?.messages.find(
+	if (
+		!sessionChannels(snapshot?.session)
+			.find(item => item.id === channelId)
+			?.visibleTo.includes(action.actor)
+	)
+		return action;
+	const source = snapshot?.conversations[`${action.actor}:${channelId}`]?.messages.find(
 		item => item.id === action.source.messageRef,
 	);
 	if (!source) throw new Error(`Visible source message ${action.source.messageRef} is unavailable`);
@@ -63,11 +69,6 @@ export class HostError extends Error {
 	) {
 		super(text);
 	}
-}
-
-/** Keeps a readable prefix of commit or content hashes and any suffix such as `-dirty-…`. */
-export function shortRevision(revision: string): string {
-	return revision.replace(/^((?:content-)?[0-9a-f]{7})[0-9a-f]+/i, '$1');
 }
 
 const REPLAY_NOTICE = 'Session ended to replay a checkpoint.';
@@ -161,6 +162,8 @@ export class HostClient implements LabClient, CheckpointClient {
 	private generation = 0;
 	private checking?: Promise<boolean>;
 	private watchTimer?: ReturnType<typeof setTimeout>;
+	/** Closes the stream once no listener is left. */
+	private idleTimer?: ReturnType<typeof setTimeout>;
 	/** This tab follows a running session. */
 	private active = false;
 	private host?: HostInfo;
@@ -216,8 +219,6 @@ export class HostClient implements LabClient, CheckpointClient {
 	private blank(project: ProjectDescription): LabSnapshot {
 		return {
 			project,
-			actors: [],
-			channels: [],
 			conversations: {},
 			commands: [],
 			pending: { modals: [], collectors: [] },
@@ -380,15 +381,29 @@ export class HostClient implements LabClient, CheckpointClient {
 			if (!(error instanceof HostError && error.status === 409)) throw error;
 		}
 	}
+	/**
+	 * The event stream lives while someone listens. The last listener leaving closes it on the next task, so an
+	 * unsubscribe immediately followed by a subscribe (React StrictMode, a remount) keeps the same stream; a
+	 * listener arriving after it closed reopens it and catches up on what it missed.
+	 */
 	subscribe(listener: (snapshot: LabSnapshot) => void): () => void {
 		this.listeners.add(listener);
+		clearTimeout(this.idleTimer);
+		this.idleTimer = undefined;
+		if (!this.stream && (this.active || this.host?.run.state === 'active')) {
+			this.openStream();
+			if (this.active) this.scheduleRefresh();
+		}
 		return () => {
-			this.listeners.delete(listener);
-			if (!this.listeners.size) {
+			if (!this.listeners.delete(listener) || this.listeners.size) return;
+			clearTimeout(this.idleTimer);
+			this.idleTimer = setTimeout(() => {
+				this.idleTimer = undefined;
+				if (this.listeners.size) return;
 				this.closeStream();
 				this.stopWatching();
 				clearTimeout(this.refreshTimer);
-			}
+			});
 		};
 	}
 	/**
@@ -429,10 +444,7 @@ export class HostClient implements LabClient, CheckpointClient {
 		}
 	}
 	/** Every actor's view of every channel, keyed `actor:channel`. */
-	private async loadConversations(
-		actors: SessionDescription['actors'],
-		channels: LabSnapshot['channels'],
-	): Promise<LabSnapshot['conversations']> {
+	private async loadConversations(actors: Actor[], channels: Channel[]): Promise<LabSnapshot['conversations']> {
 		const conversations: LabSnapshot['conversations'] = {};
 		await Promise.all(
 			actors.flatMap(actor =>
@@ -476,13 +488,10 @@ export class HostClient implements LabClient, CheckpointClient {
 			this.rpc<SessionLog>('session.log'),
 			this.rpc<CommandSchema[]>('session.commandSchemas'),
 		]);
-		const channels = session.guilds.flatMap(guild =>
-			guild.channels.map(channel => ({ ...channel, guildId: guild.id })),
-		);
 		const [conversations, projections] = await Promise.all([
 			this.loadConversations(
 				session.actors.filter(actor => actor.channelId),
-				channels,
+				sessionChannels(session),
 			),
 			this.loadProjections(project),
 		]);
@@ -494,8 +503,6 @@ export class HostClient implements LabClient, CheckpointClient {
 			error: this.snapshot?.error,
 			project,
 			session,
-			actors: session.actors,
-			channels,
 			conversations,
 			commands,
 			log,
@@ -580,7 +587,7 @@ export class HostClient implements LabClient, CheckpointClient {
 				options?.acceptRevision ? { acceptRevision: true } : {},
 			);
 		} catch (error) {
-			if (!(error instanceof HostError && error.code === 'revision-mismatch') && this.active) this.stop(REPLAY_NOTICE);
+			if (!isRevisionMismatch(error) && this.active) this.stop(REPLAY_NOTICE);
 			throw error;
 		}
 		if (this.active) this.stop(REPLAY_NOTICE);
@@ -612,7 +619,7 @@ export class HostClient implements LabClient, CheckpointClient {
 	}
 	/** Closing is client state on the host: the bot keeps waiting, and the modal's own trigger reopens it. */
 	closeModal(actor: string, customId: string): void {
-		const userId = this.snapshot?.actors.find(item => item.key === actor)?.userId;
+		const userId = sessionActors(this.snapshot?.session).find(item => item.key === actor)?.userId;
 		const modal = this.snapshot?.pending.modals.find(item => item.customId === customId && item.userId === userId);
 		if (!modal) return;
 		const key = modal.interactionId;
@@ -622,7 +629,7 @@ export class HostClient implements LabClient, CheckpointClient {
 	}
 	reopenModal(key: string): void {
 		const modal = this.snapshot?.pending.modals.find(item => item.interactionId === key);
-		const actor = modal && this.snapshot?.actors.find(item => item.userId === modal.userId)?.key;
+		const actor = modal && sessionActors(this.snapshot?.session).find(item => item.userId === modal.userId)?.key;
 		if (!modal || !actor) return;
 		const wasClosed = this.serverClosed.has(key);
 		this.localCloses.delete(key);

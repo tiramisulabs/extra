@@ -1,7 +1,7 @@
 import { Fragment, useLayoutEffect, useRef } from 'react';
-import type { Expectation, LabClient, MessageIntent, VisibleMessage } from '../bridge';
+import type { Expectation, MessageIntent, VisibleMessage } from '../bridge';
 import { LockedHashIcon, PinIcon } from '../icons';
-import { messageText } from '../messages';
+import { isEphemeral, messageText } from '../messages';
 import { continues } from '../render/grouping';
 import type { NameMap } from '../render/Markdown';
 import { Message } from '../render/Message';
@@ -31,7 +31,6 @@ function useFollowNewMessages(viewKey: string, messages: VisibleMessage[]) {
 
 /** One actor's view of one channel: its messages, or the lock screen when the actor cannot view it. */
 export function Conversation({
-	client,
 	actor,
 	channel,
 	channelName,
@@ -41,9 +40,8 @@ export function Conversation({
 	names,
 	onIntent,
 	onPin,
-	report,
+	onDismiss,
 }: {
-	client: LabClient;
 	actor: string;
 	channel: string;
 	channelName: string;
@@ -54,7 +52,8 @@ export function Conversation({
 	onIntent: (intent: MessageIntent) => void;
 	/** Present when the client can save checkpoints. */
 	onPin?: (expectation: Expectation) => void;
-	report: (reason: unknown) => void;
+	/** Hides one of the viewer's own ephemeral messages. */
+	onDismiss: (message: VisibleMessage) => void;
 }) {
 	const { list, onScroll } = useFollowNewMessages(`${actor}:${channel}`, messages);
 	return (
@@ -72,7 +71,7 @@ export function Conversation({
 				const previous = messages[index - 1];
 				const day = dayLabel(item.payload.timestamp);
 				const newDay = day && day !== dayLabel(previous?.payload.timestamp);
-				const dismissible = item.visibility === 'ephemeral' && item.ownerId === viewerId;
+				const dismissible = isEphemeral(item) && item.ownerId === viewerId;
 				return (
 					<Fragment key={item.id}>
 						{newDay && (
@@ -84,7 +83,7 @@ export function Conversation({
 							message={item}
 							names={names}
 							onIntent={onIntent}
-							onDismiss={dismissible ? () => void client.dismissMessage(actor, channel, item).catch(report) : undefined}
+							onDismiss={dismissible ? () => onDismiss(item) : undefined}
 							continued={!newDay && continues(previous, item)}
 							tools={
 								onPin &&

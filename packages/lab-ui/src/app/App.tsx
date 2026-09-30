@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import type { LabAction, LabClient, LabSnapshot, MessageIntent } from '../bridge';
-import { hasCheckpoints } from '../bridge';
+import { hasCheckpoints, sessionChannels } from '../bridge';
+import { errorText } from '../format';
 import { CloseIcon, FlaskIcon, HashIcon, LockedHashIcon, MembersIcon, MenuIcon } from '../icons';
 import { type CheckpointStatus, StatusCallout, useCheckpointDraft } from './CheckpointsTab';
 import { Composer } from './Composer';
@@ -131,7 +132,7 @@ export function App({ client }: { client: LabClient }) {
 /** The Discord-like client around one snapshot: navigation, the conversation, side panels and modals. */
 function Lab({ client, snapshot }: { client: LabClient; snapshot: LabSnapshot }) {
 	const [error, setError] = useState('');
-	const report = useCallback((reason: unknown) => setError(String(reason).replace(/^Error: /, '')), []);
+	const report = useCallback((reason: unknown) => setError(errorText(reason)), []);
 	const selection = useViewSelection(snapshot);
 	const { actor, guildId, channel } = selection;
 	const [panel, setPanel] = useState<SidePanel | undefined>(() => (narrow() ? undefined : 'members'));
@@ -151,7 +152,7 @@ function Lab({ client, snapshot }: { client: LabClient; snapshot: LabSnapshot })
 	const actors = viewableActors(snapshot);
 	const viewer = actors.find(item => item.key === actor);
 	const guild = session?.guilds.find(item => item.id === guildId);
-	const channels = snapshot.channels.filter(item => item.guildId === guildId);
+	const channels = sessionChannels(session).filter(item => item.guildId === guildId);
 	const current = channels.find(item => item.id === channel);
 	const canView = Boolean(current?.visibleTo.includes(actor));
 	const messages = snapshot.conversations[`${actor}:${channel}`]?.messages ?? [];
@@ -217,7 +218,6 @@ function Lab({ client, snapshot }: { client: LabClient; snapshot: LabSnapshot })
 					{running ? (
 						<>
 							<Conversation
-								client={client}
 								actor={actor}
 								channel={channel}
 								channelName={current?.name ?? ''}
@@ -227,16 +227,17 @@ function Lab({ client, snapshot }: { client: LabClient; snapshot: LabSnapshot })
 								names={session?.names}
 								onIntent={intent}
 								onPin={onPin}
-								report={report}
+								onDismiss={message => void client.dismissMessage(actor, channel, message).catch(report)}
 							/>
 							<ResumeForms
 								forms={unreachableForms(snapshot.pending.modals, snapshot.closedModals, viewer?.userId, messages)}
 								onReopen={key => client.reopenModal(key)}
 							/>
 							<Composer
-								snapshot={snapshot}
+								commands={snapshot.commands}
+								projectName={snapshot.project.name}
 								channelName={current?.name ?? ''}
-								guildId={guildId}
+								guild={guild}
 								canView={canView}
 								onRun={entry =>
 									act({

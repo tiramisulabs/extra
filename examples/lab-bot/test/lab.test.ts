@@ -3,7 +3,7 @@ import { createSession, replay } from '@slipher/lab/runtime';
 import { describe, expect, test } from 'vitest';
 import { project } from '../lab/project.js';
 
-const preset = (botCanManageRoles = true) => ({
+const preset = (botCanManageRoles: boolean) => ({
 	scenario: { id: 'support', version: 1 },
 	params: { botCanManageRoles },
 });
@@ -75,11 +75,15 @@ describe('lab bot', () => {
 	test('a recorded session replays against a fresh bot', () =>
 		withSession(true, async session => {
 			await sendRequest(session, 'Can you help?');
-			const { log } = await replay(project, await session.log(), [
+			const recorded = await session.log();
+			const { log } = await replay(project, recorded, [
 				{ role: { guild: 'guild', member: 'member', role: 'role.requester' }, present: true },
 				{ view: { actor: 'staff', channel: 'channel.staff' }, contains: 'Can you help?' },
 				{ view: { actor: 'member', channel: 'channel.staff' }, contains: 'Can you help?', absent: true },
 			]);
-			expect(log.entries).toHaveLength(2);
+			// The fresh bot answers each recorded action the way the recorded one did.
+			const summaries = (entries: typeof log.entries) => entries.map(entry => entry.outcome.summary);
+			expect(summaries(log.entries)).toEqual(summaries(recorded.entries));
+			expect(summaries(log.entries).at(-1)).toBe('Request sent to staff.');
 		}));
 });

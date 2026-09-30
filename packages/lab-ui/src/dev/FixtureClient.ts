@@ -1,5 +1,5 @@
 import type { InspectorEntry, LabAction, LabClient, LabSnapshot, ScenarioChoice, VisibleMessage } from '../bridge';
-import { presetParams } from '../bridge';
+import { presetParams, sessionActors } from '../bridge';
 
 const bot = { id: 'bot', username: 'Seyfert', bot: true };
 const message = (id: string, content: string, extra: Partial<VisibleMessage> = {}): VisibleMessage => ({
@@ -36,7 +36,24 @@ const initial: LabSnapshot = {
 			services: { replies: 'normal' },
 		},
 		refs: { guild: 'guild', general: 'general', staff: 'staff', alice: '101', bob: '102' },
-		actors: [],
+		actors: [
+			{
+				key: 'alice',
+				name: 'Alice',
+				userId: '101',
+				guildId: 'guild',
+				channelId: 'general',
+				roles: { guild: ['member'] },
+			},
+			{
+				key: 'bob',
+				name: 'Bob',
+				userId: '102',
+				guildId: 'guild',
+				channelId: 'general',
+				roles: { guild: ['moderator'] },
+			},
+		],
 		guilds: [
 			{
 				id: 'guild',
@@ -63,21 +80,6 @@ const initial: LabSnapshot = {
 			channels: { general: 'general', staff: 'staff', '222': 'general' },
 		},
 	},
-	actors: [
-		{
-			key: 'alice',
-			name: 'Alice',
-			userId: '101',
-			guildId: 'guild',
-			channelId: 'general',
-			roles: { guild: ['member'] },
-		},
-		{ key: 'bob', name: 'Bob', userId: '102', guildId: 'guild', channelId: 'general', roles: { guild: ['moderator'] } },
-	],
-	channels: [
-		{ id: 'general', name: 'general', guildId: 'guild', type: 0, visibleTo: ['alice', 'bob'] },
-		{ id: 'staff', name: 'staff', guildId: 'guild', type: 0, visibleTo: ['bob'] },
-	],
 	conversations: {
 		'alice:general': {
 			diagnostics: [],
@@ -265,7 +267,7 @@ export class FixtureClient implements LabClient {
 	async act(action: LabAction) {
 		this.log({ kind: action.kind, label: 'verb' in action ? action.verb : action.op, detail: JSON.stringify(action) });
 		if ('verb' in action && action.verb === 'submitModal') {
-			const userId = this.snapshot.actors.find(actor => actor.key === action.actor)?.userId;
+			const userId = sessionActors(this.snapshot.session).find(actor => actor.key === action.actor)?.userId;
 			this.snapshot.pending.modals = this.snapshot.pending.modals.filter(
 				modal => modal.customId !== action.customId || modal.userId !== userId,
 			);
@@ -273,7 +275,7 @@ export class FixtureClient implements LabClient {
 		this.emit();
 	}
 	closeModal(actor: string, customId: string) {
-		const userId = this.snapshot.actors.find(item => item.key === actor)?.userId;
+		const userId = sessionActors(this.snapshot.session).find(item => item.key === actor)?.userId;
 		const modal = this.snapshot.pending.modals.find(item => item.customId === customId && item.userId === userId);
 		if (modal) this.snapshot.closedModals = [...this.snapshot.closedModals, modal.interactionId];
 		this.log({ kind: 'local', label: 'closeModal', detail: customId });

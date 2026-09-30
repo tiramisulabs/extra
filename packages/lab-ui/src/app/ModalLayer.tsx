@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { LabSnapshot } from '../bridge';
+import type { PendingModal } from '../bridge';
 import { Modal, type ModalValues } from '../render/Modal';
 
 /**
@@ -13,7 +13,7 @@ export function ModalLayer({
 	onClose,
 	onSubmit,
 }: {
-	pending: LabSnapshot['pending']['modals'];
+	pending: PendingModal[];
 	closedModals: string[];
 	viewerId?: string;
 	onClose: (customId: string) => void;

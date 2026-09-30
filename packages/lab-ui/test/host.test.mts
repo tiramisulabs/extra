@@ -8,8 +8,56 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { after, test } from 'node:test';
 import { type HostedOptions, type LabHost, startHost } from '@slipher/lab/host';
-import type { LabSnapshot } from '../src/bridge';
-import { HostClient, shortRevision } from '../src/HostClient';
+import type { LabAction, LabSnapshot } from '../src/bridge';
+import { FixtureClient } from '../src/dev/FixtureClient';
+import { shortRevision } from '../src/format';
+import { HostClient, semanticAction } from '../src/HostClient';
+
+const click = (messageRef: string, customId: string): LabAction => ({
+	kind: 'user',
+	verb: 'click',
+	actor: 'alice',
+	customId,
+	source: { channel: 'general', messageRef, customId },
+});
+const locator = (action: LabAction) => (action.kind === 'user' && action.verb === 'click' ? action.source : undefined);
+
+test('UI clicks use a semantic locator and reject a missing visible source', async () => {
+	const snapshot = await new FixtureClient().connect();
+	const source = locator(semanticAction(click('m1', 'approve'), snapshot));
+	assert.equal(source?.messageRef, undefined);
+	assert.equal(source?.customId, 'approve');
+	assert.match(source?.contains ?? '', /Hi/);
+	assert.throws(
+		() => semanticAction(click('stale-id', 'approve'), snapshot),
+		/Visible source message stale-id is unavailable/,
+	);
+});
+
+test('a message without content is located by its embed or its first text display', async () => {
+	const snapshot = await new FixtureClient().connect();
+	snapshot.conversations['alice:general'].messages.push({
+		id: 'embed-only',
+		channelId: 'general',
+		visibility: 'public',
+		payload: {
+			id: 'embed-only',
+			embeds: [{ color: 1 }, { title: 'Ticket #4', description: 'Opened by Alice' }],
+			components: [{ type: 1, components: [{ type: 2, style: 1, custom_id: 'close', label: 'Close' }] }],
+		},
+	});
+	assert.deepEqual(locator(semanticAction(click('embed-only', 'close'), snapshot)), {
+		channel: 'general',
+		customId: 'close',
+		contains: 'Ticket #4',
+	});
+	// m4 is a Components V2 message: a container whose first text display precedes the section holding the button.
+	assert.deepEqual(locator(semanticAction(click('m4', 'view'), snapshot)), {
+		channel: 'general',
+		customId: 'view',
+		contains: '**Summary**\nA test flow.',
+	});
+});
 
 test('HostClient drives a child session through HTTP and exposes action failures', async () => {
 	const host = await startHost({ projectModule: resolve(process.cwd(), '../lab/test/fixtures/project.cjs') });
@@ -65,7 +113,7 @@ test('HostClient drives a child session through HTTP and exposes action failures
 		assert.ok(
 			snapshots
 				.at(-1)
-				?.actors.find(actor => actor.key === 'alice')
+				?.session?.actors.find(actor => actor.key === 'alice')
 				?.roles[current.session?.refs.guild ?? ''].includes(current.session?.refs.ban ?? ''),
 		);
 		await assert.rejects(
@@ -109,6 +157,56 @@ test('a reloaded tab shows the session the host is still running', async () => {
 		assert.equal(idle.session, undefined);
 		assert.equal(idle.error, undefined);
 	} finally {
+		await host.close();
+	}
+});
+
+test('the event stream survives an immediate resubscribe and reopens for a listener arriving after it closed', async () => {
+	const streams: { closed: boolean }[] = [];
+	class FakeEventSource {
+		closed = false;
+		onerror: (() => void) | null = null;
+		constructor() {
+			streams.push(this);
+		}
+		addEventListener() {}
+		close() {
+			this.closed = true;
+		}
+	}
+	const tick = () => new Promise(done => setTimeout(done, 0));
+	const host = await startHost({ projectModule: resolve(process.cwd(), '../lab/test/fixtures/project.cjs') });
+	Object.assign(globalThis, { EventSource: FakeEventSource });
+	try {
+		const client = new HostClient(host.url);
+		const first = client.subscribe(() => undefined);
+		await client.connect();
+		assert.equal(streams.length, 1);
+		// React StrictMode: the effect's cleanup runs and the effect subscribes again in the same task.
+		first();
+		const second = client.subscribe(() => undefined);
+		await tick();
+		assert.deepEqual(
+			streams.map(item => item.closed),
+			[false],
+		);
+		second();
+		await tick();
+		assert.deepEqual(
+			streams.map(item => item.closed),
+			[true],
+		);
+		// connect() returns the cached snapshot, so the subscription itself must reopen the stream.
+		const third = client.subscribe(() => undefined);
+		await client.connect();
+		assert.deepEqual(
+			streams.map(item => item.closed),
+			[true, false],
+		);
+		third();
+		await tick();
+	} finally {
+		Reflect.deleteProperty(globalThis, 'EventSource');
 		await host.close();
 	}
 });

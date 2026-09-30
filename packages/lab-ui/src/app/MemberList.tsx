@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Expectation, Guild, LabSnapshot } from '../bridge';
+import { type Expectation, type Guild, type LabSnapshot, sessionActors } from '../bridge';
 import { CloseIcon, EyeIcon, PinIcon } from '../icons';
 import { Avatar } from '../render/Avatar';
 
@@ -26,7 +26,7 @@ function Profile({
 	const card = useRef<HTMLDivElement>(null);
 	const [adding, setAdding] = useState('');
 	const memberId = member.id;
-	const actor = snapshot.actors.find(item => item.userId === memberId);
+	const actor = sessionActors(snapshot.session).find(item => item.userId === memberId);
 	const assigned = actor?.roles[guild.id] ?? [];
 	const assignable = guild.roles
 		.filter(role => role.id !== guild.id && !assigned.includes(role.id))
@@ -144,7 +144,8 @@ export function MemberList({
 	onViewAs: (actorKey: string) => void;
 }) {
 	const [open, setOpen] = useState<string>();
-	const actorIds = new Set(snapshot.actors.map(actor => actor.userId));
+	const actors = sessionActors(snapshot.session);
+	const actorIds = new Set(actors.map(actor => actor.userId));
 	const groups = [
 		{ title: 'Actors', members: guild.members.filter(member => actorIds.has(member.id) && !member.bot) },
 		{ title: 'Bots', members: guild.members.filter(member => member.bot) },
@@ -159,7 +160,7 @@ export function MemberList({
 					</h3>
 					<ul>
 						{group.members.map(member => {
-							const actor = snapshot.actors.find(item => item.userId === member.id);
+							const actor = actors.find(item => item.userId === member.id);
 							return (
 								<li key={member.id}>
 									<button

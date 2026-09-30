@@ -5,7 +5,7 @@
 	"type": "module",
 	"scripts": {
 		"build": "tsc",
-		"test": "vitest run",
+		"test": "tsc -p test && vitest run",
 		"lab": "slipher-lab --project dist/lab/project.js",
 		"lint": "biome lint --write ./src ./lab ./test",
 		"format": "biome format --write ./src ./lab ./test",

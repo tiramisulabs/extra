@@ -4,8 +4,6 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ResumeForms, unreachableForms } from '../src/app/ResumeForms';
 import type { PendingModal } from '../src/bridge';
-import { FixtureClient } from '../src/dev/FixtureClient';
-import { semanticAction } from '../src/HostClient';
 import { messageText } from '../src/messages';
 import { Component } from '../src/render/Component';
 import { avatarUrl, mediaUrl } from '../src/render/cdn';
@@ -78,43 +76,6 @@ test('modal prefill and StringSelect defaults survive rendering; multi-select wa
 	);
 	assert.match(select, /aria-haspopup="listbox"/);
 	assert.match(select, /<span class="select-chip">One<\/span>/);
-});
-
-test('fixture closeModal only hides presentation and keeps pending inspector state', async () => {
-	const client = new FixtureClient();
-	const before = await client.connect();
-	const modal = before.pending.modals[0];
-	client.closeModal('alice', modal.customId);
-	const after = await client.connect();
-	assert.equal(after.pending.modals.length, 1);
-	assert.deepEqual(after.closedModals, [modal.interactionId]);
-});
-
-test('UI clicks use a semantic locator and reject a missing visible source', async () => {
-	const snapshot = await new FixtureClient().connect();
-	const action = semanticAction(
-		{
-			kind: 'user',
-			verb: 'click',
-			actor: 'alice',
-			customId: 'approve',
-			source: { channel: 'general', messageRef: 'm1', customId: 'approve' },
-		},
-		snapshot,
-	);
-	assert.equal(action.kind, 'user');
-	if (action.kind !== 'user' || action.verb !== 'click') return;
-	assert.equal(action.source.messageRef, undefined);
-	assert.equal(action.source.customId, 'approve');
-	assert.match(action.source.contains ?? '', /Hi/);
-	assert.throws(
-		() =>
-			semanticAction(
-				{ ...action, source: { channel: 'general', messageRef: 'stale-id', customId: 'approve' } },
-				snapshot,
-			),
-		/Visible source message stale-id is unavailable/,
-	);
 });
 
 test('the text that identifies a message is its content, then an embed, then the first text display it shows', () => {

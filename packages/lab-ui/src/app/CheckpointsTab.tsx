@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { CheckpointClient, Expectation, JsonValue, LabClient, LabSnapshot } from '../bridge';
-import { hasCheckpoints } from '../bridge';
-import { HostError, shortRevision } from '../HostClient';
+import { hasCheckpoints, isRevisionMismatch, sessionActors } from '../bridge';
+import { errorText, shortRevision } from '../format';
 import { CloseIcon } from '../icons';
 
 /** The outcome of the last checkpoint operation; a replay passes or fails, anything else is neutral. */
@@ -51,7 +51,8 @@ export function useCheckpointDraft(): CheckpointDraft {
 function describeExpectation(expectation: Expectation, snapshot: LabSnapshot): string {
 	const names = snapshot.session?.names;
 	if ('view' in expectation) {
-		const actor = snapshot.actors.find(item => item.key === expectation.view.actor)?.name ?? expectation.view.actor;
+		const actor =
+			sessionActors(snapshot.session).find(item => item.key === expectation.view.actor)?.name ?? expectation.view.actor;
 		const channel = names?.channels[expectation.view.channel] ?? expectation.view.channel;
 		return `${actor} ${expectation.absent ? 'does not see' : 'sees'} “${expectation.contains}” in #${channel}`;
 	}
@@ -66,15 +67,13 @@ function describeExpectation(expectation: Expectation, snapshot: LabSnapshot): s
 	return `Action ${expectation.action + 1} ${expectation.ok ? 'succeeds' : 'fails'}`;
 }
 
-function valueAt(value: unknown, path: string): unknown {
+/** The value at a dotted path: object keys, or array indexes as in `pending.modals.0.customId`. */
+function valueAt(value: JsonValue | undefined, path: string): JsonValue | undefined {
 	if (!path) return value;
-	return path
-		.split('.')
-		.reduce<unknown>(
-			(current, key) =>
-				current && typeof current === 'object' ? (current as Record<string, unknown>)[key] : undefined,
-			value,
-		);
+	return path.split('.').reduce<JsonValue | undefined>((current, key) => {
+		if (Array.isArray(current)) return current[Number(key)];
+		return current && typeof current === 'object' ? current[key] : undefined;
+	}, value);
 }
 
 const INSPECT_SOURCE = 'inspect';
@@ -97,13 +96,14 @@ function ExpectationsSection({
 	const [path, setPath] = useState('');
 	const { arrival, setArrival } = draft;
 	function pinValue() {
-		const base = source === INSPECT_SOURCE ? snapshot.rawInspect : snapshot.projections?.[source];
-		const value = valueAt(base, path);
-		if (value === undefined) {
+		// The inspect snapshot arrives as JSON; its interface only lacks the index signature JsonValue asks for.
+		const inspect = snapshot.rawInspect as JsonValue | undefined;
+		const base = source === INSPECT_SOURCE ? inspect : snapshot.projections?.[source];
+		const equals = valueAt(base, path);
+		if (equals === undefined) {
 			report(`No value at "${path}" in ${source}.`);
 			return;
 		}
-		const equals = JSON.parse(JSON.stringify(value)) as JsonValue;
 		setArrival([
 			...arrival,
 			source === INSPECT_SOURCE ? { path, equals } : { project: { name: source, path }, equals },
@@ -232,7 +232,7 @@ function CheckpointSection({
 			await client.replayCheckpoint(name, acceptRevision ? { acceptRevision } : undefined);
 			setStatus({ text: `PASS · ${name}`, tone: 'ok' });
 		} catch (reason) {
-			if (reason instanceof HostError && reason.code === 'revision-mismatch' && !acceptRevision) {
+			if (isRevisionMismatch(reason) && !acceptRevision) {
 				const { checkpointRevision = 'unknown', currentRevision = 'unknown' } = reason.details;
 				const confirmed = window.confirm(
 					`${name} was recorded on ${shortRevision(checkpointRevision)}; this preview is ${shortRevision(currentRevision)}. Replay anyway?`,
@@ -241,7 +241,7 @@ function CheckpointSection({
 				setStatus(undefined);
 				return;
 			}
-			setStatus({ text: `FAIL · ${reason instanceof Error ? reason.message : String(reason)}`, tone: 'danger' });
+			setStatus({ text: `FAIL · ${errorText(reason)}`, tone: 'danger' });
 		}
 	}
 	async function exportTest() {
