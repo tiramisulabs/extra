@@ -22,12 +22,18 @@ import type {
 	SessionLog,
 } from '../index';
 import { isParamValue, PROTOCOL_VERSION, validateLabAction } from '../protocol';
-import { createObservers, errorText, LAB_VERSION } from '../shared';
+import { createObservers, DEFAULT_DISPOSE_TIMEOUT_MS, errorText, LAB_VERSION } from '../shared';
 import { performAction } from './actions';
-import { jsonCopy, toJson } from './json';
-import { conversation, describeRun, inspectRun, type Run, requireActor, resolveRef, unknownRefError } from './run';
-
-const DEFAULT_DISPOSE_TIMEOUT_MS = 5000;
+import { toJson } from './json';
+import {
+	type ActiveRun,
+	conversation,
+	describeRun,
+	inspectRun,
+	requireActor,
+	resolveRef,
+	unknownRefError,
+} from './run';
 
 export function deterministicId(name: string): string {
 	// FNV-1a 64-bit, masked to 62 bits so the ID stays a positive snowflake-sized decimal.
@@ -46,7 +52,7 @@ interface Acquired {
 type SessionState<R> =
 	| { status: 'idle' }
 	| { status: 'starting'; task: Promise<void> }
-	| { status: 'active'; run: Run<R>; acquired: Acquired }
+	| { status: 'active'; run: ActiveRun<R>; acquired: Acquired }
 	| { status: 'stopping' };
 
 export function createSession<R>(
@@ -61,7 +67,7 @@ export function createSession<R>(
 	let stopTask: Promise<void> | undefined;
 	let log = newLog(preset);
 
-	const requireRun = (): Run<R> => {
+	const requireActive = (): ActiveRun<R> => {
 		if (state.status !== 'active') throw new Error('Session is not started');
 		return state.run;
 	};
@@ -107,7 +113,7 @@ export function createSession<R>(
 
 	const stop = async (): Promise<void> => {
 		// A failed start has already released what it acquired.
-		if (state.status === 'starting') await state.task.catch(() => {});
+		if (state.status === 'starting') await state.task.catch(() => undefined);
 		if (state.status !== 'active') return;
 		const { acquired } = state;
 		state = { status: 'stopping' };
@@ -115,7 +121,7 @@ export function createSession<R>(
 	};
 
 	const record = (action: LabAction, outcome: ActionOutcome) => {
-		log.entries.push({ seq: log.entries.length + 1, action: jsonCopy(action), outcome });
+		log.entries.push({ seq: log.entries.length + 1, action: toJson<LabAction>(action), outcome });
 		emit({ type: 'action', detail: toJson(outcome) });
 	};
 
@@ -139,7 +145,7 @@ export function createSession<R>(
 			await session.start();
 		},
 		async act(action) {
-			const run = requireRun();
+			const run = requireActive();
 			try {
 				validateLabAction(action);
 				const result = await performAction(run, action);
@@ -163,33 +169,33 @@ export function createSession<R>(
 		},
 		observe: observers.observe,
 		async view(actor, channelRef) {
-			const run = requireRun();
+			const run = requireActive();
 			return conversation(run, requireActor(run, actor), resolveRef(run, channelRef));
 		},
 		async inspect() {
-			return inspectRun(requireRun(), observers.diagnostics);
+			return inspectRun(requireActive(), observers.diagnostics);
 		},
 		async describe() {
-			return describeRun(requireRun(), log.preset);
+			return describeRun(requireActive(), log.preset);
 		},
 		async commandSchemas() {
-			return requireRun().bot.commandSchemas();
+			return requireActive().bot.commandSchemas();
 		},
 		async inspectProject(name, args = null) {
-			const run = requireRun();
+			const run = requireActive();
 			const handler = project.inspect?.[name];
 			if (!handler) throw new Error(`Unknown project inspector "${name}"`);
 			return toJson(await handler(run.context, args));
 		},
 		async log() {
-			return jsonCopy(log);
+			return toJson<SessionLog>(log);
 		},
 	};
 	return session;
 }
 
 function newLog(preset: Preset): SessionLog {
-	return { labVersion: LAB_VERSION, protocolVersion: PROTOCOL_VERSION, preset: jsonCopy(preset), entries: [] };
+	return { labVersion: LAB_VERSION, protocolVersion: PROTOCOL_VERSION, preset: toJson<Preset>(preset), entries: [] };
 }
 
 async function deadline(task: Promise<void>, ms: number, label: string): Promise<void> {
@@ -218,7 +224,7 @@ async function bootRun<R>(
 	preset: Preset,
 	acquired: Acquired,
 	onBotEvent: (event: MockBotEvent) => void,
-): Promise<Run<R>> {
+): Promise<ActiveRun<R>> {
 	const scenario = findScenario(project, preset);
 	const params = scenarioParams(scenario, preset);
 	const services = selectedServices(project, preset);

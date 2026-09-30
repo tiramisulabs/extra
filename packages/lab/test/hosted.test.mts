@@ -1,13 +1,13 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
-import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import { afterEach, expect, test } from 'vitest';
 import { type LabHost, startHost } from '../src/host';
 import { PROTOCOL_VERSION, validateHostInfo } from '../src/protocol';
 import { createCheckpoint } from '../src/runtime';
+import { closeHosts, tempDataDir } from './helpers.mjs';
 
 const origin = 'https://preview.example.test';
 const preset = { scenario: { id: 'hosted', version: 1 } };
@@ -15,15 +15,8 @@ const fixture = resolve(process.cwd(), 'test/fixtures/hosted.cjs');
 const flow = resolve(process.cwd(), 'test/fixtures/project.cjs');
 const life = resolve(process.cwd(), 'test/fixtures/lifecycle.cjs');
 const hosts: LabHost[] = [];
-const dataDirs: string[] = [];
 
-afterEach(async () => {
-	try {
-		for (const host of hosts.splice(0)) await host.close();
-	} finally {
-		for (const dataDir of dataDirs.splice(0)) await rm(dataDir, { recursive: true, force: true });
-	}
-});
+afterEach(() => closeHosts(hosts));
 
 function hostedOptions(projectModule = fixture) {
 	return {
@@ -33,14 +26,8 @@ function hostedOptions(projectModule = fixture) {
 	};
 }
 
-async function isolatedDataDir(): Promise<string> {
-	const dataDir = await mkdtemp(resolve(tmpdir(), 'slipher-lab-hosted-'));
-	dataDirs.push(dataDir);
-	return dataDir;
-}
-
 async function startHosted(options: Parameters<typeof startHost>[0]): Promise<LabHost> {
-	return startHost({ ...options, dataDir: options.dataDir ?? (await isolatedDataDir()) });
+	return startHost({ ...options, dataDir: options.dataDir ?? (await tempDataDir()) });
 }
 
 function api(
@@ -352,7 +339,7 @@ test('boundary, navigation, health and authorize', async () => {
 });
 
 test('child environment and cached describe are isolated', async () => {
-	const dataDir = await isolatedDataDir();
+	const dataDir = await tempDataDir();
 	const marker = resolve(dataDir, 'describes.txt');
 	process.env.LAB_HIDDEN = 'secret-sentinel';
 	process.env.LAB_FORWARDED = 'forward-sentinel';
@@ -430,7 +417,7 @@ test('checkpoint revision stamping, mismatch, acceptance and export', async () =
 });
 
 test('hosted checkpoint directories are wiped on boot and deleted with the run', async () => {
-	const dataDir = await isolatedDataDir();
+	const dataDir = await tempDataDir();
 	const orphan = resolve(dataDir, 'runs', 'orphan', 'old.json');
 	await mkdir(resolve(dataDir, 'runs', 'orphan'), { recursive: true });
 	await writeFile(orphan, '{}');
@@ -453,7 +440,7 @@ test('hosted checkpoint directories are wiped on boot and deleted with the run',
 });
 
 test('ending rejects a parsed Start and checkpoint save, and close awaits disposal', async () => {
-	const dataDir = await isolatedDataDir();
+	const dataDir = await tempDataDir();
 	const marker = resolve(dataDir, 'disposed');
 	const host = await startHost({
 		...hostedOptions(life),
@@ -539,7 +526,7 @@ test('startHost validation, loopback HTTP and local host info', async () => {
 
 test('CLI rejects invalid hosted flag combinations', async () => {
 	const cli = resolve(process.cwd(), 'lib/host/cli.js');
-	const dataDir = await isolatedDataDir();
+	const dataDir = await tempDataDir();
 	for (const args of [
 		['--public-origin', origin],
 		['--access', 'trusted-proxy'],
@@ -560,7 +547,7 @@ test('CLI rejects invalid hosted flag combinations', async () => {
 });
 
 test('CLI SIGTERM closes its hosted child', async () => {
-	const dataDir = await isolatedDataDir();
+	const dataDir = await tempDataDir();
 	const cli = spawn(
 		process.execPath,
 		[

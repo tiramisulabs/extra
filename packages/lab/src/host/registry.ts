@@ -16,8 +16,8 @@ export interface HostLimits {
 /** How requests map to runs: local mode has a single run, hosted mode one per browser cookie. */
 export interface RunScope {
 	readonly limits?: HostLimits;
-	/** Receives `session-error` events for failures outside any run. */
-	readonly fallback?: Run;
+	/** Local mode's only run, which also receives `session-error` events for failures outside any run. */
+	readonly local?: Run;
 	info(req: IncomingMessage): HostInfo['run'];
 	/** The request's active run, marked as used; throws 409 when it is missing or has ended. */
 	require(req: IncomingMessage): Run;
@@ -30,29 +30,29 @@ export interface RunScope {
 
 /** Local mode has one run that never ends; it also receives errors raised outside a route. */
 export class LocalRuns implements RunScope {
-	readonly fallback: Run;
+	readonly local: Run;
 
 	constructor(dataDir: string) {
-		this.fallback = createRun('', dataDir);
+		this.local = createRun('', dataDir);
 	}
 
 	info(): HostInfo['run'] {
-		return { state: 'active', session: !!this.fallback.session };
+		return { state: 'active', session: !!this.local.session };
 	}
 	require(): Run {
-		return this.fallback;
+		return this.local;
 	}
 	lookup(): Run {
-		return this.fallback;
+		return this.local;
 	}
 	create(): Run {
-		return this.fallback;
+		return this.local;
 	}
 	stop(run: Run): Promise<void> {
 		return enqueue(run, () => stopSession(run));
 	}
 	async close(): Promise<void> {
-		const run = this.fallback;
+		const run = this.local;
 		for (const stream of run.streams) stream.end();
 		await enqueue(run, () => stopSession(run));
 	}
@@ -190,7 +190,7 @@ export class HostedRuns implements RunScope {
 			if (run.state !== 'active' || run.pending > 0) continue;
 			const reason = expiryReason(run, this.limits, now);
 			// A failure is recorded in cleanupErrors and reported by close().
-			if (reason) this.end(run, reason).catch(() => undefined);
+			if (reason) void this.end(run, reason).catch(() => undefined);
 		}
 	}
 

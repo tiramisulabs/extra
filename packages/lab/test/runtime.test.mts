@@ -670,7 +670,7 @@ describe('lab runtime', () => {
 				event: { type: 'rest', phase: 'other', detail: {} },
 			}),
 		).toBe(false);
-		const worker = fork(resolve(process.cwd(), 'lib/child/worker.js'), [fixturePath], {
+		const worker = fork(resolve(process.cwd(), 'lib/child/worker.js'), [fixturePath, '5000'], {
 			stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
 		});
 		try {

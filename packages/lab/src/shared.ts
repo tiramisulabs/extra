@@ -1,8 +1,24 @@
-import type { Session, SessionEvent } from './index';
+import type { Checkpoint, Session, SessionEvent } from './index';
+import { isPositiveInteger } from './protocol';
 
 export const LAB_VERSION: string = require('../package.json').version;
 
+/** How long each in-process cleanup step (bot close, resources dispose) and a child's exit may take. */
+export const DEFAULT_DISPOSE_TIMEOUT_MS = 5000;
+
 export const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+/** Returns `value`, or throws a `TypeError` naming the option when it is not a positive safe integer. */
+export function positiveInteger(value: number, name: string): number {
+	if (!isPositiveInteger(value)) throw new TypeError(`${name} must be a positive integer`);
+	return value;
+}
+
+/** Checkpoints replay only on the lab version that recorded them. */
+export function assertLabVersion(checkpoint: Pick<Checkpoint, 'labVersion'>): void {
+	if (checkpoint.labVersion !== LAB_VERSION)
+		throw new Error(`Checkpoint lab version ${checkpoint.labVersion} is not supported (current ${LAB_VERSION})`);
+}
 
 type Listener = (event: SessionEvent) => void;
 

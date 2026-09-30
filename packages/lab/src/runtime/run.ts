@@ -1,6 +1,8 @@
 import type { Actor, MockBot, WorldSnapshot } from '@slipher/testing';
 import type {
 	ActorSpec,
+	InspectedPending,
+	InspectedRestCall,
 	InspectorSnapshot,
 	Preset,
 	ScenarioContext,
@@ -17,7 +19,7 @@ export interface RunActor {
 }
 
 /** State owned by one started session. Dispose and reset drop it whole. */
-export interface Run<R> {
+export interface ActiveRun<R> {
 	bot: MockBot;
 	refs: Record<string, string>;
 	actors: Map<string, RunActor>;
@@ -28,7 +30,7 @@ export interface Run<R> {
 	dismissed: Map<string, Set<string>>;
 }
 
-type RunState = Pick<Run<unknown>, 'bot' | 'refs'>;
+type RefScope = Pick<ActiveRun<unknown>, 'bot' | 'refs'>;
 
 export function unknownRefError(refs: Record<string, string>, name: string): Error {
 	const available = Object.entries(refs).map(([key, id]) => `${key}=${id}`);
@@ -36,7 +38,7 @@ export function unknownRefError(refs: Record<string, string>, name: string): Err
 }
 
 /** Resolves a ref name, or a raw ID, to an entity that exists in the current world. */
-export function resolveRef(run: RunState, name: string): string {
+export function resolveRef(run: RefScope, name: string): string {
 	const id = run.refs[name] ?? name;
 	const world = run.bot.world.snapshot();
 	if (
@@ -50,37 +52,37 @@ export function resolveRef(run: RunState, name: string): string {
 	throw unknownRefError(run.refs, name);
 }
 
-export function requireActor<R>(run: Run<R>, key: string): RunActor {
+export function requireActor<R>(run: ActiveRun<R>, key: string): RunActor {
 	const actor = run.actors.get(key);
 	if (!actor) throw new Error(`Unknown actor "${key}"`);
 	return actor;
 }
 
-export const actorUserId = (run: RunState, actor: RunActor): string => resolveRef(run, actor.spec.userId);
+export const actorUserId = (run: RefScope, actor: RunActor): string => resolveRef(run, actor.spec.userId);
 
 /** What an actor sees in a channel, minus the messages they dismissed. */
-export function conversation<R>(run: Run<R>, actor: RunActor, channelId: string): VisibleConversation {
+export function conversation<R>(run: ActiveRun<R>, actor: RunActor, channelId: string): VisibleConversation {
 	const view = run.bot.conversation({ userId: actorUserId(run, actor), channelId });
 	const dismissed = run.dismissed.get(actor.key);
 	return { ...view, messages: view.messages.filter(message => !dismissed?.has(message.id)) };
 }
 
 /** Reads pending interactions and forgets local closes of modals the bot no longer waits for. */
-export function pendingInteractions<R>(run: Run<R>): ReturnType<MockBot['pendingInteractions']> {
+export function pendingInteractions<R>(run: ActiveRun<R>): ReturnType<MockBot['pendingInteractions']> {
 	const pending = run.bot.pendingInteractions();
 	const live = new Set(pending.modals.map(modal => modal.interactionId));
 	for (const id of run.closedModals) if (!live.has(id)) run.closedModals.delete(id);
 	return pending;
 }
 
-export function inspectRun<R>(run: Run<R>, diagnostics: readonly string[]): InspectorSnapshot {
+export function inspectRun<R>(run: ActiveRun<R>, diagnostics: readonly string[]): InspectorSnapshot {
 	const pending = pendingInteractions(run);
 	return {
 		world: toJson(run.bot.world.snapshot()),
-		rest: toJson(
+		rest: toJson<InspectedRestCall[]>(
 			run.bot.restCalls().map(call => ({ ...call, ...(call.error ? { error: errorText(call.error) } : {}) })),
 		),
-		pending: toJson({
+		pending: toJson<InspectedPending>({
 			...pending,
 			modals: pending.modals.map(modal => ({ ...modal, closed: run.closedModals.has(modal.interactionId) })),
 		}),
@@ -90,7 +92,7 @@ export function inspectRun<R>(run: Run<R>, diagnostics: readonly string[]): Insp
 }
 
 /** Display name per member, preferring the guild nickname, then the user's names, then the ref name. */
-async function memberNames<R>(run: Run<R>, world: WorldSnapshot): Promise<Record<string, string>> {
+async function memberNames<R>(run: ActiveRun<R>, world: WorldSnapshot): Promise<Record<string, string>> {
 	const names: Record<string, string> = {};
 	for (const member of world.members) {
 		const user = await run.bot.client.cache.users?.raw(member.userId);
@@ -104,11 +106,11 @@ async function memberNames<R>(run: Run<R>, world: WorldSnapshot): Promise<Record
 	return names;
 }
 
-export async function actorName<R>(run: Run<R>, actor: RunActor): Promise<string> {
+export async function actorName<R>(run: ActiveRun<R>, actor: RunActor): Promise<string> {
 	return (await memberNames(run, run.bot.world.snapshot()))[actorUserId(run, actor)] ?? actor.key;
 }
 
-export async function describeRun<R>(run: Run<R>, preset: Preset): Promise<SessionDescription> {
+export async function describeRun<R>(run: ActiveRun<R>, preset: Preset): Promise<SessionDescription> {
 	const { bot } = run;
 	const world = bot.world.snapshot();
 	const users = await memberNames(run, world);

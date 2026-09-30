@@ -1,5 +1,6 @@
 import type { VisibleMessage } from '@slipher/testing';
 import { ComponentType } from 'seyfert/lib/types';
+import { isRecord } from '../protocol';
 
 const SELECT_TYPES: readonly unknown[] = [
 	ComponentType.StringSelect,
@@ -9,7 +10,6 @@ const SELECT_TYPES: readonly unknown[] = [
 	ComponentType.ChannelSelect,
 ];
 
-const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object';
 const isString = (value: unknown): value is string => typeof value === 'string';
 
 /**
@@ -27,13 +27,13 @@ export function visibleMessageText(payload: VisibleMessage['payload']): string[]
 			for (const item of value) visit(item);
 			return;
 		}
-		if (!isObject(value)) return;
+		if (!isRecord(value)) return;
 		if (value.type === ComponentType.TextDisplay && isString(value.content)) text.push(value.content);
 		if (value.type === ComponentType.Button && isString(value.label)) text.push(value.label);
 		if (SELECT_TYPES.includes(value.type)) {
 			if (isString(value.placeholder)) text.push(value.placeholder);
 			if (Array.isArray(value.options))
-				for (const option of value.options) if (isObject(option) && isString(option.label)) text.push(option.label);
+				for (const option of value.options) if (isRecord(option) && isString(option.label)) text.push(option.label);
 		}
 		visit(value.components);
 		visit(value.accessory);
@@ -47,5 +47,5 @@ export const messageShows = (message: VisibleMessage, contains: string): boolean
 
 export function hasCustomId(components: unknown, customId: string): boolean {
 	if (Array.isArray(components)) return components.some(item => hasCustomId(item, customId));
-	return isObject(components) && (components.custom_id === customId || hasCustomId(components.components, customId));
+	return isRecord(components) && (components.custom_id === customId || hasCustomId(components.components, customId));
 }

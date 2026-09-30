@@ -11,7 +11,7 @@ import type {
 	SessionLog,
 } from '../index';
 import { createCheckpoint, validateCheckpoint } from '../protocol';
-import { LAB_VERSION } from '../shared';
+import { assertLabVersion } from '../shared';
 import { messageShows } from './messages';
 import { createSession } from './session';
 
@@ -38,8 +38,7 @@ export async function replay<R>(
 /** Starts `session`, repeats the checkpoint actions, checks outcomes and arrival, and disposes the session. */
 export async function replaySession(session: Session, checkpoint: Checkpoint): Promise<ReplayResult> {
 	validateCheckpoint(checkpoint);
-	if (checkpoint.labVersion !== LAB_VERSION)
-		throw new Error(`Checkpoint lab version ${checkpoint.labVersion} is not supported (current ${LAB_VERSION})`);
+	assertLabVersion(checkpoint);
 	await session.start();
 	try {
 		for (const index of checkpoint.actions.keys()) await replayAction(session, checkpoint, index);

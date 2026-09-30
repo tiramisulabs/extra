@@ -5,6 +5,7 @@ import type { Checkpoint, Preset, Session, SessionEvent } from '../index';
 import {
 	type BridgeResponse,
 	type HostInfo,
+	isRecord,
 	PROTOCOL_VERSION,
 	type ProjectDescription,
 	validateBridgeRequest,
@@ -12,13 +13,12 @@ import {
 	validateCheckpointName,
 	validatePreset,
 } from '../protocol';
-import { replaySession } from '../runtime';
-import { exportTest } from '../runtime/checkpoint';
-import { errorText, LAB_VERSION } from '../shared';
+import { exportTest, replaySession } from '../runtime';
+import { assertLabVersion, errorText, LAB_VERSION } from '../shared';
 import { listCheckpoints, readCheckpoint, writeCheckpoint } from './checkpoints';
 import { isLocalRequest, isPublicOriginRequest } from './guards';
-import { HttpError, isRecord, readJsonBody, sendJson, validated } from './http';
-import type { HostAccess, HostOptions } from './index';
+import { HttpError, readJsonBody, sendJson, validated } from './http';
+import type { HostedConfig, HostOptions } from './index';
 import type { RunScope } from './registry';
 import { assertActive, enqueue, openEventStream, publish, type Run, stopSession } from './run';
 import { serveUi } from './static';
@@ -31,7 +31,7 @@ const LIFECYCLE_REQUESTS = new Set(['session.start', 'session.dispose', 'project
 /** Everything request handlers need from a started host. */
 export interface HostContext {
 	options: HostOptions;
-	hosted?: { publicOrigin: URL; access: HostAccess };
+	hosted?: HostedConfig;
 	instanceId: string;
 	uiRoot?: string;
 	runs: RunScope;
@@ -89,7 +89,7 @@ function sendError(host: HostContext, { res, run }: Exchange, error: unknown): v
 		return;
 	}
 	sendJson(res, 500, { error: errorText(error) });
-	const target = run ?? host.runs.fallback;
+	const target = run ?? host.runs.local;
 	if (target) publish(target, 'session-error', { detail: errorText(error) });
 }
 
@@ -141,18 +141,11 @@ async function startSession(host: HostContext, exchange: Exchange): Promise<void
 	if (existing) assertActive(existing);
 	if (host.isClosed()) throw new HttpError(503, 'Host is closed');
 	if (!isRecord(input) || !('preset' in input)) throw new HttpError(400, 'Expected { preset }');
-	const preset = validatedPreset(input.preset);
+	const preset = validated(input.preset, validatePreset);
 	const run = existing ?? host.runs.create(res);
 	exchange.run = run;
 	await enqueue(run, () => startRunSession(host, run, preset));
 	sendJson(res, 201, { ok: true });
-}
-
-function validatedPreset(value: unknown): Preset {
-	return validated(() => {
-		validatePreset(value);
-		return value;
-	});
 }
 
 async function startRunSession(host: HostContext, run: Run, preset: Preset): Promise<void> {
@@ -178,7 +171,7 @@ function forwardSessionEvent(run: Run, session: Session, event: SessionEvent): v
 	if (event.origin !== 'child') return;
 	if (run.session === session) run.session = undefined;
 	// The process may still be alive after a protocol or IPC error.
-	session.dispose().catch(() => undefined);
+	void session.dispose().catch(() => undefined);
 	publish(run, 'child-exit', event);
 }
 
@@ -190,10 +183,7 @@ async function endSession(host: HostContext, exchange: Exchange): Promise<void> 
 async function rpc(host: HostContext, exchange: Exchange): Promise<void> {
 	const run = requireRun(host, exchange);
 	const body = await readJsonBody(exchange.req);
-	const request = validated(() => {
-		validateBridgeRequest(body);
-		return body;
-	});
+	const request = validated(body, validateBridgeRequest);
 	if (LIFECYCLE_REQUESTS.has(request.type)) throw new HttpError(400, `Use lifecycle endpoint for ${request.type}`);
 	const response = await enqueue(run, async (): Promise<BridgeResponse> => {
 		if (!run.session) throw new HttpError(409, 'Session is not started');
@@ -240,7 +230,7 @@ async function checkpointRoute(host: HostContext, exchange: Exchange, url: URL):
 	} catch {
 		throw new HttpError(400, 'Invalid checkpoint name');
 	}
-	validated(() => validateCheckpointName(name));
+	validated(name, validateCheckpointName);
 	switch (`${req.method}${suffix}`) {
 		case 'GET':
 			return sendJson(res, 200, await loadCheckpoint(host, run, name));
@@ -284,15 +274,15 @@ async function loadCheckpoint(host: HostContext, run: Run, name: string): Promis
 	return validatedCheckpoint(host, await readCheckpoint(run.checkpointsDir, name));
 }
 
+/** A checkpoint must name a scenario the project defines; a project that cannot be described also fails with 400. */
 async function validatedCheckpoint(host: HostContext, value: unknown): Promise<Checkpoint> {
-	try {
-		validateCheckpoint(value, await host.describeProject());
-		if (value.labVersion !== LAB_VERSION)
-			throw new Error(`Checkpoint lab version ${value.labVersion} is not supported (current ${LAB_VERSION})`);
-		return value;
-	} catch (error) {
+	const project = await host.describeProject().catch(error => {
 		throw new HttpError(400, errorText(error));
-	}
+	});
+	return validated(value, (checkpoint): asserts checkpoint is Checkpoint => {
+		validateCheckpoint(checkpoint, project);
+		assertLabVersion(checkpoint);
+	});
 }
 
 /** A checkpoint recorded on another build replays only when the request sets `acceptRevision: true`. */

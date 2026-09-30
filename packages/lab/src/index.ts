@@ -4,6 +4,9 @@ import type {
 	CommandSchema,
 	MockBot,
 	MockBotOptions,
+	PendingCollector,
+	PendingModal,
+	RestCall,
 	VisibleConversation,
 	WorldBuilder,
 } from '@slipher/testing';
@@ -159,10 +162,20 @@ export interface Checkpoint {
 	outcomes?: ExpectedOutcome[];
 	arrival: Expectation[];
 }
+/** A modal the bot is waiting on; `closed` is set when its user closed it locally and can reopen it. */
+export interface InspectedModal extends PendingModal {
+	closed: boolean;
+}
+export interface InspectedPending {
+	modals: InspectedModal[];
+	collectors: PendingCollector[];
+}
+/** A recorded REST call as JSON: `error` is the error message and `response`, when present, is JSON data. */
+export type InspectedRestCall = Omit<RestCall, 'error' | 'response'> & { error?: string; response?: JsonValue };
 export interface InspectorSnapshot {
 	world: JsonValue;
-	rest: JsonValue;
-	pending: JsonValue;
+	rest: InspectedRestCall[];
+	pending: InspectedPending;
 	diagnostics: string[];
 	local?: { dismissed: Record<string, string[]> };
 }

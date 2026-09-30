@@ -1,8 +1,6 @@
 import type { Checkpoint } from '../index';
 import { validateCheckpoint } from '../protocol';
 
-export { createCheckpoint } from '../protocol';
-
 export function exportTest(
 	checkpoint: Checkpoint,
 	options: { format: 'vitest' | 'node'; projectModule?: string },

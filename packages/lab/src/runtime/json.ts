@@ -4,8 +4,8 @@ import type { JsonValue } from '../index';
 const bigintAsString = (_key: string, value: unknown): unknown =>
 	typeof value === 'bigint' ? value.toString() : value;
 
-/** Converts mock-bot state into JSON data for events and snapshots. */
-export const toJson = (value: unknown): JsonValue => JSON.parse(JSON.stringify(value, bigintAsString));
-
-/** Deep-copies plain data, so later mutation of either side cannot leak into the other. */
-export const jsonCopy = <T>(value: T): T => JSON.parse(JSON.stringify(value, bigintAsString));
+/**
+ * Deep-copies mock-bot state or plain data as JSON, so later mutation of either side cannot leak into the other.
+ * `T` names the shape the JSON form has; it defaults to any JSON value.
+ */
+export const toJson = <T = JsonValue>(value: unknown): T => JSON.parse(JSON.stringify(value, bigintAsString));

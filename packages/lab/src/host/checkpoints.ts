@@ -9,7 +9,7 @@ import { HttpError, isErrnoCode, isWithin, validated } from './http';
 // can never read or overwrite a file outside that directory.
 
 async function containedCheckpointFile(dir: string, name: string): Promise<string> {
-	validated(() => validateCheckpointName(name));
+	validated(name, validateCheckpointName);
 	const file = resolve(dir, `${name}.json`);
 	const root = await realpath(dir);
 	try {

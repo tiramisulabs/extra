@@ -9,10 +9,9 @@ import {
 	validateLabAction,
 	validateProjectDescription,
 } from '../protocol';
-import { createObservers, errorText } from '../shared';
+import { createObservers, DEFAULT_DISPOSE_TIMEOUT_MS, errorText, positiveInteger } from '../shared';
 
 const DEFAULT_START_TIMEOUT_MS = 10000;
-const DEFAULT_DISPOSE_TIMEOUT_MS = 5000;
 const DEFAULT_RPC_TIMEOUT_MS = 30000;
 const DESCRIBE_EXIT_TIMEOUT_MS = 1000;
 const SIGKILL_EXIT_TIMEOUT_MS = 1000;
@@ -44,8 +43,10 @@ function workerPath(): string {
 	}
 }
 
-function forkWorker(options: ProcessOptions, args: string[], stdin: 'ignore' | 'inherit'): ChildProcess {
-	return fork(workerPath(), [resolve(options.projectModule), ...args], {
+/** The worker receives the project module path and the dispose timeout its in-process session uses. */
+function forkWorker(options: ProcessOptions, stdin: 'ignore' | 'inherit'): ChildProcess {
+	const disposeTimeoutMs = options.disposeTimeoutMs ?? DEFAULT_DISPOSE_TIMEOUT_MS;
+	return fork(workerPath(), [resolve(options.projectModule), String(disposeTimeoutMs)], {
 		cwd: options.cwd,
 		execArgv: options.execArgv ?? process.execArgv,
 		env: childEnvironment(options),
@@ -86,7 +87,7 @@ async function exitsWithin(exited: Promise<void>, ms: number): Promise<boolean> 
 
 /** Loads the project in a short-lived child and returns its description; no scenario hook runs. */
 export async function describeChildProject(options: ProcessOptions): Promise<ProjectDescription> {
-	const target = forkWorker(options, [], 'ignore');
+	const target = forkWorker(options, 'ignore');
 	const exited = new Promise<void>(done => target.once('exit', () => done()));
 	const timeoutMs = options.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS;
 	let timer: ReturnType<typeof setTimeout> | undefined;
@@ -133,8 +134,7 @@ interface PendingCall {
 
 /** Runs the Session API in a forked process; see the package README for timeouts and module formats. */
 export function createChildSession(options: ChildSessionOptions): Session {
-	if (options.rpcTimeoutMs !== undefined && (!Number.isSafeInteger(options.rpcTimeoutMs) || options.rpcTimeoutMs <= 0))
-		throw new TypeError('rpcTimeoutMs must be a positive integer');
+	if (options.rpcTimeoutMs !== undefined) positiveInteger(options.rpcTimeoutMs, 'rpcTimeoutMs');
 	const rpcTimeoutMs = options.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
 	const disposeTimeoutMs = options.disposeTimeoutMs ?? DEFAULT_DISPOSE_TIMEOUT_MS;
 	const observers = createObservers();
@@ -211,7 +211,7 @@ export function createChildSession(options: ChildSessionOptions): Session {
 	};
 
 	const spawn = (): Worker => {
-		const target = forkWorker(options, [String(disposeTimeoutMs)], 'inherit');
+		const target = forkWorker(options, 'inherit');
 		const current: Worker = {
 			process: target,
 			ready: false,

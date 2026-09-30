@@ -9,11 +9,11 @@ import type { LabAction, Locator } from '../index';
 import { errorText } from '../shared';
 import { hasCustomId, messageShows, visibleMessageText } from './messages';
 import {
+	type ActiveRun,
 	actorName,
 	actorUserId,
 	conversation,
 	pendingInteractions,
-	type Run,
 	type RunActor,
 	requireActor,
 	resolveRef,
@@ -30,7 +30,7 @@ export interface ActionResult {
 	recorded?: LabAction;
 }
 
-export async function performAction<R>(run: Run<R>, action: LabAction): Promise<ActionResult> {
+export async function performAction<R>(run: ActiveRun<R>, action: LabAction): Promise<ActionResult> {
 	switch (action.kind) {
 		case 'user':
 			return performUserAction(run, action);
@@ -41,7 +41,7 @@ export async function performAction<R>(run: Run<R>, action: LabAction): Promise<
 	}
 }
 
-async function performAdminAction<R>(run: Run<R>, action: AdminAction): Promise<ActionResult> {
+async function performAdminAction<R>(run: ActiveRun<R>, action: AdminAction): Promise<ActionResult> {
 	const input = {
 		guildId: resolveRef(run, action.guild),
 		userId: resolveRef(run, action.member),
@@ -52,7 +52,7 @@ async function performAdminAction<R>(run: Run<R>, action: AdminAction): Promise<
 	return {};
 }
 
-function performLocalAction<R>(run: Run<R>, action: LocalAction): ActionResult {
+function performLocalAction<R>(run: ActiveRun<R>, action: LocalAction): ActionResult {
 	const actor = requireActor(run, action.actor);
 	if (action.op === 'dismissMessage') {
 		const message = dismissTarget(run, actor, action.source);
@@ -80,7 +80,7 @@ function performLocalAction<R>(run: Run<R>, action: LocalAction): ActionResult {
 	return { summary: 'modal reopened' };
 }
 
-function dismissTarget<R>(run: Run<R>, actor: RunActor, source: Locator): VisibleMessage {
+function dismissTarget<R>(run: ActiveRun<R>, actor: RunActor, source: Locator): VisibleMessage {
 	const messages = conversation(run, actor, resolveRef(run, source.channel)).messages;
 	const ownerId = actorUserId(run, actor);
 	const { messageRef, contains, customId } = source;
@@ -109,7 +109,7 @@ interface UserStep {
 	dispatch(): Promise<DispatchResult>;
 }
 
-async function performUserAction<R>(run: Run<R>, action: UserAction): Promise<ActionResult> {
+async function performUserAction<R>(run: ActiveRun<R>, action: UserAction): Promise<ActionResult> {
 	const actor = requireActor(run, action.actor);
 	const userId = actorUserId(run, actor);
 	const pending = pendingInteractions(run).modals.find(modal => modal.userId === userId);
@@ -130,7 +130,7 @@ async function performUserAction<R>(run: Run<R>, action: UserAction): Promise<Ac
 	}
 }
 
-function prepareUserStep<R>(run: Run<R>, actor: RunActor, action: UserAction): UserStep {
+function prepareUserStep<R>(run: ActiveRun<R>, actor: RunActor, action: UserAction): UserStep {
 	const { handle } = actor;
 	switch (action.verb) {
 		case 'slash': {
@@ -184,7 +184,7 @@ function prepareUserStep<R>(run: Run<R>, actor: RunActor, action: UserAction): U
 }
 
 /** The channel payload for an action, after checking the actor may act there. */
-function actionChannel<R>(run: Run<R>, actor: RunActor, channelRef: string): ApiChannel {
+function actionChannel<R>(run: ActiveRun<R>, actor: RunActor, channelRef: string): ApiChannel {
 	const channelId = resolveRef(run, channelRef);
 	const channel = run.bot.world.query.channel({ id: channelId });
 	if (!channel) throw new Error(`Unknown channel "${channelRef}"`);
@@ -209,7 +209,7 @@ function actionChannel<R>(run: Run<R>, actor: RunActor, channelRef: string): Api
 }
 
 /** The single message a locator matches in what the actor sees. */
-function locate<R>(run: Run<R>, actor: RunActor, locator: Locator): string {
+function locate<R>(run: ActiveRun<R>, actor: RunActor, locator: Locator): string {
 	const channelId = resolveRef(run, locator.channel);
 	const messages = conversation(run, actor, channelId).messages;
 	const { messageRef, contains, author, customId } = locator;

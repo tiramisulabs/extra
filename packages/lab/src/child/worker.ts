@@ -13,9 +13,9 @@ import {
 import { createSession } from '../runtime';
 import { errorText } from '../shared';
 
-// argv: project module path, then the in-process dispose timeout in ms.
+// argv: project module path, then the in-process dispose timeout in ms; the parent always passes both.
 const modulePath = process.argv[2];
-const disposeTimeoutMs = process.argv[3] ? Number(process.argv[3]) : undefined;
+const disposeTimeoutMs = Number(process.argv[3]);
 let session: Session | undefined;
 let queue = Promise.resolve();
 

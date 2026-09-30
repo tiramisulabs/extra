@@ -5,6 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { describeChildProject } from '../child';
 import type { BuildInfo, ProjectDescription } from '../protocol';
+import { positiveInteger } from '../shared';
 import { HostedRuns, type HostLimits, LocalRuns } from './registry';
 import { createRequestListener, type HostContext } from './routes';
 
@@ -50,12 +51,8 @@ const DEFAULT_MAX_RUNS = 6;
 const DEFAULT_IDLE_TTL_MS = 30 * 60_000;
 const DEFAULT_MAX_RUN_MS = 2 * 60 * 60_000;
 
-function positiveInteger(value: number, name: string): number {
-	if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError(`${name} must be a positive integer`);
-	return value;
-}
-
-interface HostedConfig {
+/** Hosted options after validation and defaults. */
+export interface HostedConfig {
 	publicOrigin: URL;
 	access: HostAccess;
 	limits: HostLimits;
@@ -157,10 +154,12 @@ export async function startHost(options: HostOptions): Promise<LabHost> {
 		async close() {
 			if (closed) return;
 			closed = true;
-			const [cleanup] = await Promise.allSettled([runs.close()]);
-			await Promise.allSettled(describes);
-			await new Promise<void>((done, reject) => server.close(error => (error ? reject(error) : done())));
-			if (cleanup.status === 'rejected') throw cleanup.reason;
+			try {
+				await runs.close();
+			} finally {
+				await Promise.allSettled(describes);
+				await new Promise<void>((done, reject) => server.close(error => (error ? reject(error) : done())));
+			}
 		},
 	};
 }

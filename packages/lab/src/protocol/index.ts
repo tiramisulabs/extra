@@ -1,5 +1,11 @@
 export const PROTOCOL_VERSION = 1;
-export type { CommandSchema, PendingModal, VisibleConversation, VisibleMessage } from '@slipher/testing';
+export type {
+	CommandSchema,
+	PendingCollector,
+	PendingModal,
+	VisibleConversation,
+	VisibleMessage,
+} from '@slipher/testing';
 
 import type {
 	Checkpoint,
@@ -16,6 +22,9 @@ export type {
 	ActionOutcome,
 	Checkpoint,
 	Expectation,
+	InspectedModal,
+	InspectedPending,
+	InspectedRestCall,
 	InspectorSnapshot,
 	LabAction,
 	Preset,
@@ -75,7 +84,8 @@ export interface ProjectDescription {
 }
 export type BridgeMessage = BridgeRequest | BridgeResponse | BridgeEvent;
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
+/** A plain object: not null and not an array. */
+export const isRecord = (value: unknown): value is Record<string, unknown> =>
 	value !== null && typeof value === 'object' && !Array.isArray(value);
 /** Protocol identifiers and labels are never empty. */
 const isText = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
@@ -85,7 +95,7 @@ const isTextMap = (value: unknown): boolean => isRecord(value) && Object.values(
 const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 const isNonNegativeInteger = (value: unknown): value is number =>
 	typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
-const isPositiveInteger = (value: unknown): value is number => isNonNegativeInteger(value) && value > 0;
+export const isPositiveInteger = (value: unknown): value is number => isNonNegativeInteger(value) && value > 0;
 const isOneOf = <T>(options: readonly T[], value: unknown): value is T => options.some(option => option === value);
 const isActionIndex = (value: unknown, actionCount: number): boolean =>
 	isNonNegativeInteger(value) && value < actionCount;

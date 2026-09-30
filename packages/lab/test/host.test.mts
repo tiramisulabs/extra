@@ -1,12 +1,12 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { readFile, symlink, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
-import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { afterEach, expect, test } from 'vitest';
 import { type LabHost, startHost } from '../src/host';
 import { PROTOCOL_VERSION } from '../src/protocol';
 import { createCheckpoint } from '../src/runtime';
+import { closeHosts, tempDataDir } from './helpers.mjs';
 
 const fixture = resolve(process.cwd(), 'test/fixtures/project.cjs');
 const life = resolve(process.cwd(), 'test/fixtures/lifecycle.cjs');
@@ -14,19 +14,7 @@ const description = resolve(process.cwd(), 'test/fixtures/description.cjs');
 const cwdDir = resolve(process.cwd(), 'test/fixtures/cwd');
 const cwdFixture = resolve(cwdDir, 'project.cjs');
 const hosts: LabHost[] = [];
-const dataDirs: string[] = [];
-afterEach(async () => {
-	try {
-		for (const host of hosts.splice(0)) await host.close();
-	} finally {
-		for (const dataDir of dataDirs.splice(0)) await rm(dataDir, { recursive: true, force: true });
-	}
-});
-async function tempDataDir(): Promise<string> {
-	const dataDir = await mkdtemp(resolve(tmpdir(), 'slipher-lab-host-'));
-	dataDirs.push(dataDir);
-	return dataDir;
-}
+afterEach(() => closeHosts(hosts));
 async function post(url: string, path: string, value: unknown): Promise<Response> {
 	return fetch(`${url}${path}`, {
 		method: 'POST',
@@ -333,4 +321,39 @@ test('checkpoint HTTP save, load, replay, export and strict load errors', async 
 	);
 	expect((await fetch(`${host.url}/api/checkpoints/linked`)).status).toBe(400);
 	expect(await readFile(outside, 'utf8')).toBe('untouched');
+});
+
+test('/api/rpc refuses lifecycle requests that have their own endpoints', async () => {
+	const host = await startHost({ projectModule: fixture, dataDir: await tempDataDir() });
+	hosts.push(host);
+	const requests = [
+		{ type: 'session.start', payload: { scenario: { id: 'flow', version: 1 } } },
+		{ type: 'session.dispose' },
+		{ type: 'project.describe' },
+	];
+	for (const [id, request] of requests.entries()) {
+		const response = await post(host.url, '/api/rpc', { version: PROTOCOL_VERSION, id, ...request });
+		expect(response.status).toBe(400);
+		expect(await response.json()).toEqual({ error: `Use lifecycle endpoint for ${request.type}` });
+	}
+	const info = (await (await fetch(`${host.url}/api/host`)).json()) as { run: { session: boolean } };
+	expect(info.run.session).toBe(false);
+});
+
+test('unknown checkpoint sub-routes and methods are 404', async () => {
+	const host = await startHost({ projectModule: fixture, dataDir: await tempDataDir() });
+	hosts.push(host);
+	const unknown = [
+		['DELETE', '/api/checkpoints/x'],
+		['PUT', '/api/checkpoints/x'],
+		['GET', '/api/checkpoints/x/replay'],
+		['POST', '/api/checkpoints/x/replay/extra'],
+		['POST', '/api/checkpoints/x/export'],
+		['GET', '/api/checkpoints/x/unknown'],
+	];
+	for (const [method, path] of unknown) {
+		const response = await fetch(`${host.url}${path}`, { method });
+		expect(response.status, `${method} ${path}`).toBe(404);
+		expect(await response.json()).toEqual({ error: 'Route not found' });
+	}
 });

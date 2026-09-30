@@ -19,14 +19,11 @@ export function isErrnoCode(error: unknown, code: string): boolean {
 	return !!error && typeof error === 'object' && 'code' in error && error.code === code;
 }
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-	return !!value && typeof value === 'object';
-}
-
-/** Runs a validator and reports its failure as a 400 carrying the validator's message. */
-export function validated<T>(check: () => T): T {
+/** Returns `value` once `check` accepts it; a rejection becomes a 400 carrying the validator's message. */
+export function validated<T>(value: unknown, check: (value: unknown) => asserts value is T): T {
 	try {
-		return check();
+		check(value);
+		return value;
 	} catch (error) {
 		throw new HttpError(400, errorText(error));
 	}
