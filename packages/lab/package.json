@@ -48,8 +48,8 @@
 	},
 	"peerDependencies": {
 		"seyfert": ">=5.0.0",
-		"@slipher/testing": "^1.0.0",
-		"@slipher/lab-ui": "0.0.0"
+		"@slipher/testing": "workspace:*",
+		"@slipher/lab-ui": "workspace:*"
 	},
 	"peerDependenciesMeta": {
 		"@slipher/lab-ui": { "optional": true }

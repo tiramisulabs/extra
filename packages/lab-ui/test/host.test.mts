@@ -6,7 +6,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import { type HostedOptions, type LabHost, startHost } from '@slipher/lab/host';
 import type { LabSnapshot } from '../src/bridge';
 import { HostClient, shortRevision } from '../src/HostClient';
@@ -182,6 +182,16 @@ function browser(origin: string): typeof fetch {
 		return response;
 	};
 }
+// Hosted hosts clear their data directory's runs on boot, so each gets its own instead of the shared fixture default.
+const dataDirs: string[] = [];
+after(async () => {
+	await Promise.all(dataDirs.map(dir => rm(dir, { recursive: true, force: true })));
+});
+async function hostedDataDir(): Promise<string> {
+	const dir = await mkdtemp(join(tmpdir(), 'lab-ui-hosted-'));
+	dataDirs.push(dir);
+	return dir;
+}
 async function hostedHost(
 	port: number,
 	revision: string,
@@ -192,6 +202,7 @@ async function hostedHost(
 	const host = await startHost({
 		projectModule: resolve(process.cwd(), '../lab/test/fixtures', fixture),
 		port,
+		dataDir: await hostedDataDir(),
 		hosted: { publicOrigin: origin, access: { mode: 'trusted-proxy' }, ...hosted },
 		build: { revision, ref: 'pr-1' },
 	});
@@ -489,7 +500,7 @@ test('an abruptly killed host is replaced and found without a shutdown event', a
 			resolve(process.cwd(), '../lab/lib/host/cli.js'),
 			...['--project', resolve(process.cwd(), '../lab/test/fixtures/project.cjs')],
 			...['--port', String(port), '--public-origin', origin, '--access', 'trusted-proxy'],
-			...['--build-revision', 'aaaaaaa1111'],
+			...['--build-revision', 'aaaaaaa1111', '--data', await hostedDataDir()],
 		],
 		{ stdio: ['ignore', 'pipe', 'inherit'] },
 	);

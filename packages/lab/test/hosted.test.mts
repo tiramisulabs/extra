@@ -15,9 +15,14 @@ const fixture = resolve(process.cwd(), 'test/fixtures/hosted.cjs');
 const flow = resolve(process.cwd(), 'test/fixtures/project.cjs');
 const life = resolve(process.cwd(), 'test/fixtures/lifecycle.cjs');
 const hosts: LabHost[] = [];
+const dataDirs: string[] = [];
 
 afterEach(async () => {
-	for (const host of hosts.splice(0)) await host.close();
+	try {
+		for (const host of hosts.splice(0)) await host.close();
+	} finally {
+		for (const dataDir of dataDirs.splice(0)) await rm(dataDir, { recursive: true, force: true });
+	}
 });
 
 function hostedOptions(projectModule = fixture) {
@@ -26,6 +31,16 @@ function hostedOptions(projectModule = fixture) {
 		build: { revision: 'abc123', ref: 'main' },
 		hosted: { publicOrigin: origin, access: { mode: 'trusted-proxy' as const } },
 	};
+}
+
+async function isolatedDataDir(): Promise<string> {
+	const dataDir = await mkdtemp(resolve(tmpdir(), 'slipher-lab-hosted-'));
+	dataDirs.push(dataDir);
+	return dataDir;
+}
+
+async function startHosted(options: Parameters<typeof startHost>[0]): Promise<LabHost> {
+	return startHost({ ...options, dataDir: options.dataDir ?? (await isolatedDataDir()) });
 }
 
 function api(
@@ -149,8 +164,9 @@ function partialPost(host: LabHost, path: string, cookie: string, value: unknown
 	return { pending, finish: () => finish() };
 }
 
+// This end-to-end path starts several fresh child processes under CI load.
 test('hosted run isolation covers acts, reset, checkpoints and SSE history', async () => {
-	const host = await startHost(hostedOptions(flow));
+	const host = await startHosted(hostedOptions(flow));
 	hosts.push(host);
 	const scenario = { scenario: { id: 'flow', version: 1 } };
 	const a = await start(host, scenario);
@@ -219,10 +235,10 @@ test('hosted run isolation covers acts, reset, checkpoints and SSE history', asy
 		run: { state: 'active', session: true },
 	});
 	expect(await (await api(host, '/api/checkpoints', { cookie: a.cookie })).json()).toEqual({ names: ['only_a'] });
-});
+}, 30_000);
 
 test('run errors, cap, disposal and host info', async () => {
-	const host = await startHost({ ...hostedOptions(), hosted: { ...hostedOptions().hosted, maxRuns: 1 } });
+	const host = await startHosted({ ...hostedOptions(), hosted: { ...hostedOptions().hosted, maxRuns: 1 } });
 	hosts.push(host);
 	const info = await (await api(host, '/api/host')).json();
 	validateHostInfo(info);
@@ -267,7 +283,7 @@ test.each([
 	{ idleTtlMs: 60, maxRunMs: 2000, reason: 'expired' },
 	{ idleTtlMs: 2000, maxRunMs: 60, reason: 'max-lifetime' },
 ])('reaper ends runs with $reason', async ({ idleTtlMs, maxRunMs, reason }) => {
-	const host = await startHost({ ...hostedOptions(), hosted: { ...hostedOptions().hosted, idleTtlMs, maxRunMs } });
+	const host = await startHosted({ ...hostedOptions(), hosted: { ...hostedOptions().hosted, idleTtlMs, maxRunMs } });
 	hosts.push(host);
 	const a = await start(host);
 	const events = reason === 'expired' ? await api(host, '/api/events', { cookie: a.cookie }) : undefined;
@@ -288,7 +304,7 @@ test.each([
 });
 
 test('boundary, navigation, health and authorize', async () => {
-	const host = await startHost(hostedOptions());
+	const host = await startHosted(hostedOptions());
 	hosts.push(host);
 	expect(
 		await (
@@ -326,7 +342,7 @@ test('boundary, navigation, health and authorize', async () => {
 			.status,
 	).toBe(403);
 	expect((await api(host, '/', { headers: { Host: 'foreign.invalid', 'Sec-Fetch-Site': 'none' } })).status).toBe(403);
-	const blocked = await startHost({
+	const blocked = await startHosted({
 		...hostedOptions(),
 		hosted: { publicOrigin: origin, access: { mode: 'authorize', authorize: () => false } },
 	});
@@ -364,7 +380,7 @@ test('child environment and cached describe are isolated', async () => {
 });
 
 test('checkpoint revision stamping, mismatch, acceptance and export', async () => {
-	const host = await startHost(hostedOptions());
+	const host = await startHosted(hostedOptions());
 	hosts.push(host);
 	const a = await start(host);
 	const log = (
@@ -480,7 +496,7 @@ test('ending rejects a parsed Start and checkpoint save, and close awaits dispos
 });
 
 test('close aggregates disposal errors after ending all runs', async () => {
-	const host = await startHost({ ...hostedOptions(life), env: { LAB_CLEANUP_FAIL: '1' } });
+	const host = await startHosted({ ...hostedOptions(life), env: { LAB_CLEANUP_FAIL: '1' } });
 	hosts.push(host);
 	await start(host, { scenario: { id: 'life', version: 1 } });
 	hosts.splice(hosts.indexOf(host), 1);
@@ -488,7 +504,7 @@ test('close aggregates disposal errors after ending all runs', async () => {
 });
 
 test('reaper cleanup failures remain visible to close', async () => {
-	const host = await startHost({
+	const host = await startHosted({
 		...hostedOptions(life),
 		env: { LAB_CLEANUP_FAIL: '1' },
 		hosted: { ...hostedOptions().hosted, idleTtlMs: 60, maxRunMs: 2000 },
@@ -502,18 +518,18 @@ test('reaper cleanup failures remain visible to close', async () => {
 
 test('startHost validation, loopback HTTP and local host info', async () => {
 	await expect(startHost({ projectModule: fixture, hostname: '0.0.0.0' })).rejects.toThrow('Host must bind');
-	await expect(startHost({ ...hostedOptions(), inheritEnv: true })).rejects.toThrow('cannot inherit');
+	await expect(startHosted({ ...hostedOptions(), inheritEnv: true })).rejects.toThrow('cannot inherit');
 	await expect(
-		startHost({
+		startHosted({
 			...hostedOptions(),
 			hosted: { ...hostedOptions().hosted, publicOrigin: 'http://preview.example.test' },
 		}),
 	).rejects.toThrow('HTTP publicOrigin');
-	await expect(startHost({ ...hostedOptions(), hosted: { ...hostedOptions().hosted, maxRuns: 0 } })).rejects.toThrow(
+	await expect(startHosted({ ...hostedOptions(), hosted: { ...hostedOptions().hosted, maxRuns: 0 } })).rejects.toThrow(
 		'positive integer',
 	);
 	const localOrigin = 'http://localhost:4197';
-	const loopback = await startHost({
+	const loopback = await startHosted({
 		...hostedOptions(),
 		hosted: { ...hostedOptions().hosted, publicOrigin: localOrigin },
 	});
@@ -537,8 +553,9 @@ test('startHost validation, loopback HTTP and local host info', async () => {
 	expect(localInfo.run).not.toHaveProperty('startedAt');
 });
 
-test('CLI rejects invalid hosted flag combinations', () => {
+test('CLI rejects invalid hosted flag combinations', async () => {
 	const cli = resolve(process.cwd(), 'lib/host/cli.js');
+	const dataDir = await isolatedDataDir();
 	for (const args of [
 		['--public-origin', origin],
 		['--access', 'trusted-proxy'],
@@ -546,7 +563,7 @@ test('CLI rejects invalid hosted flag combinations', () => {
 		['--public-origin', origin, '--access', 'authorize', '--build-revision', 'abc123'],
 		['--public-origin', origin, '--access', 'trusted-proxy'],
 	]) {
-		const result = spawnSync(process.execPath, [cli, '--project', fixture, ...args], {
+		const result = spawnSync(process.execPath, [cli, '--project', fixture, '--data', dataDir, ...args], {
 			cwd: process.cwd(),
 			env: { ...process.env, SLIPHER_LAB_BUILD_REVISION: '' },
 			encoding: 'utf8',
@@ -556,12 +573,15 @@ test('CLI rejects invalid hosted flag combinations', () => {
 });
 
 test('CLI SIGTERM closes its hosted child', async () => {
+	const dataDir = await isolatedDataDir();
 	const cli = spawn(
 		process.execPath,
 		[
 			'lib/host/cli.js',
 			'--project',
 			fixture,
+			'--data',
+			dataDir,
 			'--public-origin',
 			origin,
 			'--access',
