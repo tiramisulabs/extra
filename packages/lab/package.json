@@ -1,7 +1,7 @@
 {
 	"name": "@slipher/lab",
 	"version": "0.0.0",
-	"private": true,
+	"private": false,
 	"license": "MIT",
 	"files": ["lib/**"],
 	"exports": {
@@ -48,8 +48,8 @@
 	},
 	"peerDependencies": {
 		"seyfert": ">=5.0.0",
-		"@slipher/testing": "workspace:*",
-		"@slipher/lab-ui": "workspace:*"
+		"@slipher/testing": "^1.0.0",
+		"@slipher/lab-ui": "0.0.0"
 	},
 	"peerDependenciesMeta": {
 		"@slipher/lab-ui": { "optional": true }

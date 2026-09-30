@@ -187,7 +187,7 @@ importers:
   packages/lab:
     dependencies:
       '@slipher/lab-ui':
-        specifier: workspace:*
+        specifier: 0.0.0
         version: link:../lab-ui
     dependenciesMeta:
       '@slipher/testing':

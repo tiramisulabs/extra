@@ -1,7 +1,7 @@
 {
   "name": "@slipher/lab-ui",
   "version": "0.0.0",
-  "private": true,
+  "private": false,
   "type": "module",
   "files": [
     "dist/**",

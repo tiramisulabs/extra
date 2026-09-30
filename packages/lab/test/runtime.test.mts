@@ -1,10 +1,10 @@
 import { fork } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { MessageFlags } from 'seyfert';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { type Checkpoint, defineProject, defineScenario, type Preset } from '../src';
 import { createChildSession } from '../src/child';
 import { isBridgeMessage, PROTOCOL_VERSION, validateBridgeRequest, validateLabAction } from '../src/protocol';
@@ -29,6 +29,19 @@ const submit = {
 	customId: 'answer',
 	fields: { value: 'yes' },
 } as const;
+
+async function readWhenPresent(path: string, timeoutMs = 5000): Promise<string> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		try {
+			return await readFile(path, 'utf8');
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+		}
+		await new Promise<void>(done => setImmediate(done));
+	}
+	throw new Error(`Timed out waiting for ${path}`);
+}
 
 describe('lab runtime', () => {
 	test('views keep history and ephemeral visibility scoped to each actor', async () => {
@@ -154,18 +167,70 @@ describe('lab runtime', () => {
 
 	test('start timeout lets a slow setup finish and runs dispose', async () => {
 		const dir = await mkdtemp(resolve(tmpdir(), 'slipher-lab-start-'));
+		const started = resolve(dir, 'started');
+		const gate = resolve(dir, 'gate');
+		const finished = resolve(dir, 'finished');
 		const marker = resolve(dir, 'disposed');
 		const child = createChildSession({
 			projectModule: resolve(process.cwd(), 'test/fixtures/lifecycle.cjs'),
 			preset: { scenario: { id: 'life', version: 1 } },
-			env: { LAB_SLOW_SETUP_MS: '150', LAB_DISPOSE_MARKER: marker },
+			env: {
+				LAB_SETUP_STARTED_MARKER: started,
+				LAB_SETUP_GATE: gate,
+				LAB_SETUP_FINISHED_MARKER: finished,
+				LAB_DISPOSE_MARKER: marker,
+			},
 			startTimeoutMs: 80,
 			disposeTimeoutMs: 500,
 		});
+		vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+		const starting = child.start();
+		const rejection = starting.catch(error => error);
 		try {
-			await expect(child.start()).rejects.toThrow('session.start timed out after 80ms');
-			expect(await readFile(marker, 'utf8')).toBe('disposed');
+			await readWhenPresent(started);
+			vi.advanceTimersByTime(80);
+			await writeFile(gate, 'open');
+			const error: unknown = await rejection;
+			expect(error).toBeInstanceOf(Error);
+			expect(error).not.toBeInstanceOf(AggregateError);
+			expect((error as Error).message).toBe('session.start timed out after 80ms; external cleanup may be pending');
+			expect(await readWhenPresent(finished)).toBe('finished');
+			expect(await readWhenPresent(marker, 2000)).toBe('disposed after setup');
 		} finally {
+			vi.useRealTimers();
+			await writeFile(gate, 'open');
+			await child.dispose().catch(() => {});
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+	test('start timeout forces exit when setup never completes', async () => {
+		const dir = await mkdtemp(resolve(tmpdir(), 'slipher-lab-start-stuck-'));
+		const started = resolve(dir, 'started');
+		const gate = resolve(dir, 'gate');
+		const child = createChildSession({
+			projectModule: resolve(process.cwd(), 'test/fixtures/lifecycle.cjs'),
+			preset: { scenario: { id: 'life', version: 1 } },
+			env: { LAB_SETUP_STARTED_MARKER: started, LAB_SETUP_GATE: gate },
+			startTimeoutMs: 80,
+			disposeTimeoutMs: 100,
+		});
+		vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+		const starting = child.start();
+		const rejection = starting.catch(error => error);
+		try {
+			const pid = Number(await readWhenPresent(started));
+			vi.advanceTimersByTime(80);
+			await new Promise<void>(done => setImmediate(done));
+			vi.advanceTimersByTime(100);
+			const error: unknown = await rejection;
+			expect(error).toBeInstanceOf(AggregateError);
+			expect((error as Error).message).toContain('session.start timed out after 80ms');
+			expect((error as Error).message).toContain('forced shutdown or cleanup failed; external cleanup may be pending');
+			expect(() => process.kill(pid, 0)).toThrow();
+		} finally {
+			vi.useRealTimers();
+			await writeFile(gate, 'open');
+			await child.dispose().catch(() => {});
 			await rm(dir, { recursive: true, force: true });
 		}
 	});
