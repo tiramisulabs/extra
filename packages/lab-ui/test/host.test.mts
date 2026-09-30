@@ -39,6 +39,7 @@ test('a message without content is located by its embed or its first text displa
 	snapshot.conversations['alice:general'].messages.push({
 		id: 'embed-only',
 		channelId: 'general',
+		sequence: 100,
 		visibility: 'public',
 		payload: {
 			id: 'embed-only',

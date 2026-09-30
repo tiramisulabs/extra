@@ -107,7 +107,7 @@ export class MockBot extends MockBotCore {
 	}
 
 	protected override track<T>(dispatch: Dispatch<T>): Dispatch<T> {
-		dispatch.observe((phase, error) => {
+		dispatch.setObserver((phase, error) => {
 			if (dispatch.dispatchId === undefined) return;
 			const sessionKey = this.sessions.keyForDispatch(dispatch.dispatchId);
 			this.publish({
@@ -315,12 +315,11 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	client.applicationId = options.applicationId ?? ((options.client && client.applicationId) || TEST_APPLICATION_ID);
 	// A caller-supplied client may carry its own bot id; the world's bot user follows the id the client runs as.
 	options.world?.adoptBotId(client.botId);
-	const liveBotUser = options.world?.botUser();
 	const built = options.world?.build();
 	const world = built ? cloneWorld(built, 'createMockBot') : undefined;
 	// The running bot takes its identity from the clone, so editing the builder after start cannot reach it.
 	const botUser =
-		(liveBotUser && world?.users[built?.users.indexOf(liveBotUser) ?? -1]) ||
+		world?.users.find(user => user.bot && user.id === client.botId) ??
 		defaultBotUser({ ...options.botUser, id: client.botId });
 	client.me = mockClientUser(client, botUser, client.applicationId);
 

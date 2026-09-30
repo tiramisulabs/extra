@@ -76,8 +76,8 @@ export class Dispatch<T = DispatchResult> implements PromiseLike<T> {
 		this.snapshotter = options.snapshotter;
 	}
 
-	/** @internal Attach persistent observation without changing lazy execution. */
-	observe(observer: DispatchObserver): void {
+	/** @internal Sets the single lifecycle observer; execution stays lazy. */
+	setObserver(observer: DispatchObserver): void {
 		this.observer = observer;
 	}
 

@@ -14,7 +14,7 @@ export interface VisibleMessage {
 	ownerId?: string;
 	interactionId?: string;
 	/** Monotonic creation order in this world. */
-	sequence?: number;
+	sequence: number;
 	editedAt?: string;
 }
 

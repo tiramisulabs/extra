@@ -2,9 +2,11 @@ import type { InspectorEntry, LabAction, LabClient, LabSnapshot, ScenarioChoice,
 import { presetParams, sessionActors } from '../bridge';
 
 const bot = { id: 'bot', username: 'Seyfert', bot: true };
+let sequence = 0;
 const message = (id: string, content: string, extra: Partial<VisibleMessage> = {}): VisibleMessage => ({
 	id,
 	channelId: 'general',
+	sequence: ++sequence,
 	visibility: 'public',
 	payload: { id, author: bot, content },
 	...extra,

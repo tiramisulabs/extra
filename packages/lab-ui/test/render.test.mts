@@ -160,6 +160,7 @@ test('ephemeral responses never merge into a previous message; public ones still
 	) => ({
 		id,
 		channelId: 'c',
+		sequence: seconds,
 		visibility: extra.visibility ?? ('public' as const),
 		payload: { id, author: bot, content: id, timestamp: at(seconds), flags: extra.flags },
 	});
@@ -216,6 +217,7 @@ test("only the viewer's own ephemeral messages offer Dismiss message", () => {
 	const message = {
 		id: 'm1',
 		channelId: 'c1',
+		sequence: 1,
 		visibility: 'ephemeral' as const,
 		ownerId: 'alice',
 		payload: { id: 'm1', content: 'Saved', flags: 64, author: { id: 'bot', username: 'Bot', bot: true } },
@@ -239,7 +241,13 @@ test('a closed form whose trigger is no longer visible offers Reopen; a visible 
 		source: { channelId: 'c1', messageId: 'm-verify', customId: 'verify' },
 		payload: { custom_id: 'verify:1', title: 'Verify email', components: [] },
 	};
-	const trigger = { id: 'm-verify', channelId: 'c1', visibility: 'ephemeral' as const, payload: { id: 'm-verify' } };
+	const trigger = {
+		id: 'm-verify',
+		channelId: 'c1',
+		sequence: 1,
+		visibility: 'ephemeral' as const,
+		payload: { id: 'm-verify' },
+	};
 	assert.deepEqual(unreachableForms([form], ['i-1'], 'alice', []), [form], 'trigger dismissed');
 	const live = {
 		...trigger,
