@@ -67,5 +67,5 @@ jobs:
           HUSKY: 0
 
       - name: Publish in pkg.pr.new
-        run: pnpx pkg-pr-new publish './packages/*'
+        run: pnpx pkg-pr-new publish --pnpm './packages/*'
         if: github.repository == 'tiramisulabs/extra'

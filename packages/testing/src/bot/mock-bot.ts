@@ -64,7 +64,8 @@ import {
 } from './interactions';
 import { isEphemeral } from './message-flags';
 import { MockBotDispatchCore } from './mock-bot-dispatch';
-import { prepareAutocompleteOptions, prepareChatInputOptions } from './option-validation';
+import type { ModalOpenerSource } from './observation';
+import { CommandOptionType, prepareAutocompleteOptions, prepareChatInputOptions } from './option-validation';
 import {
 	type ApiChannel,
 	type ApiMember,
@@ -93,6 +94,46 @@ import { applyWorldEvent, WORLD_EVENT_NAMES } from './world-events';
 const INPUT_SHUTDOWN_GRACE_MS = 250;
 const realSetTimeout = setTimeout.bind(globalThis);
 const realClearTimeout = clearTimeout.bind(globalThis);
+
+type CommandDataOptions = NonNullable<ApiInteractionPayload['data']['options']>;
+
+/** Identify what opened a modal, so two modals with the same customId stay distinguishable. */
+function openerSource(payload: ApiInteractionPayload): ModalOpenerSource {
+	const { data } = payload;
+	if (payload.type === InteractionType.MessageComponent) {
+		return {
+			channelId: payload.channel_id,
+			...(payload.message ? { messageId: payload.message.id } : {}),
+			...(data.custom_id ? { customId: data.custom_id } : {}),
+			...(data.values ? { values: [...data.values] } : {}),
+		};
+	}
+	if (payload.type === InteractionType.ApplicationCommand && data.type === ApplicationCommandType.ChatInput) {
+		return {
+			channelId: payload.channel_id,
+			...(data.name ? { commandName: data.name } : {}),
+			...chatInputRoute(data.options ?? []),
+		};
+	}
+	return { channelId: payload.channel_id };
+}
+
+/** The group/subcommand path of a chat-input command and its leaf options, sorted by name. */
+function chatInputRoute(options: CommandDataOptions): Pick<ModalOpenerSource, 'group' | 'subcommand' | 'options'> {
+	const group = options[0]?.type === CommandOptionType.SubcommandGroup ? options[0] : undefined;
+	const groupOptions = group ? (group.options ?? []) : options;
+	const subcommand = groupOptions[0]?.type === CommandOptionType.Subcommand ? groupOptions[0] : undefined;
+	const leaves = subcommand ? (subcommand.options ?? []) : groupOptions;
+	return {
+		...(group ? { group: group.name } : {}),
+		...(subcommand ? { subcommand: subcommand.name } : {}),
+		options: Object.fromEntries(
+			leaves
+				.flatMap(option => (option.value === undefined ? [] : [[option.name, option.value] as const]))
+				.sort(([a], [b]) => a.localeCompare(b)),
+		),
+	};
+}
 
 export class MockBot extends MockBotDispatchCore {
 	private actorSessionSequence = 0;
@@ -137,7 +178,19 @@ export class MockBot extends MockBotDispatchCore {
 			ctx.resolveDenial = resolve;
 			ctx.rejectDenial = reject;
 		});
-		this._state.registerInteractionToken(payload.token, payload.channel_id, payload.type, payload.application_id);
+		this._state.registerInteractionToken(
+			payload.token,
+			payload.channel_id,
+			payload.type,
+			payload.application_id,
+			userId === undefined
+				? undefined
+				: {
+						userId,
+						interactionId: payload.id,
+						source: openerSource(payload),
+					},
+		);
 		if (payload.message) {
 			this._state.registerComponentSource(payload.token, payload.message.channel_id, payload.message.id);
 		}
@@ -156,8 +209,10 @@ export class MockBot extends MockBotDispatchCore {
 		} finally {
 			modalCapturedDuringExecution = this.modalRenderCapturedDispatches.delete(dispatchId);
 			if (isModalPayload && userId) {
-				modalRegistry(this.client).delete(userId);
-				this.modalOwners.delete(userId);
+				if (this.modalOwners.get(userId) === causalOwnerDispatchId) {
+					modalRegistry(this.client).delete(userId);
+					this.forgetModalOwner(userId);
+				}
 			}
 		}
 		if (isModalPayload) {
@@ -714,7 +769,13 @@ export class MockBot extends MockBotDispatchCore {
 				);
 			}
 			if (synthetic && !message) this.assertSyntheticComponentAllowed('clickButton', customId);
-			const hydrated = message?.id ? this.hydrateSourceMessage(message, { verb: 'clickButton', customId }) : undefined;
+			const hydrated = message?.id
+				? this.hydrateSourceMessage(
+						message,
+						{ verb: 'clickButton', customId },
+						prepared.user?.id ?? this.defaultUser.id,
+					)
+				: undefined;
 			let messageForInteraction: ApiMessage | undefined;
 			if (hydrated) {
 				this.requireComponentOnMessage('clickButton', customId, hydrated, options.allowTamperedInput);
@@ -799,7 +860,7 @@ export class MockBot extends MockBotDispatchCore {
 			);
 		}
 
-		const sourceMessage = this.hydrateSourceMessage(resolvedSource, { verb, customId });
+		const sourceMessage = this.hydrateSourceMessage(resolvedSource, { verb, customId }, userId);
 		const sourceComponent = this.requireComponentOnMessage(verb, customId, sourceMessage, options.allowTamperedInput);
 		const checkpoint = this.sessions.componentCheckpoint(
 			customId,
@@ -857,7 +918,9 @@ export class MockBot extends MockBotDispatchCore {
 				);
 			}
 			if (synthetic && !message) this.assertSyntheticComponentAllowed('selectMenu', customId);
-			const hydrated = message?.id ? this.hydrateSourceMessage(message, { verb: 'selectMenu', customId }) : undefined;
+			const hydrated = message?.id
+				? this.hydrateSourceMessage(message, { verb: 'selectMenu', customId }, prepared.user?.id ?? this.defaultUser.id)
+				: undefined;
 			const sourceComponent = hydrated
 				? this.requireComponentOnMessage('selectMenu', customId, hydrated, options.allowTamperedInput)
 				: undefined;
@@ -1037,7 +1100,7 @@ export class MockBot extends MockBotDispatchCore {
 		const before = new Map(
 			Object.entries(this._world).map(([key, value]) => [key, Array.isArray(value) ? value.length : 0]),
 		);
-		register(new WorldBuilder(this._world));
+		register(new WorldBuilder(this._world, this.client.botId));
 		const added = Object.fromEntries(
 			Object.entries(this._world).map(([key, value]) => [
 				key,
@@ -1204,6 +1267,7 @@ export class MockBot extends MockBotDispatchCore {
 		const dispatchId = nextDispatchId();
 		return this.track(
 			new Dispatch<EventDispatchResult>({
+				kind: name,
 				rest: this.rest,
 				client: this.client,
 				executor: async () => {
@@ -1278,6 +1342,7 @@ export class MockBot extends MockBotDispatchCore {
 		const dispatchId = nextDispatchId();
 		return this.track(
 			new Dispatch<EventDispatchResult>({
+				kind: name,
 				rest: this.rest,
 				client: this.client,
 				executor: async () => {
@@ -1347,9 +1412,11 @@ export class MockBot extends MockBotDispatchCore {
 
 	private clearInputRuntime(): void {
 		this.client.components.modals.clear();
+		for (const messageId of this.client.components.values.keys()) this.client.components.clearValue(messageId);
 		this.client.components.values.clear();
 		this.modalWaiters.clear();
 		this.modalOwners.clear();
+		this.completedModalOwners.clear();
 		this.displayedModals.clear();
 		this.modalRenderCapturedDispatches.clear();
 		this.sessions.reset();

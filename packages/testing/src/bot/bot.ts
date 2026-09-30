@@ -11,23 +11,224 @@ import type { ClientConstructorOptions, ClientOptions } from './bot-support';
 import { TEST_APPLICATION_ID, TEST_BOT_ID } from './constants';
 import { type MockBotOptions, type MockSubCommandClass } from './contracts';
 import { registerWorldDefaults } from './defaults';
+import type { Dispatch } from './dispatch';
 import { dispatchStore } from './dispatch-context';
 import { MockGateway } from './gateway';
+import { isEphemeral } from './message-flags';
+import { channelAccess, type MessageDenial, messageDenial } from './message-visibility';
 import { MockBot as MockBotCore } from './mock-bot';
+import type {
+	CommandSchema,
+	InspectedMessage,
+	MockBotEvent,
+	PendingCollector,
+	PendingInteractionChange,
+	PendingModal,
+	VisibleConversation,
+	VisibleMessage,
+} from './observation';
+import { memberUpdateEvent } from './payload-events';
 import { type ApiRole } from './payloads';
 import { MockApiHandler } from './rest';
-import { asClientGateway, asUsingClient, cacheStore, clientLifecycle, eventsInternals } from './seyfert-internals';
-import { WorldState, type WorldStateReader } from './state';
-import { cloneWorld, seedCachedRole, seedWorld } from './world';
+import {
+	asClientGateway,
+	asUsingClient,
+	cacheStore,
+	clientLifecycle,
+	eventsInternals,
+	mockClientUser,
+} from './seyfert-internals';
+import { type WorldSnapshot, WorldState, type WorldStateReader } from './state';
+import type { ChannelTimelineEntry } from './state-read';
+import { cloneWorld, defaultBotUser, seedCachedRole, seedWorld } from './world';
 
 export * from './contracts';
 export { Dispatch, type DispatchOptions } from './dispatch';
 export { WORLD_EVENT_NAMES } from './world-events';
 
+export interface MemberRoleChange {
+	guildId: string;
+	userId: string;
+	roleId: string;
+}
+
 /** Public facade kept in this module so the declaration entrypoint remains stable across internal collaborators. */
 export class MockBot extends MockBotCore {
+	private readonly observers = new Set<(event: MockBotEvent) => void>();
+	/** World snapshots taken when an observed REST call started, diffed once it settles. */
+	private readonly restSnapshots = new Map<number, WorldSnapshot>();
+	/** Messages up to this sequence were seeded before the bot started. */
+	private readonly startupSequence = this._world?.messageSequence ?? 0;
+
 	override get world(): WorldStateReader {
 		return super.world;
+	}
+
+	/** A failing observer is reported and skipped so it cannot break the bot it watches. */
+	private publish(event: MockBotEvent): void {
+		for (const observer of [...this.observers]) {
+			try {
+				observer(event);
+			} catch (error) {
+				console.warn('[@slipher/testing] observer failed:', error);
+			}
+		}
+	}
+
+	private publishDiff(before: WorldSnapshot): void {
+		const diff = this._state.diff(before);
+		if (Object.values(diff).some(bucket => bucket.added.length || bucket.removed.length || bucket.changed.length)) {
+			this.publish({ type: 'world', diff });
+		}
+	}
+
+	constructor(...args: ConstructorParameters<typeof MockBotCore>) {
+		super(...args);
+		// Relay REST traffic to observers; field initializers above have already run.
+		this.rest.observeActions((action, phase) => {
+			if (phase === 'pending') {
+				if (this.observers.size) this.restSnapshots.set(action.seq, this._state.snapshot());
+				this.publish({ type: 'rest', phase: 'request', action: { ...action } });
+				return;
+			}
+			this.publish({ type: 'rest', phase: 'settled', action: { ...action } });
+			const before = this.restSnapshots.get(action.seq);
+			this.restSnapshots.delete(action.seq);
+			if (before) this.publishDiff(before);
+		});
+	}
+
+	/** Stream REST calls, dispatches, world diffs and pending interaction changes. Returns an unsubscribe. */
+	observe(observer: (event: MockBotEvent) => void): () => void {
+		this.observers.add(observer);
+		return () => {
+			this.observers.delete(observer);
+		};
+	}
+
+	protected override track<T>(dispatch: Dispatch<T>): Dispatch<T> {
+		dispatch.setObserver((phase, error) => {
+			if (dispatch.dispatchId === undefined) return;
+			const sessionKey = this.sessions.keyForDispatch(dispatch.dispatchId);
+			this.publish({
+				type: 'dispatch',
+				phase,
+				dispatchId: dispatch.dispatchId,
+				kind: dispatch.kind,
+				...(error === undefined ? {} : { error }),
+				...(sessionKey === undefined ? {} : { sessionKey }),
+			});
+		});
+		return super.track(dispatch);
+	}
+
+	protected override applyWorldEvent(name: string, payload: Record<string, unknown>): void {
+		const before = this.observers.size ? this._state.snapshot() : undefined;
+		super.applyWorldEvent(name, payload);
+		if (before) this.publishDiff(before);
+	}
+
+	protected override onInteractionChange(change: PendingInteractionChange): void {
+		this.publish({ type: 'interaction', change });
+	}
+
+	private visibleMessage(entry: ChannelTimelineEntry): VisibleMessage {
+		const { message } = entry;
+		return {
+			id: message.id,
+			channelId: entry.channelId,
+			payload: structuredClone(message) as VisibleMessage['payload'],
+			visibility: isEphemeral(message) ? 'ephemeral' : 'public',
+			sequence: entry.sequence,
+			...(entry.ownerId === undefined ? {} : { ownerId: entry.ownerId }),
+			...(entry.interactionId === undefined ? {} : { interactionId: entry.interactionId }),
+			...(message.edited_timestamp === null ? {} : { editedAt: message.edited_timestamp }),
+		};
+	}
+
+	/** Every message in the channel, including hidden and deleted ones, with delivery details. */
+	inspectChannel(channelId: string): { messages: InspectedMessage[]; diagnostics: string[] } {
+		if (!this._world?.channels.some(entry => entry.id === channelId)) {
+			return { messages: [], diagnostics: ['unknown-channel'] };
+		}
+		const timeline = this._state.channelTimeline(channelId);
+		const diagnostics: string[] = [];
+		if (timeline.some(entry => isEphemeral(entry.message) && entry.ownerId === undefined)) {
+			diagnostics.push('ephemeral-owner-unknown');
+		}
+		return {
+			messages: timeline.map(entry => ({
+				...this.visibleMessage(entry),
+				liveRecipientIds: [...(entry.liveRecipientIds ?? [])],
+				isHistory: entry.sequence <= this.startupSequence,
+				...(entry.deleted ? { deleted: true } : {}),
+			})),
+			diagnostics,
+		};
+	}
+
+	/** What `userId` can see in the channel; diagnostics count the messages hidden from them and why. */
+	conversation(query: { userId: string; channelId: string }): VisibleConversation {
+		const { userId, channelId } = query;
+		const access = channelAccess(this._world, this._state, channelId, userId);
+		if (!access.visible) return { channelId, messages: [], diagnostics: [access.denial] };
+		const timeline = this._state
+			.channelTimeline(channelId)
+			.filter(entry => !entry.deleted)
+			.map(entry => ({ entry, denial: messageDenial(entry, userId, access.permissions) }));
+		const hidden = (denial: MessageDenial) => timeline.filter(item => item.denial === denial).length;
+		const diagnostics: string[] = [];
+		const unknownOwner = hidden('ephemeral-owner-unknown');
+		if (unknownOwner) diagnostics.push(`ephemeral-owner-unknown:${unknownOwner}`);
+		const history = hidden('history-hidden');
+		if (history) diagnostics.push(`history-hidden:${history}`);
+		return {
+			channelId,
+			messages: timeline.filter(item => item.denial === undefined).map(item => this.visibleMessage(item.entry)),
+			diagnostics,
+		};
+	}
+
+	/** Open modals and live component collectors. */
+	pendingInteractions(): { modals: PendingModal[]; collectors: PendingCollector[] } {
+		return {
+			modals: [...this.displayedModals.values()].flatMap(value =>
+				value.pending ? [structuredClone(value.pending)] : [],
+			),
+			collectors: [...this.pendingCollectors].map(value => structuredClone(value)),
+		};
+	}
+
+	/** Loads any deferred directory commands before returning their full Seyfert JSON schemas. */
+	async commandSchemas(): Promise<CommandSchema[]> {
+		await this.ensureAllCommandsLoaded();
+		const { values, entryPoint } = this.client.commands;
+		return [...values, ...(entryPoint ? [entryPoint] : [])].map(command => command.toJSON() as CommandSchema);
+	}
+
+	/** Role changes made outside the bot: they dispatch GUILD_MEMBER_UPDATE and ignore the bot's permissions. */
+	readonly admin = {
+		addMemberRole: (input: MemberRoleChange): Promise<void> =>
+			this.changeMemberRole(input, roles => [...new Set([...roles, input.roleId])]),
+		removeMemberRole: (input: MemberRoleChange): Promise<void> =>
+			this.changeMemberRole(input, roles => roles.filter(roleId => roleId !== input.roleId)),
+	};
+
+	private async changeMemberRole(input: MemberRoleChange, nextRoles: (roles: string[]) => string[]): Promise<void> {
+		const { guildId, userId, roleId } = input;
+		if (!this._world?.guilds.some(entry => entry.id === guildId)) {
+			throw new TypeError(`admin: guild "${guildId}" is not in the world.`);
+		}
+		const member = this._world.members.find(entry => entry.guildId === guildId && entry.member.user.id === userId);
+		if (!member) throw new TypeError(`admin: member "${userId}" is not in guild "${guildId}".`);
+		if (!this._world.roles.some(entry => entry.guildId === guildId && entry.role.id === roleId)) {
+			throw new TypeError(`admin: role "${roleId}" is not in guild "${guildId}".`);
+		}
+		await this.emit(
+			'GUILD_MEMBER_UPDATE',
+			memberUpdateEvent(member.member, { guildId, roles: nextRoles(member.member.roles) }),
+			{ allowNoHandler: true },
+		);
 	}
 }
 
@@ -35,9 +236,11 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	const rest = new MockApiHandler({ onUnhandledRest: options.onUnhandledRest });
 	// Reconcile before the clone: adoptBotId rewrites the seeded bot member on the live world, so the
 	// ApiMember registerBotMember already returned points at the same id the client will run as.
-	const statedBotId = options.world ? options.world.adoptBotId(options.botId) : options.botId;
-	const built = options.world?.build();
-	const world = built ? cloneWorld(built, 'createMockBot') : undefined;
+	const profileId = options.botUser?.id;
+	if (profileId !== undefined && options.botId !== undefined && profileId !== options.botId)
+		throw new TypeError(`createMockBot: botUser id "${profileId}" conflicts with botId "${options.botId}".`);
+	const requestedBotId = options.botId ?? profileId;
+	const statedBotId = options.world ? options.world.adoptBotId(requestedBotId, options.botUser) : requestedBotId;
 	const botId = statedBotId ?? TEST_BOT_ID;
 	const prefixList = [...(options.prefixes ?? []), ...(options.mentionAsPrefix ? [`<@${botId}>`, `<@!${botId}>`] : [])];
 	const clientOptionsBase: ClientOptions | undefined = options.clientOptions
@@ -110,6 +313,15 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	}
 	client.botId = statedBotId ?? ((options.client && client.botId) || botId);
 	client.applicationId = options.applicationId ?? ((options.client && client.applicationId) || TEST_APPLICATION_ID);
+	// A caller-supplied client may carry its own bot id; the world's bot user follows the id the client runs as.
+	options.world?.adoptBotId(client.botId);
+	const built = options.world?.build();
+	const world = built ? cloneWorld(built, 'createMockBot') : undefined;
+	// The running bot takes its identity from the clone, so editing the builder after start cannot reach it.
+	const botUser =
+		world?.users.find(user => user.bot && user.id === client.botId) ??
+		defaultBotUser({ ...options.botUser, id: client.botId });
+	client.me = mockClientUser(client, botUser, client.applicationId);
 
 	let requestedSubcommands: MockSubCommandClass[] = [];
 	if (options.commands) {
@@ -131,7 +343,8 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	await runMockClientStartup(client, options, commandCatalog);
 	// seedWorld only needs the UsingClient cache/rest surface already installed above.
 	if (world) await seedWorld(asUsingClient(client), world);
-	const state = new WorldState(world, { botId: client.botId });
+	else await client.cache.users?.set(CacheFrom.Test, botUser.id, botUser);
+	const state = new WorldState(world, { botId: client.botId, botUser });
 	registerWorldDefaults(rest, world, {
 		emit: (name, payload) => client.events.runEvent(name, client, payload, -1, true) as Promise<void>,
 		removeCachedMember: async (guildId, userId) => {

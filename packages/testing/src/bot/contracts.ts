@@ -40,7 +40,7 @@ import {
 	normalizeEmbed,
 	normalizeFile,
 } from './state';
-import type { WorldBuilder } from './world';
+import type { BotUserOptions, WorldBuilder } from './world';
 
 type ClientConstructorOptions = ConstructorParameters<typeof Client>[0];
 type ClientOptions = NonNullable<ClientConstructorOptions>;
@@ -628,6 +628,8 @@ export interface MockBotOptions {
 	shardLatency?: number;
 	/** Bot user id used by the mock client identity. */
 	botId?: string;
+	/** Bot profile shared by client.me, seeded members, and authored messages. */
+	botUser?: BotUserOptions;
 	/** Application id used for interactions and webhook routes. */
 	applicationId?: string;
 	/**

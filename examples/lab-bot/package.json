@@ -1,0 +1,34 @@
+{
+	"name": "lab-bot",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"build": "tsc",
+		"test": "tsc -p test && vitest run",
+		"lab": "slipher-lab --project dist/lab/project.js",
+		"lint": "biome lint --write ./src ./lab ./test",
+		"format": "biome format --write ./src ./lab ./test",
+		"checkb": "biome check --write --no-errors-on-unmatched ./src ./lab ./test"
+	},
+	"dependencies": {
+		"seyfert": "5.1.0",
+		"@slipher/testing": "workspace:*",
+		"@slipher/lab": "workspace:*"
+	},
+	"dependenciesMeta": {
+		"@slipher/testing": {
+			"injected": true
+		},
+		"@slipher/lab": {
+			"injected": true
+		}
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.1",
+		"@slipher/lab-ui": "workspace:*",
+		"@types/node": "^26.0.1",
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.9"
+	}
+}

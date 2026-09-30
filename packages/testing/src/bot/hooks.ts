@@ -1,7 +1,8 @@
-import type { Client } from 'seyfert';
+import { type Client, Interaction, Modal } from 'seyfert';
 import type { ModalWaiter } from './dispatch';
 import { dispatchStore } from './dispatch-context';
 import type { InputCheckpoint } from './interaction-session';
+import type { PendingCollector } from './observation';
 import { type ComponentCollectorMatch, componentInternals, modalRegistry } from './seyfert-internals';
 
 type MiddlewareControl = (...args: unknown[]) => unknown;
@@ -29,6 +30,13 @@ function stableCollectorMatch(match: ComponentCollectorMatch): ComponentCollecto
 	return new RegExp(match.source, match.flags.replace(/[gy]/g, ''));
 }
 
+/** The literal customIds a collector matches; a RegExp matcher has none to list. */
+function collectorCustomIds(match: ComponentCollectorMatch): string[] | undefined {
+	if (typeof match === 'string') return [match];
+	if (Array.isArray(match)) return [...match];
+	return undefined;
+}
+
 /** Component/modal detection capabilities, fixed at install time from the client's component surface. */
 export interface DispatchHookCapabilities {
 	canDetectComponentCommand: boolean;
@@ -39,18 +47,24 @@ export interface DispatchHookCapabilities {
 export interface DispatchHookDeps {
 	/** Pending modal waiters keyed by userId; resolved when seyfert registers a modal via components.modals.set. */
 	modalWaiters: Map<string, ModalWaiter[]>;
-	/** Dispatch that owns the currently registered waitFor modal for a user. */
+	/** Dispatch that opened the currently registered modal for a user. */
 	modalOwners: Map<string, number>;
+	/** Whether this user's registered modal was opened by a dispatch that has returned. */
+	isModalOwnerCompleted?: (userId: string) => boolean;
+	/** Close the displayed definition when a newer modal replaces it for this user. */
+	onModalReplaced?: (userId: string) => void;
 	/** Drain the given dispatch's REST surface until quiescent or aborted. */
 	drainUntilQuiescent: (dispatchId: number | undefined, aborted: () => boolean) => Promise<void>;
 	/** Snapshot the modal definition just displayed to userId, so submitModal can validate customId/fields. */
 	onModalDisplayed?: (userId: string, dispatchId: number | undefined) => string | undefined;
-	/** Clear ownership when the registered modal callback is explicitly resolved with null (raw timeout seam). */
+	/** Clear ownership when a modal wait settles with null. */
 	onModalTimedOut?: (userId: string, dispatchId: number | undefined) => void;
 	/** Publish a real user-input checkpoint to the stateful session coordinator. */
 	onCheckpoint?: (checkpoint: InputCheckpoint) => void;
 	/** Remove a checkpoint after its underlying wait settles by input or timeout. */
 	onCheckpointSettled?: (checkpoint: InputCheckpoint) => void;
+	/** Report a live component collector; returns the callback that reports it closed. */
+	onCollectorRegistered?: (collector: PendingCollector) => () => void;
 }
 
 interface DispatchHookInstallState {
@@ -67,6 +81,41 @@ interface DispatchHookInstallState {
 const dispatchHookInstalls = new WeakMap<Client, DispatchHookInstallState>();
 const middlewareHookFunctions = new WeakMap<Client, WeakSet<WrappedMiddleware>>();
 const permissionHookCommands = new WeakMap<Client, WeakSet<object>>();
+type ModalCallback = (interaction: unknown) => unknown;
+/** Seyfert's modal callback -> the wrapper registered in its place by the `components.modals.set` hook. */
+const registeredModalCallbacks = new WeakMap<ModalCallback, ModalCallback>();
+let modalTimeoutHookInstalled = false;
+
+/**
+ * When `interaction.modal(body, { waitFor })` times out, Seyfert resolves null but leaves the callback registered
+ * in `components.modals`, so the mock would keep offering a modal nobody is waiting for. Passing null to the
+ * registered wrapper releases it exactly like an explicit timeout, and only if it is still the user's current
+ * modal, so a replacement opened meanwhile survives.
+ *
+ * Seyfert has no per-client seam here, so this patches `Interaction.prototype.modal` once per process. The patch
+ * is inert for clients without dispatch hooks and for modals opened without `waitFor` options.
+ */
+function installModalTimeoutHook(): void {
+	if (modalTimeoutHookInstalled) return;
+	modalTimeoutHookInstalled = true;
+	const seyfertModal = Interaction.prototype.modal as (
+		this: Interaction,
+		body: Parameters<Interaction['modal']>[0],
+		options?: Parameters<Interaction['modal']>[1],
+	) => Promise<unknown>;
+	Interaction.prototype.modal = async function (this: Interaction, body, options) {
+		if (!dispatchHookInstalls.has(this.client as Client) || options === undefined) {
+			return seyfertModal.call(this, body, options);
+		}
+		// Build the Modal here, as Seyfert would, to read the callback it assigns before its first await.
+		const modal = body instanceof Modal ? body : new Modal(body);
+		const waiting = seyfertModal.call(this, modal, options);
+		const callback = (modal as Modal & { __exec?: ModalCallback }).__exec;
+		const result = await waiting;
+		if (result === null && callback) registeredModalCallbacks.get(callback)?.(null);
+		return result;
+	} as Interaction['modal'];
+}
 
 /**
  * Install the component/middleware wrappers ONCE on the shared client singletons. Each wrapper reads the
@@ -103,6 +152,7 @@ export function installDispatchHooks(client: Client, deps: DispatchHookDeps): Di
 		},
 	};
 	dispatchHookInstalls.set(client, state);
+	installModalTimeoutHook();
 
 	if (canDetectComponentCommand) {
 		const execute = componentHooks.execute?.bind(componentHooks);
@@ -118,6 +168,14 @@ export function installDispatchHooks(client: Client, deps: DispatchHookDeps): Di
 	}
 	if (canDetectComponentWait) {
 		const createComponentCollector = componentHooks.createComponentCollector?.bind(componentHooks);
+		// Per message, the closers of its pending collectors; run when Seyfert clears or stops them.
+		const collectorClosers = new Map<string, Set<() => void>>();
+		const clearValue = componentHooks.clearValue.bind(componentHooks);
+		componentHooks.clearValue = id => {
+			for (const close of collectorClosers.get(id) ?? []) close();
+			collectorClosers.delete(id);
+			return clearValue(id);
+		};
 		componentHooks.createComponentCollector = (messageId, channelId, guildId, options, components) => {
 			// Seyfert replaces same-message collector state with Map#set without clearing the previous timers.
 			// Clear the unreachable collector first so its idle/timeout handles cannot fire into the replacement.
@@ -131,14 +189,41 @@ export function installDispatchHooks(client: Client, deps: DispatchHookDeps): Di
 			if (!collector) {
 				throw new TypeError('Seyfert createComponentCollector returned no collector handle.');
 			}
-			if (state.closing) componentHooks.clearValue(messageId);
+			// A collector created during shutdown is inert: cleared at once, so it is never reported as pending.
+			if (state.closing) {
+				componentHooks.clearValue(messageId);
+				return collector;
+			}
 			const run = collector.run.bind(collector);
+			const entry = componentHooks.values.get(messageId);
+			const openClosers = collectorClosers.get(messageId) ?? new Set<() => void>();
+			collectorClosers.set(messageId, openClosers);
+			/** Report the collector as pending; the returned closer reports it closed, at most once. */
+			const register = (match: ComponentCollectorMatch, kind: PendingCollector['kind']): (() => void) => {
+				// Once Seyfert cleared this collector (stop, idle, timeout, replacement), run/waitFor register nothing.
+				if (componentHooks.values.get(messageId) !== entry) return () => {};
+				const customIds = collectorCustomIds(match);
+				const close = state.deps.onCollectorRegistered?.({
+					messageId,
+					channelId,
+					kind,
+					...(customIds ? { customIds } : {}),
+				});
+				if (!close) return () => {};
+				const dispose = () => {
+					openClosers.delete(dispose);
+					close();
+				};
+				openClosers.add(dispose);
+				return dispose;
+			};
 			collector.run = (match, callback) => {
 				run(stableCollectorMatch(match), (...args: unknown[]) => {
 					const ctx = dispatchStore.getStore();
 					if (ctx) ctx.collectorMatched = true;
 					return callback(...args);
 				});
+				register(match, 'run');
 			};
 			const waitFor = collector.waitFor.bind(collector);
 			collector.waitFor = (match, timeout) => {
@@ -148,6 +233,8 @@ export function installDispatchHooks(client: Client, deps: DispatchHookDeps): Di
 				const before = new Set(row?.components ?? []);
 				const registeredMatch = stableCollectorMatch(match);
 				const waiting = waitFor(registeredMatch, timeout);
+				const closeCollector = register(match, 'waitFor');
+				void waiting.then(closeCollector, closeCollector);
 				const component = row?.components.find(candidate => !before.has(candidate));
 				if (component) {
 					const callback = component.callback;
@@ -198,6 +285,7 @@ export function installDispatchHooks(client: Client, deps: DispatchHookDeps): Di
 				if (state.closing) pending?.cancel();
 				return waiting;
 			};
+			// No stop wrapper: Seyfert's stop calls clearValue, which the hook above uses to close these collectors.
 			return collector;
 		};
 	}
@@ -217,16 +305,19 @@ export function installDispatchHooks(client: Client, deps: DispatchHookDeps): Di
 	modals.set = (key: string, value: unknown) => {
 		const ctx = dispatchStore.getStore();
 		const ownerId = ctx?.dispatchId;
-		const storedValue =
-			typeof value === 'function'
-				? (interaction: unknown) => {
-						if (interaction === null) {
-							modals.delete(key);
-							state.deps.onModalTimedOut?.(key, ownerId);
-						}
-						return (value as (input: unknown) => unknown)(interaction);
-					}
-				: value;
+		// A null interaction is a timeout: release the registration unless a newer modal already replaced it.
+		const registerCallback = (callback: ModalCallback): ModalCallback => {
+			const registered: ModalCallback = interaction => {
+				if (interaction === null && modals.get(key) === registered) {
+					modals.delete(key);
+					state.deps.onModalTimedOut?.(key, ownerId);
+				}
+				return callback(interaction);
+			};
+			registeredModalCallbacks.set(callback, registered);
+			return registered;
+		};
+		const storedValue = typeof value === 'function' ? registerCallback(value as ModalCallback) : value;
 		if (state.closing) {
 			const result = realSet(key, storedValue);
 			if (ownerId !== undefined) state.deps.modalOwners.set(key, ownerId);
@@ -234,7 +325,12 @@ export function installDispatchHooks(client: Client, deps: DispatchHookDeps): Di
 			return result;
 		}
 		const existingOwner = state.deps.modalOwners.get(key);
-		if (modals.has(key) && existingOwner !== undefined && existingOwner !== ownerId) {
+		if (
+			modals.has(key) &&
+			existingOwner !== undefined &&
+			existingOwner !== ownerId &&
+			!state.deps.isModalOwnerCompleted?.(key)
+		) {
 			throw new TypeError(
 				`A modal is already waiting for user ${key} from dispatch ${existingOwner}; ` +
 					`dispatch ${ownerId ?? '(unknown)'} would overwrite it. Same-user modal flows must be driven sequentially.`,
@@ -249,6 +345,7 @@ export function installDispatchHooks(client: Client, deps: DispatchHookDeps): Di
 						`already waiting for that user's modal. Same-user modal flows must be driven sequentially.`,
 				);
 			}
+			state.deps.onModalReplaced?.(key);
 			const result = realSet(key, storedValue);
 			if (ownerId !== undefined) state.deps.modalOwners.set(key, ownerId);
 			const customId = state.deps.onModalDisplayed?.(key, ownerId);
@@ -270,6 +367,7 @@ export function installDispatchHooks(client: Client, deps: DispatchHookDeps): Di
 					'Use `await raw.submitModal(customId, fields)` or `await raw.timeoutModal()`.',
 			);
 		}
+		state.deps.onModalReplaced?.(key);
 		const result = realSet(key, storedValue);
 		if (ownerId !== undefined) state.deps.modalOwners.set(key, ownerId);
 		const customId = state.deps.onModalDisplayed?.(key, ownerId);

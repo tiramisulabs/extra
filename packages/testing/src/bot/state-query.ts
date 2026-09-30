@@ -1,6 +1,7 @@
 import { TEST_BOT_ID } from './constants';
 import { decodeEmoji } from './emoji';
 import { isEphemeral } from './message-flags';
+import type { ModalOpenerSource } from './observation';
 import {
 	type ApiAuditLogEntry,
 	type ApiAutoModRule,
@@ -12,6 +13,7 @@ import {
 	type ApiSoundboardSound,
 	type ApiStageInstance,
 	type ApiSticker,
+	type ApiUser,
 	type ApiVoiceState,
 	type ApiWebhook,
 	type RawMessage,
@@ -57,7 +59,14 @@ import type {
 	WorldWebhookFilter,
 } from './state-support';
 import { EMPTY_WORLD, queryMatches, roleView, WorldStateError } from './state-support';
-import type { WorldData } from './world';
+import { defaultBotUser, type WorldData, type WorldMessageEntry } from './world';
+
+/** The user behind an interaction token, so its responses are attributed to them. */
+export interface InteractionIdentity {
+	userId: string;
+	interactionId: string;
+	source?: ModalOpenerSource;
+}
 
 export abstract class WorldStateQueryCore {
 	protected abstract guild(guildId: string): GuildView | undefined;
@@ -71,15 +80,22 @@ export abstract class WorldStateQueryCore {
 	protected abstract buildMessageView(message: WorldData['messages'][number]['message']): MessageView;
 	protected readonly world: WorldData;
 	protected readonly botId: string;
+	protected readonly botUser: ApiUser;
 	/** guildId -> userId -> the X-Audit-Log-Reason the ban carried, if any. */
 	protected readonly bansByGuild = new Map<string, Map<string, string | undefined>>();
 	protected readonly dmChannelByUser = new Map<string, string>();
+	protected readonly verifiedDmRecipients = new Set<string>();
 	protected readonly messageIdByToken = new Map<string, string>();
+	protected readonly interactionByToken = new Map<string, InteractionIdentity>();
+	/** Deleted messages by id, kept only so developer inspection can still show them. */
+	protected readonly deletedMessages = new Map<string, WorldMessageEntry>();
 	protected readonly channelIdByToken = new Map<string, string>();
 	protected readonly applicationIdByToken = new Map<string, string>();
 	protected readonly originTypeByToken = new Map<string, number>();
 	protected readonly acknowledgedTokens = new Set<string>();
 	protected readonly deletedOriginalTokens = new Set<string>();
+	/** Tokens whose deferred original is still loading; their first followup fills it instead of posting. */
+	protected readonly loadingOriginalTokens = new Set<string>();
 	protected readonly componentSourceByToken = new Map<string, { channelId: string; messageId: string }>();
 	protected readonly invitesByCode = new Map<string, ApiInvite>();
 	protected readonly webhooksById = new Map<string, ApiWebhook>();
@@ -190,11 +206,23 @@ export abstract class WorldStateQueryCore {
 	constructor(seed?: WorldData, options: WorldStateOptions = {}) {
 		this.world = seed ?? EMPTY_WORLD();
 		this.botId = options.botId ?? TEST_BOT_ID;
+		this.botUser = options.botUser ?? defaultBotUser({ id: this.botId });
 		this.world.roles ??= [];
 		this.world.messages ??= [];
+		this.sequenceSeededMessages();
 		this.world.guildEmojis ??= [];
 		this.world.autoModRules ??= [];
 		this.indexWorld();
+	}
+
+	/** Number seeded messages in array order, keeping any later sequence a fixture already assigned. */
+	private sequenceSeededMessages(): void {
+		let sequence = 0;
+		for (const entry of this.world.messages) {
+			sequence = Math.max(sequence + 1, entry.sequence);
+			entry.sequence = sequence;
+		}
+		this.world.messageSequence = Math.max(this.world.messageSequence ?? 0, sequence);
 	}
 
 	/**
@@ -205,6 +233,9 @@ export abstract class WorldStateQueryCore {
 	 * @internal
 	 */
 	indexWorld(): void {
+		// Members seeded before this point count as joined now: later messages reach them live.
+		const joinSequence = (this.world.joinSequence ??= {});
+		for (const { member } of this.world.members) joinSequence[member.user.id] ??= this.world.messageSequence ?? 0;
 		for (const invite of this.world.invites ?? []) this.invitesByCode.set(invite.code, invite);
 		for (const webhook of this.world.webhooks ?? []) this.webhooksById.set(webhook.id, webhook);
 		for (const channel of this.world.channels) {

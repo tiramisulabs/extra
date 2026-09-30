@@ -305,6 +305,7 @@ export interface PinSnapshot {
  * and consumed by {@link WorldState.diff}. Deeply frozen so later world mutations never alter it.
  */
 export interface WorldSnapshot {
+	botUser: ApiUser;
 	members: MemberSnapshot[];
 	channels: ChannelSnapshot[];
 	messages: MessageSnapshot[];
@@ -412,6 +413,7 @@ export interface WorldDiff {
 
 export interface WorldStateOptions {
 	botId?: string;
+	botUser?: ApiUser;
 }
 
 export type RequireAtLeastOne<T extends object> = {

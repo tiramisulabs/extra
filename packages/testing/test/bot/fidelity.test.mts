@@ -159,4 +159,33 @@ describe('fidelity fixes', () => {
 		expect(updateResult.deferredReply).toBe(false);
 		await bot.close();
 	});
+
+	test('a followup after deleting the deferred response creates a new message', async () => {
+		@Declare({ name: 'defer-delete-original', description: 'Deletes @original, then follows up' })
+		class DeleteOriginal extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.deferReply();
+				await ctx.deleteResponse();
+				await ctx.followup({ content: 'after @original delete' });
+			}
+		}
+		@Declare({ name: 'defer-delete-by-id', description: 'Deletes the loading message by id, then follows up' })
+		class DeleteById extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.deferReply();
+				const loading = await ctx.fetchResponse();
+				await ctx.client.messages.delete(loading.id, ctx.channelId);
+				await ctx.followup({ content: 'after id delete' });
+			}
+		}
+
+		await using bot = await createMockBot({ commands: [DeleteOriginal, DeleteById] });
+		for (const [name, content] of [
+			['defer-delete-original', 'after @original delete'],
+			['defer-delete-by-id', 'after id delete'],
+		] as const) {
+			const result = await bot.slash({ name });
+			expect(result.followups).toMatchObject([{ content }]);
+		}
+	});
 });

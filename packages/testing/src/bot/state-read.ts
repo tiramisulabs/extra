@@ -1,7 +1,7 @@
 import { emojiPayload } from './emoji';
 import { isEphemeral } from './message-flags';
 import { type ApiMessage, type ApiVoiceState, apiMessage, type RawMessage } from './payloads';
-import { WorldStateQueryCore } from './state-query';
+import { type InteractionIdentity, WorldStateQueryCore } from './state-query';
 import type {
 	AuditLogEntrySnapshot,
 	AutoModRuleSnapshot,
@@ -33,6 +33,10 @@ import type {
 	WorldSnapshot,
 } from './state-support';
 import { deepFreeze, diffEntities, roleView } from './state-support';
+import type { WorldMessageEntry } from './world';
+
+/** A message in a channel's history; deleted ones are only kept for developer inspection. */
+export type ChannelTimelineEntry = WorldMessageEntry & { deleted?: boolean };
 
 export abstract class WorldStateReadCore extends WorldStateQueryCore {
 	protected abstract reactionKey(channelId: string, messageId: string): string;
@@ -182,6 +186,7 @@ export abstract class WorldStateReadCore extends WorldStateQueryCore {
 			name: entry.sound.name,
 		}));
 		return deepFreeze({
+			botUser: { ...this.botUser },
 			members,
 			channels,
 			messages,
@@ -412,10 +417,36 @@ export abstract class WorldStateReadCore extends WorldStateQueryCore {
 		return this.applicationIdByToken.get(token);
 	}
 
-	registerInteractionToken(token: string, channelId: string, originType?: number, applicationId?: string): void {
+	registerInteractionToken(
+		token: string,
+		channelId: string,
+		originType?: number,
+		applicationId?: string,
+		interaction?: InteractionIdentity,
+	): void {
+		if (interaction) this.interactionByToken.set(token, interaction);
 		this.channelIdByToken.set(token, channelId);
 		if (originType !== undefined) this.originTypeByToken.set(token, originType);
 		if (applicationId !== undefined) this.applicationIdByToken.set(token, applicationId);
+	}
+
+	interactionForToken(token: string): InteractionIdentity | undefined {
+		return this.interactionByToken.get(token);
+	}
+
+	/** Every message created in the channel, deleted ones included, in creation order. */
+	channelTimeline(channelId: string): ChannelTimelineEntry[] {
+		return [
+			...this.world.messages.filter(entry => entry.channelId === channelId),
+			...[...this.deletedMessages.values()]
+				.filter(entry => entry.channelId === channelId)
+				.map(entry => ({ ...entry, deleted: true })),
+		].sort((a, b) => a.sequence - b.sequence);
+	}
+
+	/** Whether `channelId` is the DM channel opened with `userId`. */
+	verifiedDmRecipient(userId: string, channelId: string): boolean {
+		return this.verifiedDmRecipients.has(userId) && this.dmChannelByUser.get(userId) === channelId;
 	}
 
 	/** The originating interaction type (2 command, 3 component, 5 modal submit) for a token, if known. */

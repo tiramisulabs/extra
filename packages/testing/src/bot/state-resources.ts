@@ -1,6 +1,6 @@
 import { mockId } from '../id';
 import { decodeEmoji } from './emoji';
-import { isEphemeral, MESSAGE_FLAG_COMPONENTS_V2 } from './message-flags';
+import { isEphemeral, MESSAGE_FLAG_COMPONENTS_V2, MESSAGE_FLAG_EPHEMERAL, MESSAGE_FLAG_LOADING } from './message-flags';
 import { assertNameBounds } from './message-validation';
 import {
 	type ApiAuditLogEntry,
@@ -32,7 +32,7 @@ import {
 } from './payloads';
 import type { ChannelOverwriteLike } from './permissions';
 import { apiError, DiscordErrors } from './rest';
-import { WorldStateMutationCore } from './state-mutations';
+import { type AddMessageOptions, WorldStateMutationCore } from './state-mutations';
 import type { ChannelView, GuildMemberView, MessageView } from './state-support';
 import {
 	arrayValue,
@@ -440,13 +440,32 @@ export class WorldState extends WorldStateMutationCore {
 		channel.permission_overwrites = channel.permission_overwrites.filter(current => current.id !== overwriteId);
 	}
 
+	/** Attribute an interaction response to the user and interaction behind its token. */
+	private responseOwnership(token: string): AddMessageOptions {
+		const interaction = this.interactionForToken(token);
+		return interaction ? { ownerId: interaction.userId, interactionId: interaction.interactionId } : {};
+	}
+
 	/** @internal For an interaction's first visible reply. */
 	addOriginalResponse(token: string, channelId: string, raw: Record<string, unknown>, authorId: string): RawMessage {
 		if (this.deletedOriginalTokens.has(token)) apiError(DiscordErrors.UnknownMessage);
 		this.registerInteractionToken(token, channelId);
-		const view = this.addMessage(channelId, { ...raw, author_id: authorId });
+		const view = this.addMessage(channelId, { ...raw, author_id: authorId }, this.responseOwnership(token));
 		this.deletedOriginalTokens.delete(token);
 		this.messageIdByToken.set(token, view.id);
+		return this.rawMessageOr(channelId, view.id);
+	}
+
+	/** @internal A type 5 callback creates the original loading response immediately. */
+	addDeferredResponse(token: string, channelId: string, flags: number, authorId: string): RawMessage {
+		this.registerInteractionToken(token, channelId);
+		const view = this.addMessage(
+			channelId,
+			{ flags: (flags & MESSAGE_FLAG_EPHEMERAL) | MESSAGE_FLAG_LOADING, author_id: authorId },
+			{ loading: true, ...this.responseOwnership(token) },
+		);
+		this.messageIdByToken.set(token, view.id);
+		this.loadingOriginalTokens.add(token);
 		return this.rawMessageOr(channelId, view.id);
 	}
 
@@ -463,6 +482,12 @@ export class WorldState extends WorldStateMutationCore {
 		const messageId = this.messageIdByToken.get(token);
 		if (!messageId) return this.addOriginalResponse(token, channelId, raw, authorId);
 		this.editMessage(channelId, messageId, raw);
+		// The first edit fills a deferred loading placeholder.
+		this.loadingOriginalTokens.delete(token);
+		const entry = this.world.messages.find(
+			candidate => candidate.channelId === channelId && candidate.message.id === messageId,
+		);
+		if (entry) entry.message.flags &= ~MESSAGE_FLAG_LOADING;
 		return this.rawMessageOr(channelId, messageId);
 	}
 
@@ -485,9 +510,10 @@ export class WorldState extends WorldStateMutationCore {
 	/** @internal For webhook followups. */
 	addFollowup(token: string, raw: Record<string, unknown>, authorId: string): RawMessage | Record<string, never> {
 		if (!this.acknowledgedTokens.has(token)) apiError(DiscordErrors.UnknownWebhook);
+		if (this.loadingOriginalTokens.has(token)) return this.upsertOriginalResponse(token, raw, authorId);
 		const channelId = this.channelIdByToken.get(token);
 		if (!channelId) return {};
-		const view = this.addMessage(channelId, { ...raw, author_id: authorId });
+		const view = this.addMessage(channelId, { ...raw, author_id: authorId }, this.responseOwnership(token));
 		return this.rawMessageOr(channelId, view.id);
 	}
 
@@ -499,6 +525,7 @@ export class WorldState extends WorldStateMutationCore {
 		const messageId = this.messageIdByToken.get(token);
 		if (channelId && messageId) this.deleteMessage(channelId, messageId);
 		this.messageIdByToken.delete(token);
+		this.loadingOriginalTokens.delete(token);
 		this.deletedOriginalTokens.add(token);
 	}
 

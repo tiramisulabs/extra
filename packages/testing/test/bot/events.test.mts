@@ -177,6 +177,58 @@ describe('emit result and factories', () => {
 		await bot.close();
 	});
 
+	test('repeated GUILD_MEMBER_ADD replaces data and partial UPDATE preserves it in world and cache', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'member-replacement-guild' });
+		const bot = await createMockBot({ world });
+		try {
+			const user = apiUser({ id: 'rejoined-member' });
+			await bot.emit(
+				'GUILD_MEMBER_ADD',
+				{
+					guild_id: guild.id,
+					...apiMember({ user, nick: 'Old', roles: ['old-role'], communicationDisabledUntil: '2030-01-01T00:00:00Z' }),
+				},
+				{ allowNoHandler: true },
+			);
+			await bot.emit(
+				'GUILD_MEMBER_ADD',
+				{
+					guild_id: guild.id,
+					...apiMember({ user, nick: 'New', roles: ['new-role'], joinedAt: '2026-09-29T00:00:00Z' }),
+				},
+				{ allowNoHandler: true },
+			);
+			const replaced = bot.world.query.member({ guildId: guild.id, userId: user.id });
+			expect(replaced).toMatchObject({ nick: 'New', roles: ['new-role'] });
+			expect(replaced?.communicationDisabledUntil).toBeUndefined();
+			await expect(Promise.resolve(bot.client.cache.members?.raw(user.id, guild.id))).resolves.toMatchObject({
+				nick: 'New',
+				roles: ['new-role'],
+			});
+			await bot.emit(
+				'GUILD_MEMBER_UPDATE',
+				{
+					guild_id: guild.id,
+					user: { id: user.id },
+					roles: ['updated-role'],
+				},
+				{ allowNoHandler: true },
+			);
+			expect(bot.world.query.member({ guildId: guild.id, userId: user.id })).toMatchObject({
+				nick: 'New',
+				roles: ['updated-role'],
+			});
+			await expect(Promise.resolve(bot.client.cache.members?.raw(user.id, guild.id))).resolves.toMatchObject({
+				nick: 'New',
+				roles: ['updated-role'],
+				joined_at: '2026-09-29T00:00:00Z',
+			});
+		} finally {
+			await bot.close();
+		}
+	});
+
 	test('gateway event validation fails before dirtying world when Seyfert cache would reject', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'invalid-event-guild' });

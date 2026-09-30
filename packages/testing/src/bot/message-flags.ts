@@ -3,6 +3,9 @@
 /** `EPHEMERAL` (1 << 6): the message is only visible to the invoking user and is not part of the channel. */
 export const MESSAGE_FLAG_EPHEMERAL = 1 << 6;
 
+/** `LOADING` (1 << 7): a deferred interaction response that has not been edited yet. */
+export const MESSAGE_FLAG_LOADING = 1 << 7;
+
 /** `IS_COMPONENTS_V2` (1 << 15): the body uses the components-v2 tree and forbids top-level content/embeds. */
 export const MESSAGE_FLAG_COMPONENTS_V2 = 1 << 15;
 

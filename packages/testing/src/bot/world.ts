@@ -58,6 +58,19 @@ import {
 import type { PermissionInput } from './permissions';
 import { permissionBits } from './permissions';
 
+export interface WorldMessageEntry {
+	channelId: string;
+	message: ApiMessage;
+	/** Creation order in this world. */
+	sequence: number;
+	/** The user an ephemeral message belongs to. */
+	ownerId?: string;
+	/** The interaction whose response created the message. */
+	interactionId?: string;
+	/** Users who received the message when it was created; without ReadMessageHistory only they see it. */
+	liveRecipientIds?: string[];
+}
+
 /**
  * The built world: plain, cloneable data, which is what `createMockBot({ world })` seeds into the cache.
  *
@@ -72,7 +85,11 @@ export interface WorldData {
 	users: ApiUser[];
 	members: { guildId: string; member: ApiMember }[];
 	roles: { guildId: string; role: ApiRole }[];
-	messages: { channelId: string; message: ApiMessage }[];
+	messages: WorldMessageEntry[];
+	/** Last allocated message creation sequence, independent of fixture timestamps. */
+	messageSequence?: number;
+	/** The message sequence at which each user joined; only later messages reach them live. */
+	joinSequence?: Record<string, number>;
 	voiceStates?: { guildId: string; voiceState: ApiVoiceState }[];
 	guildEmojis?: { guildId: string; emoji: ApiEmoji }[];
 	invites?: ApiInvite[];
@@ -103,9 +120,11 @@ export interface WorldData {
 
 type GuildRelatedCacheResource = {
 	namespace?: string;
+	hashId?: (id: string) => string;
 	adapter?: {
-		bulkSet?: (entries: [string, unknown][]) => unknown;
+		bulkSet?: (entries: ([string, unknown] | [string, unknown, [string, string]])[]) => unknown;
 	};
+	addToRelationship?: (id: string[], guildId: string) => unknown;
 	parse?: (data: Record<string, unknown>, id: string, guildId: string) => unknown;
 };
 
@@ -114,7 +133,13 @@ function needsNamespaceAlias(
 	id: string,
 ): resource is GuildRelatedCacheResource {
 	const namespace = resource?.namespace;
-	return typeof namespace === 'string' && id.startsWith(namespace);
+	// Seyfert 5.0 treats an ID starting with the namespace as already hashed; 5.1 hashes it correctly.
+	return typeof namespace === 'string' && id.startsWith(namespace) && resource?.hashId?.(id) !== `${namespace}.${id}`;
+}
+
+/** Seyfert 5.1 dropped `addToRelationship`; its `bulkSet` takes the guild relationship in each entry instead. */
+function usesRelationshipEntries(resource: GuildRelatedCacheResource): boolean {
+	return typeof resource.addToRelationship !== 'function';
 }
 
 async function writeNamespaceAlias(
@@ -126,7 +151,10 @@ async function writeNamespaceAlias(
 	if (!needsNamespaceAlias(resource, id)) return;
 	const aliasKey = `${resource.namespace}.${id}`;
 	const parsed = resource.parse?.({ ...data }, id, guildId) ?? { ...data, id, guild_id: guildId };
-	await Promise.resolve(resource.adapter?.bulkSet?.([[aliasKey, parsed]]));
+	const entry: [string, unknown] | [string, unknown, [string, string]] = usesRelationshipEntries(resource)
+		? [aliasKey, parsed, [`${resource.namespace}.${guildId}`, id]]
+		: [aliasKey, parsed];
+	await Promise.resolve(resource.adapter?.bulkSet?.([entry]));
 }
 
 export async function seedCachedRole(client: UsingClient, guildId: string, role: ApiRole): Promise<void> {
@@ -163,8 +191,25 @@ export type WorldInviteOptions = Omit<ApiInviteOptions, 'channelId' | 'guildId'>
 
 export type WorldBotMemberOptions = { roles?: string[]; botId?: string };
 
-/** Username given to the member seeded by {@link WorldBuilder.registerBotMember}. */
-const BOT_USERNAME = 'slipher-test-bot';
+/** One profile for the mock client, seeded guild members, and authored messages. */
+export type BotUserOptions = Omit<ApiUserOptions, 'bot'>;
+
+/** Allocate the next message creation sequence; fixture timestamps cannot order messages reliably. */
+export function nextMessageSequence(world: WorldData): number {
+	world.messageSequence = (world.messageSequence ?? 0) + 1;
+	return world.messageSequence;
+}
+
+/** The default matches the existing seeded bot member name. */
+export function defaultBotUser(options: BotUserOptions = {}): ApiUser {
+	return apiUser({
+		id: options.id ?? TEST_BOT_ID,
+		username: options.username ?? 'slipher-test-bot',
+		globalName: 'globalName' in options ? options.globalName : (options.username ?? 'Slipher Test Bot'),
+		avatar: options.avatar,
+		bot: true,
+	});
+}
 
 /**
  * A registered guild: the `ApiGuild` payload plus the guild-scoped registrars, so the guild id is stated
@@ -193,7 +238,7 @@ export class WorldBuilder {
 	 * @internal Passing a world continues seeding one that is already live. `MockBot.seed` uses it so the
 	 * registrars stay usable against a running bot instead of being frozen at `createMockBot`.
 	 */
-	constructor(seed?: WorldData) {
+	constructor(seed?: WorldData, botId?: string) {
 		this.world = seed ?? {
 			guilds: [],
 			channels: [],
@@ -207,12 +252,43 @@ export class WorldBuilder {
 			autoModRules: [],
 			webhooks: [],
 		};
+		if (botId) {
+			this.pinnedBot = { id: botId, statedBy: 'the running bot' };
+			this.botIdentity = this.world.users.find(user => user.id === botId && user.bot);
+		}
 	}
 
-	/** Members seeded by registerBotMember, kept so adoptBotId can restate their user id. */
-	private readonly botMembers: ApiMember[] = [];
-	/** Bot id explicitly given to registerBotMember, if any. */
-	private pinnedBotId?: string;
+	/** The bot id stated for this world, and the call that stated it (named in conflict errors). */
+	private pinnedBot?: { id: string; statedBy: string };
+	private botIdentity?: ApiUser;
+
+	/** Return the one mutable bot user; options configure it before `createMockBot` clones the world. */
+	botUser(options: BotUserOptions = {}): ApiUser {
+		const pinned = this.pinnedBot;
+		if (options.id !== undefined && pinned && options.id !== pinned.id) {
+			throw new TypeError(`mockWorld: botUser id "${options.id}" conflicts with botId "${pinned.id}".`);
+		}
+		if (options.id !== undefined) {
+			this.pinnedBot ??= { id: options.id, statedBy: `world.botUser({ id: "${options.id}" })` };
+		}
+		return this.restateBotUser(options);
+	}
+
+	/** Apply a profile to the bot user without pinning its id; callers check pinned conflicts first. */
+	private restateBotUser(options: BotUserOptions): ApiUser {
+		const user = (this.botIdentity ??= defaultBotUser());
+		Object.assign(
+			user,
+			defaultBotUser({
+				id: options.id ?? this.pinnedBot?.id ?? user.id,
+				username: options.username ?? user.username,
+				globalName: 'globalName' in options ? options.globalName : (options.username ?? user.global_name),
+				avatar: 'avatar' in options ? options.avatar : user.avatar,
+			}),
+		);
+		if (!this.world.users.includes(user)) this.world.users.push(user);
+		return user;
+	}
 
 	private requireGuild(guildId: string): void {
 		if (this.world.guilds.some(guild => guild.id === guildId)) return;
@@ -483,19 +559,17 @@ export class WorldBuilder {
 	}
 
 	registerBotMember(guildId: string, options: WorldBotMemberOptions = {}): ApiMember {
-		if (options.botId !== undefined && this.pinnedBotId !== undefined && options.botId !== this.pinnedBotId) {
+		const pinned = this.pinnedBot;
+		if (options.botId !== undefined && pinned && options.botId !== pinned.id) {
 			throw new TypeError(
-				`mockWorld: registerBotMember is already pinned to botId "${this.pinnedBotId}" but got "${options.botId}". ` +
+				`mockWorld: registerBotMember is already pinned to botId "${pinned.id}" but got "${options.botId}". ` +
 					'A world has one bot; seed the other guild without botId.',
 			);
 		}
-		if (options.botId !== undefined) this.pinnedBotId = options.botId;
-		const member = this.registerMember(guildId, {
-			user: apiUser({ id: this.pinnedBotId ?? TEST_BOT_ID, bot: true, username: BOT_USERNAME }),
-			roles: options.roles,
-		});
-		this.botMembers.push(member);
-		return member;
+		if (options.botId !== undefined) {
+			this.pinnedBot ??= { id: options.botId, statedBy: `registerBotMember({ botId: "${options.botId}" })` };
+		}
+		return this.registerMember(guildId, { user: this.botUser(), roles: options.roles });
 	}
 
 	/**
@@ -506,18 +580,22 @@ export class WorldBuilder {
 	 * the bot member fails `author.id === client.botId`. Runs against the live world *before* `createMockBot`
 	 * clones it, so the `ApiMember` that `registerBotMember` already handed back is corrected in place too.
 	 *
+	 * Adoption restates the id (and `profile`, the `createMockBot({ botUser })` options) without pinning it:
+	 * only the world's own calls pin, so the same builder can seed another bot that runs under another id.
+	 *
 	 * Returns the stated bot id, or `undefined` when neither side stated one (leaving the default in place).
 	 */
-	adoptBotId(explicit?: string): string | undefined {
-		if (explicit !== undefined && this.pinnedBotId !== undefined && explicit !== this.pinnedBotId) {
+	adoptBotId(explicit?: string, profile: BotUserOptions = {}): string | undefined {
+		const pinned = this.pinnedBot;
+		if (explicit !== undefined && pinned && explicit !== pinned.id) {
 			throw new TypeError(
-				`createMockBot: botId "${explicit}" conflicts with registerBotMember({ botId: "${this.pinnedBotId}" }). ` +
-					'State the bot id once: keep it on createMockBot and drop it from registerBotMember, or the reverse.',
+				`createMockBot: botId "${explicit}" conflicts with ${pinned.statedBy}. ` +
+					'State the bot id once, or use the same id in both places.',
 			);
 		}
-		const stated = explicit ?? this.pinnedBotId;
-		if (stated !== undefined) {
-			for (const member of this.botMembers) member.user.id = stated;
+		const stated = explicit ?? pinned?.id;
+		if (stated !== undefined || Object.keys(profile).length) {
+			this.restateBotUser({ ...profile, ...(stated === undefined ? {} : { id: stated }) });
 		}
 		return stated;
 	}
@@ -531,14 +609,23 @@ export class WorldBuilder {
 		return this;
 	}
 
-	registerMessage(channelId: string, options: Omit<ApiMessageOptions, 'channelId'> = {}): ApiMessage {
+	registerMessage(
+		channelId: string,
+		options: Omit<ApiMessageOptions, 'channelId'> & { ownerId?: string } = {},
+	): ApiMessage {
 		const channel = this.requireChannel(channelId);
+		const { ownerId, ...messageOptions } = options;
 		const message = apiMessage({
-			...options,
+			...messageOptions,
 			channelId,
 			...(channel.guild_id === undefined ? {} : { guildId: channel.guild_id }),
 		});
-		this.world.messages.push({ channelId, message });
+		this.world.messages.push({
+			channelId,
+			message,
+			sequence: nextMessageSequence(this.world),
+			...(ownerId === undefined ? {} : { ownerId }),
+		});
 		return message;
 	}
 

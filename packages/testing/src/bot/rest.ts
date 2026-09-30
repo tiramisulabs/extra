@@ -97,10 +97,8 @@ export function apiError(error: DiscordErrorInit, message?: string): never {
 /**
  * Narrow an unknown caught value to a Discord REST error, by the fields Discord actually sends.
  *
- * `error.message` is not one of them: seyfert's `parseError` names the error `API_<statusText>_<code>` and
- * uses that as the message, so a Missing Permissions failure reads `Api Forbidden 50013`. The status and the
- * code are the contract — the descriptive copy stays on `error.metadata.response.message` for the handful of
- * errors whose text carries per-call detail (Invalid Form Body naming the offending field).
+ * `error.message` is not one of them: Seyfert 5.0 and 5.1 format it differently. The status and code are the
+ * contract; Discord's descriptive copy stays on `error.metadata.response.message`, including per-call detail.
  *
  * ```ts
  * catch (error) {
@@ -261,6 +259,8 @@ interface Interceptor {
 
 type NotifyPhase = 'pending' | 'settled';
 
+type ActionObserver = (action: RecordedAction, phase: NotifyPhase) => void;
+
 interface ActionListener {
 	onAction(action: RecordedAction, phase: NotifyPhase): void;
 	timer: ReturnType<typeof setTimeout>;
@@ -391,6 +391,7 @@ export class MockApiHandler extends ApiHandler {
 	/** @internal */
 	readonly actions: RecordedAction[] = [];
 	private listeners: ActionListener[] = [];
+	private readonly observers = new Set<ActionObserver>();
 	private interceptors: Interceptor[] = [];
 	private defaultInterceptors: Interceptor[] = [];
 	private gates: RequestGate[] = [];
@@ -659,8 +660,14 @@ export class MockApiHandler extends ApiHandler {
 		return { hit, release: g.release };
 	}
 
+	/** @internal Persistent notification of every action's start and settlement; MockBot relays it to observers. */
+	observeActions(observer: ActionObserver): void {
+		this.observers.add(observer);
+	}
+
 	private notifyListeners(action: RecordedAction, phase: NotifyPhase): void {
 		for (const listener of [...this.listeners]) listener.onAction(action, phase);
+		for (const observer of this.observers) observer(action, phase);
 	}
 
 	private observerRequest(

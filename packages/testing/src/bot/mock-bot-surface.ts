@@ -39,6 +39,8 @@ import {
 	type ModalFields,
 	type SelectMenuInteractionOptions,
 } from './interactions';
+import { isEphemeral } from './message-flags';
+import type { PendingCollector, PendingInteractionChange, PendingModal } from './observation';
 import { type ApiMember, type ApiMessage, type ApiUser, apiMessage, apiUser, memberOptionsFrom } from './payloads';
 import { computeChannelPermissions } from './permissions';
 import { MockApiHandler, type RecordedAction, type RestCall, type RouteMatcher, type RouteParams } from './rest';
@@ -91,13 +93,19 @@ export abstract class MockBotSurface {
 	protected subcommandRoutes: SubcommandClassRoute[] = [];
 	/** Pending modal waiters keyed by userId; resolved when seyfert registers a modal via components.modals.set. */
 	protected readonly modalWaiters = new Map<string, ModalWaiter[]>();
-	/** The dispatch that owns the currently registered waitFor modal for a user. */
+	/** The dispatch that opened the currently registered modal for a user. */
 	protected readonly modalOwners = new Map<string, number>();
+	/** Users whose modal opener finished; only their currently displayed modal remains live. */
+	protected readonly completedModalOwners = new Set<string>();
 	/** Modal definition displayed to a user (customId + input customIds), captured when seyfert registers it. */
 	protected readonly displayedModals = new Map<
 		string,
-		{ customId?: string; inputIds: Set<string>; dispatchId?: number }
+		{ customId?: string; inputIds: Set<string>; dispatchId?: number; pending?: PendingModal }
 	>();
+	/** Live component collectors, reported by the dispatch hooks. */
+	protected readonly pendingCollectors = new Set<PendingCollector>();
+	/** Called when a modal or collector opens or closes; the public MockBot relays it to observers. */
+	protected onInteractionChange(_change: PendingInteractionChange): void {}
 	/** Dispatches whose type-9 callback was captured eagerly by the modal registration hook. */
 	protected readonly modalRenderCapturedDispatches = new Set<number>();
 	protected virtualNowMs = Date.now();
@@ -137,10 +145,7 @@ export abstract class MockBotSurface {
 			assertCheckpointReady: checkpoint => this.assertCheckpointReady(checkpoint),
 			onDispatchCompleted: dispatchId => {
 				for (const [userId, ownerDispatchId] of this.modalOwners) {
-					if (ownerDispatchId !== dispatchId) continue;
-					this.client.components.modals.delete(userId);
-					this.modalOwners.delete(userId);
-					this.displayedModals.delete(userId);
+					if (ownerDispatchId === dispatchId) this.completedModalOwners.add(userId);
 				}
 			},
 		});
@@ -531,19 +536,33 @@ export abstract class MockBotSurface {
 		for (let i = this.rest.actions.length - 1; i >= 0; i--) {
 			const action = this.rest.actions[i];
 			if (dispatchId !== undefined && action.dispatchId !== dispatchId) continue;
-			if (!action.route.includes('/callback')) continue;
-			const body = action.body as { type?: number; data?: Record<string, unknown> } | undefined;
+			const callback = /^\/interactions\/([^/]+)\/([^/]+)\/callback$/.exec(action.route);
+			if (!callback) continue;
+			const body = action.body as { type?: number; data?: PendingModal['payload'] } | undefined;
 			if (body?.type !== 9) continue;
-			const data = body.data ?? {};
+			const [, interactionId, token] = callback;
+			const opener = this._state.interactionForToken(token);
+			if (opener?.userId !== userId || opener.interactionId !== interactionId) continue;
+			const data = body.data;
 			const inputIds = new Set<string>();
-			collectComponentCustomIds(data.components, inputIds);
+			collectComponentCustomIds(data?.components, inputIds);
+			const pending: PendingModal | undefined = data && {
+				userId,
+				interactionId,
+				customId: data.custom_id,
+				payload: structuredClone(data),
+				...(action.sessionKey === undefined ? {} : { sessionKey: action.sessionKey }),
+				...(opener.source === undefined ? {} : { source: opener.source }),
+			};
 			this.displayedModals.set(userId, {
-				customId: data.custom_id as string | undefined,
+				customId: data?.custom_id,
 				inputIds,
 				...(dispatchId === undefined ? {} : { dispatchId }),
+				...(pending === undefined ? {} : { pending }),
 			});
+			if (pending) this.onInteractionChange({ kind: 'modal', phase: 'opened', modal: pending });
 			if (dispatchId !== undefined) this.modalRenderCapturedDispatches.add(dispatchId);
-			return data.custom_id as string | undefined;
+			return data?.custom_id;
 		}
 		return undefined;
 	}
@@ -605,8 +624,15 @@ export abstract class MockBotSurface {
 		}
 	}
 
-	protected consumeDisplayedModal(userId: string): void {
+	protected forgetModalOwner(userId: string): void {
+		this.modalOwners.delete(userId);
+		this.completedModalOwners.delete(userId);
+	}
+
+	protected closeDisplayedModal(userId: string): void {
+		const modal = this.displayedModals.get(userId)?.pending;
 		this.displayedModals.delete(userId);
+		if (modal) this.onInteractionChange({ kind: 'modal', phase: 'closed', modal });
 	}
 
 	/** Whether this session opened `customId` for `userId` and is still parked on it, or rendered it this step. */
@@ -771,11 +797,24 @@ export abstract class MockBotSurface {
 	protected hydrateSourceMessage(
 		source: { id: string; channel_id?: string },
 		strict?: { verb: 'clickButton' | 'selectMenu'; customId: string },
+		userId?: string,
 	): ApiMessage {
 		const stored = source.channel_id
 			? this._state.rawMessage(source.channel_id, source.id)
 			: this._state.rawMessageById(source.id);
-		if (stored) return stored;
+		if (stored) {
+			// Only a known owner is enforced: fixtures may seed ephemeral sources without one.
+			const ownerId = isEphemeral(stored)
+				? this._world?.messages.find(entry => entry.channelId === stored.channel_id && entry.message.id === stored.id)
+						?.ownerId
+				: undefined;
+			if (userId && ownerId !== undefined && ownerId !== userId) {
+				throw new TypeError(
+					`${strict?.verb ?? 'component'}: ephemeral source message "${source.id}" is visible only to its owner.`,
+				);
+			}
+			return stored;
+		}
 		if (strict) {
 			throw new TypeError(
 				`${strict.verb}: source message "${source.id}" was not found for customId "${strict.customId}". ` +

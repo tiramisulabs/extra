@@ -7,6 +7,7 @@ import {
 	type ComponentContext,
 	Declare,
 	Label,
+	MessageFlags,
 	Modal,
 	ModalCommand,
 	type ModalContext,
@@ -85,6 +86,64 @@ describe('component flows', () => {
 		expect(clicked).toEqual(['self-click']);
 		expect(result.content).toBe('clicked via view');
 		await bot.close();
+	});
+
+	test('interaction replies are button sources, including owner-only ephemeral replies', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'reply-source-guild', everyonePermissions: ['ViewChannel'] });
+		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'reply-source-owner' }) });
+		const channel = world.registerChannel(guild.id);
+		const other = world.registerMember(guild.id, { user: apiUser({ id: 'reply-source-other' }) });
+		const row = new ActionRow().setComponents([
+			new Button().setCustomId('reply-source-button').setLabel('Open').setStyle(ButtonStyle.Primary),
+		]);
+
+		@Declare({ name: 'public-source', description: 'Public button response' })
+		class PublicSource extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.write({ content: 'public button', components: [row] });
+			}
+		}
+
+		@Declare({ name: 'private-source', description: 'Ephemeral button response' })
+		class PrivateSource extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.editOrReply({ content: 'private button', components: [row], flags: MessageFlags.Ephemeral });
+			}
+		}
+
+		class ReplyButton extends ComponentCommand {
+			componentType = 'Button' as const;
+			customId = 'reply-source-button';
+			async run(ctx: ComponentContext<'Button'>) {
+				await ctx.write({ content: 'opened' });
+			}
+		}
+
+		const bot = await createMockBot({ commands: [PublicSource, PrivateSource], components: [ReplyButton], world });
+		try {
+			const ownerActor = bot.actor({ member: actor, guildId: guild.id, channel });
+			const otherActor = bot.actor({ member: other, guildId: guild.id, channel });
+			await ownerActor.slash({ name: 'public-source' });
+			const publicSource = bot.conversation({ userId: other.user.id, channelId: channel.id }).messages.at(-1);
+			if (!publicSource) throw new Error('public response missing from world');
+			expect(await otherActor.clickButton('reply-source-button', { source: publicSource.id })).toMatchObject({
+				content: 'opened',
+			});
+
+			await ownerActor.slash({ name: 'private-source' });
+			const privateSource = bot.conversation({ userId: actor.user.id, channelId: channel.id }).messages.at(-1);
+			if (!privateSource) throw new Error('ephemeral response missing from owner world');
+			expect(privateSource.visibility).toBe('ephemeral');
+			expect(await ownerActor.clickButton('reply-source-button', { source: privateSource.id })).toMatchObject({
+				content: 'opened',
+			});
+			await expect(otherActor.clickButton('reply-source-button', { source: privateSource.id })).rejects.toThrow(
+				/ephemeral.*owner/,
+			);
+		} finally {
+			await bot.close();
+		}
 	});
 
 	test('stateful clickButton rejects a registered ComponentCommand that was never rendered', async () => {
