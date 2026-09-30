@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { MessageFlags } from 'seyfert';
 import { describe, expect, test, vi } from 'vitest';
-import { type Checkpoint, defineProject, defineScenario, type Preset } from '../src';
+import { type Checkpoint, defineProject, defineScenario, type Preset, type SessionEvent } from '../src';
 import { createChildSession } from '../src/child';
 import { isBridgeMessage, PROTOCOL_VERSION, validateBridgeRequest, validateLabAction } from '../src/protocol';
 import { createSession, deterministicId, replay } from '../src/runtime';
@@ -248,7 +248,7 @@ describe('lab runtime', () => {
 
 	test('no optional hooks needed; actor steps, locator, and replay', async () => {
 		const session = createSession(project, preset);
-		const events: import('../src').SessionEvent[] = [];
+		const events: SessionEvent[] = [];
 		session.observe(event => {
 			events.push(event);
 		});
@@ -729,25 +729,15 @@ describe('lab runtime', () => {
 		expect(() => process.kill(first.pid, 0)).toThrow();
 	});
 
-	test('child reset does not start again when exit times out', async () => {
+	test.each([
+		['exit times out', { LAB_HOLD_OPEN: '1' }],
+		['cleanup fails', { LAB_CLEANUP_FAIL: '1' }],
+	])('child reset does not start again when %s', async (_case, env) => {
 		const child = createChildSession({
 			projectModule: resolve(process.cwd(), 'test/fixtures/lifecycle.cjs'),
 			preset: { scenario: { id: 'life', version: 1 } },
-			env: { LAB_HOLD_OPEN: '1' },
+			env,
 			disposeTimeoutMs: 100,
-		});
-		await child.start();
-		const { pid } = (await child.inspectProject('identity')) as { pid: number };
-		await expect(child.reset()).rejects.toThrow('external cleanup may be pending');
-		await expect(child.inspectProject('identity')).rejects.toThrow('not running');
-		expect(() => process.kill(pid, 0)).toThrow();
-	});
-
-	test('child reset does not start again after cleanup failure', async () => {
-		const child = createChildSession({
-			projectModule: resolve(process.cwd(), 'test/fixtures/lifecycle.cjs'),
-			preset: { scenario: { id: 'life', version: 1 } },
-			env: { LAB_CLEANUP_FAIL: '1' },
 		});
 		await child.start();
 		const { pid } = (await child.inspectProject('identity')) as { pid: number };

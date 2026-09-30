@@ -9,7 +9,7 @@ import type {
 } from '@slipher/testing';
 import type { JsonValue, PROTOCOL_VERSION } from './protocol';
 
-export type { JsonValue };
+export type { JsonValue, VisibleConversation };
 export type Params = Record<string, boolean | string | number>;
 export interface ParamDefinition<T extends boolean | string | number = boolean | string | number> {
 	kind: 'boolean' | 'string' | 'number' | 'enum';
@@ -47,9 +47,15 @@ export interface Scenario<R = unknown> {
 	title: string;
 	params?: Record<string, ParamDefinition>;
 	world?: (world: ScenarioWorld, ctx: { params: Params; ref: Ref }) => void;
-	actors?: (refs: Refs) => Record<string, { userId: string; guildId?: string; channelId: string }>;
+	actors?: (refs: Refs) => Record<string, ActorSpec>;
 	requires?: (ctx: ScenarioContext<R>) => string[] | Promise<string[]>;
 	seed?: (ctx: ScenarioContext<R>) => void | Promise<void>;
+}
+/** Ref names or IDs for the user an actor plays and the channel its actions default to. */
+export interface ActorSpec {
+	userId: string;
+	guildId?: string;
+	channelId: string;
 }
 export interface ScenarioContext<R = unknown> {
 	params: Params;
@@ -152,7 +158,6 @@ export interface Checkpoint {
 	outcomes?: ExpectedOutcome[];
 	arrival: Expectation[];
 }
-export type { VisibleConversation };
 export interface InspectorSnapshot {
 	world: JsonValue;
 	rest: JsonValue;

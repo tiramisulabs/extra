@@ -10,9 +10,9 @@ export function exportTest(
 	validateCheckpoint(checkpoint);
 	const projectModule = options.projectModule ?? checkpoint.projectModule;
 	if (!projectModule) throw new Error('Export requires a project module path');
-	const testImport = options.format === 'vitest' ? 'vitest' : 'node:test';
 	if (options.format !== 'vitest' && options.format !== 'node')
 		throw new Error(`Unknown export format: ${options.format}`);
+	const testImport = options.format === 'vitest' ? 'vitest' : 'node:test';
 	const assertion = checkpoint.arrival.length
 		? 'await replay(project, checkpoint);'
 		: "throw new Error('Checkpoint has no explicit expectations; pin an arrival condition or action result before using this test.');";

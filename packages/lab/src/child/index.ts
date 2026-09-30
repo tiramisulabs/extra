@@ -1,16 +1,6 @@
 import { type ChildProcess, fork } from 'node:child_process';
 import { resolve } from 'node:path';
-import type {
-	ActionOutcome,
-	InspectorSnapshot,
-	JsonValue,
-	LabAction,
-	Preset,
-	Session,
-	SessionEvent,
-	SessionLog,
-	VisibleConversation,
-} from '../index';
+import type { JsonValue, Preset, Session } from '../index';
 import {
 	type BridgeRequest,
 	isBridgeMessage,
@@ -19,78 +9,17 @@ import {
 	validateLabAction,
 	validateProjectDescription,
 } from '../protocol';
+import { createObservers, errorText } from '../shared';
 
-function workerPath(): string {
-	try {
-		return require.resolve('./worker');
-	} catch {
-		return require.resolve('../../lib/child/worker.js');
-	}
-}
-
-function childError(message: string): Error {
-	return new Error(
-		message.includes('No seyfert.config file found.')
-			? `${message} Run the CLI from the bot directory or pass --cwd <dir>.`
-			: message,
-	);
-}
-
-function childEnvironment(options: Omit<ChildSessionOptions, 'preset'>): NodeJS.ProcessEnv {
-	if (options.inheritEnv !== false) return { ...process.env, ...options.env };
-	const env: NodeJS.ProcessEnv = {};
-	for (const name of ['PATH', 'HOME', 'TMPDIR', 'LANG', 'TZ', 'NODE_ENV', ...new Set(options.childEnv ?? [])]) {
-		if (process.env[name] !== undefined) env[name] = process.env[name];
-	}
-	return { ...env, ...options.env };
-}
-
-export async function describeChildProject(options: Omit<ChildSessionOptions, 'preset'>): Promise<ProjectDescription> {
-	const target = fork(workerPath(), [resolve(options.projectModule)], {
-		cwd: options.cwd,
-		execArgv: options.execArgv ?? process.execArgv,
-		env: childEnvironment(options),
-		stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
-	});
-	const timeoutMs = options.startTimeoutMs ?? 10000;
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	const exited = new Promise<void>(done => target.once('exit', () => done()));
-	try {
-		const result = await new Promise<JsonValue>((done, reject) => {
-			timer = setTimeout(() => reject(new Error(`project.describe timed out after ${timeoutMs}ms`)), timeoutMs);
-			target.once('error', reject);
-			target.once('exit', (code, signal) =>
-				reject(new Error(`Describe child exited (code ${code}, signal ${signal})`)),
-			);
-			target.on('message', message => {
-				if (!isBridgeMessage(message) || message.type !== 'result' || message.id !== 1) return;
-				if (message.ok) done(message.value ?? null);
-				else reject(childError(message.error ?? 'Child operation failed'));
-			});
-			target.send({ version: PROTOCOL_VERSION, id: 1, type: 'project.describe' });
-		});
-		validateProjectDescription(result);
-		return result;
-	} finally {
-		if (timer) clearTimeout(timer);
-		if (target.exitCode === null && target.signalCode === null) target.kill('SIGTERM');
-		let exitTimer: ReturnType<typeof setTimeout> | undefined;
-		try {
-			await Promise.race([
-				exited,
-				new Promise<void>(done => {
-					exitTimer = setTimeout(done, options.disposeTimeoutMs ?? 1000);
-				}),
-			]);
-		} finally {
-			if (exitTimer) clearTimeout(exitTimer);
-		}
-		if (target.exitCode === null && target.signalCode === null) {
-			target.kill('SIGKILL');
-			await exited;
-		}
-	}
-}
+const DEFAULT_START_TIMEOUT_MS = 10000;
+const DEFAULT_DISPOSE_TIMEOUT_MS = 5000;
+const DEFAULT_RPC_TIMEOUT_MS = 30000;
+const DESCRIBE_EXIT_TIMEOUT_MS = 1000;
+const SIGKILL_EXIT_TIMEOUT_MS = 1000;
+// The worker closes the bot and then disposes resources, each under its own dispose deadline.
+const disposeRpcTimeout = (disposeTimeoutMs: number) => 2 * disposeTimeoutMs + 250;
+/** Variables a child without the inherited environment still receives. */
+const BASE_CHILD_ENV = ['PATH', 'HOME', 'TMPDIR', 'LANG', 'TZ', 'NODE_ENV'];
 
 export interface ChildSessionOptions {
 	projectModule: string;
@@ -104,166 +33,214 @@ export interface ChildSessionOptions {
 	disposeTimeoutMs?: number;
 	rpcTimeoutMs?: number;
 }
+type ProcessOptions = Omit<ChildSessionOptions, 'preset'>;
+
+function workerPath(): string {
+	try {
+		return require.resolve('./worker');
+	} catch {
+		// Running from sources (tests): use the compiled worker.
+		return require.resolve('../../lib/child/worker.js');
+	}
+}
+
+function forkWorker(options: ProcessOptions, args: string[], stdin: 'ignore' | 'inherit'): ChildProcess {
+	return fork(workerPath(), [resolve(options.projectModule), ...args], {
+		cwd: options.cwd,
+		execArgv: options.execArgv ?? process.execArgv,
+		env: childEnvironment(options),
+		stdio: [stdin, 'inherit', 'inherit', 'ipc'],
+	});
+}
+
+function childEnvironment(options: ProcessOptions): NodeJS.ProcessEnv {
+	if (options.inheritEnv !== false) return { ...process.env, ...options.env };
+	const env: NodeJS.ProcessEnv = {};
+	for (const name of new Set([...BASE_CHILD_ENV, ...(options.childEnv ?? [])]))
+		if (process.env[name] !== undefined) env[name] = process.env[name];
+	return { ...env, ...options.env };
+}
+
+function childError(message: string): Error {
+	return new Error(
+		message.includes('No seyfert.config file found.')
+			? `${message} Run the CLI from the bot directory or pass --cwd <dir>.`
+			: message,
+	);
+}
+
+/** Resolves whether `exited` settles within `ms`. */
+async function exitsWithin(exited: Promise<void>, ms: number): Promise<boolean> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			exited.then(() => true),
+			new Promise<boolean>(done => {
+				timer = setTimeout(done, ms, false);
+			}),
+		]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/** Loads the project in a short-lived child and returns its description; no scenario hook runs. */
+export async function describeChildProject(options: ProcessOptions): Promise<ProjectDescription> {
+	const target = forkWorker(options, [], 'ignore');
+	const exited = new Promise<void>(done => target.once('exit', () => done()));
+	const timeoutMs = options.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		const result = await new Promise<JsonValue>((done, reject) => {
+			timer = setTimeout(() => reject(new Error(`project.describe timed out after ${timeoutMs}ms`)), timeoutMs);
+			target.once('error', reject);
+			target.once('exit', (code, signal) =>
+				reject(new Error(`Describe child exited (code ${code}, signal ${signal})`)),
+			);
+			target.on('message', message => {
+				if (!isBridgeMessage(message) || message.type !== 'result' || message.id !== 1) return;
+				if (message.ok) done(message.value ?? null);
+				else reject(childError(message.error ?? 'Child operation failed'));
+			});
+			target.send({ version: PROTOCOL_VERSION, id: 1, type: 'project.describe' } satisfies BridgeRequest);
+		});
+		validateProjectDescription(result);
+		return result;
+	} finally {
+		clearTimeout(timer);
+		if (target.exitCode === null && target.signalCode === null) target.kill('SIGTERM');
+		if (!(await exitsWithin(exited, options.disposeTimeoutMs ?? DESCRIBE_EXIT_TIMEOUT_MS))) {
+			target.kill('SIGKILL');
+			await exited;
+		}
+	}
+}
+
+/** One forked worker. `ready` turns true once its session started, and false again when it stops being usable. */
+interface Worker {
+	process: ChildProcess;
+	exited: Promise<void>;
+	ready: boolean;
+	/** Set when the host asked the worker to stop, so its exit is not reported as a crash. */
+	stopping: boolean;
+}
+
+interface PendingCall {
+	owner: ChildProcess;
+	resolve(value: JsonValue): void;
+	reject(error: Error): void;
+}
+
+/** Runs the Session API in a forked process; see the package README for timeouts and module formats. */
 export function createChildSession(options: ChildSessionOptions): Session {
 	if (options.rpcTimeoutMs !== undefined && (!Number.isSafeInteger(options.rpcTimeoutMs) || options.rpcTimeoutMs <= 0))
 		throw new TypeError('rpcTimeoutMs must be a positive integer');
-	let child: ChildProcess | undefined;
-	let exitPromise: Promise<void> | undefined;
+	const rpcTimeoutMs = options.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
+	const disposeTimeoutMs = options.disposeTimeoutMs ?? DEFAULT_DISPOSE_TIMEOUT_MS;
+	const observers = createObservers();
+	const { emit } = observers;
+	const pending = new Map<number, PendingCall>();
+	let worker: Worker | undefined;
 	let sequence = 0;
-	let started = false;
-	let intentionalExit = false;
 	let stopTask: Promise<void> | undefined;
-	const listeners = new Set<(event: SessionEvent) => void>();
-	const diagnostics: string[] = [];
-	const pending = new Map<
-		number,
-		{ owner: ChildProcess; resolve(value: JsonValue): void; reject(error: Error): void }
-	>();
-	const emit = (event: SessionEvent) => {
-		for (const listener of listeners) {
-			try {
-				listener(event);
-			} catch (error) {
-				const detail = `Observer failed: ${error instanceof Error ? error.message : String(error)}`;
-				diagnostics.push(detail);
-				if (event.type !== 'error' || event.origin !== 'observer')
-					for (const other of listeners) {
-						if (other === listener) continue;
-						try {
-							other({ type: 'error', origin: 'observer', detail });
-						} catch (observerError) {
-							diagnostics.push(
-								`Observer failed: ${observerError instanceof Error ? observerError.message : String(observerError)}`,
-							);
-						}
-					}
-			}
-		}
-	};
-	const rejectFor = (owner: ChildProcess, error: Error) => {
-		for (const [id, waiter] of pending)
-			if (waiter.owner === owner) {
+
+	const reportChildError = (detail: string) => emit({ type: 'error', origin: 'child', detail });
+
+	const rejectCallsTo = (owner: ChildProcess, error: Error) => {
+		for (const [id, call] of pending)
+			if (call.owner === owner) {
 				pending.delete(id);
-				waiter.reject(error);
+				call.reject(error);
 			}
 	};
-	const call = (type: BridgeRequest['type'], payload?: JsonValue, timeoutMs?: number): Promise<JsonValue> => {
-		const target = child;
+
+	/** A timed-out call leaves the worker in an unknown state: fail everything waiting on it and stop it. */
+	const onCallTimeout = (target: ChildProcess, type: BridgeRequest['type'], timeoutMs: number) => {
+		const error = new Error(`${type} timed out after ${timeoutMs}ms; external cleanup may be pending`);
+		rejectCallsTo(target, error);
+		// Start and dispose timeouts are handled by their callers, which already stop the worker.
+		if (type === 'session.start' || type === 'session.dispose' || stopTask) return;
+		if (worker) worker.ready = false;
+		reportChildError(error.message);
+		void stop().catch(cleanupError => reportChildError(errorText(cleanupError)));
+	};
+
+	const call = (type: BridgeRequest['type'], payload: unknown, timeoutMs: number): Promise<JsonValue> => {
+		const target = worker?.process;
 		if (!target?.connected) return Promise.reject(new Error('Child session is not running'));
 		const id = ++sequence;
-		const request = { version: PROTOCOL_VERSION, id, type, ...(payload === undefined ? {} : { payload }) };
 		return new Promise<JsonValue>((resolveCall, rejectCall) => {
-			let timer: ReturnType<typeof setTimeout> | undefined;
+			const timer = setTimeout(() => {
+				if (pending.get(id)?.owner === target) onCallTimeout(target, type, timeoutMs);
+			}, timeoutMs);
 			pending.set(id, {
 				owner: target,
 				resolve(value) {
-					if (timer) clearTimeout(timer);
+					clearTimeout(timer);
 					resolveCall(value);
 				},
 				reject(error) {
-					if (timer) clearTimeout(timer);
+					clearTimeout(timer);
 					rejectCall(error);
 				},
 			});
-			if (timeoutMs)
-				timer = setTimeout(() => {
-					const waiter = pending.get(id);
-					if (waiter?.owner === target) {
-						const error = new Error(`${type} timed out after ${timeoutMs}ms; external cleanup may be pending`);
-						rejectFor(target, error);
-						if (type !== 'session.start' && type !== 'session.dispose' && !stopTask) {
-							started = false;
-							emit({ type: 'error', origin: 'child', detail: error.message });
-							void stop().catch(cleanupError =>
-								emit({
-									type: 'error',
-									origin: 'child',
-									detail: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
-								}),
-							);
-						}
-					}
-				}, timeoutMs);
-			target.send(request, error => {
-				if (error) {
-					const waiter = pending.get(id);
-					if (waiter?.owner === target) {
-						pending.delete(id);
-						waiter.reject(error);
-					}
-				}
+			// The worker validates every request, so the payload is not re-checked here.
+			target.send({ version: PROTOCOL_VERSION, id, type, ...(payload === undefined ? {} : { payload }) }, error => {
+				const waiter = pending.get(id);
+				if (!error || waiter?.owner !== target) return;
+				pending.delete(id);
+				waiter.reject(error);
 			});
 		});
 	};
-	const waitExit = async (target: ChildProcess, ms: number): Promise<void> => {
-		const exit = exitPromise;
-		if (!exit) return;
-		let timer: ReturnType<typeof setTimeout> | undefined;
-		try {
-			await Promise.race([
-				exit,
-				new Promise<never>((_, reject) => {
-					timer = setTimeout(
-						() => reject(new Error(`Child exit timed out after ${ms}ms; external cleanup may be pending`)),
-						ms,
+
+	/** Calls a session method in the worker. Results are produced by the worker's own Session, so they are trusted. */
+	const rpc = async <T>(type: BridgeRequest['type'], payload?: unknown): Promise<T> =>
+		(await call(type, payload, rpcTimeoutMs)) as T;
+
+	const requireReady = () => {
+		if (!worker?.ready) throw new Error('Child session is not started');
+	};
+
+	const waitForExit = async (current: Worker): Promise<void> => {
+		if (await exitsWithin(current.exited, disposeTimeoutMs)) return;
+		current.process.kill('SIGKILL');
+		if (!(await exitsWithin(current.exited, SIGKILL_EXIT_TIMEOUT_MS)))
+			throw new Error('Child did not exit after SIGKILL; external cleanup may be pending');
+		throw new Error(`Child exit timed out after ${disposeTimeoutMs}ms; external cleanup may be pending`);
+	};
+
+	const spawn = (): Worker => {
+		const target = forkWorker(options, [String(disposeTimeoutMs)], 'inherit');
+		const current: Worker = {
+			process: target,
+			ready: false,
+			stopping: false,
+			exited: new Promise<void>(done => {
+				target.once('exit', (code, signal) => {
+					rejectCallsTo(
+						target,
+						new Error(`Child exited (code ${code}, signal ${signal}); external cleanup may be pending`),
 					);
-				}),
-			]);
-		} catch (error) {
-			target.kill('SIGKILL');
-			let killTimer: ReturnType<typeof setTimeout> | undefined;
-			try {
-				await Promise.race([
-					exit,
-					new Promise<never>((_, reject) => {
-						killTimer = setTimeout(
-							() => reject(new Error('Child did not exit after SIGKILL; external cleanup may be pending')),
-							1000,
-						);
-					}),
-				]);
-			} finally {
-				if (killTimer) clearTimeout(killTimer);
-			}
-			throw error;
-		} finally {
-			if (timer) clearTimeout(timer);
-		}
-	};
-	const launch = async () => {
-		if (child) throw new Error('Child session already started');
-		intentionalExit = false;
-		const target = fork(workerPath(), [resolve(options.projectModule), String(options.disposeTimeoutMs ?? 5000)], {
-			cwd: options.cwd,
-			execArgv: options.execArgv ?? process.execArgv,
-			env: childEnvironment(options),
-			stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
-		});
-		child = target;
-		exitPromise = new Promise<void>(done => {
-			target.once('exit', (code, signal) => {
-				rejectFor(target, new Error(`Child exited (code ${code}, signal ${signal}); external cleanup may be pending`));
-				if (child === target) {
-					child = undefined;
-					started = false;
-					if (!intentionalExit)
-						emit({
-							type: 'error',
-							origin: 'child',
-							detail: `Child exited unexpectedly (code ${code}, signal ${signal}); external cleanup may be pending`,
-						});
-				}
-				done();
-			});
-		});
+					if (worker === current) {
+						worker = undefined;
+						if (!current.stopping)
+							reportChildError(
+								`Child exited unexpectedly (code ${code}, signal ${signal}); external cleanup may be pending`,
+							);
+					}
+					done();
+				});
+			}),
+		};
 		target.on('message', message => {
-			if (child !== target) return;
+			if (worker !== current) return;
 			if (!isBridgeMessage(message)) {
-				emit({ type: 'error', origin: 'child', detail: 'Invalid child protocol message' });
+				reportChildError('Invalid child protocol message');
 				return;
 			}
 			if (message.type === 'event') {
-				emit(message.event as SessionEvent);
+				emit(message.event);
 				return;
 			}
 			if (message.type !== 'result') return;
@@ -274,110 +251,83 @@ export function createChildSession(options: ChildSessionOptions): Session {
 			else waiter.reject(childError(message.error ?? 'Child operation failed'));
 		});
 		target.on('error', error => {
-			rejectFor(target, error);
-			if (child === target) emit({ type: 'error', origin: 'child', detail: error.message });
+			rejectCallsTo(target, error);
+			if (worker === current) reportChildError(error.message);
 		});
+		return current;
+	};
+
+	const start = async () => {
+		if (worker) throw new Error('Child session already started');
+		const current = spawn();
+		worker = current;
 		try {
-			await call('session.start', options.preset as unknown as JsonValue, options.startTimeoutMs ?? 10000);
-			started = true;
+			await call('session.start', options.preset, options.startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS);
+			current.ready = true;
 		} catch (error) {
 			try {
 				await stop();
 			} catch (cleanupError) {
 				throw new AggregateError(
 					[error, cleanupError],
-					`${error instanceof Error ? error.message : String(error)}; forced shutdown or cleanup failed; external cleanup may be pending`,
+					`${errorText(error)}; forced shutdown or cleanup failed; external cleanup may be pending`,
 				);
 			}
 			throw error;
 		}
 	};
+
 	const stop = (): Promise<void> => {
 		if (stopTask) return stopTask;
-		const target = child;
-		if (!target) return Promise.resolve();
-		started = false;
-		intentionalExit = true;
+		const current = worker;
+		if (!current) return Promise.resolve();
+		current.ready = false;
+		current.stopping = true;
 		stopTask = (async () => {
 			let cleanupError: unknown;
 			try {
-				// The worker closes the bot and then disposes resources, each with its own deadline.
-				await call('session.dispose', undefined, 2 * (options.disposeTimeoutMs ?? 5000) + 250);
+				await call('session.dispose', undefined, disposeRpcTimeout(disposeTimeoutMs));
 			} catch (error) {
 				cleanupError = error;
-				target.kill('SIGKILL');
+				current.process.kill('SIGKILL');
 			}
 			try {
-				await waitExit(target, options.disposeTimeoutMs ?? 5000);
+				await waitForExit(current);
 			} catch (error) {
 				cleanupError ??= error;
 			}
 			if (cleanupError) {
-				emit({
-					type: 'error',
-					origin: 'child',
-					detail: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
-				});
+				reportChildError(errorText(cleanupError));
 				throw cleanupError;
 			}
-		})();
-		return stopTask.finally(() => {
+		})().finally(() => {
 			stopTask = undefined;
 		});
+		return stopTask;
 	};
+
 	return {
-		start: launch,
+		start,
 		dispose: stop,
 		async reset() {
-			if (!started) throw new Error('Child session is not started');
+			requireReady();
 			await stop();
-			await launch();
+			await start();
 		},
-		async act(action: LabAction): Promise<ActionOutcome> {
-			if (!started) throw new Error('Child session is not started');
+		async act(action) {
+			requireReady();
 			validateLabAction(action);
-			return (await call(
-				'session.act',
-				action as unknown as JsonValue,
-				options.rpcTimeoutMs ?? 30000,
-			)) as unknown as ActionOutcome;
+			return rpc('session.act', action);
 		},
-		observe(listener) {
-			listeners.add(listener);
-			return () => {
-				listeners.delete(listener);
-			};
+		observe: observers.observe,
+		view: (actor, channelRef) => rpc('session.view', { actor, channelRef }),
+		async inspect() {
+			const snapshot = await rpc<Awaited<ReturnType<Session['inspect']>>>('session.inspect');
+			return { ...snapshot, diagnostics: [...snapshot.diagnostics, ...observers.diagnostics] };
 		},
-		async view(actor: string, channelRef: string): Promise<VisibleConversation> {
-			return (await call(
-				'session.view',
-				{ actor, channelRef },
-				options.rpcTimeoutMs ?? 30000,
-			)) as unknown as VisibleConversation;
-		},
-		async inspect(): Promise<InspectorSnapshot> {
-			const snapshot = (await call(
-				'session.inspect',
-				undefined,
-				options.rpcTimeoutMs ?? 30000,
-			)) as unknown as InspectorSnapshot;
-			return { ...snapshot, diagnostics: [...snapshot.diagnostics, ...diagnostics] };
-		},
-		async describe() {
-			return (await call('session.describe', undefined, options.rpcTimeoutMs ?? 30000)) as unknown as Awaited<
-				ReturnType<Session['describe']>
-			>;
-		},
-		async commandSchemas() {
-			return (await call('session.commandSchemas', undefined, options.rpcTimeoutMs ?? 30000)) as unknown as Awaited<
-				ReturnType<Session['commandSchemas']>
-			>;
-		},
-		async inspectProject(name: string, args: JsonValue = null): Promise<JsonValue> {
-			return await call('session.inspectProject', { name, args }, options.rpcTimeoutMs ?? 30000);
-		},
-		async log(): Promise<SessionLog> {
-			return (await call('session.log', undefined, options.rpcTimeoutMs ?? 30000)) as unknown as SessionLog;
-		},
+		describe: () => rpc('session.describe'),
+		commandSchemas: () => rpc('session.commandSchemas'),
+		inspectProject: (name, args = null) => rpc('session.inspectProject', { name, args }),
+		log: () => rpc('session.log'),
 	};
 }

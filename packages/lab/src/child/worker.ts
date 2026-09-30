@@ -1,88 +1,102 @@
 import { pathToFileURL } from 'node:url';
-import { invokeSession } from '../bridge';
+import { asJson, invokeSession } from '../bridge';
 import type { JsonValue, Project, Session } from '../index';
 import {
+	type BridgeEvent,
 	type BridgeRequest,
+	type BridgeResponse,
 	PROTOCOL_VERSION,
 	type ProjectDescription,
 	validateBridgeRequest,
 	validateProjectDescription,
 } from '../protocol';
 import { createSession } from '../runtime';
+import { errorText } from '../shared';
 
-const send = (message: unknown) => {
-	if (process.connected) process.send?.(message);
-};
+// argv: project module path, then the in-process dispose timeout in ms.
 const modulePath = process.argv[2];
-const disposeTimeoutMs = Number(process.argv[3] ?? 5000);
+const disposeTimeoutMs = process.argv[3] ? Number(process.argv[3]) : undefined;
 let session: Session | undefined;
 let queue = Promise.resolve();
+
+const send = (message: BridgeResponse | BridgeEvent) => {
+	if (process.connected) process.send?.(message);
+};
+
+type ProjectModule = Partial<Project> & { project?: Project; default?: Project };
+
+/** Accepts a module exporting `project`, a default project, or the project itself, as CommonJS or ESM. */
 async function loadProject(): Promise<Project> {
+	let loaded: ProjectModule;
 	try {
-		const loaded = require(modulePath) as { default?: Project; project?: Project } | Project;
-		return 'scenarios' in loaded
-			? loaded
-			: (loaded.project ?? loaded.default ?? Promise.reject(new Error('Project module has no project export')));
+		loaded = require(modulePath);
 	} catch (error) {
-		if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== 'ERR_REQUIRE_ESM') throw error;
-		const loaded = (await import(pathToFileURL(modulePath).href)) as { default?: Project; project?: Project };
-		return loaded.project ?? loaded.default ?? Promise.reject(new Error('Project module has no project export'));
+		if ((error as NodeJS.ErrnoException | undefined)?.code !== 'ERR_REQUIRE_ESM') throw error;
+		loaded = await import(pathToFileURL(modulePath).href);
 	}
+	const project = loaded.project ?? loaded.default ?? (loaded.scenarios ? (loaded as Project) : undefined);
+	if (!project) throw new Error('Project module has no project export');
+	return project;
 }
+
+function describeProject(project: Project): ProjectDescription {
+	const description: ProjectDescription = {
+		name: project.name,
+		scenarios: project.scenarios.map(({ id, version, title, params }) => ({
+			id,
+			version,
+			title,
+			params: params ?? {},
+		})),
+		services: Object.fromEntries(
+			Object.entries(project.services ?? {}).map(([name, service]) => [
+				name,
+				{ default: service.default, variants: Object.keys(service.variants) },
+			]),
+		),
+		inspectors: Object.keys(project.inspect ?? {}),
+	};
+	validateProjectDescription(description);
+	return description;
+}
+
 async function handle(request: BridgeRequest): Promise<JsonValue> {
-	if (request.type === 'project.describe') {
-		const project = await loadProject();
-		const description: ProjectDescription = {
-			name: project.name,
-			scenarios: project.scenarios.map(({ id, version, title, params }) => ({
-				id,
-				version,
-				title,
-				params: params ?? {},
-			})),
-			services: Object.fromEntries(
-				Object.entries(project.services ?? {}).map(([name, service]) => [
-					name,
-					{ default: service.default, variants: Object.keys(service.variants) },
-				]),
-			),
-			inspectors: Object.keys(project.inspect ?? {}),
-		};
-		validateProjectDescription(description);
-		return description as unknown as JsonValue;
+	switch (request.type) {
+		case 'project.describe':
+			return asJson(describeProject(await loadProject()));
+		case 'session.start': {
+			if (session) throw new Error('Session already started');
+			session = createSession(await loadProject(), request.payload, { disposeTimeoutMs });
+			session.observe(event => send({ version: PROTOCOL_VERSION, type: 'event', event }));
+			await session.start();
+			return null;
+		}
+		case 'session.dispose':
+			if (!session) throw new Error('Session is not started');
+			await session.dispose();
+			session = undefined;
+			return null;
+		default:
+			if (!session) throw new Error('Session is not started');
+			return invokeSession(session, request);
 	}
-	if (request.type === 'session.start') {
-		if (session) throw new Error('Session already started');
-		const project = await loadProject();
-		session = createSession(project, request.payload as unknown as import('../index').Preset, { disposeTimeoutMs });
-		session.observe(event => send({ version: PROTOCOL_VERSION, type: 'event', event }));
-		await session.start();
-		return null;
-	}
-	if (!session) throw new Error('Session is not started');
-	if (request.type !== 'session.dispose') return invokeSession(session, request);
-	await session.dispose();
-	session = undefined;
-	return null;
 }
+
+/** The request ID to answer with, even when the request itself is invalid. */
+function requestId(message: unknown): number {
+	const id = typeof message === 'object' && message !== null && 'id' in message ? message.id : undefined;
+	return typeof id === 'number' && Number.isSafeInteger(id) ? id : 0;
+}
+
 process.on('message', message => {
 	queue = queue.then(async () => {
 		try {
 			validateBridgeRequest(message);
 			send({ version: PROTOCOL_VERSION, type: 'result', id: message.id, ok: true, value: await handle(message) });
+			// Both requests end the worker's job; disconnecting lets the process exit on its own.
 			if (message.type === 'session.dispose' || message.type === 'project.describe') process.disconnect?.();
 		} catch (error) {
-			const id =
-				typeof message === 'object' && message !== null && 'id' in message && Number.isSafeInteger(message.id)
-					? message.id
-					: 0;
-			send({
-				version: PROTOCOL_VERSION,
-				type: 'result',
-				id,
-				ok: false,
-				error: error instanceof Error ? error.message : String(error),
-			});
+			send({ version: PROTOCOL_VERSION, type: 'result', id: requestId(message), ok: false, error: errorText(error) });
 		}
 	});
 });
