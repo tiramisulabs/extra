@@ -34,6 +34,7 @@ export {
 	type DispatchResult,
 	type EmitEventOptions,
 	type EventDispatchResult,
+	type MemberRoleChange,
 	type MenuCommandClass,
 	type MenuOptions,
 	type MenuResultFor,

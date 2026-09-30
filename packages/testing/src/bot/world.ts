@@ -62,7 +62,7 @@ export interface WorldMessageEntry {
 	channelId: string;
 	message: ApiMessage;
 	/** Creation order in this world. */
-	sequence?: number;
+	sequence: number;
 	/** The user an ephemeral message belongs to. */
 	ownerId?: string;
 	/** The interaction whose response created the message. */
@@ -271,11 +271,16 @@ export class WorldBuilder {
 		if (options.id !== undefined) {
 			this.pinnedBot ??= { id: options.id, statedBy: `world.botUser({ id: "${options.id}" })` };
 		}
+		return this.restateBotUser(options);
+	}
+
+	/** Apply a profile to the bot user without pinning its id; callers check pinned conflicts first. */
+	private restateBotUser(options: BotUserOptions): ApiUser {
 		const user = (this.botIdentity ??= defaultBotUser());
 		Object.assign(
 			user,
 			defaultBotUser({
-				id: this.pinnedBot?.id ?? user.id,
+				id: options.id ?? this.pinnedBot?.id ?? user.id,
 				username: options.username ?? user.username,
 				globalName: 'globalName' in options ? options.globalName : (options.username ?? user.global_name),
 				avatar: 'avatar' in options ? options.avatar : user.avatar,
@@ -575,9 +580,12 @@ export class WorldBuilder {
 	 * the bot member fails `author.id === client.botId`. Runs against the live world *before* `createMockBot`
 	 * clones it, so the `ApiMember` that `registerBotMember` already handed back is corrected in place too.
 	 *
+	 * Adoption restates the id (and `profile`, the `createMockBot({ botUser })` options) without pinning it:
+	 * only the world's own calls pin, so the same builder can seed another bot that runs under another id.
+	 *
 	 * Returns the stated bot id, or `undefined` when neither side stated one (leaving the default in place).
 	 */
-	adoptBotId(explicit?: string): string | undefined {
+	adoptBotId(explicit?: string, profile: BotUserOptions = {}): string | undefined {
 		const pinned = this.pinnedBot;
 		if (explicit !== undefined && pinned && explicit !== pinned.id) {
 			throw new TypeError(
@@ -586,7 +594,9 @@ export class WorldBuilder {
 			);
 		}
 		const stated = explicit ?? pinned?.id;
-		if (stated !== undefined) this.botUser({ id: stated });
+		if (stated !== undefined || Object.keys(profile).length) {
+			this.restateBotUser({ ...profile, ...(stated === undefined ? {} : { id: stated }) });
+		}
 		return stated;
 	}
 

@@ -185,8 +185,8 @@ test('seeded ephemeral views enforce channel access while component actions only
 		const otherView = bot.conversation({ userId: other.user.id, channelId: channel.id });
 		expect(ownerView.messages.map(message => message.id)).toEqual(['owned-private-panel']);
 		expect(otherView.messages.map(message => message.id)).toEqual([]);
-		expect(ownerView.diagnostics).toContain('ephemeral-owner-unknown:2-hidden');
-		expect(otherView.diagnostics).toContain('ephemeral-owner-unknown:2-hidden');
+		expect(ownerView.diagnostics).toContain('ephemeral-owner-unknown:2');
+		expect(otherView.diagnostics).toContain('ephemeral-owner-unknown:2');
 		expect(bot.inspectChannel(channel.id).diagnostics).toContain('ephemeral-owner-unknown');
 		expect(bot.inspectChannel(channel.id).messages).toMatchObject([
 			{ id: 'owned-private-panel', ownerId: owner.user.id },
@@ -228,13 +228,12 @@ test('seeded ephemeral views enforce channel access while component actions only
 	}
 });
 
-test('admin role changes preserve member data, cache and event semantics, and change bot REST permissions', async () => {
+async function adminRolesFixture() {
 	const world = mockWorld();
 	const guild = world.registerGuild({ id: 'lab-roles', ownerId: 'lab-owner' });
 	const manage = world.registerRole(guild.id, { id: 'lab-manage', permissions: ['ManageRoles'], position: 10 });
 	const assigned = world.registerRole(guild.id, { id: 'lab-assigned', position: 1 });
-	const other = world.registerGuild({ id: 'lab-other' });
-	const foreign = world.registerRole(other.id, { id: 'lab-foreign' });
+	const foreign = world.registerRole(world.registerGuild({ id: 'lab-other' }).id, { id: 'lab-foreign' });
 	const target = world.registerMember(guild.id, {
 		user: apiUser({ id: 'lab-target' }),
 		nick: 'kept',
@@ -242,42 +241,48 @@ test('admin role changes preserve member data, cache and event semantics, and ch
 	});
 	target.flags = 17;
 	world.registerBotMember(guild.id);
-	let updates = 0;
-	const updated = createEvent({
-		data: { name: 'guildMemberUpdate' },
-		run: () => {
-			updates++;
-		},
-	});
+	const updates = { count: 0 };
+	const updated = createEvent({ data: { name: 'guildMemberUpdate' }, run: () => void updates.count++ });
 	const bot = await createMockBot({ world, events: [updated] });
-	try {
-		await expect(
-			bot.admin.addMemberRole({ guildId: guild.id, userId: target.user.id, roleId: foreign.id }),
-		).rejects.toThrow(/not in guild/);
-		await bot.admin.addMemberRole({ guildId: guild.id, userId: target.user.id, roleId: assigned.id });
-		const actual = bot.world.query.member({ guildId: guild.id, userId: target.user.id });
-		const cached = await bot.client.cache.members?.raw(target.user.id, guild.id);
-		expect(actual?.roles).toContain(assigned.id);
-		expect(actual?.nick).toBe('kept');
-		expect(cached?.roles).toContain(assigned.id);
-		expect(cached?.nick).toBe('kept');
-		expect(cached?.joined_at).toBe(target.joined_at);
-		expect(cached?.flags).toBe(17);
-		expect(updates).toBe(1);
-		await expectDiscordError(
-			bot.rest.request('PUT', `/guilds/${guild.id}/members/${target.user.id}/roles/${assigned.id}`),
-			DiscordErrors.MissingPermissions,
-		);
-		await bot.admin.addMemberRole({ guildId: guild.id, userId: bot.client.botId, roleId: manage.id });
-		await bot.admin.removeMemberRole({ guildId: guild.id, userId: target.user.id, roleId: assigned.id });
-		expect(bot.world.query.member({ guildId: guild.id, userId: target.user.id })?.roles).not.toContain(assigned.id);
-		expect((await bot.client.cache.members?.raw(target.user.id, guild.id))?.roles).not.toContain(assigned.id);
-		await bot.rest.request('PUT', `/guilds/${guild.id}/members/${target.user.id}/roles/${assigned.id}`);
-		expect(bot.world.query.member({ guildId: guild.id, userId: target.user.id })?.roles).toContain(assigned.id);
-		expect((await bot.client.cache.members?.raw(target.user.id, guild.id))?.roles).toContain(assigned.id);
-	} finally {
-		await bot.close();
-	}
+	const change = (roleId: string, userId = target.user.id) => ({ guildId: guild.id, userId, roleId });
+	const roles = async () => ({
+		world: bot.world.query.member({ guildId: guild.id, userId: target.user.id })?.roles,
+		cache: (await bot.client.cache.members?.raw(target.user.id, guild.id))?.roles,
+	});
+	const assignByRest = () =>
+		bot.rest.request('PUT', `/guilds/${guild.id}/members/${target.user.id}/roles/${assigned.id}`);
+	return { bot, guild, manage, assigned, foreign, target, updates, change, roles, assignByRest };
+}
+
+test('admin role changes reject a role from another guild', async () => {
+	const { bot, foreign, change } = await adminRolesFixture();
+	await using _bot = bot;
+	await expect(bot.admin.addMemberRole(change(foreign.id))).rejects.toThrow(/not in guild/);
+});
+
+test('admin role changes keep member data in world and cache and dispatch one member update', async () => {
+	const { bot, guild, assigned, target, updates, change, roles } = await adminRolesFixture();
+	await using _bot = bot;
+	await bot.admin.addMemberRole(change(assigned.id));
+	expect(await roles()).toEqual({ world: [assigned.id], cache: [assigned.id] });
+	expect(bot.world.query.member({ guildId: guild.id, userId: target.user.id })?.nick).toBe('kept');
+	expect(await bot.client.cache.members?.raw(target.user.id, guild.id)).toMatchObject({
+		nick: 'kept',
+		joined_at: target.joined_at,
+		flags: 17,
+	});
+	expect(updates.count).toBe(1);
+	await bot.admin.removeMemberRole(change(assigned.id));
+	expect(await roles()).toEqual({ world: [], cache: [] });
+});
+
+test('admin role changes on the bot member change what its REST calls may do', async () => {
+	const { bot, manage, assigned, change, roles, assignByRest } = await adminRolesFixture();
+	await using _bot = bot;
+	await expectDiscordError(assignByRest(), DiscordErrors.MissingPermissions);
+	await bot.admin.addMemberRole(change(manage.id, bot.client.botId));
+	await assignByRest();
+	expect(await roles()).toEqual({ world: [assigned.id], cache: [assigned.id] });
 });
 
 test('observers see REST, world changes and a button modal; pending state clears on submit', async () => {
@@ -320,11 +325,7 @@ test('observers see REST, world changes and a button modal; pending state clears
 	}
 	const bot = await createMockBot({ commands: [Panel], components: [Open], world });
 	const events: MockBotEvent[] = [];
-	const unsubscribe = bot.observe(event => events.push(event));
-	const bad = vi.spyOn(console, 'warn').mockImplementation(() => {});
-	const unsubscribeBad = bot.observe(() => {
-		throw new Error('observer failed');
-	});
+	bot.observe(event => events.push(event));
 	try {
 		await bot.slash({ name: 'lab-panel', guildId: guild.id, channel, user: actor.user });
 		expect(bot.pendingInteractions().collectors).toEqual([]);
@@ -352,15 +353,30 @@ test('observers see REST, world changes and a button modal; pending state clears
 			),
 		).toBe(true);
 		expect(events.some(event => event.type === 'dispatch' && event.phase === 'end')).toBe(true);
+	} finally {
+		await bot.close();
+	}
+});
+
+test('a failing observer is reported without breaking others, and unsubscribe stops delivery', async () => {
+	await using bot = await createMockBot();
+	const events: MockBotEvent[] = [];
+	const unsubscribe = bot.observe(event => events.push(event));
+	const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+	const unsubscribeBad = bot.observe(() => {
+		throw new Error('observer failed');
+	});
+	try {
+		await bot.client.messages.write('observed-channel', { content: 'first' });
+		expect(warn).toHaveBeenCalledWith('[@slipher/testing] observer failed:', expect.any(Error));
 		const count = events.length;
+		expect(count).toBeGreaterThan(0);
 		unsubscribe();
-		await bot.slash({ name: 'lab-panel', guildId: guild.id, channel, user: actor.user });
+		await bot.client.messages.write('observed-channel', { content: 'second' });
 		expect(events).toHaveLength(count);
-		expect(bad).toHaveBeenCalled();
 	} finally {
 		unsubscribeBad();
-		bad.mockRestore();
-		await bot.close();
+		warn.mockRestore();
 	}
 });
 
@@ -411,6 +427,35 @@ test('pendingInteractions lists a live message collector and removes it on stop'
 		unsubscribe();
 		await bot.close();
 	}
+});
+
+test('a collector created while the bot closes is never reported as pending', async () => {
+	@Declare({ name: 'lab-late-collect', description: 'Collects again after the wait is cancelled' })
+	class LateCollect extends Command {
+		async run(ctx: CommandContext) {
+			await ctx.write({
+				content: 'choose',
+				components: [
+					new ActionRow().setComponents([
+						new Button().setCustomId('lab-late').setLabel('Choose').setStyle(ButtonStyle.Primary),
+					]),
+				],
+			});
+			const message = await ctx.fetchResponse();
+			const choice = await message.createComponentCollector().waitFor('lab-late');
+			if (choice === null) message.createComponentCollector().run('lab-late', () => {});
+		}
+	}
+	const bot = await createMockBot({ commands: [LateCollect] });
+	const changes: string[] = [];
+	bot.observe(event => {
+		if (event.type === 'interaction' && event.change.kind === 'collector') changes.push(event.change.phase);
+	});
+	await bot.slash({ name: 'lab-late-collect' });
+	expect(bot.pendingInteractions().collectors).toMatchObject([{ kind: 'waitFor' }]);
+	await bot.close();
+	expect(bot.pendingInteractions().collectors).toEqual([]);
+	expect(changes).toEqual(['opened', 'closed']);
 });
 
 test('a collector continuation exposes its modal with the opening interaction identity', async () => {
@@ -610,6 +655,43 @@ test('a button modal remains available after its handler returns', async () => {
 	} finally {
 		await bot.close();
 	}
+});
+
+test('a session dispatch may replace a modal whose raw opener already completed', async () => {
+	const detailsModal = (customId: string) =>
+		new Modal()
+			.setCustomId(customId)
+			.setTitle('Details')
+			.setComponents([
+				new Label().setLabel('Name').setComponent(new TextInput({ custom_id: 'name', style: TextInputStyle.Short })),
+			])
+			.run(async submit => {
+				if (submit) await submit.write({ content: `${customId} submitted` });
+			});
+	class Open extends ComponentCommand {
+		componentType = 'Button' as const;
+		customId = 'raw-open';
+		async run(ctx: ComponentContext<'Button'>) {
+			await ctx.interaction.modal(detailsModal('raw-first'));
+		}
+	}
+	class Replace extends ComponentCommand {
+		componentType = 'Button' as const;
+		customId = 'raw-replace';
+		async run(ctx: ComponentContext<'Button'>) {
+			await ctx.interaction.modal(detailsModal('raw-second'));
+		}
+	}
+	await using bot = await createMockBot({ components: [Open, Replace] });
+	// Un-sessioned dispatches never reach the session completion hook, so the owner check must see them finish.
+	const user = apiUser({ id: 'raw-modal-user' });
+	const opener = bot.actor({ user, session: false }).clickButton('raw-open', { allowSyntheticSource: true });
+	await opener.untilModal();
+	await opener;
+	await bot.clickButton('raw-replace', { user, allowSyntheticSource: true });
+	expect(bot.pendingInteractions().modals).toMatchObject([{ customId: 'raw-second' }]);
+	const result = await bot.submitModal('raw-second', { name: 'Alice' }, { user });
+	expect(result.content).toBe('raw-second submitted');
 });
 
 test('ephemeral collector continuation replies and followups retain the opening user', async () => {

@@ -219,7 +219,7 @@ export abstract class WorldStateQueryCore {
 	private sequenceSeededMessages(): void {
 		let sequence = 0;
 		for (const entry of this.world.messages) {
-			sequence = Math.max(sequence + 1, entry.sequence ?? 0);
+			sequence = Math.max(sequence + 1, entry.sequence);
 			entry.sequence = sequence;
 		}
 		this.world.messageSequence = Math.max(this.world.messageSequence ?? 0, sequence);

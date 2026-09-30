@@ -34,7 +34,7 @@ function canView(permissions: bigint | undefined): permissions is bigint {
  * Users who receive a message live as it is created: guild members who joined before it and can view its
  * channel. An ephemeral message reaches only its owner. DM messages record no recipients.
  */
-export function liveRecipients(world: WorldData, entry: WorldMessageEntry & { sequence: number }): string[] {
+export function liveRecipients(world: WorldData, entry: WorldMessageEntry): string[] {
 	const channel = world.channels.find(candidate => candidate.id === entry.channelId);
 	if (!channel?.guild_id) return [];
 	const ephemeral = isEphemeral(entry.message);

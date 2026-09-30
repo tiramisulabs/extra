@@ -189,12 +189,19 @@ export function installDispatchHooks(client: Client, deps: DispatchHookDeps): Di
 			if (!collector) {
 				throw new TypeError('Seyfert createComponentCollector returned no collector handle.');
 			}
-			if (state.closing) componentHooks.clearValue(messageId);
+			// A collector created during shutdown is inert: cleared at once, so it is never reported as pending.
+			if (state.closing) {
+				componentHooks.clearValue(messageId);
+				return collector;
+			}
 			const run = collector.run.bind(collector);
+			const entry = componentHooks.values.get(messageId);
 			const openClosers = collectorClosers.get(messageId) ?? new Set<() => void>();
 			collectorClosers.set(messageId, openClosers);
 			/** Report the collector as pending; the returned closer reports it closed, at most once. */
 			const register = (match: ComponentCollectorMatch, kind: PendingCollector['kind']): (() => void) => {
+				// Once Seyfert cleared this collector (stop, idle, timeout, replacement), run/waitFor register nothing.
+				if (componentHooks.values.get(messageId) !== entry) return () => {};
 				const customIds = collectorCustomIds(match);
 				const close = state.deps.onCollectorRegistered?.({
 					messageId,
@@ -278,11 +285,7 @@ export function installDispatchHooks(client: Client, deps: DispatchHookDeps): Di
 				if (state.closing) pending?.cancel();
 				return waiting;
 			};
-			const stop = collector.stop.bind(collector);
-			collector.stop = reason => {
-				for (const close of [...openClosers]) close();
-				stop(reason);
-			};
+			// No stop wrapper: Seyfert's stop calls clearValue, which the hook above uses to close these collectors.
 			return collector;
 		};
 	}

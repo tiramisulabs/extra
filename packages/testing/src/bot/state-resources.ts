@@ -525,6 +525,7 @@ export class WorldState extends WorldStateMutationCore {
 		const messageId = this.messageIdByToken.get(token);
 		if (channelId && messageId) this.deleteMessage(channelId, messageId);
 		this.messageIdByToken.delete(token);
+		this.loadingOriginalTokens.delete(token);
 		this.deletedOriginalTokens.add(token);
 	}
 

@@ -802,6 +802,7 @@ export abstract class MockBotDispatchCore extends MockBotSurface {
 			modalOwners: this.modalOwners,
 			isModalOwnerCompleted: userId => {
 				if (this.completedModalOwners.has(userId)) return true;
+				// Raw (`session: false`) dispatches never report completion to the sessions, so check them directly.
 				const owner = this.modalOwners.get(userId);
 				return (
 					owner !== undefined && this.dispatches.some(dispatch => dispatch.dispatchId === owner && dispatch.isCompleted)

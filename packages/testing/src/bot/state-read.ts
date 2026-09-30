@@ -441,7 +441,7 @@ export abstract class WorldStateReadCore extends WorldStateQueryCore {
 			...[...this.deletedMessages.values()]
 				.filter(entry => entry.channelId === channelId)
 				.map(entry => ({ ...entry, deleted: true })),
-		].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
+		].sort((a, b) => a.sequence - b.sequence);
 	}
 
 	/** Whether `channelId` is the DM channel opened with `userId`. */

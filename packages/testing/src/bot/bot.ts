@@ -82,8 +82,9 @@ export class MockBot extends MockBotCore {
 		}
 	}
 
-	/** @internal Connect the existing REST notification seam after world defaults have been installed. */
-	startObservingRest(): void {
+	constructor(...args: ConstructorParameters<typeof MockBotCore>) {
+		super(...args);
+		// Relay REST traffic to observers; field initializers above have already run.
 		this.rest.observeActions((action, phase) => {
 			if (phase === 'pending') {
 				if (this.observers.size) this.restSnapshots.set(action.seq, this._state.snapshot());
@@ -151,7 +152,7 @@ export class MockBot extends MockBotCore {
 			return { messages: [], diagnostics: ['unknown-channel'] };
 		}
 		const timeline = this._state.channelTimeline(channelId);
-		const diagnostics = ['developer-inspection'];
+		const diagnostics: string[] = [];
 		if (timeline.some(entry => isEphemeral(entry.message) && entry.ownerId === undefined)) {
 			diagnostics.push('ephemeral-owner-unknown');
 		}
@@ -159,7 +160,7 @@ export class MockBot extends MockBotCore {
 			messages: timeline.map(entry => ({
 				...this.visibleMessage(entry),
 				liveRecipientIds: [...(entry.liveRecipientIds ?? [])],
-				isHistory: (entry.sequence ?? 0) <= this.startupSequence,
+				isHistory: entry.sequence <= this.startupSequence,
 				...(entry.deleted ? { deleted: true } : {}),
 			})),
 			diagnostics,
@@ -178,7 +179,7 @@ export class MockBot extends MockBotCore {
 		const hidden = (denial: MessageDenial) => timeline.filter(item => item.denial === denial).length;
 		const diagnostics: string[] = [];
 		const unknownOwner = hidden('ephemeral-owner-unknown');
-		if (unknownOwner) diagnostics.push(`ephemeral-owner-unknown:${unknownOwner}-hidden`);
+		if (unknownOwner) diagnostics.push(`ephemeral-owner-unknown:${unknownOwner}`);
 		const history = hidden('history-hidden');
 		if (history) diagnostics.push(`history-hidden:${history}`);
 		return {
@@ -238,9 +239,8 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	const profileId = options.botUser?.id;
 	if (profileId !== undefined && options.botId !== undefined && profileId !== options.botId)
 		throw new TypeError(`createMockBot: botUser id "${profileId}" conflicts with botId "${options.botId}".`);
-	if (options.world && options.botUser) options.world.botUser(options.botUser);
 	const requestedBotId = options.botId ?? profileId;
-	const statedBotId = options.world ? options.world.adoptBotId(requestedBotId) : requestedBotId;
+	const statedBotId = options.world ? options.world.adoptBotId(requestedBotId, options.botUser) : requestedBotId;
 	const botId = statedBotId ?? TEST_BOT_ID;
 	const prefixList = [...(options.prefixes ?? []), ...(options.mentionAsPrefix ? [`<@${botId}>`, `<@!${botId}>`] : [])];
 	const clientOptionsBase: ClientOptions | undefined = options.clientOptions
@@ -315,9 +315,13 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 	client.applicationId = options.applicationId ?? ((options.client && client.applicationId) || TEST_APPLICATION_ID);
 	// A caller-supplied client may carry its own bot id; the world's bot user follows the id the client runs as.
 	options.world?.adoptBotId(client.botId);
-	const botUser = options.world?.botUser() ?? defaultBotUser({ ...options.botUser, id: client.botId });
+	const liveBotUser = options.world?.botUser();
 	const built = options.world?.build();
 	const world = built ? cloneWorld(built, 'createMockBot') : undefined;
+	// The running bot takes its identity from the clone, so editing the builder after start cannot reach it.
+	const botUser =
+		(liveBotUser && world?.users[built?.users.indexOf(liveBotUser) ?? -1]) ||
+		defaultBotUser({ ...options.botUser, id: client.botId });
 	client.me = mockClientUser(client, botUser, client.applicationId);
 
 	let requestedSubcommands: MockSubCommandClass[] = [];
@@ -385,7 +389,6 @@ export async function createMockBot(options: MockBotOptions = {}): Promise<MockB
 		commandCatalog,
 	);
 	bot.installDispatchHooks();
-	bot.startObservingRest();
 	bot.validateSubcommandClasses(requestedSubcommands);
 	return bot;
 }

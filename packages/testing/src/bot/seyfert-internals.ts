@@ -112,9 +112,12 @@ export function asUsingClient(client: Client): UsingClient {
 	return client as unknown as UsingClient;
 }
 
+/** The mock application sets none of Discord's application flags; the enum has no zero member to name it. */
+const NO_APPLICATION_FLAGS = 0 as ApplicationFlags;
+
 /** Seed `client.me` through the same transformer the gateway READY event uses. */
 export function mockClientUser(client: Client, user: ApiUser, applicationId: string): Client['me'] {
-	return Transformers.ClientUser(asUsingClient(client), user, { id: applicationId, flags: 0 as ApplicationFlags });
+	return Transformers.ClientUser(asUsingClient(client), user, { id: applicationId, flags: NO_APPLICATION_FLAGS });
 }
 
 /** Cast the MockGateway to the concrete ShardManager type `Client#setServices` expects (no public ctor type). */

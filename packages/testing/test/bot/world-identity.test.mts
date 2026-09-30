@@ -248,6 +248,37 @@ describe('bot identity is stated once', () => {
 		);
 	});
 
+	test('a world reused for another bot can run under a different id', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'reuse-guild' });
+		const member = world.registerBotMember(guild.id);
+		{
+			await using first = await createMockBot({ world });
+			expect(first.client.botId).toBe(TEST_BOT_ID);
+		}
+		{
+			await using second = await createMockBot({ world, botId: '999' });
+			expect(second.client.botId).toBe('999');
+			expect(member.user.id).toBe('999');
+		}
+		await using third = await createMockBot({ world, botUser: { id: '998' } });
+		expect(third.client.botId).toBe('998');
+	});
+
+	test('changing the builder after start leaves the running bot identity alone', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'frozen-identity-guild' });
+		const channel = world.registerChannel(guild.id);
+		world.botUser({ username: 'before' });
+		await using bot = await createMockBot({ world });
+		world.botUser({ username: 'after' });
+
+		const message = await bot.client.messages.write(channel.id, { content: 'hello' });
+		expect(message.author.username).toBe('before');
+		expect(bot.world.snapshot().botUser.username).toBe('before');
+		expect(bot.client.me.username).toBe('before');
+	});
+
 	test('pinning two different bot ids on one world fails at registration', () => {
 		const world = mockWorld();
 		const first = world.registerGuild({ id: 'multi-guild-a' });

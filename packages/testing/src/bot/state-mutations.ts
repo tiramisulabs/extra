@@ -296,6 +296,7 @@ export abstract class WorldStateMutationCore extends WorldStateReadCore {
 		for (const [token, id] of this.messageIdByToken) {
 			if (id === messageId) {
 				this.messageIdByToken.delete(token);
+				this.loadingOriginalTokens.delete(token);
 				this.deletedOriginalTokens.add(token);
 			}
 		}
