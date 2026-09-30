@@ -704,10 +704,7 @@ test('a closed modal keeps its flow: its trigger reopens it, the submit complete
 		await client.start({ scenarioId: 'flow', params: { label: 'Panel' }, services: {} });
 		const fresh = await client.connect();
 		assert.deepEqual(fresh.closedModals, []);
-		assert.deepEqual(
-			(fresh.rawInspect as { local?: { dismissed?: Record<string, string[]> } }).local?.dismissed ?? {},
-			{},
-		);
+		assert.deepEqual(fresh.rawInspect?.local?.dismissed ?? {}, {});
 	} finally {
 		await host.close();
 	}

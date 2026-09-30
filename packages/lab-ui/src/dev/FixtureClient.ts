@@ -224,7 +224,7 @@ const initial: LabSnapshot = {
 		rest: [
 			{
 				id: 'rest-1',
-				label: '403 · PUT /guilds/guild/members/101/roles/moderator',
+				label: 'PUT /guilds/guild/members/101/roles/moderator',
 				detail: 'Missing Permissions',
 				failed: true,
 			},

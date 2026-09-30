@@ -1,4 +1,4 @@
-import { type FormEvent, type KeyboardEvent, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { type FormEvent, type KeyboardEvent, useLayoutEffect, useRef, useState } from 'react';
 import type { CommandOption, CommandSchema, Guild, JsonValue } from '../bridge';
 import { CloseIcon, SendIcon, SlashIcon } from '../icons';
 
@@ -161,7 +161,7 @@ export function Composer({
 	canView: boolean;
 	onRun: (entry: { command: string; group?: string; subcommand?: string; options: Record<string, JsonValue> }) => void;
 }) {
-	const entries = useMemo(() => commandEntries(commands), [commands]);
+	const entries = commandEntries(commands);
 	const [query, setQuery] = useState('');
 	const [picking, setPicking] = useState(false);
 	const [highlight, setHighlight] = useState(0);

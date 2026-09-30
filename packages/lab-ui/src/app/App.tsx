@@ -234,6 +234,7 @@ function Lab({ client, snapshot }: { client: LabClient; snapshot: LabSnapshot })
 								onReopen={key => client.reopenModal(key)}
 							/>
 							<Composer
+								key={`${actor}:${channel}`}
 								commands={snapshot.commands}
 								projectName={snapshot.project.name}
 								channelName={current?.name ?? ''}

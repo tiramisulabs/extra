@@ -35,7 +35,7 @@ export function* componentTree(components: ComponentPayload[] = []): Generator<C
 
 /**
  * First text a person would read in the message: its content, an embed's title or description, or a text display.
- * The runtime's locators search the same text, so it identifies the message across sessions.
+ * Locators match it as a substring of the message's visible text, so it identifies the message across sessions.
  */
 export function messageText(payload: MessagePayload): string | undefined {
 	if (payload.content) return payload.content;

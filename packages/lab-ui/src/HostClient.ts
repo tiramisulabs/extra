@@ -60,7 +60,7 @@ export function semanticAction(action: LabAction, snapshot?: LabSnapshot): LabAc
 	};
 }
 
-export class HostError extends Error {
+class HostError extends Error {
 	constructor(
 		readonly status: number,
 		text: string,
@@ -484,9 +484,7 @@ export class HostClient implements LabClient, CheckpointClient {
 			this.loadProjections(project),
 		]);
 		if (generation !== this.generation) return;
-		const pending = inspect.pending;
-		// The lab renders modal payloads through its own looser component shape.
-		const modals = pending.modals as unknown as PendingModal[];
+		const modals: PendingModal[] = inspect.pending.modals;
 		this.syncClosedModals(modals);
 		this.snapshot = {
 			error: this.snapshot?.error,
@@ -497,7 +495,7 @@ export class HostClient implements LabClient, CheckpointClient {
 			log,
 			rawInspect: inspect,
 			projections,
-			pending: { modals, collectors: collectorEntries(pending) },
+			pending: { modals, collectors: collectorEntries(inspect.pending) },
 			closedModals: this.closedKeys(),
 			inspector: inspectorEntries(log, inspect),
 			host: this.host,
