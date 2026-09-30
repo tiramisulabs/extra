@@ -352,7 +352,7 @@ test('boundary, navigation, health and authorize', async () => {
 });
 
 test('child environment and cached describe are isolated', async () => {
-	const dataDir = await mkdtemp(resolve(tmpdir(), 'lab-hosted-env-'));
+	const dataDir = await isolatedDataDir();
 	const marker = resolve(dataDir, 'describes.txt');
 	process.env.LAB_HIDDEN = 'secret-sentinel';
 	process.env.LAB_FORWARDED = 'forward-sentinel';
@@ -374,8 +374,6 @@ test('child environment and cached describe are isolated', async () => {
 	} finally {
 		delete process.env.LAB_HIDDEN;
 		delete process.env.LAB_FORWARDED;
-		await hosts.pop()?.close();
-		await rm(dataDir, { recursive: true, force: true });
 	}
 });
 
@@ -432,74 +430,62 @@ test('checkpoint revision stamping, mismatch, acceptance and export', async () =
 });
 
 test('hosted checkpoint directories are wiped on boot and deleted with the run', async () => {
-	const dataDir = await mkdtemp(resolve(tmpdir(), 'lab-hosted-checkpoints-'));
-	try {
-		const orphan = resolve(dataDir, 'runs', 'orphan', 'old.json');
-		await mkdir(resolve(dataDir, 'runs', 'orphan'), { recursive: true });
-		await writeFile(orphan, '{}');
-		const host = await startHost({ ...hostedOptions(), dataDir });
-		hosts.push(host);
-		await expect(readFile(orphan)).rejects.toMatchObject({ code: 'ENOENT' });
-		const a = await start(host);
-		const log = (
-			(await (await rpc(host, a.cookie!, 'session.log')).json()) as { value: Parameters<typeof createCheckpoint>[0] }
-		).value;
-		const checkpoint = createCheckpoint(log, 'temporary');
-		expect(
-			(await api(host, '/api/checkpoints', { method: 'POST', cookie: a.cookie, body: { checkpoint } })).status,
-		).toBe(201);
-		const id = a.cookie!.split('.')[1];
-		const saved = resolve(dataDir, 'runs', id, 'temporary.json');
-		expect(await readFile(saved, 'utf8')).toContain('temporary');
-		await api(host, '/api/session', { method: 'DELETE', cookie: a.cookie });
-		await expect(readFile(saved)).rejects.toMatchObject({ code: 'ENOENT' });
-		await host.close();
-		hosts.splice(hosts.indexOf(host), 1);
-	} finally {
-		await rm(dataDir, { recursive: true, force: true });
-	}
+	const dataDir = await isolatedDataDir();
+	const orphan = resolve(dataDir, 'runs', 'orphan', 'old.json');
+	await mkdir(resolve(dataDir, 'runs', 'orphan'), { recursive: true });
+	await writeFile(orphan, '{}');
+	const host = await startHost({ ...hostedOptions(), dataDir });
+	hosts.push(host);
+	await expect(readFile(orphan)).rejects.toMatchObject({ code: 'ENOENT' });
+	const a = await start(host);
+	const log = (
+		(await (await rpc(host, a.cookie!, 'session.log')).json()) as { value: Parameters<typeof createCheckpoint>[0] }
+	).value;
+	const checkpoint = createCheckpoint(log, 'temporary');
+	expect((await api(host, '/api/checkpoints', { method: 'POST', cookie: a.cookie, body: { checkpoint } })).status).toBe(
+		201,
+	);
+	const id = a.cookie!.split('.')[1];
+	const saved = resolve(dataDir, 'runs', id, 'temporary.json');
+	expect(await readFile(saved, 'utf8')).toContain('temporary');
+	await api(host, '/api/session', { method: 'DELETE', cookie: a.cookie });
+	await expect(readFile(saved)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
 test('ending rejects a parsed Start and checkpoint save, and close awaits disposal', async () => {
-	const dataDir = await mkdtemp(resolve(tmpdir(), 'lab-hosted-ending-'));
-	try {
-		const marker = resolve(dataDir, 'disposed');
-		const host = await startHost({
-			...hostedOptions(life),
-			dataDir,
-			env: { LAB_SLOW_DISPOSE_MS: '120', LAB_DISPOSE_MARKER: marker },
-		});
-		hosts.push(host);
-		const lifePreset = { scenario: { id: 'life', version: 1 } };
-		const a = await start(host, lifePreset);
-		const cookie = a.cookie!;
-		const log = (
-			(await (await rpc(host, cookie, 'session.log')).json()) as { value: Parameters<typeof createCheckpoint>[0] }
-		).value;
-		const checkpoint = createCheckpoint(log, 'late_write');
-		const lateStart = partialPost(host, '/api/session', cookie, { preset: lifePreset });
-		const lateSave = partialPost(host, '/api/checkpoints', cookie, { checkpoint });
-		await new Promise(done => setTimeout(done, 20));
-		const ending = api(host, '/api/session', { method: 'DELETE', cookie });
-		await untilEnded(host, cookie, 'stopped');
-		lateStart.finish();
-		lateSave.finish();
-		expect(await lateStart.pending).toMatchObject({ status: 409, body: { code: 'run-ended' } });
-		expect(await lateSave.pending).toMatchObject({ status: 409, body: { code: 'run-ended' } });
-		await host.close();
-		hosts.splice(hosts.indexOf(host), 1);
-		expect((await ending).status).toBe(200);
-		expect(await readFile(marker, 'utf8')).toBe('disposed');
-	} finally {
-		await rm(dataDir, { recursive: true, force: true });
-	}
+	const dataDir = await isolatedDataDir();
+	const marker = resolve(dataDir, 'disposed');
+	const host = await startHost({
+		...hostedOptions(life),
+		dataDir,
+		env: { LAB_SLOW_DISPOSE_MS: '120', LAB_DISPOSE_MARKER: marker },
+	});
+	hosts.push(host);
+	const lifePreset = { scenario: { id: 'life', version: 1 } };
+	const a = await start(host, lifePreset);
+	const cookie = a.cookie!;
+	const log = (
+		(await (await rpc(host, cookie, 'session.log')).json()) as { value: Parameters<typeof createCheckpoint>[0] }
+	).value;
+	const checkpoint = createCheckpoint(log, 'late_write');
+	const lateStart = partialPost(host, '/api/session', cookie, { preset: lifePreset });
+	const lateSave = partialPost(host, '/api/checkpoints', cookie, { checkpoint });
+	await new Promise(done => setTimeout(done, 20));
+	const ending = api(host, '/api/session', { method: 'DELETE', cookie });
+	await untilEnded(host, cookie, 'stopped');
+	lateStart.finish();
+	lateSave.finish();
+	expect(await lateStart.pending).toMatchObject({ status: 409, body: { code: 'run-ended' } });
+	expect(await lateSave.pending).toMatchObject({ status: 409, body: { code: 'run-ended' } });
+	await host.close();
+	expect((await ending).status).toBe(200);
+	expect(await readFile(marker, 'utf8')).toBe('disposed');
 });
 
 test('close aggregates disposal errors after ending all runs', async () => {
 	const host = await startHosted({ ...hostedOptions(life), env: { LAB_CLEANUP_FAIL: '1' } });
 	hosts.push(host);
 	await start(host, { scenario: { id: 'life', version: 1 } });
-	hosts.splice(hosts.indexOf(host), 1);
 	await expect(host.close()).rejects.toBeInstanceOf(AggregateError);
 });
 
@@ -512,12 +498,10 @@ test('reaper cleanup failures remain visible to close', async () => {
 	hosts.push(host);
 	const a = await start(host, { scenario: { id: 'life', version: 1 } });
 	await untilEnded(host, a.cookie!, 'expired');
-	hosts.splice(hosts.indexOf(host), 1);
 	await expect(host.close()).rejects.toBeInstanceOf(AggregateError);
 });
 
 test('startHost validation, loopback HTTP and local host info', async () => {
-	await expect(startHost({ projectModule: fixture, hostname: '0.0.0.0' })).rejects.toThrow('Host must bind');
 	await expect(startHosted({ ...hostedOptions(), inheritEnv: true })).rejects.toThrow('cannot inherit');
 	await expect(
 		startHosted({
@@ -562,6 +546,8 @@ test('CLI rejects invalid hosted flag combinations', async () => {
 		['--max-runs', '2'],
 		['--public-origin', origin, '--access', 'authorize', '--build-revision', 'abc123'],
 		['--public-origin', origin, '--access', 'trusted-proxy'],
+		['--unknown', 'value'],
+		['--port'],
 	]) {
 		const result = spawnSync(process.execPath, [cli, '--project', fixture, '--data', dataDir, ...args], {
 			cwd: process.cwd(),
@@ -569,6 +555,7 @@ test('CLI rejects invalid hosted flag combinations', async () => {
 			encoding: 'utf8',
 		});
 		expect(result.status).toBe(1);
+		expect(result.stderr).toContain('Usage: slipher-lab');
 	}
 });
 

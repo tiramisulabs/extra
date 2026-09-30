@@ -14,9 +14,19 @@ const description = resolve(process.cwd(), 'test/fixtures/description.cjs');
 const cwdDir = resolve(process.cwd(), 'test/fixtures/cwd');
 const cwdFixture = resolve(cwdDir, 'project.cjs');
 const hosts: LabHost[] = [];
+const dataDirs: string[] = [];
 afterEach(async () => {
-	for (const host of hosts.splice(0)) await host.close();
+	try {
+		for (const host of hosts.splice(0)) await host.close();
+	} finally {
+		for (const dataDir of dataDirs.splice(0)) await rm(dataDir, { recursive: true, force: true });
+	}
 });
+async function tempDataDir(): Promise<string> {
+	const dataDir = await mkdtemp(resolve(tmpdir(), 'slipher-lab-host-'));
+	dataDirs.push(dataDir);
+	return dataDir;
+}
 async function post(url: string, path: string, value: unknown): Promise<Response> {
 	return fetch(`${url}${path}`, {
 		method: 'POST',
@@ -67,42 +77,32 @@ test('describe uses metadata without starting a session', async () => {
 });
 
 test('explicit cwd applies to describe, session start and replay', async () => {
-	const dataDir = await mkdtemp(resolve(tmpdir(), 'slipher-lab-cwd-'));
-	try {
-		const wrong = await startHost({ projectModule: cwdFixture });
-		hosts.push(wrong);
-		const failedDescribe = await fetch(`${wrong.url}/api/describe`);
-		expect(failedDescribe.status).toBe(500);
-		expect((await failedDescribe.json()) as { error: string }).toEqual({
-			error: 'No seyfert.config file found. Run the CLI from the bot directory or pass --cwd <dir>.',
-		});
-		const failedStart = await post(wrong.url, '/api/session', { preset: { scenario: { id: 'cwd', version: 1 } } });
-		expect(failedStart.status).toBe(500);
-		expect((await failedStart.json()) as { error: string }).toMatchObject({
-			error: expect.stringContaining(
-				'No seyfert.config file found. Run the CLI from the bot directory or pass --cwd <dir>.',
-			),
-		});
+	const missingConfig = 'No seyfert.config file found. Run the CLI from the bot directory or pass --cwd <dir>.';
+	const preset = { scenario: { id: 'cwd', version: 1 } };
+	const wrong = await startHost({ projectModule: cwdFixture });
+	hosts.push(wrong);
+	const failedDescribe = await fetch(`${wrong.url}/api/describe`);
+	expect(failedDescribe.status).toBe(500);
+	expect(await failedDescribe.json()).toEqual({ error: missingConfig });
+	const failedStart = await post(wrong.url, '/api/session', { preset });
+	expect(failedStart.status).toBe(500);
+	expect(await failedStart.json()).toMatchObject({ error: expect.stringContaining(missingConfig) });
 
-		const host = await startHost({ projectModule: cwdFixture, cwd: cwdDir, dataDir });
-		hosts.push(host);
-		expect(await fetch(`${host.url}/api/describe`).then(response => response.json())).toMatchObject({
-			name: 'cwd-fixture',
-		});
-		expect((await post(host.url, '/api/session', { preset: { scenario: { id: 'cwd', version: 1 } } })).status).toBe(
-			201,
-		);
-		const log = (await rpc(host.url, 1, 'session.log')).value as Parameters<typeof createCheckpoint>[0];
-		const checkpoint = createCheckpoint(log, 'cwd_replay', []);
-		expect((await post(host.url, '/api/checkpoints', { checkpoint })).status).toBe(201);
-		expect((await post(host.url, '/api/checkpoints/cwd_replay/replay', {})).status).toBe(200);
-	} finally {
-		await rm(dataDir, { recursive: true, force: true });
-	}
+	const host = await startHost({ projectModule: cwdFixture, cwd: cwdDir, dataDir: await tempDataDir() });
+	hosts.push(host);
+	expect(await fetch(`${host.url}/api/describe`).then(response => response.json())).toMatchObject({
+		name: 'cwd-fixture',
+	});
+	expect((await post(host.url, '/api/session', { preset })).status).toBe(201);
+	const log = (await rpc(host.url, 1, 'session.log')).value as Parameters<typeof createCheckpoint>[0];
+	const checkpoint = createCheckpoint(log, 'cwd_replay', []);
+	expect((await post(host.url, '/api/checkpoints', { checkpoint })).status).toBe(201);
+	expect((await post(host.url, '/api/checkpoints/cwd_replay/replay', {})).status).toBe(200);
 });
 
-test('CLI parses --cwd and passes it to the child', async () => {
-	const cli = spawn(process.execPath, ['lib/host/cli.js', '--project', cwdFixture, '--cwd', cwdDir], {
+test('CLI parses --cwd and dash-prefixed --node-arg values for the child', async () => {
+	const args = ['--project', cwdFixture, '--cwd', cwdDir, '--node-arg', '--no-warnings'];
+	const cli = spawn(process.execPath, ['lib/host/cli.js', ...args], {
 		cwd: process.cwd(),
 		stdio: ['ignore', 'pipe', 'pipe'],
 	});
@@ -234,24 +234,20 @@ test('session replacement stops after failed cleanup', async () => {
 });
 
 test('replay stops the visual session and aborts when cleanup fails', async () => {
-	const dataDir = await mkdtemp(resolve(tmpdir(), 'slipher-lab-replay-'));
-	try {
-		const host = await startHost({ projectModule: life, dataDir, env: { LAB_CLEANUP_FAIL: '1' } });
-		hosts.push(host);
-		const preset = { scenario: { id: 'life', version: 1 } };
-		expect((await post(host.url, '/api/session', { preset })).status).toBe(201);
-		const log = (await rpc(host.url, 1, 'session.log')).value as Parameters<typeof createCheckpoint>[0];
-		const checkpoint = createCheckpoint(log, 'cleanup_failure', [{ path: 'world.guilds', equals: [] }]);
-		expect((await post(host.url, '/api/checkpoints', { checkpoint })).status).toBe(201);
-		const replay = await post(host.url, '/api/checkpoints/cleanup_failure/replay', {});
-		expect(replay.status).toBe(500);
-		expect(((await replay.json()) as { error: string }).error).toContain('external cleanup may be pending');
-		expect(
-			(await post(host.url, '/api/rpc', { version: PROTOCOL_VERSION, id: 2, type: 'session.inspect' })).status,
-		).toBe(409);
-	} finally {
-		await rm(dataDir, { recursive: true, force: true });
-	}
+	const dataDir = await tempDataDir();
+	const host = await startHost({ projectModule: life, dataDir, env: { LAB_CLEANUP_FAIL: '1' } });
+	hosts.push(host);
+	const preset = { scenario: { id: 'life', version: 1 } };
+	expect((await post(host.url, '/api/session', { preset })).status).toBe(201);
+	const log = (await rpc(host.url, 1, 'session.log')).value as Parameters<typeof createCheckpoint>[0];
+	const checkpoint = createCheckpoint(log, 'cleanup_failure', [{ path: 'world.guilds', equals: [] }]);
+	expect((await post(host.url, '/api/checkpoints', { checkpoint })).status).toBe(201);
+	const replay = await post(host.url, '/api/checkpoints/cleanup_failure/replay', {});
+	expect(replay.status).toBe(500);
+	expect(((await replay.json()) as { error: string }).error).toContain('external cleanup may be pending');
+	expect((await post(host.url, '/api/rpc', { version: PROTOCOL_VERSION, id: 2, type: 'session.inspect' })).status).toBe(
+		409,
+	);
 });
 
 test('close terminates the active child', async () => {
@@ -261,7 +257,6 @@ test('close terminates the active child', async () => {
 	const identity = await rpc(host.url, 1, 'session.inspectProject', { name: 'identity' });
 	const pid = (identity.value as { pid: number }).pid;
 	await host.close();
-	hosts.splice(hosts.indexOf(host), 1);
 	expect(() => process.kill(pid, 0)).toThrow();
 });
 
@@ -282,66 +277,60 @@ test('compiled root and protocol do not load process, HTTP or Seyfert modules', 
 });
 
 test('checkpoint HTTP save, load, replay, export and strict load errors', async () => {
-	const dataDir = await mkdtemp(resolve(tmpdir(), 'slipher-lab-checkpoints-'));
-	try {
-		const host = await startHost({ projectModule: fixture, dataDir });
-		hosts.push(host);
-		expect(await fetch(`${host.url}/api/checkpoints`).then(response => response.json())).toEqual({ names: [] });
-		expect((await post(host.url, '/api/session', { preset: { scenario: { id: 'flow', version: 1 } } })).status).toBe(
-			201,
-		);
-		await rpc(host.url, 1, 'session.act', {
-			kind: 'user',
-			actor: 'alice',
-			verb: 'slash',
-			command: 'support',
-			subcommand: 'open',
-		});
-		const log = (await rpc(host.url, 2, 'session.log')).value as Parameters<typeof createCheckpoint>[0];
-		const checkpoint = createCheckpoint(log, 'http_flow', [
-			{ view: { actor: 'alice', channel: 'channel' }, contains: 'support opened' },
-		]);
-		expect((await post(host.url, '/api/checkpoints', { checkpoint })).status).toBe(201);
-		expect(await fetch(`${host.url}/api/checkpoints`).then(response => response.json())).toEqual({
-			names: ['http_flow'],
-		});
-		expect(await fetch(`${host.url}/api/checkpoints/http_flow`).then(response => response.json())).toMatchObject({
-			name: 'http_flow',
-			version: 1,
-		});
-		const events = await fetch(`${host.url}/api/events`);
-		const reader = events.body?.getReader();
-		expect((await post(host.url, '/api/checkpoints/http_flow/replay', {})).status).toBe(200);
-		let replayEvents = '';
-		while (!replayEvents.includes('event: session-stopped'))
-			replayEvents += new TextDecoder().decode((await reader?.read())?.value);
-		expect(replayEvents).toContain('event: session-stopped');
-		expect(replayEvents).toContain('"reason":"replay"');
-		await reader?.cancel();
-		expect(
-			(await post(host.url, '/api/rpc', { version: PROTOCOL_VERSION, id: 3, type: 'session.inspect' })).status,
-		).toBe(409);
-		const exported = (await fetch(`${host.url}/api/checkpoints/http_flow/export?format=vitest`).then(response =>
-			response.json(),
-		)) as { code: string };
-		expect(exported.code).toContain("import { replay } from '@slipher/lab/runtime'");
-		expect((await post(host.url, '/api/checkpoints', { checkpoint: { ...checkpoint, version: 2 } })).status).toBe(400);
-		expect(
-			(await post(host.url, '/api/checkpoints', { checkpoint: { ...checkpoint, name: '../escape' } })).status,
-		).toBe(400);
-		expect([400, 404]).toContain((await fetch(`${host.url}/api/checkpoints/%2e%2e%2fescape`)).status);
-		await writeFile(resolve(dataDir, 'bad.json'), JSON.stringify({ ...checkpoint, version: 9 }));
-		expect((await fetch(`${host.url}/api/checkpoints/bad`)).status).toBe(400);
-		expect(await readFile(resolve(dataDir, 'http_flow.json'), 'utf8')).toContain('"protocolVersion": 1');
-		const outside = resolve(dataDir, 'outside');
-		await writeFile(outside, 'untouched');
-		await symlink(outside, resolve(dataDir, 'linked.json'));
-		expect((await post(host.url, '/api/checkpoints', { checkpoint: { ...checkpoint, name: 'linked' } })).status).toBe(
-			400,
-		);
-		expect((await fetch(`${host.url}/api/checkpoints/linked`)).status).toBe(400);
-		expect(await readFile(outside, 'utf8')).toBe('untouched');
-	} finally {
-		await rm(dataDir, { recursive: true, force: true });
-	}
+	const dataDir = await tempDataDir();
+	const host = await startHost({ projectModule: fixture, dataDir });
+	hosts.push(host);
+	expect(await fetch(`${host.url}/api/checkpoints`).then(response => response.json())).toEqual({ names: [] });
+	expect((await post(host.url, '/api/session', { preset: { scenario: { id: 'flow', version: 1 } } })).status).toBe(201);
+	await rpc(host.url, 1, 'session.act', {
+		kind: 'user',
+		actor: 'alice',
+		verb: 'slash',
+		command: 'support',
+		subcommand: 'open',
+	});
+	const log = (await rpc(host.url, 2, 'session.log')).value as Parameters<typeof createCheckpoint>[0];
+	const checkpoint = createCheckpoint(log, 'http_flow', [
+		{ view: { actor: 'alice', channel: 'channel' }, contains: 'support opened' },
+	]);
+	expect((await post(host.url, '/api/checkpoints', { checkpoint })).status).toBe(201);
+	expect(await fetch(`${host.url}/api/checkpoints`).then(response => response.json())).toEqual({
+		names: ['http_flow'],
+	});
+	expect(await fetch(`${host.url}/api/checkpoints/http_flow`).then(response => response.json())).toMatchObject({
+		name: 'http_flow',
+		version: 1,
+	});
+	const events = await fetch(`${host.url}/api/events`);
+	const reader = events.body?.getReader();
+	expect((await post(host.url, '/api/checkpoints/http_flow/replay', {})).status).toBe(200);
+	let replayEvents = '';
+	while (!replayEvents.includes('event: session-stopped'))
+		replayEvents += new TextDecoder().decode((await reader?.read())?.value);
+	expect(replayEvents).toContain('"reason":"replay"');
+	await reader?.cancel();
+	expect((await post(host.url, '/api/rpc', { version: PROTOCOL_VERSION, id: 3, type: 'session.inspect' })).status).toBe(
+		409,
+	);
+	const exported = (await fetch(`${host.url}/api/checkpoints/http_flow/export?format=vitest`).then(response =>
+		response.json(),
+	)) as { code: string };
+	expect(exported.code).toContain("import { replay } from '@slipher/lab/runtime'");
+	expect((await post(host.url, '/api/checkpoints', { checkpoint: { ...checkpoint, version: 2 } })).status).toBe(400);
+	expect((await post(host.url, '/api/checkpoints', { checkpoint: { ...checkpoint, name: '../escape' } })).status).toBe(
+		400,
+	);
+	expect((await fetch(`${host.url}/api/checkpoints/%2e%2e%2fescape`)).status).toBe(400);
+	expect((await fetch(`${host.url}/api/checkpoints/missing`)).status).toBe(404);
+	await writeFile(resolve(dataDir, 'bad.json'), JSON.stringify({ ...checkpoint, version: 9 }));
+	expect((await fetch(`${host.url}/api/checkpoints/bad`)).status).toBe(400);
+	expect(await readFile(resolve(dataDir, 'http_flow.json'), 'utf8')).toContain('"protocolVersion": 1');
+	const outside = resolve(dataDir, 'outside');
+	await writeFile(outside, 'untouched');
+	await symlink(outside, resolve(dataDir, 'linked.json'));
+	expect((await post(host.url, '/api/checkpoints', { checkpoint: { ...checkpoint, name: 'linked' } })).status).toBe(
+		400,
+	);
+	expect((await fetch(`${host.url}/api/checkpoints/linked`)).status).toBe(400);
+	expect(await readFile(outside, 'utf8')).toBe('untouched');
 });
