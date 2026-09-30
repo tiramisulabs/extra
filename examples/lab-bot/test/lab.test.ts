@@ -8,10 +8,7 @@ const preset = (botCanManageRoles = true) => ({
 	params: { botCanManageRoles },
 });
 
-async function withSession(
-	botCanManageRoles: boolean,
-	run: (session: Session) => Promise<void>,
-) {
+async function withSession(botCanManageRoles: boolean, run: (session: Session) => Promise<void>) {
 	const session = createSession(project, preset(botCanManageRoles));
 	await session.start();
 	try {
