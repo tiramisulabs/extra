@@ -1,5 +1,7 @@
 # @slipher/lab
 
+> **Built for agents first.** The lab is designed so coding agents can drive a bot, check what each actor sees, and turn a run into a test. People can use it too, especially through the UI, but it approximates Discord and is not yet a polished or fully reliable tool for manual QA.
+
 Run Seyfert bots against scripted Discord scenarios built on `@slipher/testing`. A scenario describes guilds, roles, channels, members and actors; a session runs your real handlers against it, so you can drive it from tests or from the browser UI in `@slipher/lab-ui`.
 
 The root and `/protocol` entrypoints are safe to load without starting a bot or importing Node process APIs.

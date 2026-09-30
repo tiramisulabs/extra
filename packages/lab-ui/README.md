@@ -1,5 +1,7 @@
 # @slipher/lab-ui
 
+> **Built for agents first.** The UI helps inspect what an agent-driven session did. It approximates Discord and is not yet a polished or fully reliable tool for manual testing.
+
 Prebuilt browser interface for `@slipher/lab`. It renders what each simulated actor sees in a Discord-like client
 and groups the lab tooling (scenario, log, REST, pending interactions, world, project inspectors, checkpoints) in a
 separate panel.
