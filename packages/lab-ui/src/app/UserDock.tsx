@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Actor } from '../bridge';
 import { ChevronIcon } from '../icons';
 import { Avatar } from '../render/Avatar';
@@ -8,16 +8,31 @@ export function UserDock({
 	viewer,
 	actors,
 	onViewAs,
+	navOpen = false,
 }: {
 	viewer: Actor;
 	actors: Actor[];
 	onViewAs: (key: string) => void;
+	navOpen?: boolean;
 }) {
 	const [open, setOpen] = useState(false);
+	const trigger = useRef<HTMLButtonElement>(null);
+	useEffect(() => {
+		if (!navOpen) setOpen(false);
+	}, [navOpen]);
 	return (
-		<div className="user-dock">
+		<div
+			className="user-dock"
+			onKeyDown={event => {
+				if (event.key !== 'Escape' || !open) return;
+				event.preventDefault();
+				event.stopPropagation();
+				setOpen(false);
+				trigger.current?.focus();
+			}}>
 			<button
 				type="button"
+				ref={trigger}
 				className="viewer-button"
 				aria-expanded={open}
 				aria-haspopup="listbox"
@@ -41,6 +56,7 @@ export function UserDock({
 								onClick={() => {
 									onViewAs(item.key);
 									setOpen(false);
+									trigger.current?.focus();
 								}}>
 								<Avatar name={item.name} user={{ id: item.userId }} size={24} />
 								<span>{item.name}</span>

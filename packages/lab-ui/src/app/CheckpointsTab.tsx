@@ -3,6 +3,7 @@ import type { CheckpointClient, Expectation, JsonValue, LabClient, LabSnapshot }
 import { hasCheckpoints, isRevisionMismatch, sessionActors } from '../bridge';
 import { errorText, shortRevision } from '../format';
 import { CloseIcon } from '../icons';
+import { usePendingAction } from '../usePendingAction';
 
 /** The outcome of the last checkpoint operation; a replay passes or fails, anything else is neutral. */
 export interface CheckpointStatus {
@@ -99,14 +100,18 @@ function ExpectationsSection({
 		// The inspect snapshot arrives as JSON; its interface only lacks the index signature JsonValue asks for.
 		const inspect = snapshot.rawInspect as JsonValue | undefined;
 		const base = source === INSPECT_SOURCE ? inspect : snapshot.projections?.[source];
-		const equals = valueAt(base, path);
+		const selectedPath = path.trim();
+		if (!selectedPath) return;
+		const equals = valueAt(base, selectedPath);
 		if (equals === undefined) {
 			report(`No value at "${path}" in ${source}.`);
 			return;
 		}
 		setArrival([
 			...arrival,
-			source === INSPECT_SOURCE ? { path, equals } : { project: { name: source, path }, equals },
+			source === INSPECT_SOURCE
+				? { path: selectedPath, equals }
+				: { project: { name: source, path: selectedPath }, equals },
 		]);
 	}
 	return (
@@ -117,7 +122,10 @@ function ExpectationsSection({
 					{arrival.map((item, index) => (
 						<li key={`${index}-${JSON.stringify(item)}`}>
 							<span>{describeExpectation(item, snapshot)}</span>
-							<code>{JSON.stringify(item)}</code>
+							<details className="expectation-detail">
+								<summary>Expectation JSON</summary>
+								<code>{JSON.stringify(item, null, 2)}</code>
+							</details>
 							<button
 								type="button"
 								className="icon-button"
@@ -133,7 +141,7 @@ function ExpectationsSection({
 			)}
 			<div className="inline-form">
 				<label className="field" htmlFor="absent-text">
-					<span className="field-label">Hidden text</span>
+					<span className="field-label">Text expected to be absent</span>
 					<input id="absent-text" value={absentText} onChange={event => setAbsentText(event.target.value)} />
 				</label>
 				<button
@@ -168,7 +176,7 @@ function ExpectationsSection({
 						onChange={event => setPath(event.target.value)}
 					/>
 				</label>
-				<button type="button" className="button small lab" onClick={pinValue}>
+				<button type="button" className="button small lab" disabled={!path.trim()} onClick={pinValue}>
 					Pin value
 				</button>
 			</div>
@@ -189,6 +197,8 @@ function CheckpointSection({
 	draft: CheckpointDraft;
 	report: (reason: unknown) => void;
 }) {
+	const { pending, run } = usePendingAction();
+	const [operation, setOperation] = useState('');
 	const [name, setName] = useState('');
 	const [saved, setSaved] = useState('');
 	const [names, setNames] = useState<string[]>([]);
@@ -200,6 +210,17 @@ function CheckpointSection({
 	}, [client, report]);
 	// Replay and export act on the stored checkpoint, so they wait until the name on screen is the one saved.
 	const ready = saved === name && names.includes(name);
+
+	function perform(label: string, action: () => Promise<void>) {
+		void run(async () => {
+			setOperation(label);
+			try {
+				await action();
+			} finally {
+				setOperation('');
+			}
+		});
+	}
 
 	async function save() {
 		try {
@@ -253,13 +274,20 @@ function CheckpointSection({
 	}
 
 	return (
-		<section className="lab-section">
+		<section className="lab-section" aria-busy={pending}>
 			<h3>Checkpoint</h3>
+			{pending && (
+				<p className="checkpoint-progress" role="status">
+					<span className="action-spinner" aria-hidden="true" />
+					{operation}…
+				</p>
+			)}
 			<div className="inline-form">
 				<label className="field" htmlFor="checkpoint-name">
 					<span className="field-label">Name</span>
 					<input
 						id="checkpoint-name"
+						disabled={pending}
 						value={name}
 						placeholder="my_checkpoint"
 						onChange={event => setName(event.target.value)}
@@ -268,8 +296,8 @@ function CheckpointSection({
 				<button
 					type="button"
 					className="button small primary"
-					disabled={!name || !snapshot.log}
-					onClick={() => void save()}>
+					disabled={pending || !name || !snapshot.log}
+					onClick={() => perform('Saving checkpoint', save)}>
 					Save
 				</button>
 			</div>
@@ -277,8 +305,12 @@ function CheckpointSection({
 				<span className="field-label">Saved</span>
 				<select
 					id="checkpoint-list"
+					disabled={pending}
 					value={names.includes(name) ? name : ''}
-					onChange={event => void load(event.target.value)}>
+					onChange={event => {
+						const value = event.target.value;
+						perform('Loading checkpoint', () => load(value));
+					}}>
 					<option value="">{names.length ? 'Choose…' : 'None'}</option>
 					{names.map(item => (
 						<option key={item} value={item}>
@@ -292,16 +324,24 @@ function CheckpointSection({
 				<button
 					type="button"
 					className="button small"
-					disabled={!ready}
+					disabled={pending || !ready}
 					title="Replays in a new session; the current one ends"
-					onClick={() => void replay()}>
+					onClick={() => perform('Replaying checkpoint', () => replay())}>
 					Replay
 				</button>
-				<select aria-label="Test format" value={format} onChange={event => setFormat(event.target.value as TestFormat)}>
+				<select
+					disabled={pending}
+					aria-label="Test format"
+					value={format}
+					onChange={event => setFormat(event.target.value as TestFormat)}>
 					<option value="vitest">Vitest</option>
 					<option value="node">node:test</option>
 				</select>
-				<button type="button" className="button small" disabled={!ready} onClick={() => void exportTest()}>
+				<button
+					type="button"
+					className="button small"
+					disabled={pending || !ready}
+					onClick={() => perform('Exporting test', exportTest)}>
 					Export test
 				</button>
 			</div>

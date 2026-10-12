@@ -8,6 +8,7 @@ import type {
 	InspectorSnapshot,
 	JsonValue,
 	LabAction,
+	ModalAttachment,
 	ProjectDescription,
 	RunEndReason,
 	SessionDescription,
@@ -31,34 +32,7 @@ import type {
 	VisibleMessage,
 } from './bridge';
 import { isRevisionMismatch, presetParams, sessionActors, sessionChannels } from './bridge';
-import { errorText, shortRevision } from './format';
-import { messageText } from './messages';
-
-/**
- * A click or select recorded against a message ID only replays in the session that produced it, so the UI's
- * exact reference becomes a locator the runtime can find again: the channel, the component and the message text.
- */
-export function semanticAction(action: LabAction, snapshot?: LabSnapshot): LabAction {
-	if (action.kind !== 'user' || (action.verb !== 'click' && action.verb !== 'select') || !action.source.messageRef)
-		return action;
-	const channelId = snapshot?.session?.refs[action.source.channel] ?? action.source.channel;
-	// The runtime owns the access rule; a channel the actor cannot view must fail there, not be rewritten here.
-	if (
-		!sessionChannels(snapshot?.session)
-			.find(item => item.id === channelId)
-			?.visibleTo.includes(action.actor)
-	)
-		return action;
-	const source = snapshot?.conversations[`${action.actor}:${channelId}`]?.messages.find(
-		item => item.id === action.source.messageRef,
-	);
-	if (!source) throw new Error(`Visible source message ${action.source.messageRef} is unavailable`);
-	const contains = messageText(source.payload);
-	return {
-		...action,
-		source: { channel: action.source.channel, customId: action.customId, ...(contains ? { contains } : {}) },
-	};
-}
+import { errorText, MAX_UPLOAD_BYTES, maxUploadLabel, shortRevision } from './format';
 
 class HostError extends Error {
 	constructor(
@@ -106,12 +80,24 @@ function hostError(response: Response, body: unknown): HostError {
 
 const detail = (value: unknown) => (typeof value === 'string' ? value : JSON.stringify(value));
 
+function actionLabel(action: LabAction): string {
+	if (action.kind === 'user') {
+		const target =
+			action.verb === 'slash'
+				? `/${[action.command, action.group, action.subcommand].filter(Boolean).join(' ')}`
+				: action.customId;
+		return `${action.actor} · ${action.verb} ${target}`;
+	}
+	if (action.kind === 'local') return `${action.actor} · ${action.op}`;
+	return `${action.op} · ${action.member} · ${action.role}`;
+}
+
 function inspectorEntries(log: SessionLog, inspect: InspectorSnapshot): LabSnapshot['inspector'] {
 	return {
 		actions: log.entries.map(({ seq, action, outcome }) => ({
 			id: `action-${seq}`,
 			kind: action.kind,
-			label: 'verb' in action ? action.verb : action.op,
+			label: actionLabel(action),
 			detail: detail(outcome.error ?? outcome.summary),
 			failed: !outcome.ok,
 		})),
@@ -539,7 +525,7 @@ export class HostClient implements LabClient, CheckpointClient {
 	}
 	async act(action: LabAction): Promise<void> {
 		try {
-			const outcome = await this.rpc<ActionOutcome>('session.act', semanticAction(action, this.snapshot));
+			const outcome = await this.rpc<ActionOutcome>('session.act', action);
 			if (!outcome.ok) throw new Error(outcome.error ?? 'Action failed');
 			if (this.snapshot) this.snapshot = { ...this.snapshot, error: undefined };
 			await this.refresh();
@@ -561,6 +547,23 @@ export class HostClient implements LabClient, CheckpointClient {
 		const checkpoint = createCheckpoint(await this.rpc<SessionLog>('session.log'), name, arrival);
 		await this.post('/api/checkpoints', { checkpoint });
 		return checkpoint;
+	}
+	async uploadFiles(files: File[]): Promise<ModalAttachment[]> {
+		const attachments: ModalAttachment[] = [];
+		for (const file of files) {
+			if (file.size > MAX_UPLOAD_BYTES) throw new Error(`${file.name} exceeds ${maxUploadLabel}`);
+			attachments.push(
+				await this.json<ModalAttachment>('/api/files', {
+					method: 'POST',
+					headers: {
+						'x-file-name': encodeURIComponent(file.name),
+						'content-type': file.type || 'application/octet-stream',
+					},
+					body: file,
+				}),
+			);
+		}
+		return attachments;
 	}
 	async loadCheckpoint(name: string): Promise<Checkpoint> {
 		return this.json<Checkpoint>(`/api/checkpoints/${encodeURIComponent(name)}`);

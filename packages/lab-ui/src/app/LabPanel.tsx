@@ -34,6 +34,28 @@ function Entries({ items, empty }: { items: InspectorEntry[]; empty: string }) {
 	);
 }
 
+function RestTab({ items }: { items: InspectorEntry[] }) {
+	const [failedOnly, setFailedOnly] = useState(false);
+	const failures = items.filter(item => item.failed);
+	return (
+		<>
+			<div className="rest-filter">
+				<label>
+					<input type="checkbox" checked={failedOnly} onChange={event => setFailedOnly(event.target.checked)} /> Failed
+					only
+				</label>
+				<span>
+					{failures.length} failed / {items.length} calls
+				</span>
+			</div>
+			<Entries
+				items={failedOnly ? failures : items}
+				empty={failedOnly ? 'No failed REST calls.' : 'No REST calls yet.'}
+			/>
+		</>
+	);
+}
+
 function Json({ value }: { value: JsonValue | undefined }) {
 	return <pre className="json-view">{value === undefined ? '—' : JSON.stringify(value, null, 2)}</pre>;
 }
@@ -196,9 +218,23 @@ export function LabPanel({
 						role="tab"
 						id={`lab-tab-${id}`}
 						aria-selected={tab === id}
+						tabIndex={tab === id ? 0 : -1}
 						aria-controls="lab-tabpanel"
 						className={tab === id ? 'active' : ''}
-						onClick={() => onTab(id)}>
+						onClick={() => onTab(id)}
+						onKeyDown={event => {
+							const index = LAB_TABS.findIndex(([key]) => key === id);
+							let next: number;
+							if (event.key === 'ArrowRight') next = (index + 1) % LAB_TABS.length;
+							else if (event.key === 'ArrowLeft') next = (index + LAB_TABS.length - 1) % LAB_TABS.length;
+							else if (event.key === 'Home') next = 0;
+							else if (event.key === 'End') next = LAB_TABS.length - 1;
+							else return;
+							event.preventDefault();
+							const key = LAB_TABS[next][0];
+							onTab(key);
+							document.getElementById(`lab-tab-${key}`)?.focus();
+						}}>
 						{label}
 						{Boolean(counts[id]) && <span className={`tab-count ${id === 'rest' ? 'danger' : ''}`}>{counts[id]}</span>}
 					</button>
@@ -207,7 +243,7 @@ export function LabPanel({
 			<div className="lab-body" role="tabpanel" id="lab-tabpanel" aria-labelledby={`lab-tab-${tab}`}>
 				{tab === 'scenario' && <ScenarioTab snapshot={snapshot} launcher={launcher} />}
 				{tab === 'log' && <Entries items={inspector.actions} empty="No actions yet." />}
-				{tab === 'rest' && <Entries items={inspector.rest} empty="No REST calls yet." />}
+				{tab === 'rest' && <RestTab items={inspector.rest} />}
 				{tab === 'pending' && <PendingTab snapshot={snapshot} client={client} actor={actor} />}
 				{tab === 'world' && <WorldTab world={snapshot.rawInspect?.world} />}
 				{tab === 'diagnostics' && (

@@ -5,8 +5,11 @@ import { EmojiLabel } from './Markdown';
 
 export type SelectOption = NonNullable<ComponentPayload['options']>[number];
 
+/** A required count, or a range, written the way Discord writes a select's limits. */
+export const countSpan = (min: number, max: number) => (min === max ? String(min) : `${min}–${max}`);
+
 /** How many values a select still needs, as Discord words it. */
-export const selectionHint = (min: number, max: number) => `Select ${min === max ? min : `${min}–${max}`}`;
+export const selectionHint = (min: number, max: number) => `Select ${countSpan(min, max)}`;
 
 /**
  * Discord's select menu: a closed trigger that summarises the choice and a listbox that opens below it.
@@ -21,8 +24,11 @@ export function SelectMenu({
 	max,
 	placeholder,
 	disabled = false,
+	busy = false,
 	onConfirm,
 	labelledBy,
+	invalid,
+	describedBy,
 }: {
 	id: string;
 	options: SelectOption[];
@@ -32,16 +38,22 @@ export function SelectMenu({
 	max: number;
 	placeholder: string;
 	disabled?: boolean;
+	busy?: boolean;
 	/** Messages send the interaction here; modals omit it and submit with the form. */
 	onConfirm?: (values: string[]) => void;
 	labelledBy?: string;
+	invalid?: boolean;
+	describedBy?: string;
 }) {
 	const [open, setOpen] = useState(false);
 	const root = useRef<HTMLDivElement>(null);
 	const trigger = useRef<HTMLButtonElement>(null);
 	const multiple = max > 1;
 	useEffect(() => {
-		if (!open) return;
+		if (disabled) setOpen(false);
+	}, [disabled]);
+	useEffect(() => {
+		if (!open || disabled) return;
 		root.current?.querySelector<HTMLElement>('[role="option"]:not(:disabled)')?.focus();
 		const onPointer = (event: MouseEvent) => {
 			if (!root.current?.contains(event.target as Node)) setOpen(false);
@@ -59,7 +71,7 @@ export function SelectMenu({
 			document.removeEventListener('mousedown', onPointer);
 			document.removeEventListener('keydown', onKey, true);
 		};
-	}, [open]);
+	}, [open, disabled]);
 	const valid = selected.length >= min && selected.length <= max;
 	const chosen = options.filter(option => selected.includes(option.value));
 	function choose(value: string) {
@@ -86,11 +98,14 @@ export function SelectMenu({
 			<button
 				ref={trigger}
 				id={id}
+				data-custom-id={id}
 				type="button"
 				className="select-trigger"
 				disabled={disabled}
+				aria-invalid={invalid || undefined}
+				aria-describedby={describedBy}
 				aria-haspopup="listbox"
-				aria-expanded={open}
+				aria-expanded={open && !disabled}
 				aria-controls={listId}
 				aria-labelledby={labelledBy ? `${labelledBy} ${id}` : undefined}
 				onClick={() => setOpen(!open)}>
@@ -104,9 +119,9 @@ export function SelectMenu({
 							))
 						: placeholder}
 				</span>
-				<ChevronIcon size={18} />
+				{busy ? <span className="action-spinner" aria-hidden="true" /> : <ChevronIcon size={18} />}
 			</button>
-			{open && (
+			{open && !disabled && (
 				<div className="select-popover">
 					<ul id={listId} role="listbox" aria-multiselectable={multiple} aria-label={placeholder} onKeyDown={moveFocus}>
 						{options.map(option => {
@@ -149,6 +164,7 @@ export function SelectMenu({
 									disabled={disabled || !valid}
 									onClick={() => {
 										setOpen(false);
+										trigger.current?.focus();
 										onConfirm(selected);
 									}}>
 									Confirm

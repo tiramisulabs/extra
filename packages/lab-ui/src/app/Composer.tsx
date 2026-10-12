@@ -1,5 +1,5 @@
 import { type FormEvent, type KeyboardEvent, useLayoutEffect, useRef, useState } from 'react';
-import type { CommandOption, CommandSchema, Guild, JsonValue } from '../bridge';
+import { type CommandOption, type CommandSchema, channelsOfTypes, type Guild, type JsonValue } from '../bridge';
 import { CloseIcon, SendIcon, SlashIcon } from '../icons';
 
 /** Discord application command option types. */
@@ -81,7 +81,9 @@ function optionChoices(option: CommandOption, guild: Guild | undefined) {
 	if (option.type === OptionType.Role) return roles;
 	if (option.type === OptionType.Mentionable) return [...members, ...roles];
 	if (option.type === OptionType.Channel)
-		return guild?.channels.map(channel => ({ label: `#${channel.name}`, value: channel.id })) ?? [];
+		return channelsOfTypes(guild?.channels ?? [], 'channel_types' in option ? option.channel_types : undefined).map(
+			channel => ({ label: `#${channel.name}`, value: channel.id }),
+		);
 	return undefined;
 }
 
@@ -100,12 +102,14 @@ function OptionPill({
 	value,
 	onChange,
 	guild,
+	disabled,
 }: {
 	option: CommandOption;
 	value: JsonValue | undefined;
 	onChange: (value: JsonValue | undefined) => void;
 	/** The open channel's guild, whose members, roles and channels are the entity options' choices. */
 	guild?: Guild;
+	disabled: boolean;
 }) {
 	const id = `option-${option.name}`;
 	const choices = optionChoices(option, guild);
@@ -121,6 +125,7 @@ function OptionPill({
 			{choices ? (
 				<select
 					id={id}
+					disabled={disabled}
 					required={option.required}
 					value={value === undefined ? '' : String(value)}
 					onChange={event => onChange(optionValue(option, event.target.value))}>
@@ -134,6 +139,7 @@ function OptionPill({
 			) : (
 				<input
 					id={id}
+					disabled={disabled}
 					type={isNumeric(option) ? 'number' : 'text'}
 					step={option.type === OptionType.Number ? 'any' : undefined}
 					required={option.required}
@@ -153,13 +159,20 @@ export function Composer({
 	guild,
 	canView,
 	onRun,
+	onError,
 }: {
 	commands: CommandSchema[];
 	projectName: string;
 	channelName: string;
 	guild?: Guild;
 	canView: boolean;
-	onRun: (entry: { command: string; group?: string; subcommand?: string; options: Record<string, JsonValue> }) => void;
+	onRun: (entry: {
+		command: string;
+		group?: string;
+		subcommand?: string;
+		options: Record<string, JsonValue>;
+	}) => void | Promise<void>;
+	onError: (reason: unknown) => void;
 }) {
 	const entries = commandEntries(commands);
 	const [query, setQuery] = useState('');
@@ -168,6 +181,9 @@ export function Composer({
 	const [selectedKey, setSelectedKey] = useState<string>();
 	const [values, setValues] = useState<Record<string, JsonValue | undefined>>({});
 	const input = useRef<HTMLInputElement>(null);
+	const form = useRef<HTMLFormElement>(null);
+	const sending = useRef(false);
+	const [submitting, setSubmitting] = useState(false);
 	/** Set by `clear`: the command input returns once it replaces the cleared draft. */
 	const refocus = useRef(false);
 	const search = query.replace(/^\//, '').trim().toLowerCase();
@@ -180,6 +196,14 @@ export function Composer({
 		input.current?.focus();
 	}, [current]);
 
+	useLayoutEffect(() => {
+		if (!selectedKey) return;
+		const target =
+			form.current?.querySelector<HTMLElement>('.command-draft input, .command-draft select') ??
+			form.current?.querySelector<HTMLButtonElement>('.send-button');
+		target?.focus();
+	}, [selectedKey]);
+
 	function choose(entry: CommandEntry) {
 		setSelectedKey(entry.key);
 		setValues({});
@@ -190,10 +214,12 @@ export function Composer({
 		setSelectedKey(undefined);
 		setValues({});
 		setQuery('');
+		setPicking(false);
 		refocus.current = true;
 	}
-	function submit(event: FormEvent<HTMLFormElement>) {
+	async function submit(event: FormEvent<HTMLFormElement>) {
 		event.preventDefault();
+		if (sending.current) return;
 		if (!current) {
 			const first = matches[highlight] ?? matches[0];
 			if (first) choose(first);
@@ -201,11 +227,25 @@ export function Composer({
 		}
 		const options: Record<string, JsonValue> = {};
 		for (const [name, value] of Object.entries(values)) if (value !== undefined) options[name] = value;
-		onRun({ command: current.command, group: current.group, subcommand: current.subcommand, options });
-		clear();
+		sending.current = true;
+		setSubmitting(true);
+		try {
+			await onRun({ command: current.command, group: current.group, subcommand: current.subcommand, options });
+			clear();
+		} catch (reason) {
+			onError(reason);
+		} finally {
+			sending.current = false;
+			setSubmitting(false);
+		}
 	}
 	function navigate(event: KeyboardEvent<HTMLInputElement>) {
 		if (event.key === 'Escape') setPicking(false);
+		if (event.key === 'ArrowDown' && !picking) {
+			event.preventDefault();
+			setPicking(true);
+			return;
+		}
 		if (!picking || !matches.length) return;
 		if (event.key === 'ArrowDown') {
 			event.preventDefault();
@@ -225,7 +265,7 @@ export function Composer({
 		);
 	const missing = current?.options.filter(option => option.required && values[option.name] === undefined) ?? [];
 	return (
-		<form className="composer" onSubmit={submit}>
+		<form className="composer" onSubmit={submit} ref={form} aria-busy={submitting}>
 			{picking && !current && (
 				<div className="command-picker" role="listbox" id="command-picker" aria-label="Commands">
 					<div className="picker-heading">{projectName}</div>
@@ -236,6 +276,7 @@ export function Composer({
 								role="option"
 								aria-selected={index === highlight}
 								key={entry.key}
+								id={`command-${index}`}
 								className={index === highlight ? 'highlight' : ''}
 								onMouseEnter={() => setHighlight(index)}
 								onMouseDown={event => event.preventDefault()}
@@ -255,7 +296,7 @@ export function Composer({
 					<div className="command-draft">
 						<span className="command-chip">
 							/{current.key}
-							<button type="button" aria-label="Clear command" onClick={clear}>
+							<button type="button" aria-label="Clear command" disabled={submitting} onClick={clear}>
 								<CloseIcon size={12} />
 							</button>
 						</span>
@@ -265,6 +306,7 @@ export function Composer({
 								option={option}
 								value={values[option.name]}
 								guild={guild}
+								disabled={submitting}
 								onChange={value => setValues(existing => ({ ...existing, [option.name]: value }))}
 							/>
 						))}
@@ -273,11 +315,13 @@ export function Composer({
 					<input
 						ref={input}
 						aria-label="Command"
+						role="combobox"
+						aria-autocomplete="list"
+						aria-activedescendant={picking && matches[highlight] ? `command-${highlight}` : undefined}
 						aria-controls="command-picker"
 						aria-expanded={picking}
 						placeholder={`Run a command in #${channelName}`}
 						value={query}
-						onFocus={() => setPicking(true)}
 						onBlur={() => setPicking(false)}
 						onKeyDown={navigate}
 						onChange={event => {
@@ -290,9 +334,9 @@ export function Composer({
 				<button
 					type="submit"
 					className="send-button"
-					aria-label={current ? `Run /${current.key}` : 'Choose command'}
-					disabled={current ? missing.length > 0 : !matches.length}>
-					<SendIcon />
+					aria-label={submitting ? 'Running command' : current ? `Run /${current.key}` : 'Choose command'}
+					disabled={submitting || (current ? missing.length > 0 : !matches.length)}>
+					{submitting ? <span className="action-spinner" /> : <SendIcon />}
 				</button>
 			</div>
 			{current && missing.length > 0 && (

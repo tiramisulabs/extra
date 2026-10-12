@@ -1,25 +1,15 @@
 import { type ReactNode, useState } from 'react';
-import type { MessageIntent, MessagePayload, VisibleMessage } from '../bridge';
+import type { Guild, MessageIntent, MessagePayload, VisibleMessage } from '../bridge';
 import { EyeIcon } from '../icons';
-import { isEphemeral, LOADING_FLAG } from '../messages';
+import { isComponentsV2, isEphemeral, LOADING_FLAG } from '../messages';
 import { Avatar } from './Avatar';
 import { Component, hex } from './Component';
 import { mediaUrl } from './cdn';
 import { Markdown, type NameMap } from './Markdown';
+import { Attachment, MediaImage, referencedMediaUrl } from './Media';
 import { gutterTime, messageTime } from './time';
 
 type Embed = NonNullable<MessagePayload['embeds']>[number];
-
-/** Linked image with a visible placeholder when the URL is unusable or fails to load. */
-function EmbedImage({ url, className }: { url: string; className: string }) {
-	const [failed, setFailed] = useState(false);
-	const src = mediaUrl(url);
-	return src && !failed ? (
-		<img className={className} src={src} alt="" onError={() => setFailed(true)} />
-	) : (
-		<div className={`media-placeholder ${className}`}>{url}</div>
-	);
-}
 
 /** Small round icon (embed author/footer); hidden if it cannot load, as Discord does. */
 function EmbedIcon({ url }: { url?: string }) {
@@ -28,7 +18,15 @@ function EmbedIcon({ url }: { url?: string }) {
 	return src && !failed ? <img src={src} alt="" onError={() => setFailed(true)} /> : null;
 }
 
-function MessageEmbed({ embed, names }: { embed: Embed; names?: NameMap }) {
+function MessageEmbed({
+	embed,
+	names,
+	attachments,
+}: {
+	embed: Embed;
+	names?: NameMap;
+	attachments?: MessagePayload['attachments'];
+}) {
 	const title = embed.title && <Markdown text={embed.title} names={names} />;
 	return (
 		<div className={`embed ${embed.thumbnail ? 'with-thumbnail' : ''}`} style={{ borderLeftColor: hex(embed.color) }}>
@@ -75,7 +73,13 @@ function MessageEmbed({ embed, names }: { embed: Embed; names?: NameMap }) {
 						))}
 					</div>
 				)}
-				{embed.image && <EmbedImage url={embed.image.url} className="embed-image" />}
+				{embed.image && (
+					<MediaImage
+						key={embed.image.url}
+						url={referencedMediaUrl(embed.image.url, attachments)}
+						className="embed-image"
+					/>
+				)}
 				{(embed.footer || embed.timestamp) && (
 					<div className="embed-footer">
 						<EmbedIcon url={embed.footer?.icon_url} />
@@ -87,7 +91,13 @@ function MessageEmbed({ embed, names }: { embed: Embed; names?: NameMap }) {
 					</div>
 				)}
 			</div>
-			{embed.thumbnail && <EmbedImage url={embed.thumbnail.url} className="embed-thumbnail" />}
+			{embed.thumbnail && (
+				<MediaImage
+					key={embed.thumbnail.url}
+					url={referencedMediaUrl(embed.thumbnail.url, attachments)}
+					className="embed-thumbnail"
+				/>
+			)}
 		</div>
 	);
 }
@@ -96,13 +106,15 @@ export function Message({
 	message,
 	onIntent,
 	names,
+	guild,
 	tools,
 	onDismiss,
 	continued = false,
 }: {
 	message: VisibleMessage;
-	onIntent: (intent: MessageIntent) => void;
+	onIntent: (intent: MessageIntent) => void | Promise<void>;
 	names?: NameMap;
+	guild?: Guild;
 	tools?: ReactNode;
 	/** Present for the viewer's own ephemeral messages, which Discord lets them dismiss. */
 	onDismiss?: () => void;
@@ -113,7 +125,8 @@ export function Message({
 	const author = payload.author?.global_name ?? payload.author?.username ?? 'Bot';
 	const ephemeral = isEphemeral(message);
 	const thinking = Boolean((payload.flags ?? 0) & LOADING_FLAG);
-	const plainOnly = !payload.embeds?.length && !payload.components?.length;
+	const v2 = isComponentsV2(payload.flags);
+	const plainOnly = !payload.embeds?.length && !payload.components?.length && !payload.attachments?.length;
 	const sentAt = messageTime(payload.timestamp);
 	return (
 		<article
@@ -144,6 +157,7 @@ export function Message({
 						{author} is thinking…
 					</p>
 				) : (
+					!v2 &&
 					payload.content && (
 						<div className="message-content">
 							<Markdown text={payload.content} names={names} jumboAllowed={plainOnly} />
@@ -152,9 +166,14 @@ export function Message({
 					)
 				)}
 				{!payload.content && message.editedAt && <span className="edited">(edited)</span>}
-				{payload.embeds?.map((embed, index) => (
-					<MessageEmbed key={index} embed={embed} names={names} />
-				))}
+				{!v2 &&
+					payload.attachments?.map(attachment => (
+						<Attachment key={`${attachment.id}:${attachment.url}`} attachment={attachment} />
+					))}
+				{!v2 &&
+					payload.embeds?.map((embed, index) => (
+						<MessageEmbed key={index} embed={embed} names={names} attachments={payload.attachments} />
+					))}
 				{payload.components?.map((component, index) => (
 					<Component
 						key={component.id ?? index}
@@ -162,6 +181,8 @@ export function Message({
 						messageId={message.id}
 						onIntent={onIntent}
 						names={names}
+						guild={guild}
+						attachments={payload.attachments}
 					/>
 				))}
 				{ephemeral && (

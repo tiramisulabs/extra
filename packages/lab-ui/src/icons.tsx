@@ -87,3 +87,10 @@ export const ExternalLinkIcon = () => (
 		<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
 	</Icon>
 );
+
+export const UploadIcon = () => (
+	<Icon>
+		<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+		<path d="M14 2v6h6M12 18v-7m-3 3 3-3 3 3" />
+	</Icon>
+);

@@ -8,57 +8,9 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { after, test } from 'node:test';
 import { type HostedOptions, type LabHost, startHost } from '@slipher/lab/host';
-import type { LabAction, LabSnapshot } from '../src/bridge';
-import { FixtureClient } from '../src/dev/FixtureClient';
+import type { LabSnapshot } from '../src/bridge';
 import { shortRevision } from '../src/format';
-import { HostClient, semanticAction } from '../src/HostClient';
-
-const click = (messageRef: string, customId: string): LabAction => ({
-	kind: 'user',
-	verb: 'click',
-	actor: 'alice',
-	customId,
-	source: { channel: 'general', messageRef, customId },
-});
-const locator = (action: LabAction) => (action.kind === 'user' && action.verb === 'click' ? action.source : undefined);
-
-test('UI clicks use a semantic locator and reject a missing visible source', async () => {
-	const snapshot = await new FixtureClient().connect();
-	const source = locator(semanticAction(click('m1', 'approve'), snapshot));
-	assert.equal(source?.messageRef, undefined);
-	assert.equal(source?.customId, 'approve');
-	assert.match(source?.contains ?? '', /Hi/);
-	assert.throws(
-		() => semanticAction(click('stale-id', 'approve'), snapshot),
-		/Visible source message stale-id is unavailable/,
-	);
-});
-
-test('a message without content is located by its embed or its first text display', async () => {
-	const snapshot = await new FixtureClient().connect();
-	snapshot.conversations['alice:general'].messages.push({
-		id: 'embed-only',
-		channelId: 'general',
-		sequence: 100,
-		visibility: 'public',
-		payload: {
-			id: 'embed-only',
-			embeds: [{ color: 1 }, { title: 'Ticket #4', description: 'Opened by Alice' }],
-			components: [{ type: 1, components: [{ type: 2, style: 1, custom_id: 'close', label: 'Close' }] }],
-		},
-	});
-	assert.deepEqual(locator(semanticAction(click('embed-only', 'close'), snapshot)), {
-		channel: 'general',
-		customId: 'close',
-		contains: 'Ticket #4',
-	});
-	// m4 is a Components V2 message: a container whose first text display precedes the section holding the button.
-	assert.deepEqual(locator(semanticAction(click('m4', 'view'), snapshot)), {
-		channel: 'general',
-		customId: 'view',
-		contains: '**Summary**\nA test flow.',
-	});
-});
+import { HostClient } from '../src/HostClient';
 
 test('HostClient drives a child session through HTTP and exposes action failures', async () => {
 	const host = await startHost({ projectModule: resolve(process.cwd(), '../lab/test/fixtures/project.cjs') });
@@ -93,8 +45,14 @@ test('HostClient drives a child session through HTTP and exposes action failures
 		assert.equal(recordedClick?.kind, 'user');
 		if (recordedClick?.kind === 'user' && recordedClick.verb === 'click') {
 			assert.equal(recordedClick.source.messageRef, undefined);
-			assert.equal(recordedClick.source.contains, 'Panel');
+			assert.equal(
+				recordedClick.source.sequence,
+				current.conversations[`alice:${current.session.refs.channel}`].messages.find(item => item.id === messageId)
+					?.sequence,
+			);
 		}
+		assert.equal(snapshots.at(-1)?.inspector.actions.at(-1)?.label, 'alice · click open');
+		assert.ok(current.inspector.actions.some(item => item.label === 'alice · slash /support open'));
 		const modal = snapshots.at(-1)?.pending.modals.find(item => item.userId === current.session?.refs.alice);
 		assert.ok(modal);
 		client.closeModal('alice', modal.customId);
@@ -103,7 +61,7 @@ test('HostClient drives a child session through HTTP and exposes action failures
 		await new Promise<void>((done, reject) => {
 			const timeout = setTimeout(() => reject(new Error('local action was not logged')), 1000);
 			const stop = client.subscribe(snapshot => {
-				if (snapshot.inspector.actions.some(item => item.kind === 'local' && item.label === 'closeModal')) {
+				if (snapshot.inspector.actions.some(item => item.kind === 'local' && item.label === 'alice · closeModal')) {
 					clearTimeout(timeout);
 					stop();
 					done();
@@ -212,7 +170,7 @@ test('the event stream survives an immediate resubscribe and reopens for a liste
 	}
 });
 
-test('UI checkpoint replays a recorded click and modal submission in a new session', async () => {
+test('UI clicks and selects distinguish identical panels and replay against their original creation order', async () => {
 	const dataDir = await mkdtemp(join(tmpdir(), 'lab-ui-replay-'));
 	try {
 		const host = await startHost({
@@ -224,7 +182,25 @@ test('UI checkpoint replays a recorded click and modal submission in a new sessi
 			await client.connect();
 			await client.start({ scenarioId: 'flow', params: { label: 'Panel' }, services: {} });
 			await client.act({ kind: 'user', actor: 'alice', verb: 'slash', command: 'flow', channel: 'channel' });
+			await client.act({ kind: 'user', actor: 'bob', verb: 'slash', command: 'flow', channel: 'channel' });
 			const snapshot = await client.connect();
+			const panels = snapshot.conversations[`alice:${snapshot.session?.refs.channel}`].messages.filter(
+				item => item.payload.content === 'Panel',
+			);
+			assert.equal(panels.length, 2);
+			await client.act({
+				kind: 'user',
+				actor: 'alice',
+				verb: 'select',
+				customId: 'panel-choice',
+				values: ['one'],
+				source: { channel: 'channel', messageRef: panels[1].id },
+			});
+			assert.ok(
+				(await client.connect()).conversations[`alice:${snapshot.session?.refs.channel}`].messages.some(
+					item => item.payload.content === `picked:${panels[1].sequence}`,
+				),
+			);
 			const messageId = snapshot.conversations[`alice:${snapshot.session?.refs.channel}`].messages.find(
 				item => item.payload.content === 'Panel',
 			)?.id;
@@ -236,6 +212,14 @@ test('UI checkpoint replays a recorded click and modal submission in a new sessi
 				customId: 'open',
 				source: { channel: 'channel', messageRef: messageId, customId: 'open' },
 			});
+			await client.act({ kind: 'local', op: 'closeModal', actor: 'alice', customId: 'answer' });
+			await client.act({
+				kind: 'user',
+				actor: 'alice',
+				verb: 'click',
+				customId: 'open',
+				source: { channel: 'channel', messageRef: messageId },
+			});
 			await client.act({
 				kind: 'user',
 				actor: 'alice',
@@ -245,11 +229,22 @@ test('UI checkpoint replays a recorded click and modal submission in a new sessi
 			});
 			const checkpoint = await client.saveCheckpoint('ui-replay', [
 				{ view: { actor: 'alice', channel: 'channel' }, contains: 'saved:yes' },
+				{ view: { actor: 'alice', channel: 'channel' }, contains: `picked:${panels[1].sequence}` },
 			]);
 			const click = checkpoint.actions.find(item => item.kind === 'user' && item.verb === 'click');
 			assert.ok(click && click.kind === 'user' && click.verb === 'click');
 			assert.equal(click.source.messageRef, undefined);
-			assert.deepEqual(click.source, { channel: 'channel', customId: 'open', contains: 'Panel' });
+			assert.deepEqual(click.source, {
+				channel: 'channel',
+				customId: 'open',
+				sequence: snapshot.conversations[`alice:${snapshot.session?.refs.channel}`].messages.find(
+					item => item.id === messageId,
+				)?.sequence,
+			});
+			const selected = checkpoint.actions.find(item => item.kind === 'user' && item.verb === 'select');
+			assert.ok(selected && selected.kind === 'user' && selected.verb === 'select');
+			assert.equal(selected.source.sequence, panels[1].sequence);
+			assert.equal(selected.source.messageRef, undefined);
 			await client.replayCheckpoint('ui-replay');
 		} finally {
 			await host.close();
@@ -742,5 +737,29 @@ test('a close the host refuses (the modal timed out meanwhile) undoes the optimi
 		assert.equal(refreshed.closedModals?.length ?? 0, 0);
 	} finally {
 		await host.close();
+	}
+});
+
+test('HostClient uploads binary files through its configured transport', async () => {
+	const dir = await mkdtemp(join(tmpdir(), 'lab-files-client-'));
+	const host = await startHost({
+		projectModule: resolve(process.cwd(), '../lab/test/fixtures/project.cjs'),
+		dataDir: dir,
+	});
+	let uploads = 0;
+	const client = new HostClient(host.url, async (input, init) => {
+		if (String(input).endsWith('/api/files')) uploads++;
+		return fetch(input, init);
+	});
+	try {
+		await client.connect();
+		await client.start({ scenarioId: 'flow', params: {}, services: {} });
+		const bytes = new Uint8Array([0, 255, 10, 42]);
+		const files = await client.uploadFiles([new File([bytes], 'fixture.bin', { type: 'application/octet-stream' })]);
+		assert.equal(uploads, 1);
+		assert.deepEqual(new Uint8Array(await (await fetch(files[0].url)).arrayBuffer()), bytes);
+	} finally {
+		await host.close();
+		await rm(dir, { recursive: true, force: true });
 	}
 });

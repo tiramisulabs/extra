@@ -1,6 +1,6 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { LabAction, LabClient, LabSnapshot, MessageIntent } from '../bridge';
-import { hasCheckpoints, sessionChannels } from '../bridge';
+import { guildWithActorLabels, hasCheckpoints, sessionChannels } from '../bridge';
 import { errorText } from '../format';
 import { CloseIcon, FlaskIcon, HashIcon, LockedHashIcon, MembersIcon, MenuIcon } from '../icons';
 import { type CheckpointStatus, StatusCallout, useCheckpointDraft } from './CheckpointsTab';
@@ -55,6 +55,7 @@ function ChatHeader({
 	membersAvailable,
 	failures,
 	onOpenNav,
+	viewerKey,
 	onToggle,
 }: {
 	title?: string;
@@ -64,6 +65,7 @@ function ChatHeader({
 	membersAvailable: boolean;
 	failures: number;
 	onOpenNav: () => void;
+	viewerKey?: string;
 	onToggle: (panel: SidePanel) => void;
 }) {
 	return (
@@ -78,6 +80,11 @@ function ChatHeader({
 				</>
 			) : (
 				<h1 className="launcher-title">{projectName}</h1>
+			)}
+			{viewerKey && (
+				<span className="mobile-viewer" title={`Viewing as ${viewerKey}`}>
+					{viewerKey}
+				</span>
 			)}
 			<div className="header-actions">
 				{membersAvailable && (
@@ -138,10 +145,58 @@ function Lab({ client, snapshot }: { client: LabClient; snapshot: LabSnapshot })
 	const [panel, setPanel] = useState<SidePanel | undefined>(() => (narrow() ? undefined : 'members'));
 	const [labTab, setLabTab] = useState<LabTab>('scenario');
 	const [navOpen, setNavOpen] = useState(false);
+	const [mobile, setMobile] = useState(
+		() => typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches,
+	);
+	useEffect(() => {
+		const media = window.matchMedia('(max-width: 760px)');
+		const update = () => {
+			setMobile(media.matches);
+			if (!media.matches) setNavOpen(false);
+		};
+		media.addEventListener('change', update);
+		return () => media.removeEventListener('change', update);
+	}, []);
+	const [modalGeneration, setModalGeneration] = useState(0);
+	const root = useRef<HTMLDivElement>(null);
+	useEffect(() => {
+		if (!navOpen || !mobile) return;
+		const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+		root.current?.querySelector<HTMLElement>('.nav-close')?.focus();
+		const handleKey = (event: KeyboardEvent) => {
+			if (root.current?.querySelector('[role="dialog"]')) return;
+			if (event.key === 'Escape') {
+				event.preventDefault();
+				setNavOpen(false);
+			}
+			if (event.key !== 'Tab') return;
+			const controls = Array.from(
+				root.current?.querySelectorAll<HTMLElement>(
+					'.server-rail button, .channel-sidebar button, .user-dock button',
+				) ?? [],
+			).filter(element => !element.matches(':disabled') && element.getClientRects().length);
+			if (!controls.length) return;
+			event.preventDefault();
+			const current = controls.indexOf(document.activeElement as HTMLElement);
+			const next =
+				current < 0
+					? event.shiftKey
+						? controls.length - 1
+						: 0
+					: (current + (event.shiftKey ? -1 : 1) + controls.length) % controls.length;
+			controls[next]?.focus();
+		};
+		document.addEventListener('keydown', handleKey);
+		return () => {
+			document.removeEventListener('keydown', handleKey);
+			previous?.focus();
+		};
+	}, [navOpen, mobile]);
 	const draft = useCheckpointDraft();
 	const launcher = useScenarioLauncher(client, snapshot, {
 		report,
 		onStarted() {
+			setModalGeneration(value => value + 1);
 			draft.reset();
 			setPanel(open => (narrow() ? undefined : (open ?? 'members')));
 		},
@@ -152,6 +207,7 @@ function Lab({ client, snapshot }: { client: LabClient; snapshot: LabSnapshot })
 	const actors = viewableActors(snapshot);
 	const viewer = actors.find(item => item.key === actor);
 	const guild = session?.guilds.find(item => item.id === guildId);
+	const controlGuild = guild && guildWithActorLabels(guild, actors);
 	const channels = sessionChannels(session).filter(item => item.guildId === guildId);
 	const current = channels.find(item => item.id === channel);
 	const canView = Boolean(current?.visibleTo.includes(actor));
@@ -164,8 +220,16 @@ function Lab({ client, snapshot }: { client: LabClient; snapshot: LabSnapshot })
 	const act = (action: LabAction) => void client.act(action).catch(report);
 	function intent(value: MessageIntent) {
 		const source = { channel, messageRef: value.messageId, customId: value.customId };
-		if (value.verb === 'click') act({ kind: 'user', verb: 'click', actor, customId: value.customId, source });
-		else act({ kind: 'user', verb: 'select', actor, customId: value.customId, values: value.values ?? [], source });
+		if (value.verb === 'click')
+			return client.act({ kind: 'user', verb: 'click', actor, customId: value.customId, source });
+		return client.act({
+			kind: 'user',
+			verb: 'select',
+			actor,
+			customId: value.customId,
+			values: value.values ?? [],
+			source,
+		});
 	}
 	function openLab(tab: LabTab) {
 		setLabTab(tab);
@@ -173,7 +237,7 @@ function Lab({ client, snapshot }: { client: LabClient; snapshot: LabSnapshot })
 	}
 
 	return (
-		<div className={`app ${navOpen ? 'nav-open' : ''}`}>
+		<div className={`app ${navOpen ? 'nav-open' : ''}`} ref={root}>
 			<header className="titlebar">
 				<span className="titlebar-title">
 					{guild && <span className="titlebar-icon">{initials(guild.name)}</span>}
@@ -204,7 +268,7 @@ function Lab({ client, snapshot }: { client: LabClient; snapshot: LabSnapshot })
 					onClose={() => setNavOpen(false)}
 				/>
 
-				<main className="chat">
+				<main className="chat" inert={mobile && navOpen}>
 					<ChatHeader
 						title={running ? current?.name : undefined}
 						canView={canView}
@@ -212,12 +276,14 @@ function Lab({ client, snapshot }: { client: LabClient; snapshot: LabSnapshot })
 						panel={panel}
 						membersAvailable={running}
 						failures={snapshot.inspector.rest.filter(item => item.failed).length}
+						viewerKey={viewer?.key}
 						onOpenNav={() => setNavOpen(true)}
 						onToggle={next => setPanel(open => (open === next ? undefined : next))}
 					/>
 					{running ? (
 						<>
 							<Conversation
+								key={`conversation:${actor}:${channel}`}
 								actor={actor}
 								channel={channel}
 								channelName={current?.name ?? ''}
@@ -225,6 +291,7 @@ function Lab({ client, snapshot }: { client: LabClient; snapshot: LabSnapshot })
 								canView={canView}
 								messages={messages}
 								names={session?.names}
+								guild={controlGuild}
 								onIntent={intent}
 								onPin={onPin}
 								onDismiss={message => void client.dismissMessage(actor, channel, message).catch(report)}
@@ -238,10 +305,11 @@ function Lab({ client, snapshot }: { client: LabClient; snapshot: LabSnapshot })
 								commands={snapshot.commands}
 								projectName={snapshot.project.name}
 								channelName={current?.name ?? ''}
-								guild={guild}
+								guild={controlGuild}
 								canView={canView}
+								onError={report}
 								onRun={entry =>
-									act({
+									client.act({
 										kind: 'user',
 										verb: 'slash',
 										actor,
@@ -265,7 +333,10 @@ function Lab({ client, snapshot }: { client: LabClient; snapshot: LabSnapshot })
 				</main>
 
 				{shownPanel && (
-					<aside className={`side-panel ${shownPanel}`} aria-label={shownPanel === 'lab' ? 'Lab' : 'Members'}>
+					<aside
+						className={`side-panel ${shownPanel}`}
+						inert={mobile && navOpen}
+						aria-label={shownPanel === 'lab' ? 'Lab' : 'Members'}>
 						<button
 							type="button"
 							className="icon-button panel-close"
@@ -300,7 +371,7 @@ function Lab({ client, snapshot }: { client: LabClient; snapshot: LabSnapshot })
 				)}
 			</div>
 
-			{viewer && <UserDock viewer={viewer} actors={actors} onViewAs={selection.viewAs} />}
+			{viewer && <UserDock viewer={viewer} actors={actors} onViewAs={selection.viewAs} navOpen={navOpen} />}
 			<button type="button" className="scrim" aria-label="Close" tabIndex={-1} onClick={() => setNavOpen(false)} />
 
 			{shownError && (
@@ -312,15 +383,20 @@ function Lab({ client, snapshot }: { client: LabClient; snapshot: LabSnapshot })
 					}}
 				/>
 			)}
-			<ModalLayer
-				pending={snapshot.pending.modals}
-				closedModals={snapshot.closedModals}
-				viewerId={viewer?.userId}
-				onClose={customId => client.closeModal(actor, customId)}
-				onSubmit={(submission, channelId) =>
-					act({ kind: 'user', verb: 'submitModal', actor, channel: channelId ?? channel, ...submission })
-				}
-			/>
+			{running && (
+				<ModalLayer
+					uploadFiles={client.uploadFiles?.bind(client)}
+					key={modalGeneration}
+					guilds={session?.guilds.map(item => guildWithActorLabels(item, actors))}
+					pending={snapshot.pending.modals}
+					closedModals={snapshot.closedModals}
+					viewerId={viewer?.userId}
+					onClose={customId => client.closeModal(actor, customId)}
+					onSubmit={(submission, channelId) =>
+						client.act({ kind: 'user', verb: 'submitModal', actor, channel: channelId ?? channel, ...submission })
+					}
+				/>
+			)}
 		</div>
 	);
 }

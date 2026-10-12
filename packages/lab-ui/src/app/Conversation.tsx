@@ -1,6 +1,6 @@
 import { Fragment, useLayoutEffect, useRef } from 'react';
-import type { Expectation, MessageIntent, VisibleMessage } from '../bridge';
-import { LockedHashIcon, PinIcon } from '../icons';
+import type { Expectation, Guild, MessageIntent, VisibleMessage } from '../bridge';
+import { HashIcon, LockedHashIcon, PinIcon } from '../icons';
 import { isEphemeral, messageText } from '../messages';
 import { continues } from '../render/grouping';
 import type { NameMap } from '../render/Markdown';
@@ -38,6 +38,7 @@ export function Conversation({
 	canView,
 	messages,
 	names,
+	guild,
 	onIntent,
 	onPin,
 	onDismiss,
@@ -49,7 +50,8 @@ export function Conversation({
 	canView: boolean;
 	messages: VisibleMessage[];
 	names?: NameMap;
-	onIntent: (intent: MessageIntent) => void;
+	guild?: Guild;
+	onIntent: (intent: MessageIntent) => void | Promise<void>;
 	/** Present when the client can save checkpoints. */
 	onPin?: (expectation: Expectation) => void;
 	/** Hides one of the viewer's own ephemeral messages. */
@@ -59,11 +61,23 @@ export function Conversation({
 	return (
 		<div className="messages" data-testid="conversation" aria-live="polite" ref={list} onScroll={onScroll}>
 			{canView ? (
-				!messages.length && <p className="channel-empty">No messages</p>
+				!messages.length && (
+					<div className="channel-empty">
+						<span className="channel-empty-icon">
+							<HashIcon size={32} />
+						</span>
+						<h2>Welcome to #{channelName}</h2>
+						<p>
+							This channel has no visible messages for {names?.users?.[viewerId ?? ''] ?? actor}. Run a command to start
+							a flow.
+						</p>
+					</div>
+				)
 			) : (
-				<div className="no-access">
+				<div className="conversation-locked">
 					<LockedHashIcon size={48} />
 					<h2>No access to #{channelName}</h2>
+					<p>Switch actors or update their roles in the member list to inspect this channel.</p>
 				</div>
 			)}
 			{messages.map((item, index) => {
@@ -82,6 +96,7 @@ export function Conversation({
 						<Message
 							message={item}
 							names={names}
+							guild={guild}
 							onIntent={onIntent}
 							onDismiss={dismissible ? () => onDismiss(item) : undefined}
 							continued={!newDay && continues(previous, item)}

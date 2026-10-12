@@ -6,6 +6,8 @@ import type {
 	InspectorSnapshot,
 	JsonValue,
 	LabAction,
+	ModalAttachment,
+	ModalFieldValue,
 	ProjectDescription,
 	PendingModal as ProtocolPendingModal,
 	VisibleMessage as ProtocolVisibleMessage,
@@ -13,7 +15,7 @@ import type {
 	SessionLog,
 } from '@slipher/lab/protocol';
 
-export type { CommandSchema, Expectation, JsonValue, LabAction, ProjectDescription };
+export type { CommandSchema, Expectation, JsonValue, LabAction, ModalAttachment, ModalFieldValue, ProjectDescription };
 
 export interface ComponentPayload {
 	type: number;
@@ -37,20 +39,39 @@ export interface ComponentPayload {
 		description?: string;
 		emoji?: { name?: string; id?: string; animated?: boolean };
 	}[];
+	channel_types?: number[];
+	default_values?: { id: string; type: 'user' | 'role' | 'channel' }[];
 	min_values?: number;
 	max_values?: number;
+	default?: boolean;
+	min_files?: number;
+	max_files?: number;
 	required?: boolean;
 	min_length?: number;
 	max_length?: number;
 	value?: string;
+	spoiler?: boolean;
 	media?: { url: string };
-	items?: { media?: { url: string }; description?: string }[];
-	file?: { url: string };
-	color?: number;
+	items?: { media?: { url: string }; description?: string; spoiler?: boolean }[];
+	file?: { url: string; id?: string; attachment_id?: string; content_type?: string };
+	name?: string;
+	size?: number;
+	accent_color?: number;
 	divider?: boolean;
 	spacing?: number;
 }
+export interface AttachmentPayload {
+	id: string;
+	filename: string;
+	url: string;
+	size?: number;
+	content_type?: string;
+	description?: string;
+	width?: number;
+	height?: number;
+}
 export interface MessagePayload {
+	attachments?: AttachmentPayload[];
 	id?: string;
 	content?: string;
 	flags?: number;
@@ -116,11 +137,27 @@ export interface LabSnapshot {
 	/** Host mode, build and this browser's run, when the client talks to a real host. */
 	host?: HostInfo;
 }
+/** Disambiguate matching member names using scenario actor keys in entity controls. */
+export function guildWithActorLabels(guild: Guild, actors: Actor[]): Guild {
+	return {
+		...guild,
+		members: guild.members.map(member => {
+			const actor = actors.find(item => item.userId === member.id);
+			const duplicate = guild.members.some(item => item.id !== member.id && item.name === member.name);
+			return actor && duplicate ? { ...member, name: `${member.name} (${actor.key})` } : member;
+		}),
+	};
+}
+
 /** The session's actors; none before a session starts. */
 export const sessionActors = (session?: SessionDescription): Actor[] => session?.actors ?? [];
 /** Every channel of the session's guilds, tagged with its guild. */
 export const sessionChannels = (session?: SessionDescription): Channel[] =>
 	session?.guilds.flatMap(guild => guild.channels.map(channel => ({ ...channel, guildId: guild.id }))) ?? [];
+/** Channels of the requested types; an empty type list means every channel. */
+export function channelsOfTypes<T extends { type: number }>(channels: T[], types?: readonly number[]): T[] {
+	return types?.length ? channels.filter(channel => types.includes(channel.type)) : channels;
+}
 type ParamValue = boolean | string | number;
 /** What Start sends: a scenario of the project's catalogue with its parameters and service variants. */
 export interface ScenarioChoice {
@@ -137,6 +174,7 @@ export function presetParams(choice: ScenarioChoice): Record<string, ParamValue>
 }
 export type MessageIntent = { verb: 'click' | 'select'; customId: string; messageId: string; values?: string[] };
 export interface LabClient {
+	uploadFiles?(files: File[]): Promise<ModalAttachment[]>;
 	connect(): Promise<LabSnapshot>;
 	subscribe(listener: (snapshot: LabSnapshot) => void): () => void;
 	start(choice: ScenarioChoice): Promise<void>;

@@ -176,7 +176,12 @@ export function MemberList({
 												<span className="member-label">{member.name}</span>
 												{member.bot && <span className="bot-tag">APP</span>}
 											</span>
-											{actor?.key === viewer && <small>Viewing</small>}
+											{actor && (
+												<small>
+													{actor.key}
+													{actor.key === viewer ? ' · Viewing' : ''}
+												</small>
+											)}
 										</span>
 									</button>
 									{open === member.id && (
