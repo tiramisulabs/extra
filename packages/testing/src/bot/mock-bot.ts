@@ -79,7 +79,7 @@ import {
 } from './payloads';
 import { isOutgoingMessagePost, MockApiError, type RecordedAction, type RestCalls, type RouteMatcher } from './rest';
 import { FOLLOWUP_ROUTE, Routes, WEBHOOK_MESSAGE_ROUTE } from './routes';
-import { resolveSelectResolved } from './select-resolved';
+import { resolveModalSelects, resolveSelectResolved } from './select-resolved';
 import {
 	asUsingClient,
 	eventsInternals,
@@ -812,7 +812,13 @@ export class MockBot extends MockBotDispatchCore {
 			options,
 			sessionKeyOverride,
 			(prepared, sourceComponent) => {
-				this.assertSelectValuesMatchSource(customId, values, sourceComponent, options.allowTamperedInput);
+				this.assertSelectValuesMatchSource(
+					customId,
+					values,
+					sourceComponent,
+					options.allowTamperedInput,
+					prepared.guildId,
+				);
 				return this.dispatchSelectMenu(customId, values, prepared);
 			},
 			// `values` is a positional parameter, not part of the options bag, so a synthetic select has to be
@@ -926,7 +932,13 @@ export class MockBot extends MockBotDispatchCore {
 				: undefined;
 			if (!sourceComponent && synthetic) this.assertSyntheticComponentAllowed('selectMenu', customId);
 			if (sourceComponent)
-				this.assertSelectValuesMatchSource(customId, values, sourceComponent, options.allowTamperedInput);
+				this.assertSelectValuesMatchSource(
+					customId,
+					values,
+					sourceComponent,
+					options.allowTamperedInput,
+					prepared.guildId === undefined ? hydrated?.guild_id : prepared.guildId,
+				);
 			const sourceType = selectTypeForInteraction(numberValue(sourceComponent?.type));
 			const preparedWithSourceType = sourceType ? { ...prepared, componentType: sourceType } : prepared;
 			const resolved = resolveSelectResolved(this._world, customId, values, preparedWithSourceType);
@@ -987,7 +999,9 @@ export class MockBot extends MockBotDispatchCore {
 			const userId = prepared.user?.id ?? this.defaultUser.id;
 			this.assertModalHandleable(customId, userId, allowSyntheticSource === true);
 			this.assertModalMatchesDisplayed(customId, fields, userId);
-			return modalSubmitInteraction(prepared);
+			const definition = this.displayedModals.get(userId)?.pending?.payload.components;
+			const resolved = resolveModalSelects(this._world, fields, definition, prepared);
+			return modalSubmitInteraction(prepared, definition, resolved);
 		});
 	}
 

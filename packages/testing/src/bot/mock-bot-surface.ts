@@ -484,6 +484,7 @@ export abstract class MockBotSurface {
 		values: string[],
 		component: Record<string, unknown>,
 		allowTampered = false,
+		guildId?: string | null,
 	): void {
 		if (allowTampered) return;
 		const type = numberValue(component.type);
@@ -496,7 +497,28 @@ export abstract class MockBotSurface {
 		if (values.length > max) {
 			throw new TypeError(`selectMenu: "${customId}" selected ${values.length} value(s), above max_values ${max}.`);
 		}
-		if (type !== 3) return;
+		if (new Set(values).size !== values.length)
+			throw new TypeError(`selectMenu: "${customId}" contains duplicate selected values.`);
+		if (type !== 3) {
+			// Only constrain a real source in a seeded guild; synthetic dispatches retain their explicit payload contract.
+			if (!guildId || !this._world?.guilds.some(guild => guild.id === guildId)) return;
+			const allowed = new Set<string>();
+			if (type === 5 || type === 7) {
+				for (const member of this.world.all.member({ guildId })) allowed.add(member.userId);
+			}
+			if (type === 6 || type === 7) {
+				for (const role of this.world.all.role({ guildId })) allowed.add(role.id);
+			}
+			if (type === 8) {
+				const channelTypes = arrayValue(component.channel_types);
+				for (const channel of this.world.all.channel({ guildId }))
+					if (!channelTypes.length || channelTypes.includes(channel.type)) allowed.add(channel.id);
+			}
+			for (const value of values)
+				if (!allowed.has(value))
+					throw new TypeError(`selectMenu: value "${value}" is not available for "${customId}" in guild "${guildId}".`);
+			return;
+		}
 		const allowed = new Set(
 			arrayValue(component.options)
 				.map(option => stringValue(asRecord(option).value))

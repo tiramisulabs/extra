@@ -523,6 +523,43 @@ describe('component flows', () => {
 		await bot.close();
 	});
 
+	test('source entity selects enforce guild, channel types and distinct values', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'select-home' });
+		const other = world.registerGuild({ id: 'select-other' });
+		const actor = world.registerMember(guild.id, { user: apiUser({ id: 'select-user' }) });
+		const text = world.registerChannel(guild.id, { id: 'select-text', type: 0 });
+		const voice = world.registerChannel(guild.id, { id: 'select-voice', type: 2 });
+		const foreign = world.registerChannel(other.id, { id: 'select-foreign', type: 0 });
+		class PickChannel extends ComponentCommand {
+			componentType = 'ChannelSelect' as const;
+			filter(ctx: ComponentContext<'ChannelSelect'>) {
+				return ctx.customId === 'pick-channel';
+			}
+			async run(ctx: ComponentContext<'ChannelSelect'>) {
+				await ctx.write({ content: ctx.interaction.values.join(',') });
+			}
+		}
+		const bot = await createMockBot({ world, components: [PickChannel] });
+		await bot.rest.request('POST', `/channels/${text.id}/messages`, {
+			body: {
+				components: [
+					{ type: 1, components: [{ type: 8, custom_id: 'pick-channel', channel_types: [0], max_values: 2 }] },
+				],
+			},
+		});
+		const source = bot.rest.actions.at(-1)!;
+		const options = { source, guildId: guild.id, channel: text, user: actor.user };
+		await expect(bot.selectMenu('pick-channel', [voice.id], options)).rejects.toThrow(/not available/);
+		await expect(bot.selectMenu('pick-channel', [foreign.id], options)).rejects.toThrow(/not available/);
+		await expect(bot.selectMenu('pick-channel', [text.id, text.id], options)).rejects.toThrow(/duplicate/);
+		await expect(bot.selectMenu('pick-channel', [text.id], options)).resolves.toMatchObject({ content: text.id });
+		await expect(
+			bot.selectMenu('pick-channel', [voice.id], { ...options, allowTamperedInput: true }),
+		).resolves.toMatchObject({ content: voice.id });
+		await bot.close();
+	});
+
 	test('selectMenu auto-resolves seeded entity select values', async () => {
 		const seen: string[][] = [];
 		const world = mockWorld();

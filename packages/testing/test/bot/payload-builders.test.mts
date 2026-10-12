@@ -4,6 +4,7 @@ import {
 	buttonInteraction,
 	chatInputInteraction,
 	modalSubmitInteraction,
+	selectMenuInteraction,
 	userOption,
 } from '../../src/bot/interactions';
 import { apiChannel, apiGuild, apiMember, apiMessage, apiUser } from '../../src/bot/payloads';
@@ -108,4 +109,39 @@ describe('interaction payload builders', () => {
 			},
 		]);
 	});
+});
+
+test('modal responses preserve source IDs, field order and legacy action-row wrappers', () => {
+	const response = modalSubmitInteraction(
+		{ customId: 'parity', fields: { confirm: false, legacy: 'ok', radio: 'a' } },
+		[
+			{ type: 1, id: 1, components: [{ type: 4, id: 2, custom_id: 'legacy' }] },
+			{ type: 18, id: 103, component: { type: 21, id: 104, custom_id: 'radio' } },
+			{ type: 18, id: 107, component: { type: 23, id: 108, custom_id: 'confirm' } },
+		],
+	);
+	expect(response.data?.components).toEqual([
+		{ type: 1, id: 1, components: [{ type: 4, id: 2, custom_id: 'legacy', value: 'ok' }] },
+		{ type: 18, id: 103, component: { type: 21, id: 104, custom_id: 'radio', value: 'a' } },
+		{ type: 18, id: 107, component: { type: 23, id: 108, custom_id: 'confirm', value: false } },
+	]);
+});
+
+test('component interaction data carries the numeric ID from the rendered source', () => {
+	const message = apiMessage({
+		components: [
+			{
+				type: 1,
+				id: 1,
+				components: [{ type: 2, id: 2, style: 1, custom_id: 'open', label: 'Open' }],
+			},
+			{
+				type: 1,
+				id: 3,
+				components: [{ type: 3, id: 4, custom_id: 'choose', options: [{ label: 'One', value: 'one' }] }],
+			},
+		],
+	});
+	expect(buttonInteraction({ customId: 'open', message }).data.id).toBe(2);
+	expect(selectMenuInteraction({ customId: 'choose', values: ['one'], message }).data.id).toBe(4);
 });
