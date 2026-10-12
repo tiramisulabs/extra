@@ -127,7 +127,7 @@ const initial: LabSnapshot = {
 						components: [
 							{
 								type: 17,
-								color: 5793266,
+								accent_color: 5793266,
 								components: [
 									{ type: 10, content: '**Summary**\nA test flow.' },
 									{ type: 14, divider: true },
@@ -188,10 +188,10 @@ const initial: LabSnapshot = {
 					custom_id: 'review-modal',
 					title: 'Review request',
 					components: [
-						{ type: 10, content: 'Give a reason before continuing.' },
 						{
 							type: 18,
 							label: 'Reason',
+							description: 'Give a reason before continuing.',
 							component: {
 								type: 4,
 								style: 2,
@@ -213,6 +213,37 @@ const initial: LabSnapshot = {
 									{ label: 'Auto', value: 'auto' },
 								],
 							},
+						},
+						{
+							type: 18,
+							label: 'Decision',
+							component: {
+								type: 21,
+								custom_id: 'decision',
+								options: [
+									{ label: 'Approve', value: 'approve' },
+									{ label: 'Review', value: 'review' },
+								],
+							},
+						},
+						{
+							type: 18,
+							label: 'Checks',
+							component: {
+								type: 22,
+								custom_id: 'checks',
+								min_values: 0,
+								required: false,
+								options: [
+									{ label: 'Notify the team', value: 'notify' },
+									{ label: 'Save a copy', value: 'copy' },
+								],
+							},
+						},
+						{
+							type: 18,
+							label: 'Attachment',
+							component: { type: 19, custom_id: 'files', required: false, max_files: 1 },
 						},
 					],
 				},

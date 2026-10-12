@@ -5,6 +5,7 @@
 	"type": "module",
 	"files": [
 		"dist/**",
+		"DISCORD_REFERENCE.md",
 		"README.md"
 	],
 	"exports": {
