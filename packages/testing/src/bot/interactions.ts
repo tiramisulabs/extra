@@ -1,5 +1,6 @@
 import { ApplicationCommandOptionType } from 'seyfert';
 import { mockId } from '../id';
+import { findComponentNode } from './component-tree';
 import { TEST_APPLICATION_ID, TEST_CHANNEL_ID, TEST_GUILD_ID } from './constants';
 import {
 	type ApiAttachment,
@@ -29,15 +30,10 @@ import {
 	type PermissionInput,
 	permissionBits,
 } from './permissions';
+import { walkComponents } from './state';
 
 /** Discord application-command option types, single-sourced from seyfert's enum. */
 const OptionType = ApplicationCommandOptionType;
-
-/**
- * String payload default for app_permissions / resolved entities: every
- * permission bit the installed seyfert knows, ORed together. Note: the invoking
- * member's permissions default to DEFAULT_MEMBER_PERMISSIONS, not this.
- */
 
 export interface EncodedOption {
 	__slipherOption: true;
@@ -312,7 +308,7 @@ export interface ApiInteractionPayload {
 	authorizing_integration_owners: Record<string, string>;
 	context: number;
 	data: {
-		id?: string;
+		id?: string | number;
 		name?: string;
 		type?: number;
 		custom_id?: string;
@@ -322,10 +318,18 @@ export interface ApiInteractionPayload {
 		target_id?: string;
 		values?: string[];
 		components?: (
-			| { type: 1; components: { type: 4; custom_id: string; value: string }[] }
-			| { type: 18; component: { type: 4; custom_id: string; value: string } }
-			| { type: 18; component: { type: 19; custom_id: string; values: string[] } }
-			| { type: 18; component: { type: 3 | 5 | 6 | 7 | 8; custom_id: string; values: string[] } }
+			| { type: 1; id?: number; components: { type: 4; id?: number; custom_id: string; value: string }[] }
+			| {
+					type: 18;
+					id?: number;
+					component:
+						| { type: 4; id?: number; custom_id: string; value: string }
+						| { type: 21; id?: number; custom_id: string; value: string | null }
+						| { type: 22; id?: number; custom_id: string; values: string[] }
+						| { type: 23; id?: number; custom_id: string; value: boolean }
+						| { type: 19; id?: number; custom_id: string; values: string[] }
+						| { type: 3 | 5 | 6 | 7 | 8; id?: number; custom_id: string; values: string[] };
+			  }
 		)[];
 	};
 	message?: ApiMessage;
@@ -517,7 +521,12 @@ export interface ButtonInteractionOptions extends BaseInteractionOptions {
 
 export function buttonInteraction(options: ButtonInteractionOptions): ApiInteractionPayload {
 	const payload = baseInteraction(options, 3);
-	payload.data = { custom_id: options.customId, component_type: 2 };
+	const source = findComponentNode(options.message?.components, options.customId);
+	payload.data = {
+		custom_id: options.customId,
+		component_type: 2,
+		...(typeof source?.id === 'number' ? { id: source.id } : {}),
+	};
 	payload.message =
 		options.message ??
 		apiMessage({
@@ -545,9 +554,11 @@ export function selectMenuInteraction(options: SelectMenuInteractionOptions): Ap
 	const selectTypes = { string: 3, user: 5, role: 6, mentionable: 7, channel: 8 } as const;
 	const componentType =
 		typeof options.componentType === 'string' ? selectTypes[options.componentType] : (options.componentType ?? 3);
+	const source = findComponentNode(options.message?.components, options.customId);
 	payload.data = {
 		custom_id: options.customId,
 		component_type: componentType,
+		...(typeof source?.id === 'number' ? { id: source.id } : {}),
 		values: options.values,
 		...(options.resolved ? { resolved: options.resolved } : {}),
 	};
@@ -560,10 +571,6 @@ export function selectMenuInteraction(options: SelectMenuInteractionOptions): Ap
 	return payload;
 }
 
-/**
- * Modal submit values keyed by input custom_id. A string fills a TextInput; an attachment array fills a
- * FileUpload input — so a command's `interaction.getFiles(customId)` (content-type validation, etc.) sees them.
- */
 /** The select kinds a modal can carry; sets the submitted select's component type and what `data.resolved` holds. */
 export type ModalSelectKind = 'string' | 'user' | 'role' | 'channel' | 'mentionable';
 
@@ -577,7 +584,7 @@ export interface ModalSelectField {
  * A modal field value: a string (TextInput), a `string[]` (string select — shorthand for `modalSelect(values)`), an
  * `ApiAttachment[]` (FileUpload), or a {@link modalSelect} for a user/role/channel/mentionable select.
  */
-export type ModalFields = Record<string, string | string[] | ApiAttachment[] | ModalSelectField>;
+export type ModalFields = Record<string, string | string[] | boolean | null | ApiAttachment[] | ModalSelectField>;
 
 const SELECT_COMPONENT_TYPE: Record<ModalSelectKind, 3 | 5 | 6 | 7 | 8> = {
 	string: 3,
@@ -625,34 +632,92 @@ export interface ModalSubmitInteractionOptions extends BaseInteractionOptions {
 	fields?: ModalFields;
 }
 
-export function modalSubmitInteraction(options: ModalSubmitInteractionOptions): ApiInteractionPayload {
+type ModalResponse = NonNullable<NonNullable<ApiInteractionPayload['data']>['components']>[number];
+type ModalResponseField = Extract<ModalResponse, { type: 18 }>['component'];
+
+/** Encode the field's value and collect any attachments or synthetic entities its readers need. */
+function modalResponseField(
+	customId: string,
+	value: ModalFields[string],
+	inputType: number | undefined,
+	resolved: ResolvedData,
+	hasResolvedEntities: boolean,
+): ModalResponseField {
+	if (inputType === 21 || value === null) {
+		if (value !== null && typeof value !== 'string')
+			throw new TypeError(`submitModal: "${customId}" needs a radio value.`);
+		return { type: 21, custom_id: customId, value };
+	}
+	if (inputType === 23 || typeof value === 'boolean') {
+		if (typeof value !== 'boolean') throw new TypeError(`submitModal: "${customId}" needs a checkbox boolean.`);
+		return { type: 23, custom_id: customId, value };
+	}
+	if (inputType === 22) {
+		if (!Array.isArray(value) || !value.every(item => typeof item === 'string'))
+			throw new TypeError(`submitModal: "${customId}" needs checkbox values.`);
+		return { type: 22, custom_id: customId, values: value as string[] };
+	}
+	if (Array.isArray(value) && inputType && inputType >= 5 && inputType <= 8)
+		value = modalSelect(
+			value as string[],
+			({ 5: 'user', 6: 'role', 7: 'mentionable', 8: 'channel' } as const)[inputType as 5 | 6 | 7 | 8],
+		);
+	if (isModalSelectField(value)) {
+		if (!hasResolvedEntities) resolveSelectEntities(value.__modalSelect, value.values, resolved);
+		return { type: SELECT_COMPONENT_TYPE[value.__modalSelect], custom_id: customId, values: value.values };
+	}
+	if (!Array.isArray(value)) return { type: 4, custom_id: customId, value };
+	// An empty array follows the rendered definition; otherwise strings are selects and objects are files.
+	if (inputType !== 19 && (value.length === 0 || typeof value[0] === 'string'))
+		return { type: 3, custom_id: customId, values: value as string[] };
+	resolved.attachments ??= {};
+	const files = value as ApiAttachment[];
+	for (const file of files) resolved.attachments[file.id] = file;
+	return { type: 19, custom_id: customId, values: files.map(file => file.id) };
+}
+
+/** Copy rendered numeric IDs and preserve the legacy TextInput action-row wrapper. */
+function wrapModalResponse(
+	definition: unknown,
+	input: Record<string, unknown> | undefined,
+	field: ModalResponseField,
+): ModalResponse {
+	let parent: Record<string, unknown> | undefined;
+	walkComponents(definition, node => {
+		if (input && (node.component === input || (Array.isArray(node.components) && node.components.includes(input))))
+			parent = node;
+	});
+	const inputId = typeof input?.id === 'number' ? { id: input.id } : {};
+	const parentId = typeof parent?.id === 'number' ? { id: parent.id } : {};
+	const component = { ...field, ...inputId };
+	if (parent?.type === 1 && component.type === 4) return { type: 1, ...parentId, components: [component] };
+	return { type: 18, ...parentId, component };
+}
+
+export function modalSubmitInteraction(
+	options: ModalSubmitInteractionOptions,
+	definition?: unknown,
+	resolvedEntities?: ResolvedData,
+): ApiInteractionPayload {
 	const payload = baseInteraction(options, 5);
 	const resolved: ResolvedData = {};
-	const components = Object.entries(options.fields ?? {}).map(([customId, value]) => {
-		if (isModalSelectField(value)) {
-			resolveSelectEntities(value.__modalSelect, value.values, resolved);
-			const type = SELECT_COMPONENT_TYPE[value.__modalSelect];
-			return { type: 18 as const, component: { type, custom_id: customId, values: value.values } };
-		}
-		if (Array.isArray(value)) {
-			// A string[] is a string select; an ApiAttachment[] is a FileUpload (objects carry an id, strings don't).
-			if (value.length === 0 || typeof value[0] === 'string') {
-				return { type: 18 as const, component: { type: 3 as const, custom_id: customId, values: value as string[] } };
-			}
-			// FileUpload (19): seyfert's getFiles reads data.resolved.attachments after finding this component.
-			resolved.attachments ??= {};
-			for (const file of value as ApiAttachment[]) resolved.attachments[file.id] = file;
-			return {
-				type: 18 as const,
-				component: { type: 19 as const, custom_id: customId, values: (value as ApiAttachment[]).map(f => f.id) },
-			};
-		}
-		return { type: 18 as const, component: { type: 4 as const, custom_id: customId, value } };
+	const order = new Map<string, number>();
+	walkComponents(definition, node => {
+		if (typeof node.custom_id === 'string') order.set(node.custom_id, order.size);
+	});
+	const fields = Object.entries(options.fields ?? {}).sort(
+		([left], [right]) => (order.get(left) ?? Infinity) - (order.get(right) ?? Infinity),
+	);
+	const components = fields.map(([customId, value]) => {
+		const input = findComponentNode(definition, customId);
+		const inputType = typeof input?.type === 'number' ? input.type : undefined;
+		const field = modalResponseField(customId, value, inputType, resolved, Boolean(resolvedEntities));
+		return wrapModalResponse(definition, input, field);
 	});
 	payload.data = {
 		custom_id: options.customId,
 		components,
-		...(Object.keys(resolved).length ? { resolved } : {}),
+		...(Object.keys(resolved).length || resolvedEntities ? { resolved: { ...resolved, ...resolvedEntities } } : {}),
 	};
 	return payload;
 }

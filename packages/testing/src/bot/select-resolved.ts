@@ -1,4 +1,5 @@
-import type { SelectMenuInteractionOptions } from './interactions';
+import { findComponentType, selectTypeForInteraction } from './component-tree';
+import type { ModalFields, ModalSubmitInteractionOptions, SelectMenuInteractionOptions } from './interactions';
 import { ALL_PERMISSIONS } from './permissions';
 import type { WorldData } from './world';
 
@@ -114,4 +115,27 @@ export function resolveSelectResolved(
 		...(Object.keys(members).length ? { members } : {}),
 		...(Object.keys(roles).length ? { roles } : {}),
 	};
+}
+
+/** Resolve entity-select fields against the seeded world before building a modal submit payload. */
+export function resolveModalSelects(
+	world: WorldData | undefined,
+	fields: ModalFields,
+	definition: unknown,
+	options: ModalSubmitInteractionOptions,
+): SelectMenuInteractionOptions['resolved'] {
+	if (!world) return undefined;
+	const resolved: NonNullable<SelectMenuInteractionOptions['resolved']> = {};
+	for (const [id, value] of Object.entries(fields)) {
+		const type = selectTypeForInteraction(findComponentType(definition, id));
+		if (!type || type === 3) continue;
+		let values: string[];
+		if (Array.isArray(value)) values = value.filter((item): item is string => typeof item === 'string');
+		else if (typeof value === 'object' && value !== null && '__modalSelect' in value) values = value.values;
+		else continue;
+		const entities = resolveSelectResolved(world, id, values, { ...options, componentType: type });
+		for (const family of ['users', 'members', 'roles', 'channels'] as const)
+			if (entities?.[family]) resolved[family] = { ...resolved[family], ...entities[family] };
+	}
+	return Object.keys(resolved).length ? resolved : undefined;
 }

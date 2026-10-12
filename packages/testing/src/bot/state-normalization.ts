@@ -308,6 +308,7 @@ export function walkComponents(value: unknown, visit: (node: Record<string, unkn
 		visit(node);
 		if (node.accessory !== undefined) visit(asRecord(node.accessory));
 		if (Array.isArray(node.components)) walkComponents(node.components, visit);
+		if (node.component !== undefined) walkComponents([node.component], visit);
 	}
 }
 

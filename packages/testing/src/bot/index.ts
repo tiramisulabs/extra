@@ -34,6 +34,7 @@ export {
 	type DispatchResult,
 	type EmitEventOptions,
 	type EventDispatchResult,
+	type MemberRoleChange,
 	type MenuCommandClass,
 	type MenuOptions,
 	type MenuResultFor,
@@ -103,6 +104,17 @@ export {
 	userCommandInteraction,
 	userOption,
 } from './interactions';
+export type {
+	CommandSchema,
+	InspectedMessage,
+	MockBotEvent,
+	ModalOpenerSource,
+	PendingCollector,
+	PendingInteractionChange,
+	PendingModal,
+	VisibleConversation,
+	VisibleMessage,
+} from './observation';
 export {
 	type ApiAttachment,
 	type ApiAttachmentOptions,
@@ -319,6 +331,7 @@ export {
 	type WorldWebhookQuery,
 } from './state';
 export {
+	type BotUserOptions,
 	type ChannelOverwriteInput,
 	mockWorld,
 	type WorldBotMemberOptions,

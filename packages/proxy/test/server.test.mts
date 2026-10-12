@@ -350,6 +350,7 @@ describe('proxy server', () => {
 	});
 
 	test('snapshots the default token version before an admission wait', async () => {
+		// Hold the rate window across real HTTP roundtrips, regardless of runner load.
 		const now = Date.now();
 		const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
 		const authorizations: string[] = [];
@@ -367,7 +368,13 @@ describe('proxy server', () => {
 
 		await fixture.handler.request('GET', '/channels/1');
 		const queued = fixture.handler.request('GET', '/channels/2');
-		await vi.waitUntil(() => fixture.proxy.getStats().pendingRequests > 0, { interval: 1 });
+		await vi.waitUntil(
+			() => {
+				const stats = fixture.proxy.getStats();
+				return stats.pendingRequests > 0 && stats.deduplicationEntries === 2;
+			},
+			{ interval: 1 },
+		);
 		fixture.rest.options.token = 'rotated';
 		clock.mockReturnValue(now + 26);
 		await queued;

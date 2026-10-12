@@ -24,6 +24,39 @@ importers:
         specifier: ^4.1.9
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(vite@8.1.3(@types/node@26.1.1)(esbuild@0.28.2)(tsx@4.23.12))
 
+  examples/lab-bot:
+    dependencies:
+      '@slipher/lab':
+        specifier: workspace:*
+        version: file:packages/lab(@slipher/lab-ui@packages+lab-ui)(@slipher/testing@file:packages/testing(seyfert@5.1.0))(seyfert@5.1.0)
+      '@slipher/testing':
+        specifier: workspace:*
+        version: file:packages/testing(seyfert@5.1.0)
+      seyfert:
+        specifier: 5.1.0
+        version: 5.1.0
+    dependenciesMeta:
+      '@slipher/lab':
+        injected: true
+      '@slipher/testing':
+        injected: true
+    devDependencies:
+      '@biomejs/biome':
+        specifier: 2.5.1
+        version: 2.5.1
+      '@slipher/lab-ui':
+        specifier: workspace:*
+        version: link:../../packages/lab-ui
+      '@types/node':
+        specifier: ^26.0.1
+        version: 26.1.1
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(vite@8.1.3(@types/node@26.1.1)(esbuild@0.28.2)(tsx@4.23.12))
+
   examples/music-bot:
     dependencies:
       '@slipher/player':
@@ -157,6 +190,67 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
+  packages/lab:
+    dependencies:
+      '@slipher/lab-ui':
+        specifier: workspace:*
+        version: link:../lab-ui
+    dependenciesMeta:
+      '@slipher/testing':
+        injected: true
+    devDependencies:
+      '@biomejs/biome':
+        specifier: 2.5.1
+        version: 2.5.1
+      '@slipher/testing':
+        specifier: workspace:*
+        version: file:packages/testing(seyfert@5.1.0)
+      '@types/node':
+        specifier: ^26.0.1
+        version: 26.1.1
+      seyfert:
+        specifier: 5.1.0
+        version: 5.1.0
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(vite@8.1.3(@types/node@26.1.1)(esbuild@0.28.2)(tsx@4.23.12))
+
+  packages/lab-ui:
+    devDependencies:
+      '@biomejs/biome':
+        specifier: 2.5.1
+        version: 2.5.1
+      '@slipher/lab':
+        specifier: workspace:*
+        version: link:../lab
+      '@types/node':
+        specifier: ^26.0.1
+        version: 26.1.1
+      '@types/react':
+        specifier: ^19.1.10
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: ^19.1.7
+        version: 19.3.0(@types/react@19.3.0)
+      react:
+        specifier: ^19.1.1
+        version: 19.3.0
+      react-dom:
+        specifier: ^19.1.1
+        version: 19.3.0(react@19.3.0)
+      tsx:
+        specifier: ^4.23.12
+        version: 4.23.12
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vite:
+        specifier: ^8.1.3
+        version: 8.1.3(@types/node@26.1.1)(esbuild@0.28.2)(tsx@4.23.12)
+
   packages/logger:
     dependencies:
       serialize-error:
@@ -177,7 +271,7 @@ importers:
         version: 26.1.1
       evlog:
         specifier: ^2.26.0
-        version: 2.26.0(vite@8.1.3(@types/node@26.1.1)(esbuild@0.28.2)(tsx@4.23.12))
+        version: 2.26.0(react@19.3.0)(vite@8.1.3(@types/node@26.1.1)(esbuild@0.28.2)(tsx@4.23.12))
       seyfert:
         specifier: ^5.0.0
         version: 5.0.0
@@ -439,6 +533,7 @@ packages:
   '@biomejs/biome@2.5.1':
     resolution: {integrity: sha512-IXWLCxKmae+rI7LOHS1B3EbVisQ6GRAWbhN9msa6KjNCyFWrvKZWR4oUdinaNssrV852OrSHuSPa95h1GPJc7Q==}
     engines: {node: '>=14.21.3'}
+    hasBin: true
 
   '@biomejs/cli-darwin-arm64@2.5.1':
     resolution: {integrity: sha512-npqDzvqv7vFaWRiNN1Te71siRgPaqS9MpqgYCdP/CrUbkJ7ApezaeaKjueKHRN/JH/6lRjJQAHi8acQDCAz22w==}
@@ -1186,6 +1281,17 @@ packages:
   '@rolldown/pluginutils@1.0.1':
     resolution: {integrity: sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw==}
 
+  '@slipher/lab@file:packages/lab':
+    resolution: {directory: packages/lab, type: directory}
+    hasBin: true
+    peerDependencies:
+      '@slipher/lab-ui': workspace:*
+      '@slipher/testing': workspace:*
+      seyfert: '>=5.0.0'
+    peerDependenciesMeta:
+      '@slipher/lab-ui':
+        optional: true
+
   '@slipher/testing@file:packages/testing':
     resolution: {directory: packages/testing, type: directory}
     peerDependencies:
@@ -1244,6 +1350,14 @@ packages:
 
   '@types/node@26.1.1':
     resolution: {integrity: sha512-nxAkRSVkN1Y0JC1W8ky/fTfkGsMmcrRsbx+3XoZE+rMOX71kLYTV7fLXpqud1GpbpP5TuffXFqfX7fH2GgZREw==}
+
+  '@types/react-dom@19.3.0':
+    resolution: {integrity: sha512-ZI7bU42mZXXKHn/qNLEw2IrbiINU7X5+vfgdixBHkCNpYWXjKgfQ/P+uyGb5CjOLB9UcnTeg3rylQtV2hym44Q==}
+    peerDependencies:
+      '@types/react': ^19.3.0
+
+  '@types/react@19.3.0':
+    resolution: {integrity: sha512-N0rFCuH9YoxG9/m61l9MfpJKfmLOVU0em7ipIz6TRgSSkvReLB9vL85GB+yr8Bs5leqpvg96JSwF4ZS1s4viQg==}
 
   '@types/ws@8.18.1':
     resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
@@ -1468,6 +1582,9 @@ packages:
   cross-spawn@7.0.6:
     resolution: {integrity: sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==}
     engines: {node: '>= 8'}
+
+  csstype@3.2.3:
+    resolution: {integrity: sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ==}
 
   dargs@7.0.0:
     resolution: {integrity: sha512-2iy1EkLdlBzQGvbweYRFxmFath8+K7+AKB0TlhHWkNuH+TmovaMH/Wp7V7R4u7f4SnX3OgLsU9t1NI9ioDnUpg==}
@@ -2002,6 +2119,15 @@ packages:
     resolution: {integrity: sha512-vYt7UD1U9Wg6138shLtLOvdAu+8DsC/ilFtEVHcH+wydcSpNE20AfSOduf6MkRFahL5FY7X1oU7nKVZFtfq8Fg==}
     engines: {node: '>=6'}
 
+  react-dom@19.3.0:
+    resolution: {integrity: sha512-JDk8dgif51OjFoDE70+OT9ICyYr+69HlmihNwp1+Nsfbna3t5sIiCa9ZJktDmQ4/1b/rn26hIAR2uYXDMr5r0Q==}
+    peerDependencies:
+      react: ^19.3.0
+
+  react@19.3.0:
+    resolution: {integrity: sha512-E8LUcbtBWt20bbl2YoHfx4ZDBdxVTfOKtCZn9cDSJ4l6/nuoApcpIBcj47t2wZoVX8g2ZHuMHbiShgCR1T5Sog==}
+    engines: {node: '>=0.10.0'}
+
   readdirp@5.0.0:
     resolution: {integrity: sha512-9u/XQ1pvrQtYyMpZe7DXKv2p5CNvyVwzUB6uhLAnQwHMSgKMBR62lc7AHljaeteeHXn11XTAaLLUVZYVZyuRBQ==}
     engines: {node: '>= 20.19.0'}
@@ -2030,6 +2156,9 @@ packages:
     resolution: {integrity: sha512-t9z29cJjXf/vxQ8dyhCSpt6H6aSwHTk8cT5I3iy6SMXuFpk5mB6PL6XfC8PCwrPTx93udwKUm9HRteAlTGBLiA==}
     engines: {node: ^20.19.0 || >=22.12.0}
     hasBin: true
+
+  scheduler@0.28.0:
+    resolution: {integrity: sha512-juorfCmIkIw8tT+p5BXSm6PJjQF/ycEYmKyzURCIt/RaZIhL+PulbQ9Yu2z1HdOJDdqDTlxA1+xKBmHXJsczAw==}
 
   semver-regex@4.0.5:
     resolution: {integrity: sha512-hunMQrEy1T6Jr2uEVjrAIqjwWcQTgOAcIM52C8MY1EZSD3DDNft04XzvYKPqjED65bNVVko0YI38nYeEHCX3yw==}
@@ -2169,6 +2298,7 @@ packages:
   typescript@6.0.3:
     resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
     engines: {node: '>=14.17'}
+    hasBin: true
 
   uWebSockets.js@https://codeload.github.com/uNetworking/uWebSockets.js/tar.gz/6609a88ffa9a16ac5158046761356ce03250a0df:
     resolution: {gitHosted: true, integrity: sha512-eUPBlSskGAN5hYzFjuf+b0LFohKxIRe8EdMmkaNrZ6r8JtEnU05CKXZknoInYJaNfMLUfjgDA7bwsynah5pX9g==, tarball: https://codeload.github.com/uNetworking/uWebSockets.js/tar.gz/6609a88ffa9a16ac5158046761356ce03250a0df}
@@ -2932,6 +3062,13 @@ snapshots:
 
   '@rolldown/pluginutils@1.0.1': {}
 
+  '@slipher/lab@file:packages/lab(@slipher/lab-ui@packages+lab-ui)(@slipher/testing@file:packages/testing(seyfert@5.1.0))(seyfert@5.1.0)':
+    dependencies:
+      '@slipher/testing': file:packages/testing(seyfert@5.1.0)
+      seyfert: 5.1.0
+    optionalDependencies:
+      '@slipher/lab-ui': link:packages/lab-ui
+
   '@slipher/testing@file:packages/testing(seyfert@5.1.0)':
     dependencies:
       seyfert: 5.1.0
@@ -2977,6 +3114,14 @@ snapshots:
   '@types/node@26.1.1':
     dependencies:
       undici-types: 8.3.0
+
+  '@types/react-dom@19.3.0(@types/react@19.3.0)':
+    dependencies:
+      '@types/react': 19.3.0
+
+  '@types/react@19.3.0':
+    dependencies:
+      csstype: 3.2.3
 
   '@types/ws@8.18.1':
     dependencies:
@@ -3237,6 +3382,8 @@ snapshots:
       shebang-command: 2.0.0
       which: 2.0.2
 
+  csstype@3.2.3: {}
+
   dargs@7.0.0: {}
 
   debug-logfmt@1.4.15(debug@4.4.3):
@@ -3365,8 +3512,9 @@ snapshots:
 
   esutils@2.0.3: {}
 
-  evlog@2.26.0(vite@8.1.3(@types/node@26.1.1)(esbuild@0.28.2)(tsx@4.23.12)):
+  evlog@2.26.0(react@19.3.0)(vite@8.1.3(@types/node@26.1.1)(esbuild@0.28.2)(tsx@4.23.12)):
     optionalDependencies:
+      react: 19.3.0
       vite: 8.1.3(@types/node@26.1.1)(esbuild@0.28.2)(tsx@4.23.12)
 
   execa@8.0.1:
@@ -3694,6 +3842,13 @@ snapshots:
 
   punycode@2.3.1: {}
 
+  react-dom@19.3.0(react@19.3.0):
+    dependencies:
+      react: 19.3.0
+      scheduler: 0.28.0
+
+  react@19.3.0: {}
+
   readdirp@5.0.0: {}
 
   redis-errors@1.2.0: {}
@@ -3739,6 +3894,8 @@ snapshots:
       '@rolldown/binding-wasm32-wasi': 1.1.5
       '@rolldown/binding-win32-arm64-msvc': 1.1.5
       '@rolldown/binding-win32-x64-msvc': 1.1.5
+
+  scheduler@0.28.0: {}
 
   semver-regex@4.0.5: {}
 

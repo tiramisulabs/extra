@@ -29,6 +29,160 @@ class BanTarget extends Command {
 }
 
 describe('bot identity is stated once', () => {
+	test('one configured profile authors seeded, REST, and interaction messages across guilds', async () => {
+		const world = mockWorld();
+		const identity = world.botUser({
+			id: '900000000000000099',
+			username: 'my-bot',
+			globalName: 'My Bot',
+			avatar: 'avatar-hash',
+		});
+		const first = world.registerGuild({ id: 'profile-a' });
+		const second = world.registerGuild({ id: 'profile-b' });
+		const here = world.registerBotMember(first.id);
+		const there = world.registerBotMember(second.id);
+		const channel = world.registerChannel(first.id, { id: 'profile-channel' });
+		const actor = world.registerMember(first.id, { user: apiUser({ id: 'profile-actor' }) });
+		world.registerMessage(channel.id, { author: world.botUser(), content: 'seeded' });
+
+		@Declare({ name: 'identity', description: 'Replies as the bot' })
+		class Identity extends Command {
+			async run(ctx: CommandContext) {
+				await ctx.write({ content: 'original' });
+				await ctx.followup({ content: 'followup' });
+				await ctx.editResponse({ content: 'edited original' });
+			}
+		}
+
+		await using bot = await createMockBot({ world, commands: [Identity] });
+		const expected = {
+			id: identity.id,
+			username: 'my-bot',
+			global_name: 'My Bot',
+			avatar: 'avatar-hash',
+			bot: true,
+		};
+		expect(bot.client.botId).toBe(identity.id);
+		expect(bot.world.snapshot().botUser).toMatchObject(expected);
+		expect(bot.client.me).toMatchObject({
+			id: identity.id,
+			username: 'my-bot',
+			globalName: 'My Bot',
+			avatar: 'avatar-hash',
+			bot: true,
+		});
+		expect(here.user).toMatchObject(expected);
+		expect(there.user).toMatchObject(expected);
+		const rest = await bot.client.messages.write(channel.id, { content: 'REST' });
+		await bot.client.messages.edit(rest.id, channel.id, { content: 'REST edited' });
+		await bot.slash({ name: 'identity', guildId: first.id, channel, user: actor.user });
+		for (const content of ['seeded', 'REST edited', 'edited original', 'followup']) {
+			expect(
+				bot.inspectChannel(channel.id).messages.find(message => message.payload.content === content)?.payload.author,
+			).toMatchObject(expected);
+		}
+		expect(
+			bot.world
+				.snapshot()
+				.members.filter(member => member.userId === identity.id)
+				.map(member => member.guildId),
+		).toEqual([first.id, second.id]);
+		expect(
+			bot.world
+				.snapshot()
+				.messages.filter(message => ['seeded', 'REST edited', 'edited original', 'followup'].includes(message.content))
+				.map(message => message.authorId),
+		).toEqual([identity.id, identity.id, identity.id, identity.id]);
+		await bot.seed(builder => {
+			const later = builder.registerGuild({ id: 'profile-later' });
+			builder.registerBotMember(later.id);
+		});
+		expect(await bot.client.cache.members?.raw(identity.id, 'profile-later')).toMatchObject({ user: expected });
+	});
+
+	test('a profile id and legacy botId cannot disagree', async () => {
+		await expect(createMockBot({ botUser: { id: 'profile-id' }, botId: 'other-id' })).rejects.toThrow(
+			/conflicts with botId/,
+		);
+		const world = mockWorld();
+		world.botUser({ id: 'world-id' });
+		await expect(createMockBot({ world, botId: 'other-id' })).rejects.toThrow(/conflicts with world\.botUser/);
+	});
+
+	test('the default profile is the same for client, REST messages, and seeded members', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'default-profile-guild' });
+		const channel = world.registerChannel(guild.id);
+		const member = world.registerBotMember(guild.id);
+		world.registerMessage(channel.id, { author: world.botUser(), content: 'seeded default' });
+		await using bot = await createMockBot({ world });
+		await bot.client.messages.write(channel.id, { content: 'REST default' });
+		expect(bot.client.me).toMatchObject({
+			id: TEST_BOT_ID,
+			username: 'slipher-test-bot',
+			globalName: 'Slipher Test Bot',
+		});
+		expect(bot.world.snapshot().botUser).toMatchObject({
+			id: TEST_BOT_ID,
+			username: 'slipher-test-bot',
+			global_name: 'Slipher Test Bot',
+			bot: true,
+		});
+		expect(member.user).toMatchObject({
+			id: TEST_BOT_ID,
+			username: 'slipher-test-bot',
+			global_name: 'Slipher Test Bot',
+			bot: true,
+		});
+		expect(bot.inspectChannel(channel.id).messages.map(message => message.payload.author.username)).toEqual([
+			'slipher-test-bot',
+			'slipher-test-bot',
+		]);
+	});
+
+	test('setting only a username gives the bot the same display name', () => {
+		const world = mockWorld();
+		expect(world.botUser({ username: 'solo-bot' })).toMatchObject({ username: 'solo-bot', global_name: 'solo-bot' });
+	});
+
+	test('createMockBot accepts the same profile without a world', async () => {
+		await using bot = await createMockBot({ botUser: { id: '900000000000000098', username: 'standalone-bot' } });
+		expect(bot.client.me).toMatchObject({
+			id: '900000000000000098',
+			username: 'standalone-bot',
+			globalName: 'standalone-bot',
+		});
+		expect(bot.world.snapshot().botUser).toMatchObject({
+			id: '900000000000000098',
+			username: 'standalone-bot',
+			global_name: 'standalone-bot',
+			bot: true,
+		});
+		const message = await bot.client.messages.write('standalone-channel', { content: 'hello' });
+		expect(message.author).toMatchObject({
+			id: '900000000000000098',
+			username: 'standalone-bot',
+			globalName: 'standalone-bot',
+			bot: true,
+		});
+	});
+
+	test('createMockBot profile updates a bot author seeded before boot', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'option-profile-guild' });
+		const channel = world.registerChannel(guild.id);
+		const member = world.registerBotMember(guild.id);
+		const seeded = world.registerMessage(channel.id, { author: world.botUser(), content: 'before boot' });
+		await using bot = await createMockBot({
+			world,
+			botUser: { id: '900000000000000097', username: 'option-bot', globalName: 'Option Bot' },
+		});
+		const expected = { id: '900000000000000097', username: 'option-bot', global_name: 'Option Bot', bot: true };
+		expect(member.user).toMatchObject(expected);
+		expect(seeded.author).toMatchObject(expected);
+		expect(bot.inspectChannel(channel.id).messages[0]?.payload.author).toMatchObject(expected);
+	});
+
 	test('a botId given to createMockBot reaches the member the world already seeded', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'identity-guild' });
@@ -92,6 +246,37 @@ describe('bot identity is stated once', () => {
 		await expect(createMockBot({ world, botId: 'options-bot' })).rejects.toThrow(
 			/conflicts with registerBotMember\(\{ botId: "world-bot" \}\)/,
 		);
+	});
+
+	test('a world reused for another bot can run under a different id', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'reuse-guild' });
+		const member = world.registerBotMember(guild.id);
+		{
+			await using first = await createMockBot({ world });
+			expect(first.client.botId).toBe(TEST_BOT_ID);
+		}
+		{
+			await using second = await createMockBot({ world, botId: '999' });
+			expect(second.client.botId).toBe('999');
+			expect(member.user.id).toBe('999');
+		}
+		await using third = await createMockBot({ world, botUser: { id: '998' } });
+		expect(third.client.botId).toBe('998');
+	});
+
+	test('changing the builder after start leaves the running bot identity alone', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'frozen-identity-guild' });
+		const channel = world.registerChannel(guild.id);
+		world.botUser({ username: 'before' });
+		await using bot = await createMockBot({ world });
+		world.botUser({ username: 'after' });
+
+		const message = await bot.client.messages.write(channel.id, { content: 'hello' });
+		expect(message.author.username).toBe('before');
+		expect(bot.world.snapshot().botUser.username).toBe('before');
+		expect(bot.client.me.username).toBe('before');
 	});
 
 	test('pinning two different bot ids on one world fails at registration', () => {

@@ -411,12 +411,12 @@ describe('one error model, one predicate', () => {
 		const channel = world.registerChannel(guild.id, { id: 'copy-chan' });
 		const bot = await createMockBot({ world });
 
-		// seyfert renames the error after the status text and the code, so the copy lives on metadata.response
+		// Seyfert 5.0 and 5.1 format Error.message differently; the wire code and response copy are stable.
 		const catalogError = await bot.client.channels.fetch('ghost').then(
 			() => undefined,
 			(reason: unknown) => reason,
 		);
-		expect((catalogError as Error).message).toBe('Api Not found 10003');
+		expect(isDiscordError(catalogError, { status: 404, code: DiscordErrors.UnknownChannel.code })).toBe(true);
 		expect(discordErrorDetail(catalogError)).toBe('Unknown Channel');
 
 		// per-call detail still overrides the catalog copy, which is why apiError's second argument exists
