@@ -34,7 +34,7 @@ function Launcher({
 	return (
 		<div className="launcher">
 			<div className="launcher-card">
-				<h2>Start a scenario</h2>
+				<h2>{snapshot.project.setup ? 'Start a session' : 'Start a scenario'}</h2>
 				{snapshot.notice && <StatusCallout status={{ text: snapshot.notice }} />}
 				{status && <StatusCallout status={status} />}
 				<ScenarioForm project={snapshot.project} launcher={launcher} running={false} />

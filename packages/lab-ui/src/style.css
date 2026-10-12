@@ -2173,6 +2173,7 @@ a.revision-chip[href]:hover {
 .scenario-card {
 	position: relative;
 	display: flex;
+	flex-wrap: wrap;
 	align-items: baseline;
 	justify-content: space-between;
 	gap: 12px;
@@ -2182,11 +2183,20 @@ a.revision-chip[href]:hover {
 	background: var(--card);
 	cursor: pointer;
 }
+.scenario-card-copy {
+	display: grid;
+	gap: 4px;
+}
+.scenario-card small {
+	color: var(--muted);
+}
 .scenario-card strong {
 	color: var(--strong);
 	font-weight: 600;
 }
 .scenario-card code {
+	max-width: 100%;
+	overflow-wrap: anywhere;
 	color: var(--faint);
 }
 .scenario-card.selected {

@@ -508,6 +508,7 @@ export class HostClient implements LabClient, CheckpointClient {
 			await this.post('/api/session', {
 				preset: {
 					scenario: { id: scenario.id, version: scenario.version },
+					...(this.project?.setup ? { setup: this.project.setup } : {}),
 					params: presetParams(choice),
 					services: choice.services,
 				},

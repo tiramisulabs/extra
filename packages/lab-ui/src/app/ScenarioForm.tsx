@@ -9,7 +9,10 @@ type ParamValue = ScenarioChoice['params'][string];
 function defaultChoice(snapshot: LabSnapshot): ScenarioChoice {
 	const preset = snapshot.session?.preset;
 	const { scenarios, services } = snapshot.project;
-	const scenario = scenarios.find(item => item.id === preset?.scenario.id) ?? scenarios[0];
+	const scenario =
+		scenarios.find(item => item.id === preset?.scenario.id) ??
+		scenarios.find(item => item.id !== snapshot.project.setup?.id) ??
+		scenarios[0];
 	return {
 		scenarioId: scenario?.id ?? '',
 		params: { ...defaultParams(scenario), ...preset?.params },
@@ -138,7 +141,7 @@ export function ScenarioForm({
 	return (
 		<form className="scenario-form" onSubmit={submit}>
 			<fieldset className="scenario-list">
-				<legend>Scenario</legend>
+				<legend>{project.setup ? 'Preparation' : 'Scenario'}</legend>
 				{project.scenarios.map(item => (
 					<label key={item.id} className={`scenario-card ${item.id === choice.scenarioId ? 'selected' : ''}`}>
 						<input
@@ -148,13 +151,23 @@ export function ScenarioForm({
 							checked={item.id === choice.scenarioId}
 							onChange={() => setChoice({ ...choice, scenarioId: item.id, params: defaultParams(item) })}
 						/>
-						<strong>{item.title}</strong>
+						<span className="scenario-card-copy">
+							<strong>{item.title}</strong>
+							{project.setup && <small>{item.id === project.setup.id ? 'Shared setup' : 'PR preview'}</small>}
+						</span>
 						<code>
 							{item.id}@{item.version}
 						</code>
 					</label>
 				))}
 			</fieldset>
+			{project.setup && (
+				<p className="lab-empty">
+					{scenario?.id === project.setup.id
+						? 'Explore the bot using the shared setup.'
+						: 'Uses the shared setup plus this preview’s changes.'}
+				</p>
+			)}
 			{scenario && Object.keys(scenario.params).length > 0 && (
 				<fieldset>
 					<legend>Parameters</legend>

@@ -276,6 +276,10 @@ function CheckpointSection({
 	return (
 		<section className="lab-section" aria-busy={pending}>
 			<h3>Checkpoint</h3>
+			<p className="lab-empty">
+				Keep a checkpoint as a regression only when its journey is worth maintaining. Keep the matching preparation with
+				the exported test.
+			</p>
 			{pending && (
 				<p className="checkpoint-progress" role="status">
 					<span className="action-spinner" aria-hidden="true" />

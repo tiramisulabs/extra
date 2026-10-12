@@ -63,7 +63,7 @@ function Json({ value }: { value: JsonValue | undefined }) {
 /** Restart form and the session's refs; before a session the launcher in the conversation area holds the form. */
 function ScenarioTab({ snapshot, launcher }: { snapshot: LabSnapshot; launcher: ScenarioLauncher }) {
 	const { session } = snapshot;
-	if (!session) return <p className="lab-empty">Start a scenario to restart it here and see its refs.</p>;
+	if (!session) return <p className="lab-empty">Start a session to restart it here and see its refs.</p>;
 	return (
 		<>
 			<ScenarioForm project={snapshot.project} launcher={launcher} running />
@@ -235,7 +235,7 @@ export function LabPanel({
 							onTab(key);
 							document.getElementById(`lab-tab-${key}`)?.focus();
 						}}>
-						{label}
+						{id === 'scenario' && snapshot.project.setup ? 'Preparation' : label}
 						{Boolean(counts[id]) && <span className={`tab-count ${id === 'rest' ? 'danger' : ''}`}>{counts[id]}</span>}
 					</button>
 				))}
