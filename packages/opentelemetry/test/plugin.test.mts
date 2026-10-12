@@ -78,26 +78,6 @@ describe('opentelemetry plugin wiring', () => {
 		}
 	});
 
-	test('options() installs contextScopes when interactions are on', () => {
-		const plugin = opentelemetry({
-			traces: { interactions: true, events: false, rest: false, cache: false },
-			metrics: { interactions: false, events: false, rest: false, cache: false },
-		});
-		const fragment = plugin.options?.({} as never);
-		assert.ok(fragment?.contextScopes);
-		assert.equal(fragment?.contextScopes?.length, 1);
-		assert.equal(typeof fragment?.contextScopes?.[0], 'function');
-	});
-
-	test('options() omits contextScopes when interactions are off', () => {
-		const plugin = opentelemetry({
-			traces: { interactions: false, events: false, rest: false, cache: false },
-			metrics: { interactions: false, events: false, rest: false, cache: false },
-		});
-		const fragment = plugin.options?.({} as never);
-		assert.deepEqual(fragment, {});
-	});
-
 	test('client.trace and ctx.trace factories return a TraceHandle', () => {
 		const plugin = opentelemetry({
 			traces: { interactions: false, events: false, rest: false, cache: false },

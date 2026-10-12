@@ -323,6 +323,8 @@ describe('proxy server', () => {
 	});
 
 	test('keeps route buckets centralized with Discord reset headers', async () => {
+		const now = Date.now();
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
 		let calls = 0;
 		const fixture = await startProxy(async () => {
 			calls++;
@@ -332,16 +334,24 @@ describe('proxy server', () => {
 				{ 'x-ratelimit-limit': '1', 'x-ratelimit-remaining': '0', 'x-ratelimit-reset-after': '0.02' },
 			);
 		});
-		cleanups.push(() => fixture.close());
+		cleanups.push(() => {
+			clock.mockRestore();
+			return fixture.close();
+		});
 
 		await fixture.handler.request('GET', '/channels/123/messages');
-		const started = Date.now();
-		await fixture.handler.request('GET', '/channels/123/messages');
+		const second = fixture.handler.request('GET', '/channels/123/messages');
+		await vi.waitUntil(() => fixture.proxy.getStats().inFlightRequests === 1, { interval: 1 });
+		assert.equal(calls, 1);
+
+		clock.mockReturnValue(now + 21);
+		assert.deepEqual(await second, { ok: true });
 		assert.equal(calls, 2);
-		assert.ok(Date.now() - started >= 10);
 	});
 
 	test('snapshots the default token version before an admission wait', async () => {
+		const now = Date.now();
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
 		const authorizations: string[] = [];
 		const fixture = await startProxy(
 			async (_url, init) => {
@@ -350,13 +360,18 @@ describe('proxy server', () => {
 			},
 			{ globalLimit: { max: 1, perMs: 25 } },
 		);
-		cleanups.push(() => fixture.close());
+		cleanups.push(() => {
+			clock.mockRestore();
+			return fixture.close();
+		});
 
 		await fixture.handler.request('GET', '/channels/1');
 		const queued = fixture.handler.request('GET', '/channels/2');
 		await vi.waitUntil(() => fixture.proxy.getStats().pendingRequests > 0, { interval: 1 });
 		fixture.rest.options.token = 'rotated';
+		clock.mockReturnValue(now + 26);
 		await queued;
+		clock.mockReturnValue(now + 52);
 		await fixture.handler.request('GET', '/channels/3');
 
 		assert.deepEqual(authorizations, ['Bot discord-token', 'Bot discord-token', 'Bot rotated']);
@@ -410,9 +425,14 @@ describe('proxy server', () => {
 	});
 
 	test('temporarily quarantines when the invalid request budget is exhausted', async () => {
+		const now = Date.now();
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
 		const fetcher = vi.fn<typeof fetch>(async () => response(403, { code: 50013, message: 'Missing Permissions' }));
 		const fixture = await startProxy(fetcher, { invalidWindow: { max: 1, perMs: 20 } });
-		cleanups.push(() => fixture.close());
+		cleanups.push(() => {
+			clock.mockRestore();
+			return fixture.close();
+		});
 		const states: string[] = [];
 		const dispose = fixture.proxy.observe(observation => {
 			if (observation.type === 'state') states.push(observation.state);
@@ -423,6 +443,7 @@ describe('proxy server', () => {
 		assert.instanceOf(blocked, ProxyError);
 		assert.equal(blocked.code, 'PROXY_INVALID_REQUEST_BUDGET_EXHAUSTED');
 		await vi.waitUntil(() => states.includes('quarantined'), { interval: 1 });
+		clock.mockReturnValue(now + 21);
 		await vi.waitUntil(() => states.includes('ready'), { interval: 1 });
 		dispose();
 		assert.instanceOf(await fixture.handler.request('GET', '/channels/3').catch(value => value), SeyfertError);

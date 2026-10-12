@@ -1,9 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { createMockBot, type SlashOptionsOf } from '../../src/bot/bot';
+import { createMockBot } from '../../src/bot/bot';
 import { EchoCommand, FilterCommand, GreetCommand, SlowCommand } from './_setup';
-
-/** Compile-time assertion that the argument is assignable to `Expected`; the typed parameter does the checking. */
-function expectAssignable<Expected>(_value: Expected): void {}
 
 describe('S18 slash class-inference', () => {
 	test('infers the option bag from the class and dispatches with no cast', async () => {
@@ -36,48 +33,6 @@ describe('S18 slash class-inference', () => {
 		const bot = await createMockBot({ commands: [GreetCommand] });
 		const result = await bot.slash({ name: 'greet', options: { name: 'object' } });
 		expect(result.content).toBe('Hello, object!');
-		await bot.close();
-	});
-});
-
-describe('S18 slash inference: compile-time enforcement', () => {
-	test('SlashOptionsOf maps the declared record to value types', () => {
-		// GreetCommand declares a required string `name`.
-		const ok: SlashOptionsOf<typeof GreetCommand> = { name: 'slipher' };
-		expectAssignable<{ name: string }>(ok);
-
-		// FilterCommand: required number `count`, optional string `label`.
-		const filter: SlashOptionsOf<typeof FilterCommand> = { count: 1 };
-		expectAssignable<{ count: number; label?: string }>(filter);
-	});
-
-	test('wrong option value type fails to compile', async () => {
-		const bot = await createMockBot({ commands: [FilterCommand, GreetCommand], validateOptions: false });
-		// @ts-expect-error count is a number; a string is rejected by the inferred bag.
-		await bot.slash(FilterCommand, { options: { count: 'three' } });
-		// @ts-expect-error name is a string; a number is rejected.
-		await bot.slash(GreetCommand, { options: { name: 42 } });
-		await bot.close();
-	});
-
-	test('required option omission fails to compile', async () => {
-		const bot = await createMockBot({ commands: [FilterCommand], validateOptions: false });
-		// @ts-expect-error `count` is required and must be present.
-		await bot.slash(FilterCommand, { options: { label: 'x' } });
-		await bot.close();
-	});
-
-	test('unknown option key fails to compile', async () => {
-		const bot = await createMockBot({ commands: [GreetCommand], validateOptions: false });
-		// @ts-expect-error `nope` is not a declared option on GreetCommand.
-		await bot.slash(GreetCommand, { options: { name: 'slipher', nope: true } });
-		await bot.close();
-	});
-
-	test('passing name in the class overload fails to compile', async () => {
-		const bot = await createMockBot({ commands: [GreetCommand], validateOptions: false });
-		// @ts-expect-error name is derived from the class and is not accepted here.
-		await bot.slash(GreetCommand, { name: 'greet', options: { name: 'slipher' } });
 		await bot.close();
 	});
 

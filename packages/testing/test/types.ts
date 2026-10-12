@@ -30,7 +30,10 @@ import {
 	type RoleView,
 	rendered,
 	richGuild,
+	type SlashOptionsOf,
 } from '../src';
+
+import { FilterCommand, GreetCommand } from './bot/_setup';
 
 declare function expectType<T>(value: T): void;
 
@@ -154,6 +157,23 @@ buttonFilter.filter({ componentType: 'StringSelect' });
 mockComponentContext(FilterTypeButton, { customId: 'save' });
 
 declare const bot: Awaited<ReturnType<typeof createMockBot>>;
+
+const greetSlashOptions: SlashOptionsOf<typeof GreetCommand> = { name: 'slipher' };
+expectType<{ name: string }>(greetSlashOptions);
+const filterSlashOptions: SlashOptionsOf<typeof FilterCommand> = { count: 1 };
+expectType<{ count: number; label?: string }>(filterSlashOptions);
+bot.slash(FilterCommand, { options: { count: 1, label: 'rows' } });
+// @ts-expect-error count is a number, not a string.
+bot.slash(FilterCommand, { options: { count: 'three' } });
+// @ts-expect-error name is a string, not a number.
+bot.slash(GreetCommand, { options: { name: 42 } });
+// @ts-expect-error count is required.
+bot.slash(FilterCommand, { options: { label: 'x' } });
+// @ts-expect-error nope is not a declared option.
+bot.slash(GreetCommand, { options: { name: 'slipher', nope: true } });
+// @ts-expect-error name is derived from the class.
+bot.slash(GreetCommand, { name: 'greet', options: { name: 'slipher' } });
+
 bot.slash(SetTypeSub, { options: { value: 'x' } });
 // @ts-expect-error — subcommand class dispatch keeps the inferred option value type.
 bot.slash(SetTypeSub, { options: { value: 123 } });
