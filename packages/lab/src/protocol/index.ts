@@ -48,6 +48,8 @@ export interface HostInfo {
 	labVersion: string;
 	protocolVersion: number;
 	build?: BuildInfo;
+	/** Initial configuration captured from the PR when the host started. */
+	preset?: Preset;
 	limits?: { maxRuns: number; idleTtlMs: number; maxRunMs: number };
 	run:
 		| { state: 'none' }
@@ -163,6 +165,7 @@ export function validateHostInfo(value: unknown): asserts value is HostInfo {
 		requireText(value.build.revision, 'host info build.revision');
 		for (const key of ['ref', 'url', 'builtAt']) optionalText(value.build[key], `host info build.${key}`);
 	}
+	if (value.preset !== undefined) validatePreset(value.preset);
 	if (value.mode === 'hosted') {
 		requireRecord(value.limits, 'host info limits');
 		for (const key of ['maxRuns', 'idleTtlMs', 'maxRunMs'])
@@ -262,7 +265,7 @@ function validateExpectation(value: unknown, actionCount: number): void {
 	} else if (typeof value.path !== 'string' || !Object.hasOwn(value, 'equals')) fail('checkpoint path expectation');
 }
 
-export function validatePreset(value: unknown): asserts value is Preset {
+export function validatePreset(value: unknown, project?: ProjectDescription): asserts value is Preset {
 	if (!isRecord(value) || !isRecord(value.scenario)) fail('session.start payload');
 	requireText(value.scenario.id, 'scenario.id');
 	if (!Number.isSafeInteger(value.scenario.version)) fail('scenario.version');
@@ -273,6 +276,18 @@ export function validatePreset(value: unknown): asserts value is Preset {
 	if (value.params !== undefined && !isParams(value.params)) fail('session.start params');
 	if (value.services !== undefined && !isTextMap(value.services)) fail('session.start services');
 	if (value.refs !== undefined && !isTextMap(value.refs)) fail('session.start refs');
+	if (!project) return;
+	const { id, version } = value.scenario;
+	const scenario = project.scenarios.find(item => item.id === id && item.version === version);
+	if (!scenario) fail('preset scenario is not defined in the project');
+	if (value.setup && (value.setup.id !== project.setup?.id || value.setup.version !== project.setup?.version))
+		fail('preset shared setup does not match the project');
+	for (const [name, given] of Object.entries(value.params ?? {})) {
+		const definition = scenario.params[name];
+		if (!definition || !isParamValue(definition.kind, given, definition.values)) fail(`preset parameter "${name}"`);
+	}
+	for (const [name, variant] of Object.entries(value.services ?? {}))
+		if (!project.services[name]?.variants.includes(variant)) fail(`preset service "${name}"`);
 }
 
 function isModalFieldValue(value: unknown): boolean {

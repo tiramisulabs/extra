@@ -4,8 +4,9 @@ import { createServer, type IncomingMessage } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { describeChildProject } from '../child';
-import type { BuildInfo, ProjectDescription } from '../protocol';
+import { type BuildInfo, type ProjectDescription, validatePreset } from '../protocol';
 import { positiveInteger, validateTimeouts } from '../shared';
+import { type PullRequestPreview, pullRequestPreset } from './preview';
 import { HostedRuns, type HostLimits, LocalRuns } from './registry';
 import { createRequestListener, type HostContext } from './routes';
 
@@ -26,11 +27,12 @@ export interface HostOptions {
 	inheritEnv?: boolean;
 	childEnv?: string[];
 	exportModule?: string;
+	pullRequest?: PullRequestPreview;
 }
-export type { BuildInfo };
+export type { BuildInfo, PullRequestPreview };
 export type HostAccess =
 	| { mode: 'trusted-proxy' }
-	| { mode: 'authorize'; authorize(req: IncomingMessage): boolean | Promise<boolean> };
+	| { mode: 'authorize'; authorize(req: IncomingMessage): boolean | Promise<boolean>; challenge?: string };
 export interface HostedOptions {
 	publicOrigin: string;
 	access: HostAccess;
@@ -89,6 +91,12 @@ function resolveHostedConfig(hosted: HostedOptions, options: HostOptions): Hoste
 }
 
 export async function startHost(options: HostOptions): Promise<LabHost> {
+	options = {
+		...options,
+		build: options.build && structuredClone(options.build),
+		pullRequest: options.pullRequest && structuredClone(options.pullRequest),
+	};
+	let preset = options.pullRequest && pullRequestPreset(options.pullRequest, options.build?.revision);
 	const hostname = options.hostname ?? '127.0.0.1';
 	const port = options.port ?? 0;
 	if (!options.hosted && !LOCAL_BIND_HOSTNAMES.includes(hostname))
@@ -113,7 +121,14 @@ export async function startHost(options: HostOptions): Promise<LabHost> {
 		childEnv: options.childEnv,
 	};
 	// Hosted mode serves one fixed build and describes it once; local mode describes on demand so rebuilds show up.
-	const cachedDescription = hosted ? await describeChildProject(childOptions) : undefined;
+	const cachedDescription = hosted || options.pullRequest ? await describeChildProject(childOptions) : undefined;
+	if (options.pullRequest && cachedDescription) {
+		const setup = cachedDescription.setup;
+		if (!preset && !setup) throw new Error('A PR without a recipe requires project.setup');
+		preset ??= { scenario: setup! };
+		preset = { ...preset, ...(setup ? { setup: preset.setup ?? setup } : {}) };
+		validatePreset(preset, cachedDescription);
+	}
 	const runs = hosted
 		? await HostedRuns.open(instanceId, dataDir, hosted.limits, hosted.publicOrigin.protocol === 'https:')
 		: new LocalRuns(dataDir);
@@ -132,6 +147,7 @@ export async function startHost(options: HostOptions): Promise<LabHost> {
 		options,
 		hosted,
 		instanceId,
+		preset,
 		uiRoot,
 		runs,
 		childOptions,

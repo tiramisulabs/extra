@@ -34,6 +34,7 @@ export interface HostContext {
 	options: HostOptions;
 	hosted?: HostedConfig;
 	instanceId: string;
+	preset?: Preset;
 	uiRoot?: string;
 	runs: RunScope;
 	childOptions: Omit<ChildSessionOptions, 'preset'>;
@@ -68,8 +69,10 @@ async function handle(host: HostContext, exchange: Exchange): Promise<void> {
 		if (req.method === 'GET' && url.pathname === '/api/health') return sendJson(res, 200, { ok: true });
 		if (!isPublicOriginRequest(req, host.hosted.publicOrigin, url.pathname))
 			throw new HttpError(403, 'Host or Origin is not permitted');
-		if (!fileDownload && host.hosted.access.mode === 'authorize' && !(await host.hosted.access.authorize(req)))
+		if (!fileDownload && host.hosted.access.mode === 'authorize' && !(await host.hosted.access.authorize(req))) {
+			if (host.hosted.access.challenge) res.setHeader('www-authenticate', host.hosted.access.challenge);
 			throw new HttpError(401, 'Unauthorized');
+		}
 	} else if (!isLocalRequest(req)) throw new HttpError(403, 'Host and Origin must be local');
 	if (host.isClosed()) throw new HttpError(503, 'Host is closed');
 	if (fileDownload) {
@@ -137,6 +140,7 @@ async function hostInfo(host: HostContext, { req, res }: Exchange): Promise<void
 		labVersion: LAB_VERSION,
 		protocolVersion: PROTOCOL_VERSION,
 		...(build ? { build } : {}),
+		...(host.preset ? { preset: host.preset } : {}),
 		...(limits ? { limits } : {}),
 		run: host.runs.info(req),
 	};
@@ -159,8 +163,8 @@ async function startSession(host: HostContext, exchange: Exchange): Promise<void
 	// The run may have ended while the body was arriving.
 	if (existing) assertActive(existing);
 	if (host.isClosed()) throw new HttpError(503, 'Host is closed');
-	if (!isRecord(input) || !('preset' in input)) throw new HttpError(400, 'Expected { preset }');
-	const preset = validated(input.preset, validatePreset);
+	if (!isRecord(input)) throw new HttpError(400, 'Expected { preset }');
+	const preset = validated('preset' in input ? input.preset : host.preset, validatePreset);
 	const run = existing ?? host.runs.create(res);
 	exchange.run = run;
 	await enqueue(run, () => startRunSession(host, run, preset));

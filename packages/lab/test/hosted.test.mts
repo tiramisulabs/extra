@@ -2,12 +2,11 @@ import { spawn, spawnSync } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import { resolve } from 'node:path';
-import { Readable } from 'node:stream';
 import { afterEach, expect, test } from 'vitest';
 import { type LabHost, startHost } from '../src/host';
 import { PROTOCOL_VERSION, validateHostInfo } from '../src/protocol';
 import { createCheckpoint } from '../src/runtime';
-import { closeHosts, tempDataDir } from './helpers.mjs';
+import { closeHosts, hostedRequest, tempDataDir } from './helpers.mjs';
 
 const origin = 'https://preview.example.test';
 const preset = { scenario: { id: 'hosted', version: 1 } };
@@ -30,45 +29,8 @@ async function startHosted(options: Parameters<typeof startHost>[0]): Promise<La
 	return startHost({ ...options, dataDir: options.dataDir ?? (await tempDataDir()) });
 }
 
-function api(
-	host: LabHost,
-	path: string,
-	options: { method?: string; cookie?: string; body?: unknown; headers?: Record<string, string> } = {},
-): Promise<Response> {
-	const method = options.method ?? 'GET';
-	const target = new URL(host.url);
-	return new Promise<Response>((done, reject) => {
-		const req = request(
-			{
-				hostname: target.hostname,
-				port: target.port,
-				path,
-				method,
-				headers: {
-					Host: new URL(origin).host,
-					...(method !== 'GET' && method !== 'HEAD' ? { Origin: origin, 'content-type': 'application/json' } : {}),
-					...(options.cookie ? { Cookie: options.cookie } : {}),
-					...options.headers,
-				},
-			},
-			response => {
-				const headers = new Headers();
-				for (const [name, value] of Object.entries(response.headers)) {
-					if (Array.isArray(value)) for (const item of value) headers.append(name, item);
-					else if (value !== undefined) headers.append(name, value);
-				}
-				const status = response.statusCode ?? 500;
-				const noBody = method === 'HEAD' || status === 204 || status === 304;
-				if (noBody) response.resume();
-				done(
-					new Response(noBody ? null : (Readable.toWeb(response) as ReadableStream<Uint8Array>), { status, headers }),
-				);
-			},
-		);
-		req.on('error', reject);
-		req.end(options.body === undefined ? undefined : JSON.stringify(options.body));
-	});
-}
+const api = (host: LabHost, path: string, options: Parameters<typeof hostedRequest>[3] = {}) =>
+	hostedRequest(host, origin, path, options);
 
 async function start(host: LabHost, scenario = preset, cookie?: string) {
 	const response = await api(host, '/api/session', { method: 'POST', cookie, body: { preset: scenario } });
