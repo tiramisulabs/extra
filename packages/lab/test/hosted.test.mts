@@ -611,3 +611,42 @@ test('CLI SIGTERM closes its hosted child', async () => {
 		if (cli.exitCode === null && cli.signalCode === null) cli.kill('SIGKILL');
 	}
 });
+
+test('hosted file URLs let bots download without cookies, assets stay scoped and cleanup revokes them', async () => {
+	let authorized = true;
+	const host = await startHosted({
+		...hostedOptions(),
+		hosted: { publicOrigin: origin, access: { mode: 'authorize', authorize: () => authorized } },
+	});
+	hosts.push(host);
+	const a = await start(host),
+		b = await start(host);
+	const response = await api(host, '/api/files', {
+		method: 'POST',
+		cookie: a.cookie,
+		body: 'file bytes',
+		headers: { 'content-type': 'application/octet-stream', 'x-file-name': 'fixture.txt' },
+	});
+	expect(response.status).toBe(201);
+	const file = (await response.json()) as import('../src/index').ModalAttachment;
+	const path = new URL(file.url).pathname;
+	expect(file.url.startsWith(origin)).toBe(true);
+	expect(
+		(
+			await rpc(host, b.cookie!, 'session.act', {
+				kind: 'user',
+				actor: 'alice',
+				verb: 'submitModal',
+				customId: 'missing',
+				fields: { file: [file] },
+			})
+		).status,
+	).toBe(404);
+	authorized = false;
+	expect((await api(host, '/api/host')).status).toBe(401);
+	expect(await (await api(host, path)).text()).toBe(JSON.stringify('file bytes'));
+	authorized = true;
+	expect((await api(host, '/api/session', { method: 'DELETE', cookie: a.cookie })).status).toBe(200);
+	expect((await api(host, path)).status).toBe(404);
+	expect((await api(host, '/api/host', { cookie: b.cookie })).status).toBe(200);
+});

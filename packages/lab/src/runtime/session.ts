@@ -146,9 +146,12 @@ export function createSession<R>(
 		},
 		async act(action) {
 			const run = requireActive();
+			let recorded = action;
 			try {
 				validateLabAction(action);
-				const result = await performAction(run, action);
+				const result = await performAction(run, action, prepared => {
+					recorded = prepared;
+				});
 				const outcome: ActionOutcome = {
 					ok: true,
 					dispatchIds: [
@@ -158,11 +161,11 @@ export function createSession<R>(
 					],
 					summary: result.summary ?? result.dispatch?.content ?? result.dispatch?.modal?.title ?? 'completed',
 				};
-				record(result.recorded ?? action, outcome);
+				record(result.recorded ?? recorded, outcome);
 				return outcome;
 			} catch (error) {
 				const message = errorText(error);
-				record(action, { ok: false, error: message, dispatchIds: [], summary: 'failed' });
+				record(recorded, { ok: false, error: message, dispatchIds: [], summary: 'failed' });
 				emit({ type: 'error', detail: message });
 				throw new Error(message);
 			}

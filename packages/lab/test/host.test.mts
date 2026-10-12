@@ -357,3 +357,45 @@ test('unknown checkpoint sub-routes and methods are 404', async () => {
 		expect(await response.json()).toEqual({ error: 'Route not found' });
 	}
 });
+
+test('uploaded bytes reach the bot and remain downloadable after checkpoint replay on a new port', async () => {
+	const dataDir = await tempDataDir();
+	let host = await startHost({ projectModule: fixture, dataDir });
+	hosts.push(host);
+	expect((await post(host.url, '/api/session', { preset: { scenario: { id: 'flow', version: 1 } } })).status).toBe(201);
+	const bytes = Buffer.from([0, 255, 1, 10, 128, 42]);
+	const response = await fetch(`${host.url}/api/files`, {
+		method: 'POST',
+		headers: { 'x-file-name': encodeURIComponent('résumé.bin'), 'content-type': 'application/octet-stream' },
+		body: bytes,
+	});
+	expect(response.status).toBe(201);
+	const file = (await response.json()) as import('../src/index').ModalAttachment;
+	expect(file).toMatchObject({ filename: 'résumé.bin', size: bytes.length });
+	const downloaded = new Uint8Array(await (await fetch(file.url)).arrayBuffer());
+	expect(downloaded).toEqual(new Uint8Array(bytes));
+	expect((await fetch(file.url, { method: 'HEAD' })).headers.get('content-length')).toBe(String(bytes.length));
+	expect(
+		await rpc(host.url, 501, 'session.act', { kind: 'user', actor: 'alice', verb: 'slash', command: 'read-file' }),
+	).toMatchObject({ ok: true, value: { ok: true } });
+	expect(
+		await rpc(host.url, 502, 'session.act', {
+			kind: 'user',
+			actor: 'alice',
+			verb: 'submitModal',
+			customId: 'read-file',
+			fields: { file: [file] },
+		}),
+	).toMatchObject({ ok: true, value: { ok: true } });
+	const log = (await rpc(host.url, 503, 'session.log')).value as Parameters<typeof createCheckpoint>[0];
+	const checkpoint = createCheckpoint(log, 'file_bytes', [
+		{ view: { actor: 'alice', channel: 'channel' }, contains: `bytes:${bytes.toString('base64')}` },
+	]);
+	expect((await post(host.url, '/api/checkpoints', { checkpoint })).status).toBe(201);
+	await host.close();
+	host = await startHost({ projectModule: fixture, dataDir });
+	hosts.push(host);
+	const replay = await post(host.url, '/api/checkpoints/file_bytes/replay', {});
+	expect(replay.status).toBe(200);
+	expect(await replay.json()).toMatchObject({ ok: true });
+});

@@ -17,8 +17,9 @@ const isString = (value: unknown): value is string => typeof value === 'string';
  * Custom IDs and other metadata are excluded, so `contains` matches what is on screen.
  */
 export function visibleMessageText(payload: VisibleMessage['payload']): string[] {
-	const text: string[] = payload.content ? [payload.content] : [];
-	for (const embed of payload.embeds) {
+	const v2 = Boolean((payload.flags ?? 0) & 32768);
+	const text: string[] = !v2 && payload.content ? [payload.content] : [];
+	for (const embed of v2 ? [] : payload.embeds) {
 		const fields = embed.fields?.flatMap(field => [field.name, field.value]) ?? [];
 		text.push(...[embed.title, embed.description, ...fields, embed.footer?.text, embed.author?.name].filter(isString));
 	}
@@ -29,6 +30,12 @@ export function visibleMessageText(payload: VisibleMessage['payload']): string[]
 		}
 		if (!isRecord(value)) return;
 		if (value.type === ComponentType.TextDisplay && isString(value.content)) text.push(value.content);
+		if (value.type === ComponentType.File && isRecord(value.file) && isString(value.file.url)) {
+			const url = value.file.url;
+			const attachment = payload.attachments?.find(file => `attachment://${file.filename}` === url);
+			if (isString(value.name)) text.push(value.name);
+			else if (attachment) text.push(attachment.filename);
+		}
 		if (value.type === ComponentType.Button && isString(value.label)) text.push(value.label);
 		if (SELECT_TYPES.includes(value.type)) {
 			if (isString(value.placeholder)) text.push(value.placeholder);

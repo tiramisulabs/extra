@@ -16,6 +16,7 @@ import {
 import { exportTest, replaySession } from '../runtime';
 import { assertLabVersion, errorText, LAB_VERSION } from '../shared';
 import { listCheckpoints, readCheckpoint, writeCheckpoint } from './checkpoints';
+import { downloadFile, FILE_PREFIX, resolveActionFiles, resolveCheckpointFiles, uploadFile } from './files';
 import { isLocalRequest, isPublicOriginRequest } from './guards';
 import { HttpError, readJsonBody, sendJson, validated } from './http';
 import type { HostedConfig, HostOptions } from './index';
@@ -59,6 +60,7 @@ export function createRequestListener(host: HostContext): RequestListener {
 async function handle(host: HostContext, exchange: Exchange): Promise<void> {
 	const { req, res } = exchange;
 	const url = new URL(req.url ?? '/', 'http://localhost');
+	const fileDownload = (req.method === 'GET' || req.method === 'HEAD') && url.pathname.startsWith(FILE_PREFIX);
 	if (host.hosted) {
 		res.setHeader('x-frame-options', 'DENY');
 		res.setHeader('referrer-policy', 'no-referrer');
@@ -66,10 +68,16 @@ async function handle(host: HostContext, exchange: Exchange): Promise<void> {
 		if (req.method === 'GET' && url.pathname === '/api/health') return sendJson(res, 200, { ok: true });
 		if (!isPublicOriginRequest(req, host.hosted.publicOrigin, url.pathname))
 			throw new HttpError(403, 'Host or Origin is not permitted');
-		if (host.hosted.access.mode === 'authorize' && !(await host.hosted.access.authorize(req)))
+		if (!fileDownload && host.hosted.access.mode === 'authorize' && !(await host.hosted.access.authorize(req)))
 			throw new HttpError(401, 'Unauthorized');
 	} else if (!isLocalRequest(req)) throw new HttpError(403, 'Host and Origin must be local');
 	if (host.isClosed()) throw new HttpError(503, 'Host is closed');
+	if (fileDownload) {
+		const [, runId, asset] = url.pathname.slice('/api/'.length).split('/');
+		const run = runId && host.runs.fileRun(runId);
+		if (!run || !asset) throw new HttpError(404, 'File not found');
+		return downloadFile(run, asset, res, req.method === 'HEAD');
+	}
 	const route =
 		routes[`${req.method} ${url.pathname}`] ??
 		(url.pathname.startsWith(CHECKPOINT_PREFIX) ? checkpointRoute : undefined);
@@ -107,7 +115,18 @@ const routes: Record<string, Route> = {
 	'POST /api/session': startSession,
 	'DELETE /api/session': endSession,
 	'POST /api/rpc': rpc,
+	'POST /api/files': upload,
 };
+
+function requestOrigin(host: HostContext, req: IncomingMessage): string {
+	return host.hosted?.publicOrigin.origin ?? `http://${req.headers.host}`;
+}
+
+async function upload(host: HostContext, exchange: Exchange): Promise<void> {
+	const run = requireRun(host, exchange);
+	const file = await enqueue(run, () => uploadFile(run, exchange.req, requestOrigin(host, exchange.req)));
+	sendJson(exchange.res, 201, file);
+}
 
 async function hostInfo(host: HostContext, { req, res }: Exchange): Promise<void> {
 	const { build } = host.options;
@@ -187,6 +206,8 @@ async function rpc(host: HostContext, exchange: Exchange): Promise<void> {
 	if (LIFECYCLE_REQUESTS.has(request.type)) throw new HttpError(400, `Use lifecycle endpoint for ${request.type}`);
 	const response = await enqueue(run, async (): Promise<BridgeResponse> => {
 		if (!run.session) throw new HttpError(409, 'Session is not started');
+		if (request.type === 'session.act')
+			await resolveActionFiles(run, request.payload, requestOrigin(host, exchange.req));
 		const result = { version: PROTOCOL_VERSION, id: request.id, type: 'result' } as const;
 		try {
 			return { ...result, ok: true, value: (await invokeSession(run.session, request)) ?? null };
@@ -233,11 +254,13 @@ async function checkpointRoute(host: HostContext, exchange: Exchange, url: URL):
 	validated(name, validateCheckpointName);
 	switch (`${req.method}${suffix}`) {
 		case 'GET':
-			return sendJson(res, 200, await loadCheckpoint(host, run, name));
+			return sendJson(res, 200, await loadCheckpoint(host, run, name, requestOrigin(host, req)));
 		case 'POST/replay':
 			return replayCheckpoint(host, exchange, run, name);
 		case 'GET/export':
-			return sendJson(res, 200, { code: await exportCheckpoint(host, run, name, url.searchParams.get('format')) });
+			return sendJson(res, 200, {
+				code: await exportCheckpoint(host, run, name, url.searchParams.get('format'), requestOrigin(host, req)),
+			});
 		default:
 			throw new HttpError(404, 'Route not found');
 	}
@@ -245,7 +268,7 @@ async function checkpointRoute(host: HostContext, exchange: Exchange, url: URL):
 
 async function replayCheckpoint(host: HostContext, { req, res }: Exchange, run: Run, name: string): Promise<void> {
 	const input = await readJsonBody(req, true);
-	const checkpoint = await loadCheckpoint(host, run, name);
+	const checkpoint = await loadCheckpoint(host, run, name, requestOrigin(host, req));
 	assertRevision(host, checkpoint, input);
 	const result = await enqueue(run, async () => {
 		if (run.session) {
@@ -258,10 +281,16 @@ async function replayCheckpoint(host: HostContext, { req, res }: Exchange, run: 
 	sendJson(res, 200, { ok: true, log: result.log, inspect: result.inspect });
 }
 
-async function exportCheckpoint(host: HostContext, run: Run, name: string, format: string | null): Promise<string> {
+async function exportCheckpoint(
+	host: HostContext,
+	run: Run,
+	name: string,
+	format: string | null,
+	origin: string,
+): Promise<string> {
 	if (format !== 'node' && format !== 'vitest') throw new HttpError(400, 'Export format must be node or vitest');
 	const { exportModule, projectModule } = host.options;
-	const code = exportTest(await loadCheckpoint(host, run, name), {
+	const code = exportTest(await loadCheckpoint(host, run, name, origin), {
 		format,
 		projectModule: exportModule ?? (host.hosted ? HOSTED_EXPORT_MODULE : projectModule),
 	});
@@ -270,8 +299,10 @@ async function exportCheckpoint(host: HostContext, run: Run, name: string, forma
 		: code;
 }
 
-async function loadCheckpoint(host: HostContext, run: Run, name: string): Promise<Checkpoint> {
-	return validatedCheckpoint(host, await readCheckpoint(run.checkpointsDir, name));
+async function loadCheckpoint(host: HostContext, run: Run, name: string, origin: string): Promise<Checkpoint> {
+	const checkpoint = await validatedCheckpoint(host, await readCheckpoint(run.checkpointsDir, name));
+	await resolveCheckpointFiles(run, checkpoint, origin);
+	return checkpoint;
 }
 
 /** A checkpoint must name a scenario the project defines; a project that cannot be described also fails with 400. */

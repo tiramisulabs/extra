@@ -1,6 +1,6 @@
 # @slipher/lab
 
-> **Built for agents first.** The lab is designed so coding agents can drive a bot, check what each actor sees, and turn a run into a test. People can use it too, especially through the UI, but it approximates Discord and is not yet a polished or fully reliable tool for manual QA.
+> **Built for agents first.** The lab is designed so coding agents can drive a bot, check what each actor sees, and turn a run into a test. The browser UI also supports manual checks of conversations, components, modals and checkpoints. It simulates Discord rather than connecting to its services; verify Discord-specific behavior against a live bot before relying on the simulation alone.
 
 Run Seyfert bots against scripted Discord scenarios built on `@slipher/testing`. A scenario describes guilds, roles, channels, members and actors; a session runs your real handlers against it, so you can drive it from tests or from the browser UI in `@slipher/lab-ui`.
 
@@ -48,6 +48,8 @@ export const project = defineProject({
 - **Resources.** `resources.setup/dispose` owns external fixtures such as a database. `requires` and `seed` run after the bot starts, and `inspect` exposes JSON projections of those resources.
 - **Bot identity.** `w.bot()` configures the bot user once; `w.builder` exposes the underlying testing world for anything else.
 
+Modals support text inputs, string and entity selects, radio groups, checkbox groups, checkboxes and file uploads. The host UI uploads file bytes and provides downloadable attachment URLs from the same server. Direct runtime actions can also supply attachment metadata.
+
 ## Run a session
 
 ```ts
@@ -65,9 +67,9 @@ try {
 
 `act` accepts:
 
-- user actions: `slash`, `click`, `select`, `submitModal`. Clicks and selects locate their source message by channel plus `customId`, `contains` or `messageRef`.
+- user actions: `slash`, `click`, `select`, `submitModal`. Clicks and selects locate their source message by channel plus `customId`, `contains`, `messageRef` or `sequence`. Runtime message IDs execute against the exact visible message; the log records its creation sequence for replay. Named scenario refs stay intact. Sequence-based replay requires the scenario and actions to create messages in the same order.
 - admin actions: `addRole` / `removeRole`, for role changes made outside the bot.
-- local actions: `closeModal`, `reopenModal` and `dismissMessage`. These change only what the actor sees and dispatch nothing.
+- local actions: `closeModal`, `reopenModal` and `dismissMessage`. These change only what the actor sees and dispatch nothing. Dismissals record the message creation sequence, so identical message text does not redirect a replay to a different message.
 
 A failed action throws, and its outcome is also recorded in `log()`.
 
@@ -145,3 +147,6 @@ The host has no accounts. `trusted-proxy` means an access proxy in front of it h
 API users can pass `access: { mode: 'authorize', authorize(req) }` instead.
 
 A container needs to install and build the project, run the CLI as a non-root user, and health-check `GET /api/health`.
+
+
+Modal files selected in the host UI are uploaded as binary data to the lab host (up to 25 MiB per file). The bot receives a normal HTTP attachment URL and can download the original bytes. Files are kept in `files/` beside the run's checkpoint JSON, rather than embedded in actions. Keep that directory with local checkpoints; replay resolves URLs against the current host, including after a port change. Hosted files expire with their run and are deleted by the existing run cleanup. Download URLs are random capabilities, so a bot does not need the browser's session cookie. Exported tests that fetch these URLs require the host and its files to remain available. The static reference preview demonstrates metadata only.

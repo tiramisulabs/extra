@@ -279,7 +279,54 @@ test('a second dismiss of the same message cannot consume an identical newer eph
 	}
 });
 
-test('replay maps an embed-only ephemeral dismiss to visible text', async () => {
+test('replay dismisses the same creation when ephemeral messages have identical text', async () => {
+	const session = createSession(project, preset);
+	await session.start();
+	let checkpoint;
+	try {
+		await session.act({ kind: 'user', actor: 'alice', verb: 'slash', command: 'private-panel' });
+		await session.act({ kind: 'user', actor: 'alice', verb: 'slash', command: 'private-panel' });
+		const messages = (await session.view('alice', 'channel')).messages;
+		await session.act({
+			kind: 'local',
+			op: 'dismissMessage',
+			actor: 'alice',
+			source: { channel: 'channel', messageRef: messages[0].id },
+		});
+		checkpoint = createCheckpoint(await session.log(), 'identical_ephemeral');
+		expect(checkpoint.actions[2]).toMatchObject({ source: { sequence: messages[0].sequence } });
+		expect(checkpoint.actions[2]).not.toHaveProperty('source.messageRef');
+	} finally {
+		await session.dispose();
+	}
+	for (let attempt = 0; attempt < 2; attempt++) {
+		const result = await replay(project, checkpoint);
+		const world = result.inspect.world as { messages: { id: string }[] };
+		expect(result.inspect.local?.dismissed.alice).toEqual([world.messages[0].id]);
+	}
+});
+
+test.each([
+	{ kind: 'embed-only', payload: { embeds: [{ title: 'Private title' }] }, text: 'Private title' },
+	{
+		kind: 'normalized V2 file',
+		payload: {
+			flags: 32768,
+			content: 'Hidden legacy content',
+			embeds: [{ title: 'Hidden legacy embed' }],
+			components: [
+				{
+					type: 13,
+					id: 4,
+					name: 'lab-parity.txt',
+					size: 44,
+					file: { url: 'https://cdn.discordapp.com/lab-parity.txt' },
+				},
+			],
+		},
+		text: 'lab-parity.txt',
+	},
+])('replay maps a $kind ephemeral dismiss to visible text', async ({ payload, text }) => {
 	const embedded = defineProject({
 		name: 'embed-dismiss',
 		scenarios: [
@@ -292,9 +339,9 @@ test('replay maps an embed-only ephemeral dismiss to visible text', async () => 
 					const channel = world.channel('channel', guild);
 					const alice = world.member('alice', guild);
 					world.message('embed', channel, {
-						flags: MessageFlags.Ephemeral,
+						...payload,
+						flags: MessageFlags.Ephemeral | (payload.flags ?? 0),
 						ownerId: alice,
-						embeds: [{ title: 'Private title' }],
 					});
 				},
 				actors: () => ({ alice: { userId: 'alice', guildId: 'guild', channelId: 'channel' } }),
@@ -314,9 +361,9 @@ test('replay maps an embed-only ephemeral dismiss to visible text', async () => 
 			source: { channel: 'channel', messageRef: 'embed' },
 		});
 		checkpoint = createCheckpoint(await session.log(), 'embed_dismiss', [
-			{ view: { actor: 'alice', channel: 'channel' }, contains: 'Private title', absent: true },
+			{ view: { actor: 'alice', channel: 'channel' }, contains: text, absent: true },
 		]);
-		expect(checkpoint.actions[0]).toMatchObject({ source: { messageRef: 'embed', contains: 'Private title' } });
+		expect(checkpoint.actions[0]).toMatchObject({ source: { messageRef: 'embed', contains: text } });
 	} finally {
 		await session.dispose();
 	}

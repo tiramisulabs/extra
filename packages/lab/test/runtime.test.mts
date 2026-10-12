@@ -287,6 +287,34 @@ describe('lab runtime', () => {
 			await session.dispose();
 		}
 	});
+	test('failed runtime-ID clicks keep their resolved source through repeated replay', async () => {
+		const session = createSession(project, preset);
+		await session.start();
+		try {
+			await session.act(slash);
+			await session.act({ ...slash, command: 'short-flow' });
+			const messages = (await session.view('alice', 'channel')).messages;
+			const panel = messages.find(message => message.payload.content === 'Panel');
+			const shortPanel = messages.find(message => message.payload.content === 'Short panel');
+			expect(panel).toBeDefined();
+			expect(shortPanel).toBeDefined();
+			await session.act({ ...click, source: { channel: 'channel', messageRef: panel!.id } });
+			await expect(
+				session.act({ ...click, customId: 'open-short', source: { channel: 'channel', messageRef: shortPanel!.id } }),
+			).rejects.toThrow('unfinished form');
+			const log = await session.log();
+			expect(log.entries[3].action).toMatchObject({
+				source: { channel: 'channel', sequence: shortPanel!.sequence, customId: 'open-short' },
+			});
+			expect(log.entries[3].action).not.toHaveProperty('source.messageRef');
+			for (let attempt = 0; attempt < 2; attempt++) {
+				const result = await replay(project, log, []);
+				expect(result.log.entries[3].outcome).toEqual(log.entries[3].outcome);
+			}
+		} finally {
+			await session.dispose();
+		}
+	});
 	test('slash subcommand and live description follow the protocol', async () => {
 		const session = createSession(project, preset);
 		await session.start();
@@ -656,6 +684,7 @@ describe('lab runtime', () => {
 			{ kind: 'missing' },
 			{ kind: 'user', actor: 'alice', verb: 'other' },
 			{ kind: 'user', actor: 'alice', verb: 'click', customId: 'x' },
+			...[0, -1, 1.5].map(sequence => ({ ...click, source: { channel: 'channel', sequence } })),
 		])
 			expect(() => validateLabAction(action)).toThrow('Invalid protocol action');
 		expect(() => validateBridgeRequest({ version: PROTOCOL_VERSION, id: 1, type: 'session.act' })).toThrow(
@@ -745,4 +774,43 @@ describe('lab runtime', () => {
 		await expect(child.inspectProject('identity')).rejects.toThrow('not running');
 		expect(() => process.kill(pid, 0)).toThrow();
 	});
+});
+
+test('advanced modal fields survive child transport, typed readers and checkpoint replay', async () => {
+	const session = createChildSession({ projectModule: fixturePath, preset });
+	await session.start();
+	try {
+		await session.act({ kind: 'user', actor: 'alice', verb: 'slash', command: 'advanced-form' });
+		const description = await session.describe();
+		const fields = {
+			who: [description.refs.bob],
+			radio: 'b',
+			checks: ['a'],
+			confirm: false,
+			files: [
+				{
+					id: 'upload-1',
+					filename: 'evidence.pdf',
+					url: 'attachment://evidence.pdf',
+					size: 42,
+					content_type: 'application/pdf',
+				},
+			],
+		};
+		validateLabAction({ kind: 'user', actor: 'alice', verb: 'submitModal', customId: 'advanced-form', fields });
+		await session.act({ kind: 'user', actor: 'alice', verb: 'submitModal', customId: 'advanced-form', fields });
+		const text = (await session.view('alice', 'channel')).messages.at(-1)?.payload.content;
+		expect(JSON.parse(text!)).toEqual({
+			who: description.refs.bob,
+			radio: 'b',
+			checks: ['a'],
+			confirm: false,
+			files: [['evidence.pdf', 42, 'application/pdf']],
+		});
+		const log = await session.log();
+		expect(log.entries.at(-1)?.action).toMatchObject({ fields });
+		await replay(project, log, []);
+	} finally {
+		await session.dispose();
+	}
 });

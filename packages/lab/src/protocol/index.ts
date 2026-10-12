@@ -27,6 +27,8 @@ export type {
 	InspectedRestCall,
 	InspectorSnapshot,
 	LabAction,
+	ModalAttachment,
+	ModalFieldValue,
 	Preset,
 	SessionDescription,
 	SessionLog,
@@ -266,9 +268,29 @@ export function validatePreset(value: unknown): asserts value is Preset {
 	if (value.refs !== undefined && !isTextMap(value.refs)) fail('session.start refs');
 }
 
+function isModalFieldValue(value: unknown): boolean {
+	if (value === null || typeof value === 'string' || typeof value === 'boolean' || isStringArray(value)) return true;
+	return (
+		Array.isArray(value) &&
+		value.every(
+			item =>
+				isRecord(item) &&
+				isText(item.id) &&
+				isText(item.filename) &&
+				isText(item.url) &&
+				typeof item.size === 'number' &&
+				Number.isSafeInteger(item.size) &&
+				item.size >= 0 &&
+				(item.content_type === undefined || typeof item.content_type === 'string') &&
+				(item.asset === undefined || (typeof item.asset === 'string' && /^[a-f0-9]{64}$/.test(item.asset))),
+		)
+	);
+}
+
 function validateLocator(value: unknown): asserts value is Locator {
 	requireRecord(value, 'action.source');
 	requireText(value.channel, 'action.source.channel');
+	if (value.sequence !== undefined && !isPositiveInteger(value.sequence)) fail('action.source.sequence');
 	for (const key of ['messageRef', 'customId', 'contains', 'author']) optionalText(value[key], `action.source.${key}`);
 }
 
@@ -291,7 +313,12 @@ export function validateLabAction(value: unknown): asserts value is LabAction {
 					return;
 				case 'dismissMessage':
 					validateLocator(value.source);
-					if (value.source.messageRef === undefined && value.source.contains === undefined) fail('action.source');
+					if (
+						value.source.messageRef === undefined &&
+						value.source.contains === undefined &&
+						value.source.sequence === undefined
+					)
+						fail('action.source');
 					return;
 				default:
 					fail(`action.op: ${String(value.op)}`);
@@ -320,11 +347,7 @@ function validateUserAction(value: Record<string, unknown>): void {
 		case 'submitModal':
 			requireText(value.customId, 'action.customId');
 			optionalText(value.channel, 'action.channel');
-			if (
-				!isRecord(value.fields) ||
-				!Object.values(value.fields).every(item => typeof item === 'string' || isStringArray(item))
-			)
-				fail('action.fields');
+			if (!isRecord(value.fields) || !Object.values(value.fields).every(isModalFieldValue)) fail('action.fields');
 			return;
 		default:
 			fail(`action.verb: ${String(value.verb)}`);

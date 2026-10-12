@@ -18,6 +18,7 @@ export interface RunScope {
 	readonly limits?: HostLimits;
 	/** Local mode's only run, which also receives `session-error` events for failures outside any run. */
 	readonly local?: Run;
+	fileRun(id: string): Run | undefined;
 	info(req: IncomingMessage): HostInfo['run'];
 	/** The request's active run, marked as used; throws 409 when it is missing or has ended. */
 	require(req: IncomingMessage): Run;
@@ -34,6 +35,10 @@ export class LocalRuns implements RunScope {
 
 	constructor(dataDir: string) {
 		this.local = createRun('', dataDir);
+	}
+
+	fileRun(id: string): Run | undefined {
+		return id === 'local' ? this.local : undefined;
 	}
 
 	info(): HostInfo['run'] {
@@ -115,6 +120,11 @@ export class HostedRuns implements RunScope {
 			Math.min(REAPER_MAX_INTERVAL_MS, Math.max(REAPER_MIN_INTERVAL_MS, interval)),
 		);
 		this.reaper.unref();
+	}
+
+	fileRun(id: string): Run | undefined {
+		const run = this.runs.get(id);
+		return run?.state === 'active' ? run : undefined;
 	}
 
 	info(req: IncomingMessage): HostInfo['run'] {

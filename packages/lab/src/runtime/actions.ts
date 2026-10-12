@@ -2,10 +2,11 @@ import type {
 	ApiChannel,
 	ChatInputInteractionOptions,
 	DispatchResult,
+	ModalFields,
 	PendingModal,
 	VisibleMessage,
 } from '@slipher/testing';
-import type { LabAction, Locator } from '../index';
+import type { LabAction, Locator, ModalAttachment } from '../index';
 import { errorText } from '../shared';
 import { hasCustomId, messageShows, visibleMessageText } from './messages';
 import {
@@ -30,10 +31,14 @@ export interface ActionResult {
 	recorded?: LabAction;
 }
 
-export async function performAction<R>(run: ActiveRun<R>, action: LabAction): Promise<ActionResult> {
+export async function performAction<R>(
+	run: ActiveRun<R>,
+	action: LabAction,
+	onPrepared: (action: LabAction) => void,
+): Promise<ActionResult> {
 	switch (action.kind) {
 		case 'user':
-			return performUserAction(run, action);
+			return performUserAction(run, action, onPrepared);
 		case 'admin':
 			return performAdminAction(run, action);
 		case 'local':
@@ -59,12 +64,14 @@ function performLocalAction<R>(run: ActiveRun<R>, action: LocalAction): ActionRe
 		const ids = run.dismissed.get(actor.key) ?? new Set<string>();
 		ids.add(message.id);
 		run.dismissed.set(actor.key, ids);
-		// Replay cannot rely on message IDs, so the log keeps visible text that identifies the message.
+		// Runtime IDs change across sessions; creation order preserves the exact dismissed message.
 		const { contains } = action.source;
 		const replayText = contains && messageShows(message, contains) ? contains : visibleMessageText(message.payload)[0];
+		const { messageRef, ...source } = action.source;
+		const namedRef = messageRef && Object.hasOwn(run.refs, messageRef) ? { messageRef } : {};
 		return {
 			summary: 'message dismissed',
-			recorded: { ...action, source: { ...action.source, contains: replayText } },
+			recorded: { ...action, source: { ...source, ...namedRef, sequence: message.sequence, contains: replayText } },
 		};
 	}
 	const userId = actorUserId(run, actor);
@@ -81,7 +88,9 @@ function performLocalAction<R>(run: ActiveRun<R>, action: LocalAction): ActionRe
 }
 
 function dismissTarget<R>(run: ActiveRun<R>, actor: RunActor, source: Locator): VisibleMessage {
-	const messages = conversation(run, actor, resolveRef(run, source.channel)).messages;
+	const messages = conversation(run, actor, resolveRef(run, source.channel)).messages.filter(
+		message => source.sequence === undefined || message.sequence === source.sequence,
+	);
 	const ownerId = actorUserId(run, actor);
 	const { messageRef, contains, customId } = source;
 	let message: VisibleMessage | undefined;
@@ -89,12 +98,12 @@ function dismissTarget<R>(run: ActiveRun<R>, actor: RunActor, source: Locator): 
 		// A dismissed or deleted message is gone from the view, so it is not resolved against the world.
 		message = messages.find(item => item.id === (run.refs[messageRef] ?? messageRef));
 		if (!message) throw new Error('Message is no longer visible');
-	} else if (contains)
+	} else if (contains || source.sequence !== undefined)
 		message = messages.findLast(
 			item =>
 				item.visibility === 'ephemeral' &&
 				item.ownerId === ownerId &&
-				messageShows(item, contains) &&
+				(!contains || messageShows(item, contains)) &&
 				(!customId || hasCustomId(item.payload.components, customId)),
 		);
 	if (!message) throw new Error('No visible message matches the dismiss source');
@@ -105,22 +114,30 @@ function dismissTarget<R>(run: ActiveRun<R>, actor: RunActor, source: Locator): 
 
 /** A user action ready to run: where it happens, and how to tell whether a pending modal came from it. */
 interface UserStep {
+	recorded?: UserAction;
 	opened(modal: PendingModal): boolean;
 	dispatch(): Promise<DispatchResult>;
 }
 
-async function performUserAction<R>(run: ActiveRun<R>, action: UserAction): Promise<ActionResult> {
+async function performUserAction<R>(
+	run: ActiveRun<R>,
+	action: UserAction,
+	onPrepared: (action: LabAction) => void,
+): Promise<ActionResult> {
 	const actor = requireActor(run, action.actor);
 	const userId = actorUserId(run, actor);
 	const pending = pendingInteractions(run).modals.find(modal => modal.userId === userId);
 	const step = prepareUserStep(run, actor, action);
+	// Keep a resolved source even if the component dispatch rejects.
+	if (step.recorded) onPrepared(step.recorded);
 	// Repeating the action that opened a still-pending modal shows that modal again, as Discord would.
 	if (pending && step.opened(pending)) {
 		run.closedModals.delete(pending.interactionId);
-		return { summary: 'modal reopened' };
+		return { summary: 'modal reopened', recorded: step.recorded };
 	}
 	try {
-		return { dispatch: await step.dispatch() };
+		const dispatch = await step.dispatch();
+		return { dispatch, recorded: step.recorded };
 	} catch (error) {
 		if (pending && errorText(error).includes('already has a pending flow'))
 			throw new Error(
@@ -157,15 +174,24 @@ function prepareUserStep<R>(run: ActiveRun<R>, actor: RunActor, action: UserActi
 		case 'click':
 		case 'select': {
 			const channel = actionChannel(run, actor, action.source.channel);
-			const messageId = locate(run, actor, action.source);
+			const message = locate(run, actor, action.source);
+			const messageId = message.id;
+			// Runtime IDs select the live message; creation order selects the same message on replay.
+			const { messageRef, ...source } = action.source;
+			const recorded =
+				messageRef && !Object.hasOwn(run.refs, messageRef)
+					? { ...action, source: { ...source, customId: action.customId, sequence: message.sequence } }
+					: undefined;
 			const fromThisComponent = (source: PendingModal['source']) =>
 				source?.channelId === channel.id && source.customId === action.customId && source.messageId === messageId;
 			if (action.verb === 'click')
 				return {
+					recorded,
 					opened: ({ source }) => fromThisComponent(source),
 					dispatch: () => handle.clickButton(action.customId, { channel, source: messageId }),
 				};
 			return {
+				recorded,
 				opened: ({ source }) =>
 					fromThisComponent(source) &&
 					source?.values !== undefined &&
@@ -177,10 +203,26 @@ function prepareUserStep<R>(run: ActiveRun<R>, actor: RunActor, action: UserActi
 			const channel = actionChannel(run, actor, action.channel ?? actor.spec.channelId);
 			return {
 				opened: () => false,
-				dispatch: () => handle.submitModal(action.customId, action.fields, { channel }),
+				dispatch: () => handle.submitModal(action.customId, submittedModalFields(action.fields), { channel }),
 			};
 		}
 	}
+}
+
+/** Host asset IDs stay in replay actions; bot fields carry only Discord attachment metadata. */
+function submittedModalFields(fields: Extract<UserAction, { verb: 'submitModal' }>['fields']): ModalFields {
+	const submitted: ModalFields = {};
+	for (const [id, value] of Object.entries(fields)) {
+		if (!Array.isArray(value)) {
+			submitted[id] = value;
+			continue;
+		}
+		const files = value.filter((item): item is ModalAttachment => typeof item !== 'string');
+		submitted[id] = files.length
+			? files.map(({ asset: _asset, ...file }) => ({ ...file, proxy_url: file.url }))
+			: value.filter((item): item is string => typeof item === 'string');
+	}
+	return submitted;
 }
 
 /** The channel payload for an action, after checking the actor may act there. */
@@ -209,13 +251,14 @@ function actionChannel<R>(run: ActiveRun<R>, actor: RunActor, channelRef: string
 }
 
 /** The single message a locator matches in what the actor sees. */
-function locate<R>(run: ActiveRun<R>, actor: RunActor, locator: Locator): string {
+function locate<R>(run: ActiveRun<R>, actor: RunActor, locator: Locator): VisibleMessage {
 	const channelId = resolveRef(run, locator.channel);
 	const messages = conversation(run, actor, channelId).messages;
-	const { messageRef, contains, author, customId } = locator;
+	const { messageRef, sequence, contains, author, customId } = locator;
 	const candidates = messages.filter(
 		message =>
 			(!messageRef || message.id === resolveRef(run, messageRef)) &&
+			(sequence === undefined || message.sequence === sequence) &&
 			(!contains || messageShows(message, contains)) &&
 			(!author || message.payload.author?.id === (author === 'bot' ? run.bot.client.botId : resolveRef(run, author))) &&
 			(!customId || hasCustomId(message.payload.components, customId)),
@@ -224,7 +267,7 @@ function locate<R>(run: ActiveRun<R>, actor: RunActor, locator: Locator): string
 		const listed = messages.map(item => `${item.id}:${item.payload.content ?? ''}`).join(', ') || '(none)';
 		throw new Error(`Locator matched ${candidates.length} messages in ${channelId}; candidates: ${listed}`);
 	}
-	return candidates[0].id;
+	return candidates[0];
 }
 
 /**

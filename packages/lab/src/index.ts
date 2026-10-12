@@ -97,10 +97,23 @@ export type Preset = {
 export interface Locator {
 	channel: string;
 	messageRef?: string;
+	/** Creation order in the scenario, stable when replay repeats the same actions. */
+	sequence?: number;
 	customId?: string;
 	contains?: string;
 	author?: 'bot' | string;
 }
+/** Serializable attachment supplied by a modal file input. */
+export interface ModalAttachment {
+	id: string;
+	filename: string;
+	url: string;
+	size: number;
+	content_type?: string;
+	/** Host-owned file, preserved beside checkpoints and resolved when replaying. */
+	asset?: string;
+}
+export type ModalFieldValue = string | string[] | boolean | null | ModalAttachment[];
 export type LabAction =
 	| {
 			kind: 'user';
@@ -120,7 +133,7 @@ export type LabAction =
 			verb: 'submitModal';
 			customId: string;
 			channel?: string;
-			fields: Record<string, string | string[]>;
+			fields: Record<string, ModalFieldValue>;
 	  }
 	| { kind: 'admin'; op: 'addRole' | 'removeRole'; guild: string; member: string; role: string }
 	| { kind: 'local'; op: 'closeModal' | 'reopenModal'; actor: string; customId: string }

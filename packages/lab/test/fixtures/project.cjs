@@ -16,6 +16,11 @@ const {
 	StringSelectMenu,
 	StringSelectOption,
 	TextInput,
+	UserSelectMenu,
+	RadioGroup,
+	CheckboxGroup,
+	Checkbox,
+	FileUpload,
 } = testingRequire('seyfert');
 const { ButtonStyle, TextInputStyle } = testingRequire('seyfert/lib/types');
 const { defineProject, defineScenario, param } = require('../../lib/index.js');
@@ -27,9 +32,21 @@ class Flow extends Command {
 		const row = new ActionRow().setComponents([
 			new Button().setCustomId('open').setLabel('Open').setStyle(ButtonStyle.Primary),
 		]);
-		await ctx.write({ content: 'Panel', components: [row.toJSON()] });
+		const select = new ActionRow().setComponents([
+			new StringSelectMenu()
+				.setCustomId('panel-choice')
+				.setOptions([new StringSelectOption().setLabel('One').setValue('one')]),
+		]);
+		await ctx.write({ content: 'Panel', components: [row.toJSON(), select.toJSON()] });
 		const message = await ctx.fetchResponse();
-		message.createComponentCollector().run('open', async interaction => {
+		const collector = message.createComponentCollector();
+		collector.run('panel-choice', async interaction => {
+			const source = liveBot
+				.inspectChannel(message.channelId)
+				.messages.find(item => item.id === interaction.message.id);
+			await interaction.write({ content: `picked:${source.sequence}` });
+		});
+		collector.run('open', async interaction => {
 			const modal = new Modal()
 				.setCustomId('answer')
 				.setTitle('Answer')
@@ -89,6 +106,66 @@ class PickModal extends Command {
 	}
 }
 const PickModalCommand = Declare({ name: 'pick-modal', description: 'Pick in modal' })(PickModal);
+
+class ReadFile extends Command {
+	async run(ctx) {
+		const form = new Modal()
+			.setCustomId('read-file')
+			.setTitle('Read file')
+			.setComponents([new Label().setLabel('File').setComponent(new FileUpload({ custom_id: 'file' }))]);
+		const submit = await ctx.interaction.modal(form, { waitFor: 120000 });
+		if (!submit) return;
+		const file = submit.getFiles('file')[0];
+		const response = await fetch(file.url);
+		if (!response.ok) throw new Error(`File fetch failed: ${response.status}`);
+		const bytes = Buffer.from(await response.arrayBuffer());
+		await submit.write({ content: `bytes:${bytes.toString('base64')}` });
+	}
+}
+const ReadFileCommand = Declare({ name: 'read-file', description: 'Read uploaded bytes' })(ReadFile);
+
+class AdvancedForm extends Command {
+	async run(ctx) {
+		const form = new Modal()
+			.setCustomId('advanced-form')
+			.setTitle('Advanced form')
+			.setComponents([
+				new Label().setLabel('User').setComponent(new UserSelectMenu().setCustomId('who')),
+				new Label().setLabel('Radio').setComponent(
+					new RadioGroup({
+						custom_id: 'radio',
+						options: [
+							{ label: 'A', value: 'a' },
+							{ label: 'B', value: 'b' },
+						],
+					}),
+				),
+				new Label().setLabel('Checks').setComponent(
+					new CheckboxGroup({
+						custom_id: 'checks',
+						options: [
+							{ label: 'A', value: 'a' },
+							{ label: 'B', value: 'b' },
+						],
+					}),
+				),
+				new Label().setLabel('Confirm').setComponent(new Checkbox({ custom_id: 'confirm' })),
+				new Label().setLabel('Files').setComponent(new FileUpload({ custom_id: 'files', required: false })),
+			]);
+		const submit = await ctx.interaction.modal(form, { waitFor: 120000 });
+		if (submit)
+			await submit.write({
+				content: JSON.stringify({
+					who: submit.getUsers('who')[0].id,
+					radio: submit.getRadioValues('radio'),
+					checks: submit.getCheckboxValues('checks'),
+					confirm: submit.getCheckbox('confirm'),
+					files: submit.getFiles('files').map(file => [file.filename, file.size, file.contentType]),
+				}),
+			});
+	}
+}
+const AdvancedFormCommand = Declare({ name: 'advanced-form', description: 'Advanced fields' })(AdvancedForm);
 
 class NeedsRole extends Command {
 	async onPermissionsFail(ctx) {
@@ -195,6 +272,8 @@ const project = defineProject({
 		liveBot = await createMockBot({
 			world,
 			commands: [
+				ReadFileCommand,
+				AdvancedFormCommand,
 				FlowCommand,
 				ShortFlowCommand,
 				PickModalCommand,
