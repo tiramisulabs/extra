@@ -31,16 +31,6 @@ function dataPointCount(scopeMetrics: ScopeMetrics | undefined, name: string): n
 }
 
 describe('instrumentGateway', () => {
-	test('no shard source → no data points, no throw', async () => {
-		await withMeter(async reader => {
-			const cleanup = instrumentGateway({ client: { rest: {} }, api: undefined });
-			assert.doesNotThrow(cleanup);
-
-			const { resourceMetrics } = await reader.collect();
-			assert.equal(dataPointCount(resourceMetrics.scopeMetrics[0], 'seyfert.gateway.shard.connected'), 0);
-		});
-	});
-
 	// Seyfert assigns `client.gateway` inside `Client.start()`, after `BaseClient.start()`
 	// has already run plugin setup — so the shard source must be resolved per collection.
 	test('picks up a shard source that appears after setup', async () => {

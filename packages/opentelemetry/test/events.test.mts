@@ -47,13 +47,24 @@ function fakeEventApi() {
 describe('instrumentEvents (gateway runEvent)', () => {
 	test('fake path produces span event messageCreate', async () => {
 		await withProvider(async exporter => {
+			const recorded: Array<{ duration: number; attrs: Record<string, unknown> }> = [];
 			const { client, calls } = fakeClient();
 			const cleanup = instrumentEvents(
 				{ client, api: undefined },
 				{
 					traceEnabled: true,
 					checkIfShouldTrace: () => true,
-					getMetrics: () => undefined,
+					getMetrics: () => ({
+						recordInteraction() {},
+						recordEvent(durationSeconds, attributes) {
+							recorded.push({
+								duration: durationSeconds,
+								attrs: attributes as Record<string, unknown>,
+							});
+						},
+						recordRest() {},
+						recordCache() {},
+					}),
 				},
 			);
 
@@ -69,6 +80,10 @@ describe('instrumentEvents (gateway runEvent)', () => {
 			assert.equal(spans[0].attributes['seyfert.shard_id'], 0);
 			assert.equal(spans[0].status.code, SpanStatusCode.UNSET);
 
+			assert.equal(recorded.length, 1);
+			assert.ok(recorded[0].duration >= 0);
+			assert.equal(recorded[0].attrs['seyfert.event.name'], 'messageCreate');
+			assert.equal(recorded[0].attrs['seyfert.error'], false);
 			cleanup();
 		});
 	});
@@ -259,40 +274,6 @@ describe('instrumentEvents (gateway runEvent)', () => {
 			assert.equal(typeof cleanup, 'function');
 			cleanup();
 			assert.equal(exporter.getFinishedSpans().length, 0);
-		});
-	});
-
-	test('records event metrics when provided', async () => {
-		await withProvider(async exporter => {
-			const recorded: Array<{ duration: number; attrs: Record<string, unknown> }> = [];
-			const { client } = fakeClient();
-			const cleanup = instrumentEvents(
-				{ client, api: undefined },
-				{
-					traceEnabled: true,
-					checkIfShouldTrace: () => true,
-					getMetrics: () => ({
-						recordInteraction() {},
-						recordEvent(durationSeconds, attributes) {
-							recorded.push({
-								duration: durationSeconds,
-								attrs: attributes as Record<string, unknown>,
-							});
-						},
-						recordRest() {},
-						recordCache() {},
-					}),
-				},
-			);
-
-			await client.events.runEvent('ready', client, {}, -1);
-			assert.equal(recorded.length, 1);
-			assert.ok(recorded[0].duration >= 0);
-			assert.equal(recorded[0].attrs['seyfert.event.name'], 'ready');
-			assert.equal(recorded[0].attrs['seyfert.error'], false);
-			assert.equal(exporter.getFinishedSpans().length, 1);
-
-			cleanup();
 		});
 	});
 });

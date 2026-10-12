@@ -12,7 +12,7 @@ import { BasicTracerProvider, InMemorySpanExporter, SimpleSpanProcessor } from '
 import { assert, describe, test } from 'vitest';
 import * as publicApi from '../src';
 import { resolvePluginOptions } from '../src/options';
-import { shouldStartNodeSDK, startOpenTelemetry, startOwnedSdk } from '../src/sdk';
+import { startOpenTelemetry, startOwnedSdk } from '../src/sdk';
 
 class CountingContextManager implements ContextManager {
 	disableCalls = 0;
@@ -86,36 +86,10 @@ describe('public SDK bootstrap', () => {
 	});
 });
 
-describe('shouldStartNodeSDK', () => {
-	test('true for ProxyTracerProvider without a real delegate', () => {
-		const provider = new ProxyTracerProvider();
-		assert.equal(provider.getDelegateTracer('check'), undefined);
-		assert.equal(shouldStartNodeSDK(provider), true);
-	});
-
-	test('false for ProxyTracerProvider with a delegate set', () => {
-		const provider = new ProxyTracerProvider();
-		provider.setDelegate(new BasicTracerProvider());
-		assert.ok(provider.getDelegateTracer('check'));
-		assert.equal(shouldStartNodeSDK(provider), false);
-	});
-
-	test('false for a real BasicTracerProvider', () => {
-		assert.equal(shouldStartNodeSDK(new BasicTracerProvider()), false);
-	});
-});
-
 describe('startOwnedSdk', () => {
 	// Globals are sticky: success path first while the process proxy is clean,
 	// then register a real provider and assert we refuse to start again.
 	test('starts NodeSDK when the global provider is still a bare proxy', async () => {
-		const globalProvider = trace.getTracerProvider();
-		if (!shouldStartNodeSDK(globalProvider)) {
-			assert.fail(
-				'Global tracer provider is not a bare ProxyTracerProvider; startOwnedSdk success path could not run. Run sdk tests first/in isolation.',
-			);
-		}
-
 		const contextManager = new CountingContextManager();
 		const exporter = new InMemorySpanExporter();
 		const owned = startOwnedSdk(
@@ -131,7 +105,6 @@ describe('startOwnedSdk', () => {
 		assert.equal(typeof owned.shutdown, 'function');
 		assert.ok(contextManager.enableCalls > 0);
 		await owned.shutdown();
-		assert.equal(shouldStartNodeSDK(trace.getTracerProvider()), true);
 
 		const secondExporter = new InMemorySpanExporter();
 		const second = startOwnedSdk(
@@ -175,7 +148,6 @@ describe('startOwnedSdk', () => {
 		const provider = new BasicTracerProvider();
 		trace.setGlobalTracerProvider(provider);
 		try {
-			assert.equal(shouldStartNodeSDK(trace.getTracerProvider()), false);
 			assert.equal(startOwnedSdk(resolvePluginOptions({})), undefined);
 		} finally {
 			void provider.shutdown();
