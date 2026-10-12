@@ -75,6 +75,7 @@ export type BridgeResponse = Envelope & { type: 'result'; ok: boolean; value?: J
 export type BridgeEvent = { version: typeof PROTOCOL_VERSION; type: 'event'; event: SessionEvent };
 export interface ProjectDescription {
 	name: string;
+	setup?: { id: string; version: number };
 	scenarios: {
 		id: string;
 		version: number;
@@ -214,6 +215,8 @@ export function validateCheckpoint(value: unknown, project?: ProjectDescription)
 	const { id, version } = preset.scenario;
 	if (project && !project.scenarios.some(scenario => scenario.id === id && scenario.version === version))
 		fail(`checkpoint scenario: ${id}@${version} is not defined`);
+	if (project && (preset.setup?.id !== project.setup?.id || preset.setup?.version !== project.setup?.version))
+		fail('checkpoint shared setup does not match the project');
 }
 
 function validateExpectedOutcome(value: unknown, actionCount: number): void {
@@ -263,6 +266,10 @@ export function validatePreset(value: unknown): asserts value is Preset {
 	if (!isRecord(value) || !isRecord(value.scenario)) fail('session.start payload');
 	requireText(value.scenario.id, 'scenario.id');
 	if (!Number.isSafeInteger(value.scenario.version)) fail('scenario.version');
+	if (value.setup !== undefined) {
+		if (!isRecord(value.setup) || !isText(value.setup.id) || !Number.isSafeInteger(value.setup.version))
+			fail('session.start setup');
+	}
 	if (value.params !== undefined && !isParams(value.params)) fail('session.start params');
 	if (value.services !== undefined && !isTextMap(value.services)) fail('session.start services');
 	if (value.refs !== undefined && !isTextMap(value.refs)) fail('session.start refs');
@@ -395,6 +402,16 @@ export function validateProjectDescription(value: unknown): asserts value is Pro
 		!isStringArray(value.inspectors)
 	)
 		fail('project description');
+	const setup = value.setup;
+	if (setup !== undefined) {
+		if (!isRecord(setup) || !isText(setup.id) || !Number.isSafeInteger(setup.version)) fail('project setup');
+		if (
+			!value.scenarios.some(
+				scenario => isRecord(scenario) && scenario.id === setup.id && scenario.version === setup.version,
+			)
+		)
+			fail('project setup scenario');
+	}
 	for (const scenario of value.scenarios) {
 		if (
 			!isRecord(scenario) ||

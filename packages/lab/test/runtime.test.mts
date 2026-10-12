@@ -438,6 +438,21 @@ describe('lab runtime', () => {
 		const order: string[] = [];
 		const projectWithHooks = defineProject({
 			name: 'ordered',
+			setup: defineScenario({
+				id: 'base',
+				version: 1,
+				title: 'Base',
+				world: () => {
+					order.push('base world');
+				},
+				requires: () => {
+					order.push('base requires');
+					return [];
+				},
+				seed: () => {
+					order.push('base seed');
+				},
+			}),
 			scenarios: [
 				defineScenario({
 					id: 'one',
@@ -445,6 +460,10 @@ describe('lab runtime', () => {
 					title: 'One',
 					world: () => {
 						order.push('world');
+					},
+					requires: () => {
+						order.push('preview requires');
+						return [];
 					},
 					seed: () => {
 						order.push('seed');
@@ -485,16 +504,24 @@ describe('lab runtime', () => {
 		expect(order).toEqual([
 			'configure',
 			'setup',
+			'base world',
 			'world',
 			'bot',
 			'service',
+			'base requires',
+			'preview requires',
+			'base seed',
 			'seed',
 			'dispose',
 			'configure',
 			'setup',
+			'base world',
 			'world',
 			'bot',
 			'service',
+			'base requires',
+			'preview requires',
+			'base seed',
 			'seed',
 			'dispose',
 		]);
@@ -523,9 +550,9 @@ describe('lab runtime', () => {
 			...project,
 			scenarios: [
 				defineScenario({
-					...project.scenarios[0],
+					...project.scenarios![0],
 					world(w, ctx) {
-						project.scenarios[0].world?.(w, ctx);
+						project.scenarios![0].world?.(w, ctx);
 						w.message('one', 'channel', { content: 'Panel' });
 						w.message('two', 'channel', { content: 'Panel' });
 					},

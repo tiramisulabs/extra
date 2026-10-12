@@ -30,7 +30,7 @@ try {
   if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== 'ERR_REQUIRE_ESM') throw error;
   loaded = await import(isAbsolute(modulePath) ? pathToFileURL(modulePath).href : modulePath) as typeof loaded;
 }
-const project = loaded.project ?? loaded.default ?? (loaded.scenarios ? loaded as Project : undefined);
+const project = loaded.project ?? loaded.default ?? ((loaded.setup || loaded.scenarios) ? loaded as Project : undefined);
 if (!project) throw new Error('Project module has no project export');
 const checkpoint: Checkpoint = ${JSON.stringify(checkpoint, null, 2)};
 

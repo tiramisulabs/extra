@@ -11,6 +11,7 @@ import type {
 	ActionOutcome,
 	ActorSpec,
 	LabAction,
+	ParamDefinition,
 	Params,
 	Preset,
 	Project,
@@ -21,6 +22,7 @@ import type {
 	SessionEvent,
 	SessionLog,
 } from '../index';
+import { projectScenarios } from '../project';
 import { isParamValue, PROTOCOL_VERSION, validateLabAction } from '../protocol';
 import { createObservers, DEFAULT_DISPOSE_TIMEOUT_MS, errorText, LAB_VERSION } from '../shared';
 import { performAction } from './actions';
@@ -55,9 +57,14 @@ type SessionState<R> =
 	| { status: 'active'; run: ActiveRun<R>; acquired: Acquired }
 	| { status: 'stopping' };
 
+function defaultPreset<R>(project: Project<R>): Preset {
+	if (!project.setup) throw new Error('A preset is required for a project without shared setup');
+	return { scenario: { id: project.setup.id, version: project.setup.version } };
+}
+
 export function createSession<R>(
 	project: Project<R>,
-	preset: Preset,
+	preset: Preset = defaultPreset(project),
 	options: { disposeTimeoutMs?: number } = {},
 ): Session {
 	const disposeTimeoutMs = options.disposeTimeoutMs ?? DEFAULT_DISPOSE_TIMEOUT_MS;
@@ -97,7 +104,13 @@ export function createSession<R>(
 		try {
 			const run = await bootRun(project, preset, acquired, event => emit(sessionEventOf(event)));
 			const { params, services } = run.context;
-			log.preset = { scenario: { ...preset.scenario }, params, services, refs: { ...run.refs } };
+			log.preset = {
+				scenario: { ...preset.scenario },
+				...(project.setup ? { setup: { id: project.setup.id, version: project.setup.version } } : {}),
+				params,
+				services,
+				refs: { ...run.refs },
+			};
 			state = { status: 'active', run, acquired };
 			emit({ type: 'started' });
 		} catch (error) {
@@ -229,7 +242,8 @@ async function bootRun<R>(
 	onBotEvent: (event: MockBotEvent) => void,
 ): Promise<ActiveRun<R>> {
 	const scenario = findScenario(project, preset);
-	const params = scenarioParams(scenario, preset);
+	const layers = project.setup && scenario !== project.setup ? [project.setup, scenario] : [scenario];
+	const params = scenarioParams({ ...project.setup?.params, ...scenario.params }, preset);
 	const services = selectedServices(project, preset);
 	await project.configure?.();
 	const resources = await setupResources(project, preset, acquired);
@@ -237,7 +251,8 @@ async function bootRun<R>(
 	const refs: Record<string, string> = Object.create(null);
 	const builder = mockWorld();
 	const ref = createRef(project, preset, refs);
-	scenario.world?.(scenarioWorld(builder, ref, refs), { params, ref });
+	const world = scenarioWorld(builder, ref, refs);
+	for (const layer of layers) layer.world?.(world, { params, ref });
 	for (const name of Object.keys(preset.refs ?? {}))
 		if (!refs[name]) throw new Error(`Preset overrides unknown ref "${name}"`);
 
@@ -249,12 +264,15 @@ async function bootRun<R>(
 
 	const context = { params, refs: { ...refs }, resources, services };
 	for (const [name, service] of Object.entries(project.services ?? {})) await service.variants[services[name]](context);
-	const missing = (await scenario.requires?.(context)) ?? [];
+	const missing: string[] = [];
+	for (const layer of layers) missing.push(...((await layer.requires?.(context)) ?? []));
 	if (missing.length) throw new Error(`Missing requirements: ${missing.join(', ')}`);
-	await scenario.seed?.(context);
+	for (const layer of layers) await layer.seed?.(context);
 
+	const specs: Record<string, ActorSpec> = {};
+	for (const layer of layers) Object.assign(specs, layer.actors?.(context.refs));
 	const actors = new Map(
-		Object.entries(scenario.actors?.(context.refs) ?? {}).map(([key, spec]) => [
+		Object.entries(specs).map(([key, spec]) => [
 			key,
 			{ key, spec, handle: createActor(bot, builder, refs, key, spec) },
 		]),
@@ -264,13 +282,14 @@ async function bootRun<R>(
 
 function findScenario<R>(project: Project<R>, preset: Preset): Scenario<R> {
 	const { id, version } = preset.scenario;
-	const found = project.scenarios.find(item => item.id === id && item.version === version);
+	if (preset.setup && (preset.setup.id !== project.setup?.id || preset.setup.version !== project.setup?.version))
+		throw new Error('Preset shared setup does not match the project');
+	const found = projectScenarios(project).find(item => item.id === id && item.version === version);
 	if (!found) throw new Error(`Scenario ${id}@${version} is not defined`);
 	return found;
 }
 
-function scenarioParams<R>(scenario: Scenario<R>, preset: Preset): Params {
-	const definitions = scenario.params ?? {};
+function scenarioParams(definitions: Record<string, ParamDefinition>, preset: Preset): Params {
 	const given = preset.params ?? {};
 	const params: Params = {};
 	for (const [name, definition] of Object.entries(definitions)) {
@@ -312,7 +331,10 @@ function createRef<R>(project: Project<R>, preset: Preset, refs: Record<string, 
 		const presetOverride = preset.refs?.[name];
 		if (override && presetOverride && override !== presetOverride)
 			throw new Error(`Ref "${name}" override conflicts with preset`);
-		const id = override ?? presetOverride ?? deterministicId(`${project.name}:${preset.scenario.id}:${name}`);
+		const id =
+			override ??
+			presetOverride ??
+			deterministicId(`${project.name}:${project.setup?.id ?? preset.scenario.id}:${name}`);
 		if (refs[name] && refs[name] !== id) throw new Error(`Ref "${name}" already resolves to ${refs[name]}`);
 		refs[name] = id;
 		return id;

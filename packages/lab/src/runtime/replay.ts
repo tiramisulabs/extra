@@ -10,6 +10,7 @@ import type {
 	Session,
 	SessionLog,
 } from '../index';
+import { describeProject } from '../project';
 import { createCheckpoint, validateCheckpoint } from '../protocol';
 import { assertLabVersion } from '../shared';
 import { messageShows } from './messages';
@@ -28,10 +29,7 @@ export async function replay<R>(
 	expectations: Expectation[] = [],
 ): Promise<ReplayResult> {
 	const checkpoint = 'entries' in input ? createCheckpoint(input, 'replay', expectations) : input;
-	validateCheckpoint(checkpoint);
-	const { id, version } = checkpoint.preset.scenario;
-	if (!project.scenarios.some(item => item.id === id && item.version === version))
-		throw new Error(`Checkpoint scenario ${id}@${version} is not defined`);
+	validateCheckpoint(checkpoint, describeProject(project));
 	return replaySession(createSession(project, checkpoint.preset), checkpoint);
 }
 

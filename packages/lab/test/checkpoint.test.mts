@@ -14,6 +14,52 @@ const require = createRequire(projectModule);
 const { project } = require(projectModule) as { project: Project };
 const preset = { scenario: { id: 'flow', version: 1 } };
 
+test('a preview extends shared preparation and survives promotion into a regression fixture', async () => {
+	const shared = defineProject({ ...project, setup: project.scenarios![0], scenarios: undefined });
+	const preview = defineScenario({
+		id: 'preview',
+		version: 1,
+		title: 'Preview',
+		params: { label: { kind: 'string', default: 'Preview seed' } },
+		world(w, { params }) {
+			w.member('reviewer', 'guild', { roles: [w.ref('access')] });
+			w.message('preview-message', 'other-channel', { content: String(params.label) });
+		},
+		actors: refs => ({
+			alice: { userId: refs.alice, guildId: refs.guild, channelId: refs['other-channel'] },
+			reviewer: { userId: refs.reviewer, guildId: refs.guild, channelId: refs['other-channel'] },
+		}),
+	});
+	const base = createSession(shared);
+	await base.start();
+	const baseRefs = (await base.describe()).refs;
+	await base.dispose();
+	const previewProject = defineProject({ ...shared, scenarios: [preview] });
+	const session = createSession(previewProject, { scenario: { id: preview.id, version: preview.version } });
+	await session.start();
+	let checkpoint: Checkpoint;
+	try {
+		const description = await session.describe();
+		for (const [name, id] of Object.entries(baseRefs)) expect(description.refs[name]).toBe(id);
+		expect((await session.act({ kind: 'user', actor: 'alice', verb: 'slash', command: 'flow' })).summary).toBe('Panel');
+		checkpoint = createCheckpoint(await session.log(), 'promoted_preview', [
+			{ view: { actor: 'reviewer', channel: 'other-channel' }, contains: 'Preview seed' },
+			{ view: { actor: 'alice', channel: 'other-channel' }, contains: 'Panel' },
+			{ view: { actor: 'bob', channel: 'channel' }, contains: 'Panel', absent: true },
+		]);
+	} finally {
+		await session.dispose();
+	}
+	// The preview entry point can disappear: the maintained test carries only its required preparation.
+	const regression = defineProject({ ...shared, scenarios: [preview] });
+	await replay(regression, checkpoint);
+	await expect(replay(shared, checkpoint)).rejects.toThrow('scenario: preview@1');
+	await expect(replay({ ...regression, setup: { ...shared.setup!, version: 2 } }, checkpoint)).rejects.toThrow(
+		'shared setup does not match',
+	);
+	await expect(replay({ ...regression, setup: undefined }, checkpoint)).rejects.toThrow('shared setup does not match');
+});
+
 test('checkpoint replay preserves permission-at-delivery visibility for each actor', async () => {
 	@Declare({ name: 'before-view', description: 'Send before view' })
 	class BeforeView extends Command {
@@ -114,7 +160,7 @@ test('replay checks outcomes, roles and visible arrival with a fresh collector',
 	expect(() => validateCheckpoint({ ...checkpoint, version: 99 })).toThrow('checkpoint version: 99');
 	expect(() => validateCheckpoint({ ...checkpoint, callback: () => undefined })).toThrow('checkpoint JSON data');
 	await expect(replay(project, { ...checkpoint, preset: { scenario: { id: 'unknown', version: 1 } } })).rejects.toThrow(
-		'scenario unknown@1',
+		/scenario.*unknown@1/,
 	);
 });
 
@@ -267,7 +313,7 @@ test('member refs survive generated apiUser ids and reject explicit ref conflict
 		...memberProject,
 		scenarios: [
 			defineScenario({
-				...memberProject.scenarios[0],
+				...memberProject.scenarios![0],
 				world(world, { ref }) {
 					const guild = world.guild('guild');
 					ref('member', '111111111111111111');

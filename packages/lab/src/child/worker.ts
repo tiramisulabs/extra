@@ -1,15 +1,14 @@
 import { pathToFileURL } from 'node:url';
 import { asJson, invokeSession } from '../bridge';
 import type { JsonValue, Project, Session } from '../index';
+import { describeProject } from '../project';
 import {
 	type BridgeEvent,
 	type BridgeRequest,
 	type BridgeResponse,
 	isRecord,
 	PROTOCOL_VERSION,
-	type ProjectDescription,
 	validateBridgeRequest,
-	validateProjectDescription,
 } from '../protocol';
 import { createSession } from '../runtime';
 import { errorText } from '../shared';
@@ -35,30 +34,10 @@ async function loadProject(): Promise<Project> {
 		if ((error as NodeJS.ErrnoException | undefined)?.code !== 'ERR_REQUIRE_ESM') throw error;
 		loaded = await import(pathToFileURL(modulePath).href);
 	}
-	const project = loaded.project ?? loaded.default ?? (loaded.scenarios ? (loaded as Project) : undefined);
+	const project =
+		loaded.project ?? loaded.default ?? (loaded.setup || loaded.scenarios ? (loaded as Project) : undefined);
 	if (!project) throw new Error('Project module has no project export');
 	return project;
-}
-
-function describeProject(project: Project): ProjectDescription {
-	const description: ProjectDescription = {
-		name: project.name,
-		scenarios: project.scenarios.map(({ id, version, title, params }) => ({
-			id,
-			version,
-			title,
-			params: params ?? {},
-		})),
-		services: Object.fromEntries(
-			Object.entries(project.services ?? {}).map(([name, service]) => [
-				name,
-				{ default: service.default, variants: Object.keys(service.variants) },
-			]),
-		),
-		inspectors: Object.keys(project.inspect ?? {}),
-	};
-	validateProjectDescription(description);
-	return description;
 }
 
 async function handle(request: BridgeRequest): Promise<JsonValue> {

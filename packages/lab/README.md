@@ -2,7 +2,7 @@
 
 > **Built for agents first.** The lab is designed so coding agents can drive a bot, check what each actor sees, and turn a run into a test. The browser UI also supports manual checks of conversations, components, modals and checkpoints. It simulates Discord rather than connecting to its services; verify Discord-specific behavior against a live bot before relying on the simulation alone.
 
-Run Seyfert bots against scripted Discord scenarios built on `@slipher/testing`. A scenario describes guilds, roles, channels, members and actors; a session runs your real handlers against it, so you can drive it from tests or from the browser UI in `@slipher/lab-ui`.
+Run a Seyfert bot in a reusable Discord workspace built on `@slipher/testing`. Keep the bot startup, guilds, roles, channels, members and actors in a shared preparation. A PR preview can add only the data or conditions it needs. Sessions run real handlers, driven from tests or the browser UI in `@slipher/lab-ui`.
 
 The root and `/protocol` entrypoints are safe to load without starting a bot or importing Node process APIs.
 
@@ -11,8 +11,8 @@ The root and `/protocol` entrypoints are safe to load without starting a bot or 
 ```ts
 import { defineProject, defineScenario, param } from '@slipher/lab';
 
-const scenario = defineScenario({
-  id: 'basic',
+const setup = defineScenario({
+  id: 'workspace',
   version: 1,
   title: 'One guild, one member',
   params: { locked: param.boolean({ default: false }) },
@@ -34,7 +34,7 @@ const scenario = defineScenario({
 
 export const project = defineProject({
   name: 'my-bot',
-  scenarios: [scenario],
+  setup,
   // Import application code here so it loads after the world is ready.
   bot: async () => {
     const { commands } = await import('./commands.js');
@@ -43,19 +43,45 @@ export const project = defineProject({
 });
 ```
 
-- **Refs.** Every entity has a name (`'guild'`, `'alice'`) that maps to a stable snowflake derived from the project, scenario and name. Actions, locators and expectations accept a ref or a raw ID. Presets can override IDs with `refs: { name: id }`.
-- **Params and services.** Scenario `params` (boolean, string, number, enum) and project `services` (named variants) are chosen per preset.
-- **Resources.** `resources.setup/dispose` owns external fixtures such as a database. `requires` and `seed` run after the bot starts, and `inspect` exposes JSON projections of those resources.
+- **Refs.** Every entity has a name (`'guild'`, `'alice'`) that maps to a stable snowflake derived from the project, shared setup and name. Its ID stays the same across preview extensions. Projects without `setup` retain their scenario-derived IDs. Actions, locators and expectations accept a ref or a raw ID. Presets can override IDs with `refs: { name: id }`.
+- **Params and services.** Shared `params` (boolean, string, number, enum) are inherited by each scenario. A scenario definition wins when it declares the same parameter; explicit preset values win over either default. Project `services` provides named variants chosen per preset.
+- **Resources.** `resources.setup/dispose` owns external fixtures such as an isolated database. The same resource instance reaches `bot`, service variants, `requires`, `seed` and `inspect`. Pass it into the bot’s actual application services; declaring a resource does not connect an existing bot automatically. Each start/reset acquires a new fixture and disposes it after the bot closes, including partial startup failures.
 - **Bot identity.** `w.bot()` configures the bot user once; `w.builder` exposes the underlying testing world for anything else.
 
 Modals support text inputs, string and entity selects, radio groups, checkbox groups, checkboxes and file uploads. The host UI uploads file bytes and provides downloadable attachment URLs from the same server. Direct runtime actions can also supply attachment metadata.
+
+## PR preparation without a permanent catalogue
+
+`setup` is a versioned preparation using the same hooks as `defineScenario`. It is runnable on its own; `scenarios` is optional. Put all normal bot commands behind the project’s `bot` bootstrap rather than loading a different bot for each feature.
+
+A preview entry point imports that project and adds its differences:
+
+```ts
+import { defineProject, defineScenario, param } from '@slipher/lab';
+import { project as sharedProject } from './project.js';
+
+const lockedChannel = defineScenario({
+  id: 'locked-channel',
+  version: 1,
+  title: 'Locked channel',
+  params: { locked: param.boolean({ default: true }) },
+});
+
+export const project = defineProject({ ...sharedProject, scenarios: [lockedChannel] });
+```
+
+A session selecting `locked-channel@1` first builds the shared world, then applies its extension. Parameters and actors are merged, with the extension winning matching names. Both `requires` hooks run after the bot and service variants are ready; if either reports a missing requirement, neither seed runs. Seeds run shared first, then extension. The shared setup runs once when selected directly. A scenario cannot reuse its ID.
+
+This module can live only for the PR. A single workspace can exercise many commands and journeys; an extension is needed only when the initial conditions differ. Legacy projects that declare only `scenarios` keep their current startup order and refs.
+
+Discord transport and world state are simulated. Mongo, Redis or other application services can be real resources, with their own isolated data and cleanup. Isolation of the child process does not isolate a shared external database: the resource hooks own that boundary.
 
 ## Run a session
 
 ```ts
 import { createSession, replay } from '@slipher/lab/runtime';
 
-const session = createSession(project, { scenario: { id: 'basic', version: 1 } });
+const session = createSession(project); // runs the shared setup alone
 await session.start();
 try {
   await session.act({ kind: 'user', actor: 'alice', verb: 'slash', command: 'ping' });
@@ -99,9 +125,17 @@ Other session methods:
 { action: 2, ok: false, error: 'regex' }
 ```
 
-`replay(project, checkpoint)` or `replay(project, log, arrival)` starts a fresh session, repeats the actions, compares each outcome, and checks the arrival conditions. Replay repeats actions; it never restores promises or collectors, so component and modal IDs must stay stable between runs.
+`replay(project, checkpoint)` or `replay(project, log, arrival)` starts a fresh session, repeats the actions, compares each outcome, and checks the arrival conditions. Logs and checkpoints record both the selected scenario version and the shared setup version. Replay rejects a missing or changed preparation before starting the bot. Changing shared setup versions therefore requires recording fresh checkpoints. Replay repeats actions; it never restores promises or collectors, so component and modal IDs must stay stable between runs.
 
 `exportTest(checkpoint, { format: 'vitest' | 'node', projectModule })` generates a test that replays the checkpoint. A checkpoint without arrival conditions exports a failing test that asks you to add one.
+
+A checkpoint contains actions, expected outcomes and preparation references. It does not serialize callbacks, a database snapshot or the implementation of the preparation. After review, discard temporary preview preparation unless the journey earns a maintained regression. To keep a regression:
+
+1. Keep the required extension beside the test, importing the shared project. Preserve its ID/version and any world/seed/actor hooks the journey needs.
+2. Export against that fixture, not the temporary PR module: `exportTest(checkpoint, { format: 'vitest', projectModule: './fixtures/locked-channel.js' })`. The module path resolves from the generated test. The host can choose it with `--export-module`.
+3. Run the exported test against the fixture, then remove the temporary preview entry point. The shared project needs no permanent catalogue entry for this regression.
+
+Keep file assets as described below when a journey downloads attachments. Maintain the preparation and assertions together; exporting actions alone cannot make a deleted fixture replayable.
 
 ## Child process
 

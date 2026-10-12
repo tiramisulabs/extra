@@ -68,7 +68,9 @@ export interface ScenarioContext<R = unknown> {
 }
 export interface Project<R = unknown> {
 	name: string;
-	scenarios: Scenario<R>[];
+	/** Shared preparation, also runnable on its own. Scenarios add only their differences. */
+	setup?: Scenario<R>;
+	scenarios?: Scenario<R>[];
 	configure?: () => void | Promise<void>;
 	resources?: {
 		setup: (ctx: { preset: Preset }) => R | Promise<R>;
@@ -90,6 +92,8 @@ export function defineProject<R = unknown>(project: Project<R>): Project<R> {
 /** A type alias rather than an interface so a preset is assignable to `JsonValue`. */
 export type Preset = {
 	scenario: { id: string; version: number };
+	/** Shared preparation used to record this run, when the project has one. */
+	setup?: { id: string; version: number };
 	params?: Params;
 	services?: Record<string, string>;
 	refs?: Record<string, string>;
