@@ -97,6 +97,7 @@ describe('component flows', () => {
 		const bot = await createMockBot({ components: [ConfirmButton] });
 		const result = await bot.clickButton('confirm', { allowSyntheticSource: true });
 		expect(result.reply?.body).toMatchObject({ data: { content: 'Confirmed!' } });
+		expect(result.content).toBe('Confirmed!');
 		await bot.close();
 	});
 

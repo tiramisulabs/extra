@@ -18,6 +18,7 @@ import {
 	createMockBot,
 	type DenialView,
 	type DispatchResult,
+	defineRoute,
 	type GuildMemberView,
 	type MessageView,
 	type MockComponentContext,
@@ -25,9 +26,13 @@ import {
 	mockCommandContext,
 	mockComponentContext,
 	mockModalContext,
+	type RecordedAction,
 	type RegisteredCommand,
 	type RegisteredCommandFound,
+	type RestCall,
+	type RestCalls,
 	type RoleView,
+	Routes,
 	rendered,
 	richGuild,
 	type SlashOptionsOf,
@@ -157,6 +162,27 @@ buttonFilter.filter({ componentType: 'StringSelect' });
 mockComponentContext(FilterTypeButton, { customId: 'save' });
 
 declare const bot: Awaited<ReturnType<typeof createMockBot>>;
+
+// Public REST vocabulary also works for a recorder outside Discord.
+const consumerRoute = defineRoute<{ userId: string }, { ok: boolean }>()({
+	method: 'POST',
+	route: '/organizations/:orgId/verdict',
+});
+declare const consumerCalls: RestCalls;
+expectType<readonly RestCall<{ orgId: string }, { userId: string }, { ok: boolean }>[]>(consumerCalls(consumerRoute));
+const [consumerCall] = consumerCalls(consumerRoute);
+expectType<string | undefined>(consumerCall?.params.orgId);
+expectType<string | undefined>(consumerCall?.body?.userId);
+expectType<Record<string, unknown> | undefined>(consumerCall?.query);
+expectType<boolean | undefined>(consumerCall?.response?.ok);
+expectType<RecordedAction | undefined>(consumerCall);
+const [botConsumerCall] = bot.restCalls(consumerRoute);
+expectType<RestCall<{ orgId: string }, { userId: string }, { ok: boolean }> | undefined>(botConsumerCall);
+const [messageCall] = bot.restCalls(Routes.createMessage);
+expectType<string | undefined>(messageCall?.params.channelId);
+expectType<string | undefined>(messageCall?.body?.content);
+// @ts-expect-error nonexistentParam is not declared by Routes.createMessage.
+void messageCall?.params.nonexistentParam;
 
 const greetSlashOptions: SlashOptionsOf<typeof GreetCommand> = { name: 'slipher' };
 expectType<{ name: string }>(greetSlashOptions);

@@ -467,7 +467,7 @@ export interface AutocompleteResult extends DispatchResult {
 }
 
 /**
- * Canonical user-action dispatcher list. Add a matrix row whenever this grows.
+ * Canonical user-action dispatcher list. Cover new verbs in their owning dispatcher suite.
  */
 export const DISPATCHER_VERBS = [
 	'slash',
