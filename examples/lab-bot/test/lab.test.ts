@@ -1,15 +1,16 @@
 import type { Session } from '@slipher/lab';
 import { createSession, replay } from '@slipher/lab/runtime';
 import { describe, expect, test } from 'vitest';
+import { missingPermissions } from '../lab/preview.js';
 import { project } from '../lab/project.js';
 
-const preset = (botCanManageRoles: boolean) => ({
-	scenario: { id: 'support', version: 1 },
-	params: { botCanManageRoles },
-});
-
 async function withSession(botCanManageRoles: boolean, run: (session: Session) => Promise<void>) {
-	const session = createSession(project, preset(botCanManageRoles));
+	const session = botCanManageRoles
+		? createSession(project)
+		: createSession(
+				{ ...project, scenarios: [missingPermissions] },
+				{ scenario: { id: missingPermissions.id, version: missingPermissions.version } },
+			);
 	await session.start();
 	try {
 		await run(session);

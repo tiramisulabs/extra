@@ -1,10 +1,10 @@
 import { defineProject, defineScenario, param } from '@slipher/lab';
 import { apiUser } from '@slipher/testing';
 
-export const supportScenario = defineScenario({
-	id: 'support',
+export const setup = defineScenario({
+	id: 'workspace',
 	version: 1,
-	title: 'Send and claim a support request',
+	title: 'Bot workspace',
 	params: {
 		botCanManageRoles: param.boolean({ default: true, label: 'Bot can manage roles' }),
 	},
@@ -46,7 +46,7 @@ export const supportScenario = defineScenario({
 
 export const project = defineProject({
 	name: 'lab-bot',
-	scenarios: [supportScenario],
+	setup,
 	// Loads the compiled handlers listed in seyfert.config.mjs.
 	bot: () => ({ loadFromConfig: true, loadModule: path => import(path) }),
 });

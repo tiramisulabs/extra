@@ -7,6 +7,7 @@
 		"build": "tsc",
 		"test": "tsc -p test && vitest run",
 		"lab": "slipher-lab --project dist/lab/project.js",
+		"lab:preview": "slipher-lab --project dist/lab/preview.js",
 		"lint": "biome lint --write ./src ./lab ./test",
 		"format": "biome format --write ./src ./lab ./test",
 		"checkb": "biome check --write --no-errors-on-unmatched ./src ./lab ./test"
