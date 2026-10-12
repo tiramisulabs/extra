@@ -30,7 +30,10 @@ Pass `--ui <dir>` to serve another build. Without this package the host still ru
 - Lab tooling, marked in amber: pin a visible message or a role as an expected result, save the session as a
   checkpoint, replay it in a fresh session, and export a test.
 
-The visual reference is Discord Onyx, stable build 634304, with default density and 16 px chat text.
+The visual reference is native Discord Onyx, stable build 634304, with default density and 16 px chat text.
+The palette comes from the signed-in client’s computed colors: black conversation/sidebar/rail surfaces,
+subtle grey hover states, and a near-black composer. The channel header spans the conversation and member list.
+Channel and member glyphs use the same reference.
 Fonts are bundled locally.
 Rendering is an approximation for development. It does not claim pixel parity with Discord; components the lab does
 not represent are shown as an explicit notice instead of being hidden.

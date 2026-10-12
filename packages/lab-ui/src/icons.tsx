@@ -1,13 +1,13 @@
 import type { ReactNode } from 'react';
 
-function Icon({ children, size = 20 }: { children: ReactNode; size?: number }) {
+function Icon({ children, size = 20, filled = false }: { children: ReactNode; size?: number; filled?: boolean }) {
 	return (
 		<svg
 			width={size}
 			height={size}
 			viewBox="0 0 24 24"
-			fill="none"
-			stroke="currentColor"
+			fill={filled ? 'currentColor' : 'none'}
+			stroke={filled ? 'none' : 'currentColor'}
 			strokeWidth="2"
 			strokeLinecap="round"
 			strokeLinejoin="round"
@@ -19,22 +19,25 @@ function Icon({ children, size = 20 }: { children: ReactNode; size?: number }) {
 }
 
 export const HashIcon = ({ size }: { size?: number }) => (
-	<Icon size={size}>
-		<path d="M5 9h14M4 15h14M10 3 8 21M16 3l-2 18" />
+	<Icon size={size} filled>
+		<path
+			fillRule="evenodd"
+			d="M10.99 3.16A1 1 0 1 0 9 2.84L8.15 8H4a1 1 0 0 0 0 2h3.82l-.67 4H3a1 1 0 1 0 0 2h3.82l-.8 4.84a1 1 0 0 0 1.97.32L8.85 16h4.97l-.8 4.84a1 1 0 0 0 1.97.32l.86-5.16H20a1 1 0 1 0 0-2h-3.82l.67-4H21a1 1 0 1 0 0-2h-3.82l.8-4.84a1 1 0 1 0-1.97-.32L15.15 8h-4.97l.8-4.84ZM14.15 14l.67-4H9.85l-.67 4h4.97Z"
+		/>
 	</Icon>
 );
 export const LockedHashIcon = ({ size }: { size?: number }) => (
-	<Icon size={size}>
-		<path d="M4 9h9M3 15h8M9 3 7 21M15 3l-1 7" />
-		<rect x="14" y="14" width="8" height="7" rx="1.5" />
-		<path d="M16 14v-2a2 2 0 0 1 4 0v2" />
+	<Icon size={size} filled>
+		<path
+			fillRule="evenodd"
+			d="M16 4h.5v-.5a2.5 2.5 0 0 1 5 0V4h.5a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1h-6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm4-.5V4h-2v-.5a1 1 0 1 1 2 0Z"
+		/>
+		<path d="M12.5 8c.28 0 .5.22.5.5V9c0 .1 0 .2.02.31.03.34-.21.69-.56.69H9.85l-.67 4h4.97l.28-1.68c.06-.34.44-.52.77-.43a3 3 0 0 0 .8.11c.27 0 .47.24.43.5l-.25 1.5H20a1 1 0 1 1 0 2h-4.15l-.86 5.16a1 1 0 0 1-1.98-.32l.8-4.84H8.86l-.86 5.16A1 1 0 0 1 6 20.84L6.82 16H3a1 1 0 1 1 0-2h4.15l.67-4H4a1 1 0 1 1 0-2h4.15l.86-5.16a1 1 0 1 1 1.98.32L10.19 8h2.31Z" />
 	</Icon>
 );
 export const MembersIcon = () => (
-	<Icon>
-		<circle cx="9" cy="8" r="3.5" />
-		<path d="M2.5 20a6.5 6.5 0 0 1 13 0" />
-		<path d="M16 4.5a3.5 3.5 0 0 1 0 7M18.5 20a6.5 6.5 0 0 0-3-5.5" />
+	<Icon filled>
+		<path d="M14.5 8a3 3 0 1 0-2.7-4.3c-.2.4.06.86.44 1.12a5 5 0 0 1 2.14 3.08c.01.06.06.1.12.1ZM18.44 17.27c.15.43.54.73 1 .73h1.06c.83 0 1.5-.67 1.5-1.5a7.5 7.5 0 0 0-6.5-7.43c-.55-.08-.99.38-1.1.92-.06.3-.15.6-.26.87-.23.58-.05 1.3.47 1.63a9.53 9.53 0 0 1 3.83 4.78ZM12.5 9a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM2 20.5a7.5 7.5 0 0 1 15 0c0 .83-.67 1.5-1.5 1.5a.2.2 0 0 1-.2-.16c-.2-.96-.56-1.87-.88-2.54-.1-.23-.42-.15-.42.1v2.1a.5.5 0 0 1-.5.5h-8a.5.5 0 0 1-.5-.5v-2.1c0-.25-.31-.33-.42-.1-.32.67-.67 1.58-.88 2.54a.2.2 0 0 1-.2.16A1.5 1.5 0 0 1 2 20.5Z" />
 	</Icon>
 );
 export const FlaskIcon = ({ size }: { size?: number }) => (

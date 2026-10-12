@@ -50,6 +50,7 @@ function Launcher({
 function ChatHeader({
 	title,
 	canView,
+	inert,
 	projectName,
 	panel,
 	membersAvailable,
@@ -60,6 +61,7 @@ function ChatHeader({
 }: {
 	title?: string;
 	canView: boolean;
+	inert: boolean;
 	projectName: string;
 	panel?: SidePanel;
 	membersAvailable: boolean;
@@ -69,17 +71,19 @@ function ChatHeader({
 	onToggle: (panel: SidePanel) => void;
 }) {
 	return (
-		<header className="chat-header">
+		<header className="chat-header" role="presentation" inert={inert}>
 			<button type="button" className="icon-button nav-toggle" aria-label="Open channels" onClick={onOpenNav}>
 				<MenuIcon />
 			</button>
 			{title ? (
 				<>
 					{canView ? <HashIcon /> : <LockedHashIcon />}
-					<h1>{title}</h1>
+					<h1 id="channel-title">{title}</h1>
 				</>
 			) : (
-				<h1 className="launcher-title">{projectName}</h1>
+				<h1 id="channel-title" className="launcher-title">
+					{projectName}
+				</h1>
 			)}
 			{viewerKey && (
 				<span className="mobile-viewer" title={`Viewing as ${viewerKey}`}>
@@ -268,18 +272,20 @@ function Lab({ client, snapshot }: { client: LabClient; snapshot: LabSnapshot })
 					onClose={() => setNavOpen(false)}
 				/>
 
-				<main className="chat" inert={mobile && navOpen}>
-					<ChatHeader
-						title={running ? current?.name : undefined}
-						canView={canView}
-						projectName={snapshot.project.name}
-						panel={panel}
-						membersAvailable={running}
-						failures={snapshot.inspector.rest.filter(item => item.failed).length}
-						viewerKey={viewer?.key}
-						onOpenNav={() => setNavOpen(true)}
-						onToggle={next => setPanel(open => (open === next ? undefined : next))}
-					/>
+				<ChatHeader
+					title={running ? current?.name : undefined}
+					canView={canView}
+					projectName={snapshot.project.name}
+					inert={mobile && navOpen}
+					panel={panel}
+					membersAvailable={running}
+					failures={snapshot.inspector.rest.filter(item => item.failed).length}
+					viewerKey={viewer?.key}
+					onOpenNav={() => setNavOpen(true)}
+					onToggle={next => setPanel(open => (open === next ? undefined : next))}
+				/>
+
+				<main className="chat" aria-labelledby="channel-title" inert={mobile && navOpen}>
 					{running ? (
 						<>
 							<Conversation
