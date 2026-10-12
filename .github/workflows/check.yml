@@ -1,6 +1,7 @@
 name: Build, Lint, Format & Publish
 on:
   push:
+  workflow_dispatch:
 
 jobs:
   build:
@@ -21,7 +22,18 @@ jobs:
       - name: check out code
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.ref }}
+          fetch-depth: 0
+
+      - name: Select validation scope
+        id: scope
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [[ "$GITHUB_REF_NAME" == "$DEFAULT_BRANCH" || "$GITHUB_REF_TYPE" == "tag" || "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo 'args=' >> "$GITHUB_OUTPUT"
+          else
+            echo 'args=--affected' >> "$GITHUB_OUTPUT"
+          fi
 
       - run: corepack enable
       - uses: actions/setup-node@v7
@@ -42,15 +54,31 @@ jobs:
         run: pnpm run lint
         id: biome_lint
 
+      - name: Restore Turbo cache
+        uses: actions/cache@v6
+        with:
+          path: .turbo/cache
+          key: ${{ runner.os }}-${{ runner.arch }}-turbo-node24-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-turbo-node24-${{ hashFiles('pnpm-lock.yaml') }}-
+
       - name: Building
         run: pnpm run build
         id: build
 
+      - name: Typechecking
+        run: pnpm run typecheck ${{ steps.scope.outputs.args }}
+        env:
+          TURBO_SCM_BASE: origin/${{ github.event.repository.default_branch }}
+          TURBO_SCM_HEAD: ${{ github.sha }}
+
       - name: Testing
-        run: pnpm run test
+        run: pnpm run test ${{ steps.scope.outputs.args }}
         id: test
         env:
           SLIPHER_SCHEDULER_REDIS_URL: redis://127.0.0.1:6379
+          TURBO_SCM_BASE: origin/${{ github.event.repository.default_branch }}
+          TURBO_SCM_HEAD: ${{ github.sha }}
 
       - name: Commit and Push changes
         continue-on-error: true
