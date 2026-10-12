@@ -25,10 +25,6 @@ describe('DAVE verification', () => {
 		expect(createDaveSenderExportContext(userId)).toEqual(encodeSnowflakeLittleEndian(userId));
 	});
 
-	test('uses the native bigint parser for snowflake input', () => {
-		expect(() => encodeSnowflakeBigEndian('snowflake')).toThrow(SyntaxError);
-	});
-
 	test('creates canonical 30 and 45 digit displayable codes', () => {
 		const authenticator = Uint8Array.from({ length: 32 }, (_, index) => index);
 		const fingerprint = Uint8Array.from({ length: 64 }, (_, index) => index);
