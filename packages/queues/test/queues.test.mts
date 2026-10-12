@@ -9,13 +9,11 @@ import {
 	OnWorkerEvent,
 	Process,
 	Processor,
-	type Queue,
-	type QueueEventMap,
 	type QueueJobOf,
 	type QueueRegistration,
 	queues,
 } from '../src';
-import { flushQueueEvents } from './fake-bullmq';
+import { flushQueueEvents, waitForEvent } from './fake-bullmq';
 
 type MailJob = { job: 'send'; email: string } | { job: 'digest'; email: string; window: 'daily' | 'weekly' };
 
@@ -29,18 +27,6 @@ declare module '../src' {
 		priority: QueueRegistration<string, string>;
 		welcome: QueueRegistration<WelcomePayload, string>;
 	}
-}
-
-function waitForEvent<TData, TResult, TEvent extends keyof QueueEventMap<TData, TResult>>(
-	queue: Pick<Queue<TData, TResult>, 'on'>,
-	event: TEvent,
-): Promise<QueueEventMap<TData, TResult>[TEvent]> {
-	return new Promise(resolve => {
-		const off = queue.on(event, payload => {
-			off();
-			resolve(payload);
-		});
-	});
 }
 
 describe('memory queues', () => {

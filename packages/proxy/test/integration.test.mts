@@ -166,6 +166,8 @@ describe('ProxyApiHandler integration', () => {
 	});
 
 	test('does not evict a token context before an exhausted route bucket resets', async () => {
+		const now = Date.now();
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
 		const createRestForToken = vi.fn((token: string) => new ApiHandler({ token, workerProxy: false }));
 		const fixture = await startProxy(
 			async () =>
@@ -176,14 +178,17 @@ describe('ProxyApiHandler integration', () => {
 				),
 			{ createRestForToken, maxTokenContexts: 1 },
 		);
-		cleanups.push(() => fixture.close());
+		cleanups.push(() => {
+			clock.mockRestore();
+			return fixture.close();
+		});
 
 		await fixture.handler.request('GET', '/channels/1', { token: 'first' });
 		const blocked = await fixture.handler.request('GET', '/channels/2', { token: 'second' }).catch(value => value);
 		assert.instanceOf(blocked, ProxyError);
 		assert.equal(blocked.code, 'PROXY_TOKEN_CONTEXT_UNAVAILABLE');
 
-		await new Promise(resolve => setTimeout(resolve, 50));
+		clock.mockReturnValue(now + 41);
 		assert.deepEqual(await fixture.handler.request('GET', '/channels/2', { token: 'second' }), { ok: true });
 		assert.equal(createRestForToken.mock.calls.length, 2);
 	});

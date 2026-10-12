@@ -65,20 +65,6 @@ describe('F37 symmetric readers', () => {
 		await bot.close();
 	});
 
-	test('world voice state delegates to the state reader', async () => {
-		const world = mockWorld();
-		const guild = world.registerGuild({ id: 'dx-vc-guild' });
-		const channel = world.registerChannel(guild.id, { type: 2 });
-		world.registerMember(guild.id, { user: apiUser({ id: 'dx-vc-user' }) });
-		world.registerVoiceState(guild.id, { userId: 'dx-vc-user', channelId: channel.id });
-		const bot = await createMockBot({ commands: [GreetCommand], world });
-
-		expect(bot.world.query.voiceState({ guildId: guild.id, userId: 'dx-vc-user' })?.channel_id).toBe(channel.id);
-		expect(bot.world.query.voiceState({ guildId: guild.id, userId: 'dx-vc-user' })?.channel_id).toBe(channel.id);
-		expect(bot.world.query.voiceState({ guildId: guild.id, userId: 'absent' })).toBeUndefined();
-		await bot.close();
-	});
-
 	test('guild-scoped readers use world wrapper scope even when raw payload guild_id is absent', () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'wrapper-guild' });

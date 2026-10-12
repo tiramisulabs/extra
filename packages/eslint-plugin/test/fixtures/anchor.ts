@@ -1,3 +1,3 @@
-// Anchor input so the RuleTester default-project tsconfig has at least one file
-// (TypeScript errors with TS18003 otherwise). Not used by any test directly.
+// Grouped member fixtures reuse this configured-project filename with virtual
+// contents. It also keeps the default-project tsconfig from producing TS18003.
 export {};

@@ -20,11 +20,6 @@ describe('TraceHandle', () => {
 		assert.equal(handle.setAttributes({ a: 1 }), false);
 	});
 
-	test('setAttributes returns false outside active span', () => {
-		const handle = createTraceHandle();
-		assert.equal(handle.setAttributes({ a: 1 }), false);
-	});
-
 	test('span reflects active span inside record and setAttributes works', async () => {
 		await withProvider(async exporter => {
 			const handle = createTraceHandle();

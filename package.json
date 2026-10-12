@@ -11,6 +11,7 @@
 		"lint": "turbo lint",
 		"format": "turbo format",
 		"test": "turbo test",
+		"typecheck": "turbo typecheck",
 		"check": "turbo run --concurrency 32 lint format build test checkb"
 	},
 	"devDependencies": {

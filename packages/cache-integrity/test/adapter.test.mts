@@ -342,16 +342,6 @@ describe('CacheIntegrityAdapter', () => {
 		}
 	});
 
-	it('keeps a new value hidden when its freshness metadata fails', async () => {
-		const inner = new AsyncAdapter();
-		inner.failSetAt = 2;
-		const adapter = new CacheIntegrityAdapter(inner, MAX_AGE);
-
-		await expect(adapter.set('guild.partial', { id: 'partial' }, ['guild', 'partial'])).rejects.toThrow('set failed');
-		expect(inner.memory.get('guild.partial')).toEqual({ id: 'partial' });
-		expect(await adapter.get('guild.partial')).toBeNull();
-	});
-
 	it('checks persisted freshness through asynchronous adapters', async () => {
 		const inner = new AsyncAdapter();
 		const first = new CacheIntegrityAdapter(inner, MAX_AGE);
@@ -503,7 +493,8 @@ describe('CacheIntegrityAdapter', () => {
 		const inner = new AsyncAdapter();
 		inner.failSetAt = 2;
 		const adapter = new CacheIntegrityAdapter(inner, MAX_AGE);
-		await expect(adapter.set('message.123', { id: '123' }, ['message.456', '123'])).rejects.toThrow();
+		await expect(adapter.set('message.123', { id: '123' }, ['message.456', '123'])).rejects.toThrow('set failed');
+		expect(inner.memory.get('message.123')).toEqual({ id: '123' });
 		expect(inner.memory.keys('message.456')).toEqual(['message.123']);
 		expect(await adapter.keys('message.456')).toEqual([]);
 		expect(await adapter.contains('message.456', '123')).toBe(false);

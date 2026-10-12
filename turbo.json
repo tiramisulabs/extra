@@ -1,15 +1,22 @@
 {
 	"$schema": "https://turbo.build/schema.json",
 	"ui": "tui",
+	"cacheDir": ".turbo/cache",
 	"tasks": {
 		"build": {
 			"dependsOn": ["^build"],
+			"inputs": ["$TURBO_DEFAULT$", "!test/**", "!stress/**", "!README.md", "$TURBO_ROOT$/tsconfig.json"],
 			"outputs": ["lib/**"]
 		},
-		"test": {
+		"typecheck": {
 			"dependsOn": ["^build"],
+			"inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/tsconfig.json"],
+			"outputs": []
+		},
+		"test": {
+			"dependsOn": ["typecheck", "^build"],
 			"cache": false,
-			"env": ["SLIPHER_REDIS_URL", "SLIPHER_SCHEDULER_REDIS_URL"]
+			"env": ["SLIPHER_REDIS_URL", "SLIPHER_REDIS_PORT", "SLIPHER_SCHEDULER_REDIS_URL"]
 		},
 		"dev": {
 			"cache": false,

@@ -199,19 +199,6 @@ describe('logger plugin', () => {
 		assert.equal(collectorEntries[1].message, 'modal collector completed');
 	});
 
-	test('returns a Seyfert plugin with lifecycle observers and instrumentation', () => {
-		const plugin: LoggerPlugin = logger({ renderer: new RecordingAdapter() });
-		const options = getLoggerPluginOptions(plugin);
-
-		assert.equal(plugin.name, '@slipher/logger');
-		assert.equal(typeof plugin.setup, 'function');
-		assert.equal(typeof plugin.ctx?.logger, 'function');
-		assert.equal(typeof plugin.options, 'function');
-		assert.equal(typeof options.commands?.defaults?.onAfterRun, 'function');
-		assert.equal(typeof options.components?.defaults?.onAfterRun, 'function');
-		assert.equal(typeof options.modals?.defaults?.onAfterRun, 'function');
-	});
-
 	test('level methods emit immediately and wide events contain no logs array', async () => {
 		const adapter = new RecordingAdapter();
 		const plugin = logger({
@@ -495,6 +482,7 @@ describe('logger plugin', () => {
 	test('useLogger works outside an interaction scope, immediate and as a one-off wide event', async () => {
 		const adapter = new RecordingAdapter();
 		const plugin = logger({ renderer: adapter });
+		assert.equal(plugin.name, '@slipher/logger');
 		const bot = await createMockBot({ plugins: [plugin] });
 
 		await useLogger().info('ready');

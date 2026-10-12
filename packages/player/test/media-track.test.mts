@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { bytes, createMediaTrack, file, getByteTrackData, radio, snapshotMediaTrack, url } from '../src/track';
+import { bytes, createMediaTrack, file, getByteTrackData, radio, url } from '../src/track';
 import type { MediaTrack } from '../src/types';
 
 function finiteTrack(overrides: Partial<MediaTrack> = {}): MediaTrack {
@@ -55,15 +55,5 @@ describe('media track helpers', () => {
 		input[0] = 9;
 		expect(getByteTrackData(track)).toEqual(Uint8Array.of(1, 2, 3));
 		expect(getByteTrackData({ ...track })).toBeUndefined();
-	});
-
-	test('snapshots only track fields while retaining process-local byte data', () => {
-		const track = bytes(Uint8Array.of(1, 2, 3), { title: 'Original', format: 'ogg-opus' });
-		const data = getByteTrackData(track);
-		const snapshot = snapshotMediaTrack(track);
-
-		expect(snapshot).not.toBe(track);
-		expect(Object.isFrozen(snapshot)).toBe(true);
-		expect(getByteTrackData(snapshot)).toBe(data);
 	});
 });

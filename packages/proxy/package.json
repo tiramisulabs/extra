@@ -29,7 +29,7 @@
 		"checkb": "biome check --write --no-errors-on-unmatched ./src ./stress ./test",
 		"typecheck": "tsc --noEmit --project ./test/tsconfig.json",
 		"typecheck:stress": "tsc --noEmit --project ./stress/tsconfig.json",
-		"test": "pnpm typecheck && vitest run --config ./test/vitest.config.mts ./test/",
+		"test": "vitest run --config ./test/vitest.config.mts ./test/",
 		"test:stress": "pnpm typecheck:stress && vitest run --config ./test/vitest.config.mts ./stress/",
 		"test:contract": "vitest run --config ./test/vitest.config.mts ./test/contract.test.mts",
 		"prepublishOnly": "pnpm build"

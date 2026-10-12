@@ -5,7 +5,7 @@ import { DEFAULT_SERVICE_NAME, type OpenTelemetryBootstrapOptions, type Resolved
 /**
  * Whether this process still has only the API proxy provider (no real SDK).
  */
-export function shouldStartNodeSDK(provider: TracerProvider): boolean {
+function shouldStartNodeSDK(provider: TracerProvider): boolean {
 	if (!(provider instanceof ProxyTracerProvider)) return false;
 	return provider.getDelegateTracer('check') === undefined;
 }

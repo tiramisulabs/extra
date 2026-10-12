@@ -615,12 +615,33 @@ describe('standalone stubs', () => {
 	test('stubQueues rejects ambiguous string payload plus options-shaped data', async () => {
 		const queue = stubQueues().get('email');
 
-		await expect(queue.add('send', { delay: '5s' })).rejects.toThrow(/Ambiguous queue\.add\(\) call/);
+		for (const options of [
+			{ id: 'custom' },
+			{ delay: '5s' },
+			{ attempts: 2 },
+			{ priority: 1 },
+			{ retryDelay: '1s' },
+			{ delay: '5s', priority: 1 },
+		]) {
+			await expect(queue.add('send', options)).rejects.toThrow(/Ambiguous queue\.add\(\) call/);
+		}
+		assert.equal(queue.jobs.length, 0);
 
-		const job = await queue.add('send', { delay: '5s' }, {});
+		for (const payload of [{ delay: '5s', timeout: 1000 }, {}, [], { message: 'hello' }]) {
+			const job = await queue.add('send', payload);
+			assert.equal(job.name, 'send');
+			assert.deepEqual(job.payload, payload);
+			assert.deepEqual(job.data, payload);
+			assert.equal(job.options, undefined);
+		}
 
+		const payload = { delay: '5s' };
+		const options = { id: 'job-1' };
+		const job = await queue.add('send', payload, options);
 		assert.equal(job.name, 'send');
-		assert.deepEqual(job.payload, { delay: '5s' });
+		assert.deepEqual(job.payload, payload);
+		assert.deepEqual(job.options, options);
+		assert.equal(queue.jobs.at(-1), job);
 	});
 
 	test('stubScheduler records dynamic tasks', () => {
