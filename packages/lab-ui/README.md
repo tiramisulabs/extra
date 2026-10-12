@@ -30,8 +30,8 @@ Pass `--ui <dir>` to serve another build. Without this package the host still ru
 - Lab tooling, marked in amber: pin a visible message or a role as an expected result, save the session as a
   checkpoint, replay it in a fresh session, and export a test.
 
-The visual reference is Discord Onyx at a fixed client build; fonts are bundled locally. See
-[DISCORD_REFERENCE.md](./DISCORD_REFERENCE.md) for source stylesheets and measured geometry.
+The visual reference is Discord Onyx, stable build 634304, with default density and 16 px chat text.
+Fonts are bundled locally.
 Rendering is an approximation for development. It does not claim pixel parity with Discord; components the lab does
 not represent are shown as an explicit notice instead of being hidden.
 
