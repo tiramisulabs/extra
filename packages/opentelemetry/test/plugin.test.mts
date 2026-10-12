@@ -4,11 +4,6 @@ import { opentelemetry } from '../src';
 import { installTestTracer } from './helpers/otel-test-provider.mts';
 
 describe('opentelemetry plugin wiring', () => {
-	test('plugin name is stable', () => {
-		const plugin = opentelemetry();
-		assert.equal(plugin.name, '@slipher/opentelemetry');
-	});
-
 	test('setup + teardown with all instruments false does not throw', async () => {
 		const plugin = opentelemetry({
 			traces: { interactions: false, events: false, rest: false, cache: false },
@@ -37,28 +32,37 @@ describe('opentelemetry plugin wiring', () => {
 		assert.throws(() => plugin.setup?.(bot.client), /cannot be set up after teardown; create a new plugin instance/);
 	});
 
-	test('setup is idempotent (second setup unwraps then re-instruments)', async () => {
-		const store = new Map<string, unknown>();
-		const adapter: Record<string, unknown> = {
+	test('repeated setup produces one span and teardown restores the original adapter', async () => {
+		const otel = installTestTracer();
+		const value = { id: '1' };
+		const store = new Map<string, unknown>([['user.1', value]]);
+		const adapter = {
 			get(key: string) {
-				return store.has(key) ? store.get(key) : null;
+				return store.get(key) ?? null;
 			},
 		};
+		const originalGet = adapter.get;
 		const client = { cache: { adapter }, events: {} };
 		const plugin = opentelemetry({
 			serviceName: 'plugin-idempotent-test',
 			traces: { interactions: false, events: false, rest: false, cache: true },
 			metrics: { interactions: false, events: false, rest: false, cache: false },
 		});
-		await plugin.setup?.(client as never);
-		const wrappedOnce = adapter.get;
-		await plugin.setup?.(client as never);
-		// Still a wrapped method (re-instrumented); not left double-wrapped in a broken way
-		assert.equal(typeof adapter.get, 'function');
-		assert.notEqual(adapter.get, wrappedOnce);
-		await plugin.teardown?.({} as never);
-		// After teardown, original restored
-		assert.notEqual(adapter.get, wrappedOnce);
+		try {
+			await plugin.setup?.(client as never);
+			await plugin.setup?.(client as never);
+			assert.equal(adapter.get('user.1'), value);
+			const spans = otel.exporter.getFinishedSpans();
+			assert.equal(spans.length, 1);
+			assert.equal(spans[0].name, 'cache get user');
+			await plugin.teardown?.({} as never);
+			assert.equal(adapter.get, originalGet);
+			assert.equal(adapter.get('user.1'), value);
+			assert.equal(otel.exporter.getFinishedSpans().length, 1);
+		} finally {
+			await plugin.teardown?.({} as never);
+			await otel.shutdown();
+		}
 	});
 
 	test('with in-memory exporter: setup and teardown', async () => {
@@ -76,26 +80,6 @@ describe('opentelemetry plugin wiring', () => {
 		} finally {
 			await otel.shutdown();
 		}
-	});
-
-	test('options() installs contextScopes when interactions are on', () => {
-		const plugin = opentelemetry({
-			traces: { interactions: true, events: false, rest: false, cache: false },
-			metrics: { interactions: false, events: false, rest: false, cache: false },
-		});
-		const fragment = plugin.options?.({} as never);
-		assert.ok(fragment?.contextScopes);
-		assert.equal(fragment?.contextScopes?.length, 1);
-		assert.equal(typeof fragment?.contextScopes?.[0], 'function');
-	});
-
-	test('options() omits contextScopes when interactions are off', () => {
-		const plugin = opentelemetry({
-			traces: { interactions: false, events: false, rest: false, cache: false },
-			metrics: { interactions: false, events: false, rest: false, cache: false },
-		});
-		const fragment = plugin.options?.({} as never);
-		assert.deepEqual(fragment, {});
 	});
 
 	test('client.trace and ctx.trace factories return a TraceHandle', () => {

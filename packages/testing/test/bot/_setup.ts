@@ -8,7 +8,6 @@ import {
 	createMiddleware,
 	createStringOption,
 	Declare,
-	EntryPointCommand,
 	Group,
 	Groups,
 	type MenuCommandContext,
@@ -20,7 +19,7 @@ import {
 	SubCommand,
 	type UserCommandInteraction,
 } from 'seyfert';
-import { ApplicationCommandType, EntryPointCommandHandlerType } from 'seyfert/lib/types';
+import { ApplicationCommandType } from 'seyfert/lib/types';
 import { expect } from 'vitest';
 import { apiUser } from '../../src/bot/payloads';
 import { type DiscordErrorInit, isDiscordError } from '../../src/bot/rest';
@@ -123,16 +122,6 @@ export class ConfirmButton extends ComponentCommand {
 	}
 	async run(ctx: ComponentContext<'Button'>) {
 		await ctx.write({ content: 'Confirmed!' });
-	}
-}
-
-export class PickSelect extends ComponentCommand {
-	componentType = 'StringSelect' as const;
-	filter(ctx: ComponentContext<'StringSelect'>) {
-		return ctx.customId === 'pick';
-	}
-	async run(ctx: ComponentContext<'StringSelect'>) {
-		await ctx.write({ content: `Picked ${ctx.interaction.values.join(',')}` });
 	}
 }
 
@@ -312,25 +301,3 @@ export class ReportMessage extends ContextMenuCommand {
 		await ctx.write({ content: `Reported message ${ctx.target.id}` });
 	}
 }
-
-export class LaunchEntryPoint extends EntryPointCommand {
-	name = 'launch';
-	description = 'Launches';
-	handler = EntryPointCommandHandlerType.AppHandler;
-
-	async run(ctx: Parameters<NonNullable<EntryPointCommand['run']>>[0]) {
-		await ctx.write({ content: 'launched' });
-	}
-}
-
-export const sampleCommands = [
-	GreetCommand,
-	SlowCommand,
-	GuardedCommand,
-	SearchCommand,
-	ReportUser,
-	ReportMessage,
-	LaunchEntryPoint,
-	EchoCommand,
-];
-export const sampleComponents = [ConfirmButton, PickSelect, FeedbackModal];

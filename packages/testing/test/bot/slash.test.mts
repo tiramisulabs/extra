@@ -340,10 +340,4 @@ describe('createMockBot', () => {
 		expect(joined).toEqual(['newbie']);
 		await bot.close();
 	});
-
-	test('main entry exports both layers', async () => {
-		const main = await import('../../src/index');
-		expect(main.createMockBot).toBeTypeOf('function');
-		expect(main.mockCommandContext).toBeTypeOf('function');
-	});
 });

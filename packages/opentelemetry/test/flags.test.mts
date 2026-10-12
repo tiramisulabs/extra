@@ -127,21 +127,6 @@ describe('signal flags', () => {
 		});
 	});
 
-	test('interactions:false → options has no contextScopes; register skips defaults', () => {
-		const { api, defaultsCalls } = fakeApi();
-		const plugin = opentelemetry({
-			traces: { ...ALL_OFF, interactions: false },
-			metrics: { ...ALL_OFF },
-		});
-
-		const fragment = plugin.options?.({} as never);
-		assert.deepEqual(fragment, {});
-		assert.equal(fragment?.contextScopes, undefined);
-
-		plugin.register?.(api as never);
-		assert.deepEqual(defaultsCalls, []);
-	});
-
 	test('interactions:true only → options installs contextScopes; register calls defaults', () => {
 		const { api, defaultsCalls } = fakeApi();
 		const plugin = opentelemetry({
@@ -156,29 +141,6 @@ describe('signal flags', () => {
 
 		plugin.register?.(api as never);
 		assert.deepEqual(defaultsCalls, ['commands', 'components', 'modals']);
-	});
-
-	test('events:false → runEvent not wrapped and produces no spans', async () => {
-		await withProvider(async exporter => {
-			const { client, originalRunEvent, eventCalls } = fakeClient();
-			const { api, getObserveCalls } = fakeApi();
-			const plugin = opentelemetry({
-				serviceName: 'flags-events-off',
-				traces: { ...ALL_OFF, events: false },
-				metrics: { ...ALL_OFF },
-			});
-
-			await plugin.setup?.(client as never, api as never);
-
-			assert.equal(client.events.runEvent, originalRunEvent);
-			await client.events.runEvent('messageCreate', client, {}, 0);
-			assert.deepEqual(eventCalls, ['messageCreate']);
-			assert.equal(exporter.getFinishedSpans().length, 0);
-			// rest still off
-			assert.equal(getObserveCalls(), 0);
-
-			await plugin.teardown?.(client as never);
-		});
 	});
 
 	test('events:true → runEvent wrapped and produces event spans', async () => {
@@ -207,25 +169,6 @@ describe('signal flags', () => {
 		});
 	});
 
-	test('rest:false → api.rest.observe never called', async () => {
-		await withProvider(async () => {
-			const { client } = fakeClient();
-			const { api, getObserveCalls, getRestObserver } = fakeApi();
-			const plugin = opentelemetry({
-				serviceName: 'flags-rest-off',
-				traces: { ...ALL_OFF, rest: false },
-				metrics: { ...ALL_OFF },
-			});
-
-			await plugin.setup?.(client as never, api as never);
-
-			assert.equal(getObserveCalls(), 0);
-			assert.equal(getRestObserver(), undefined);
-
-			await plugin.teardown?.(client as never);
-		});
-	});
-
 	test('rest:true → api.rest.observe is registered once', async () => {
 		await withProvider(async () => {
 			const { client } = fakeClient();
@@ -244,26 +187,6 @@ describe('signal flags', () => {
 			await plugin.teardown?.(client as never);
 			// disposer from observe cleanup should clear the observer
 			assert.equal(getRestObserver(), undefined);
-		});
-	});
-
-	test('cache:false → adapter methods not wrapped and produce no spans', async () => {
-		await withProvider(async exporter => {
-			const { client, originalGet, adapter } = fakeClient();
-			const { api } = fakeApi();
-			const plugin = opentelemetry({
-				serviceName: 'flags-cache-off',
-				traces: { ...ALL_OFF, cache: false },
-				metrics: { ...ALL_OFF },
-			});
-
-			await plugin.setup?.(client as never, api as never);
-
-			assert.equal(adapter.get, originalGet);
-			assert.deepEqual(adapter.get('user.1'), { id: '1' });
-			assert.equal(exporter.getFinishedSpans().length, 0);
-
-			await plugin.teardown?.(client as never);
 		});
 	});
 

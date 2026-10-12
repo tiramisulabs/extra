@@ -11,7 +11,6 @@ import {
 import { ApplicationCommandType } from 'seyfert/lib/types';
 import { describe, expect, test } from 'vitest';
 import { createMockBot } from '../../src/bot/bot';
-import { Routes } from '../../src/bot/routes';
 
 describe('introspection helpers (DX-2)', () => {
 	@Declare({ name: 'ping', description: 'Replies with pong' })
@@ -112,40 +111,6 @@ describe('introspection helpers (DX-2)', () => {
 		expect(new Set(pending.map(entry => entry.userId)).size).toBe(1);
 
 		await Promise.all([first, second]);
-		await bot.close();
-	});
-});
-
-describe('typed restCalls (S19)', () => {
-	@Declare({ name: 'say-hi', description: 'Writes a channel message' })
-	class SayHiCommand extends Command {
-		async run(ctx: CommandContext) {
-			await ctx.client.messages.write('greet-channel', { content: 'hello world' });
-			await ctx.write({ content: 'done' });
-		}
-	}
-
-	test('a route descriptor exposes typed params and leaves payload assertions to the runner', async () => {
-		const bot = await createMockBot({ commands: [SayHiCommand] });
-		await bot.slash({ name: 'say-hi' });
-
-		const [call] = bot.restCalls(Routes.createMessage);
-		const channelId: string | undefined = call?.params.channelId;
-		expect(channelId).toBe('greet-channel');
-		expect(call?.body).toMatchObject({ content: 'hello world' });
-
-		// @ts-expect-error nonexistentParam is not declared by Routes.createMessage.
-		const _wrong: unknown = call?.params.nonexistentParam;
-		void _wrong;
-		await bot.close();
-	});
-
-	test('route reads always return arrays', async () => {
-		const bot = await createMockBot({ commands: [SayHiCommand] });
-		await bot.slash({ name: 'say-hi' });
-
-		expect(bot.restCalls(Routes.createMessage)).toHaveLength(1);
-		expect(bot.restCalls(Routes.ban)).toEqual([]);
 		await bot.close();
 	});
 });

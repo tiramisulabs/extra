@@ -3,7 +3,7 @@
  * - New stateful route: add a Routes descriptor, a defaults responder, any needed
  *   WorldState mutator/view, a regression test, and a README line.
  * - New dispatcher verb: add the payload builder, MockBot method, Actor method,
- *   Dispatcher method, DISPATCHER_VERBS entry, matrix row, and README example.
+ *   Dispatcher method, DISPATCHER_VERBS entry, an owner-suite regression, and README example.
  * - New world entity: add the payload factory, WorldData field, WorldBuilder
  *   registration, cache seeding, state view, read/write responders, and a test
  *   that asserts both cache and view behavior.

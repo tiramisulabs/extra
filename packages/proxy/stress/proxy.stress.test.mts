@@ -78,6 +78,8 @@ describe('proxy stress', () => {
 	test('coordinates sustained concurrent load from many worker copies', async () => {
 		const requestCount = 4_000;
 		const workerCount = 16;
+		// Keep the local TCP accept burst below macOS listen backlogs.
+		const concurrency = 64;
 		let upstreamInFlight = 0;
 		let maxUpstreamInFlight = 0;
 		globalThis.fetch = vi.fn<typeof fetch>(async () => {
@@ -112,7 +114,7 @@ describe('proxy stress', () => {
 
 		try {
 			const startedAt = performance.now();
-			const results = await runConcurrently(requestCount, 256, index => {
+			const results = await runConcurrently(requestCount, concurrency, index => {
 				const channelId = String(100_000_000_000_000_000n + BigInt(index % 64));
 				return fixture.workers[index % workerCount].request<{ ok: boolean }>('GET', `/channels/${channelId}`);
 			});
@@ -125,7 +127,7 @@ describe('proxy stress', () => {
 			);
 			assert.equal(vi.mocked(globalThis.fetch).mock.calls.length, requestCount);
 			assert.isAbove(maxUpstreamInFlight, 1);
-			assert.isAtMost(maxUpstreamInFlight, 256);
+			assert.isAtMost(maxUpstreamInFlight, concurrency);
 			for (let index = 0; index < workerCount; index++) {
 				assert.equal(completedByService.get(`stress-service-${index}`), requestCount / workerCount);
 			}
@@ -150,8 +152,9 @@ describe('proxy stress', () => {
 
 	test('coalesces a large in-flight duplicate burst into one upstream request', async () => {
 		const duplicateCount = 300;
+		const releaseUpstream = deferred<void>();
 		globalThis.fetch = vi.fn<typeof fetch>(async () => {
-			await new Promise(resolve => setTimeout(resolve, 10));
+			await releaseUpstream.promise;
 			return response(200, { ok: true });
 		});
 		const fixture = await startWorkerPool('local-deduplication-token', 1, {
@@ -162,18 +165,29 @@ describe('proxy stress', () => {
 		const body = requestBody(requestId, '/gateway/bot');
 
 		try {
-			const results = await Promise.all(
-				Array.from({ length: duplicateCount }, () =>
-					request(fixture.proxy.url, {
+			const pending: Promise<{ status: number; body: string }>[] = [];
+			// Hold admitted requests while opening sockets in bounded waves, then release all 300 together.
+			for (let offset = 0; offset < duplicateCount; offset += 64) {
+				for (let index = offset; index < Math.min(offset + 64, duplicateCount); index++) {
+					const result = request(fixture.proxy.url, {
 						path: '/v1/requests',
 						method: 'POST',
 						credential: fixture.services[0].credential,
 						contentType: 'application/json',
 						requestId,
 						body,
-					}),
-				),
-			);
+					});
+					void result.catch(() => undefined);
+					pending.push(result);
+				}
+				await vi.waitUntil(() => fixture.proxy.getStats().admittedRequests === pending.length, {
+					interval: 1,
+					timeout: 10_000,
+				});
+			}
+			assert.equal(vi.mocked(globalThis.fetch).mock.calls.length, 1);
+			releaseUpstream.resolve();
+			const results = await Promise.all(pending);
 			const stats = fixture.proxy.getStats();
 
 			assert.equal(
@@ -192,6 +206,7 @@ describe('proxy stress', () => {
 				outcomes: { not_dispatched: 0, completed: duplicateCount, unknown: 0 },
 			});
 		} finally {
+			releaseUpstream.resolve();
 			await fixture.close();
 		}
 	}, 20_000);

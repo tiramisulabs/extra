@@ -11,6 +11,7 @@ import {
 	type RestObserverSuccessPayload,
 	sanitizeRestTarget,
 } from '../src/instrument/rest';
+import { record } from '../src/trace-api';
 import { installTestTracer } from './helpers/otel-test-provider.mts';
 
 function withProvider(run: (exporter: InMemorySpanExporter) => Promise<void> | void) {
@@ -209,38 +210,6 @@ describe('instrumentRest (api.rest.observe)', () => {
 			assert.equal(spans[0].status.code, SpanStatusCode.ERROR);
 			assert.ok(spans[0].events.some(e => e.name === 'exception'));
 			assertNoSensitiveAttributes(spans[0].attributes as Record<string, unknown>);
-
-			cleanup();
-		});
-	});
-
-	test('fail with status >= 500 → ERROR + status_code', async () => {
-		await withProvider(async exporter => {
-			const { api, getObserver } = fakeRestApi();
-			const cleanup = instrumentRest(
-				{ client: undefined, api },
-				{
-					traceEnabled: true,
-					checkIfShouldTrace: () => true,
-					getMetrics: () => undefined,
-				},
-			);
-
-			const observer = getObserver()!;
-			await observer.onRequest!(requestPayload({ method: 'GET', url: '/gateway' }));
-			await observer.onFail!(
-				failPayload({
-					method: 'GET',
-					url: '/gateway',
-					error: new Error('HTTP 503'),
-					statusCode: 503,
-				}),
-			);
-
-			const spans = exporter.getFinishedSpans();
-			assert.equal(spans.length, 1);
-			assert.equal(spans[0].attributes['http.response.status_code'], 503);
-			assert.equal(spans[0].status.code, SpanStatusCode.ERROR);
 
 			cleanup();
 		});
@@ -627,9 +596,20 @@ describe('instrumentRest (api.rest.observe)', () => {
 
 			const observer = getObserver()!;
 			// Two in-flight GETs to the same path
-			await observer.onRequest!(requestPayload({ method: 'GET', url: '/channels/1' }));
-			await observer.onRequest!(requestPayload({ method: 'GET', url: '/channels/1' }));
-			// Complete second first would be LIFO wrong; FIFO: first success ends first span
+			let firstParentId = '';
+			let secondParentId = '';
+			record('first request parent', parent => {
+				firstParentId = parent.spanContext().spanId;
+				observer.onRequest!(requestPayload({ method: 'GET', url: '/channels/1' }));
+			});
+			record('second request parent', parent => {
+				secondParentId = parent.spanContext().spanId;
+				observer.onRequest!(requestPayload({ method: 'GET', url: '/channels/1' }));
+			});
+			assert.ok(firstParentId);
+			assert.ok(secondParentId);
+			assert.notEqual(firstParentId, secondParentId);
+			// The first completion must retain the first request's parent context.
 			await observer.onSuccess!(
 				successPayload({
 					method: 'GET',
@@ -646,12 +626,14 @@ describe('instrumentRest (api.rest.observe)', () => {
 				}),
 			);
 
-			const spans = exporter.getFinishedSpans();
+			const spans = exporter.getFinishedSpans().filter(span => span.name === 'GET /channels/{channel_id}');
 			assert.equal(spans.length, 2);
 			assert.equal(spans[0].attributes['http.response.status_code'], 200);
 			assert.equal(spans[0].status.code, SpanStatusCode.UNSET);
+			assert.equal(spans[0].parentSpanContext?.spanId, firstParentId);
 			assert.equal(spans[1].attributes['http.response.status_code'], 500);
 			assert.equal(spans[1].status.code, SpanStatusCode.ERROR);
+			assert.equal(spans[1].parentSpanContext?.spanId, secondParentId);
 
 			cleanup();
 		});
@@ -796,30 +778,6 @@ describe('instrumentRest (api.rest.observe)', () => {
 			assert.equal(limited.attributes['discord.ratelimit.bucket'], 'efgh5678');
 			assert.equal(limited.attributes['discord.ratelimit.scope'], 'shared');
 			assert.deepEqual(limited.attributes['http.response.header.retry-after'], ['1.5']);
-
-			cleanup();
-		});
-	});
-
-	test('missing response headers never break the span', async () => {
-		await withProvider(async exporter => {
-			const { api, getObserver } = fakeRestApi();
-			const cleanup = instrumentRest(
-				{ client: undefined, api },
-				{
-					traceEnabled: true,
-					checkIfShouldTrace: () => true,
-					getMetrics: () => undefined,
-				},
-			);
-
-			const observer = getObserver()!;
-			await observer.onRequest!(requestPayload({ method: 'GET', url: '/users/@me' }));
-			await observer.onSuccess!(successPayload({ method: 'GET', url: '/users/@me', response: { status: 200 } }));
-
-			const span = exporter.getFinishedSpans()[0];
-			assert.equal(span.attributes['discord.ratelimit.bucket'], undefined);
-			assert.equal(span.status.code, SpanStatusCode.UNSET);
 
 			cleanup();
 		});

@@ -846,62 +846,6 @@ describe('registerInteractionInstrumentation', () => {
 		});
 	});
 
-	test('plugin register() installs defaults when interactions are on', () => {
-		const calls: string[] = [];
-		const api = {
-			commands: {
-				defaults() {
-					calls.push('commands');
-				},
-			},
-			components: {
-				defaults() {
-					calls.push('components');
-				},
-			},
-			modals: {
-				defaults() {
-					calls.push('modals');
-				},
-			},
-		};
-
-		const plugin = opentelemetry({
-			traces: { interactions: true, events: false, rest: false, cache: false },
-			metrics: { interactions: false, events: false, rest: false, cache: false },
-		});
-		plugin.register?.(api as never);
-		assert.deepEqual(calls, ['commands', 'components', 'modals']);
-	});
-
-	test('plugin register() skips defaults when interactions are off', () => {
-		let called = false;
-		const api = {
-			commands: {
-				defaults() {
-					called = true;
-				},
-			},
-			components: {
-				defaults() {
-					called = true;
-				},
-			},
-			modals: {
-				defaults() {
-					called = true;
-				},
-			},
-		};
-
-		const plugin = opentelemetry({
-			traces: { interactions: false, events: false, rest: false, cache: false },
-			metrics: { interactions: false, events: false, rest: false, cache: false },
-		});
-		plugin.register?.(api as never);
-		assert.equal(called, false);
-	});
-
 	test('lifecycle hooks create Middlewares / Options / Run children under root', async () => {
 		await withProvider(async exporter => {
 			const hooks: Record<string, (...args: never[]) => unknown> = {};

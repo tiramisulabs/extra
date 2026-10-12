@@ -212,17 +212,17 @@ describe('GuildPlayer', () => {
 		const harness = createHarness(false);
 		await harness.player.enqueue(track('waiting'));
 		await harness.player.clear();
+		expect(harness.player.queue).toEqual([]);
 		expect(harness.player.state).toEqual({ status: 'idle' });
 		expect(harness.events.filter(event => event.name === 'playerQueueEnd')).toHaveLength(1);
 		await harness.player.clear();
 		expect(harness.events.filter(event => event.name === 'playerQueueEnd')).toHaveLength(1);
 	});
 
-	test.each(['clear', 'stop', 'remove'] as const)('%s ends the last unavailable queued item', async operation => {
+	test.each(['stop', 'remove'] as const)('%s ends the last unavailable queued item', async operation => {
 		const harness = createHarness(false);
 		const item = await harness.player.enqueue(track('waiting'));
-		if (operation === 'clear') await harness.player.clear();
-		else if (operation === 'stop') await harness.player.stop();
+		if (operation === 'stop') await harness.player.stop();
 		else await harness.player.remove(item.id);
 		expect(harness.player.state).toEqual({ status: 'idle' });
 		expect(harness.player.queue).toEqual([]);

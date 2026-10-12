@@ -1,5 +1,5 @@
 import { DataPointType } from '@opentelemetry/sdk-metrics';
-import { assert, describe, test } from 'vitest';
+import { assert, describe, test, vi } from 'vitest';
 import { createCoreMetrics, durationSecondsSince } from '../src/metrics';
 import { installTestMeter } from './helpers/otel-test-provider.mts';
 
@@ -69,10 +69,13 @@ describe('createCoreMetrics', () => {
 });
 
 describe('durationSecondsSince', () => {
-	test('returns a non-negative duration in seconds', () => {
-		const start = performance.now();
-		const seconds = durationSecondsSince(start);
-		assert.ok(seconds >= 0);
-		assert.ok(seconds < 1);
+	test('converts elapsed milliseconds to seconds', () => {
+		const clock = vi.spyOn(performance, 'now').mockReturnValue(3_750);
+		try {
+			assert.equal(durationSecondsSince(1_250), 2.5);
+			assert.equal(durationSecondsSince(3_750), 0);
+		} finally {
+			clock.mockRestore();
+		}
 	});
 });

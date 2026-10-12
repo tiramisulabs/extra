@@ -227,6 +227,7 @@ describe('autocomplete and context menus', () => {
 			type: InteractionResponseType.ChannelMessageWithSource,
 			data: { content: 'Reported spammer' },
 		});
+		expect(result.content).toBe('Reported spammer');
 		await bot.close();
 	});
 
@@ -325,6 +326,7 @@ describe('context-menu result target and class-typed dispatch', () => {
 		});
 		expect(result.target.member?.permissions).toBe('8');
 		expect(result.target.member?.roles).toContain('vip');
+		expect(result.content).toBe('Reported message m-9');
 		await bot.close();
 	});
 

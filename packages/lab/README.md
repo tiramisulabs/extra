@@ -208,6 +208,8 @@ slipher-lab init --provider ssh --ssh-host deploy@your-server \
 
 For Dokploy, use `--provider dokploy --dokploy-url https://dokploy.example.com --environment-id <id>`. Add `--server-id <id>` when the Dokploy destination is a remote deployment server.
 
+In this workspace, `@slipher/lab` builds without Turbo caching so pnpm refreshes its injected CLI copies. Restoring `lib/` alone does not run that synchronization hook.
+
 For a monorepo, `cwd` selects the bot directory inside the repository and `project` is relative to that directory. Install/build commands run from the repository root. Scope a monorepo install to the bot and its dependencies when unrelated packages need additional system tools. For this repository, use `pnpm install --frozen-lockfile --filter lab-bot... --filter seyfert` and `pnpm turbo build --filter lab-bot...`.
 
 Configure a wildcard DNS record for the preview domain pointing at the server. On a **dedicated Docker server** with ports 80 and 443 available, `slipher-lab preview setup` installs a shared Traefik proxy once. Each preview gets its own Compose project and data volume. If the server already has Traefik, configure `provider.proxyNetwork` and `provider.certificateResolver` to use it instead of running setup. Dokploy manages the domain and HTTPS itself.

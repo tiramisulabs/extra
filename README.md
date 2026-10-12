@@ -76,7 +76,8 @@ Useful workspace commands:
 | Command | Action |
 | --- | --- |
 | `pnpm build` | Build every package. |
-| `pnpm test` | Run package test suites. |
+| `pnpm test` | Run package typechecks and test suites through Turbo. |
+| `pnpm typecheck` | Run cacheable package typechecks. |
 | `pnpm lint` | Run repository lint tasks. |
 | `pnpm format` | Apply repository formatting. |
 | `pnpm check` | Run the complete local verification pipeline. |
@@ -84,9 +85,11 @@ Useful workspace commands:
 To work on one package, use pnpm filtering:
 
 ```sh
-pnpm --filter @slipher/queues test
+pnpm test --filter=@slipher/queues
 pnpm --filter @slipher/queues build
 ```
+
+Package-level `test` scripts run Vitest only. Use the root `pnpm test --filter=<package>` command to include dependency builds and typechecks.
 
 ## Documentation ownership
 

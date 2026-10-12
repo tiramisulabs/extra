@@ -72,20 +72,6 @@ describe('mockWorld', () => {
 		expect(bot.world.query.guild({ id: 'payload-guild' })?.name).toBe('Payload');
 	});
 
-	test('seeds voice states resolvable from the cache', async () => {
-		const world = mockWorld();
-		const guild = world.registerGuild();
-		const channel = world.registerChannel(guild.id, { name: 'General' });
-		const member = world.registerMember(guild.id);
-		const voiceState = world.registerVoiceState(guild.id, { userId: member.user.id, channelId: channel.id });
-
-		expect(world.build().voiceStates).toEqual([{ guildId: guild.id, voiceState }]);
-
-		await using bot = await createMockBot({ world });
-		const cached = await bot.client.cache.voiceStates?.get(member.user.id, guild.id);
-		expect(cached?.channelId).toBe(channel.id);
-	});
-
 	test('seeds a role whose ID starts with the cache namespace', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'prefixed-role-guild' });

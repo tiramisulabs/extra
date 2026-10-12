@@ -79,12 +79,6 @@ function fakeClient(adapter: Record<string, unknown>): CacheClient {
 }
 
 describe('extractCacheResource', () => {
-	test('uses first segment of dotted keys', () => {
-		assert.equal(extractCacheResource(['user.123']), 'user');
-		assert.equal(extractCacheResource(['presence.guild.user']), 'presence');
-		assert.equal(extractCacheResource(['voice_state.1.2']), 'voice_state');
-	});
-
 	test('handles bulk key lists and tuples', () => {
 		assert.equal(extractCacheResource([['user.1', 'user.2']]), 'user');
 		assert.equal(extractCacheResource([[['channel.9', { id: '9' }, ['channel.guild', '9']]]]), 'channel');
@@ -98,7 +92,7 @@ describe('extractCacheResource', () => {
 
 describe('instrumentCache (adapter wraps)', () => {
 	test('wraps the complete Seyfert Adapter data surface and restores exact identities', async () => {
-		await withProvider(async () => {
+		await withProvider(async exporter => {
 			const methods = [
 				'scan',
 				'bulkGet',
@@ -136,15 +130,21 @@ describe('instrumentCache (adapter wraps)', () => {
 			}
 			assert.equal(adapter.start, originalStart, 'adapter lifecycle start must not be instrumented');
 
+			(adapter.get as (k: string) => unknown)('user.1');
+			assert.equal(exporter.getFinishedSpans().length, 1);
+
 			cleanup();
 			for (const method of methods) {
 				assert.equal(adapter[method], originals.get(method), `${method} identity was not restored`);
 			}
+			(adapter.get as (k: string) => unknown)('user.1');
+			assert.equal(exporter.getFinishedSpans().length, 1);
 		});
 	});
 
 	test('get hit sets seyfert.cache.hit true', async () => {
 		await withProvider(async exporter => {
+			const recorded: Array<{ duration: number; attrs: Record<string, unknown> }> = [];
 			const { adapter, store } = fakeAdapter();
 			store.set('user.1', { id: '1', username: 'a' });
 			const client = fakeClient(adapter);
@@ -154,7 +154,17 @@ describe('instrumentCache (adapter wraps)', () => {
 					traceEnabled: true,
 					checkIfShouldTrace: () => true,
 					skipResources: new Set(),
-					getMetrics: () => undefined,
+					getMetrics: () => ({
+						recordInteraction() {},
+						recordEvent() {},
+						recordRest() {},
+						recordCache(durationSeconds, attributes) {
+							recorded.push({
+								duration: durationSeconds,
+								attrs: attributes as Record<string, unknown>,
+							});
+						},
+					}),
 				},
 			);
 
@@ -170,6 +180,12 @@ describe('instrumentCache (adapter wraps)', () => {
 			assert.equal(spans[0].attributes['seyfert.cache.hit'], true);
 			assert.equal(spans[0].status.code, SpanStatusCode.UNSET);
 
+			assert.equal(recorded.length, 1);
+			assert.ok(recorded[0].duration >= 0);
+			assert.equal(recorded[0].attrs['seyfert.cache.op'], 'get');
+			assert.equal(recorded[0].attrs['seyfert.cache.resource'], 'user');
+			assert.equal(recorded[0].attrs['seyfert.cache.hit'], true);
+			assert.equal(recorded[0].attrs['seyfert.error'], false);
 			cleanup();
 		});
 	});
@@ -229,33 +245,6 @@ describe('instrumentCache (adapter wraps)', () => {
 			assert.equal(exporter.getFinishedSpans()[0].name, 'cache set user');
 
 			cleanup();
-		});
-	});
-
-	test('cleanup restores original methods', async () => {
-		await withProvider(async exporter => {
-			const { adapter } = fakeAdapter();
-			const originalGet = adapter.get;
-			const client = fakeClient(adapter);
-			const cleanup = instrumentCache(
-				{ client, api: undefined },
-				{
-					traceEnabled: true,
-					checkIfShouldTrace: () => true,
-					skipResources: new Set(),
-					getMetrics: () => undefined,
-				},
-			);
-
-			assert.notEqual(adapter.get, originalGet);
-			(adapter.get as (k: string) => unknown)('user.1');
-			assert.equal(exporter.getFinishedSpans().length, 1);
-
-			cleanup();
-			assert.equal(adapter.get, originalGet);
-
-			(adapter.get as (k: string) => unknown)('user.1');
-			assert.equal(exporter.getFinishedSpans().length, 1);
 		});
 	});
 
@@ -362,46 +351,6 @@ describe('instrumentCache (adapter wraps)', () => {
 			assert.equal(typeof cleanup, 'function');
 			cleanup();
 			assert.equal(exporter.getFinishedSpans().length, 0);
-		});
-	});
-
-	test('records cache metrics when provided', async () => {
-		await withProvider(async exporter => {
-			const recorded: Array<{ duration: number; attrs: Record<string, unknown> }> = [];
-			const { adapter, store } = fakeAdapter();
-			store.set('role.1', { id: '1' });
-			const client = fakeClient(adapter);
-			const cleanup = instrumentCache(
-				{ client, api: undefined },
-				{
-					traceEnabled: true,
-					checkIfShouldTrace: () => true,
-					skipResources: new Set(),
-					getMetrics: () => ({
-						recordInteraction() {},
-						recordEvent() {},
-						recordRest() {},
-						recordCache(durationSeconds, attributes) {
-							recorded.push({
-								duration: durationSeconds,
-								attrs: attributes as Record<string, unknown>,
-							});
-						},
-					}),
-				},
-			);
-
-			(adapter.get as (k: string) => unknown)('role.1');
-
-			assert.equal(recorded.length, 1);
-			assert.ok(recorded[0].duration >= 0);
-			assert.equal(recorded[0].attrs['seyfert.cache.op'], 'get');
-			assert.equal(recorded[0].attrs['seyfert.cache.resource'], 'role');
-			assert.equal(recorded[0].attrs['seyfert.cache.hit'], true);
-			assert.equal(recorded[0].attrs['seyfert.error'], false);
-			assert.equal(exporter.getFinishedSpans().length, 1);
-
-			cleanup();
 		});
 	});
 

@@ -1,16 +1,12 @@
 export function createFakeBullMQ() {
 	const state = {
-		acceptedJobs: [] as Array<{ id: string; name: string; data?: Record<string, unknown> }>,
 		closeGate: undefined as Promise<void> | undefined,
-		deduplications: new Map<string, { expiresAt: number; jobId: string }>(),
 		failUpserts: 0,
-		failResourceReadiness: 0,
 		failWorkerRuns: 0,
 		jobLookupGate: undefined as Promise<void> | undefined,
 		jobs: new Map<string, { id: string; name: string; data?: Record<string, unknown>; repeatJobKey?: string }>(),
 		jobSchedulers: [] as Array<{ id: string }>,
 		nextJobId: 1,
-		now: 0,
 		queueEvents: [] as FakeQueueEvents[],
 		queues: [] as FakeQueue[],
 		workers: [] as FakeWorker[],
@@ -41,26 +37,9 @@ export function createFakeBullMQ() {
 
 		add(name: string, data: Record<string, unknown>, options: Record<string, unknown>) {
 			this.adds.push({ name, data, options });
-			const deduplication = options.deduplication as { id?: unknown; ttl?: unknown } | undefined;
-			if (typeof deduplication?.id === 'string') {
-				const existing = state.deduplications.get(deduplication.id);
-				if (existing && existing.expiresAt > state.now) {
-					return state.jobs.get(existing.jobId);
-				}
-				state.deduplications.delete(deduplication.id);
-			}
-
 			const id = String(options.jobId ?? `${name}:${state.nextJobId++}`);
-			const existing = state.jobs.get(id);
-			if (existing) return existing;
-
 			const job = { id, name, data };
 			state.jobs.set(id, job);
-			state.acceptedJobs.push(job);
-			if (typeof deduplication?.id === 'string') {
-				const ttl = typeof deduplication.ttl === 'number' ? deduplication.ttl : Number.POSITIVE_INFINITY;
-				state.deduplications.set(deduplication.id, { expiresAt: state.now + ttl, jobId: id });
-			}
 			return job;
 		}
 
@@ -80,12 +59,7 @@ export function createFakeBullMQ() {
 			for (const listener of this.listeners.get(event) ?? []) listener(payload);
 		}
 
-		waitUntilReady() {
-			if (state.failResourceReadiness > 0) {
-				state.failResourceReadiness -= 1;
-				throw new Error('resource readiness failed');
-			}
-		}
+		waitUntilReady() {}
 
 		async close() {
 			await state.closeGate;

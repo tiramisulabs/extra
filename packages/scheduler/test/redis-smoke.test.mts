@@ -35,16 +35,22 @@ for (const [version, loadBullMQ] of bullmqVersions) {
 		const prefix = `slipher-scheduler-smoke-${version}-${process.pid}-${Date.now()}`;
 		const queueName = 'slipher-scheduler';
 		const schedulerErrors: unknown[] = [];
-		const registry = createScheduler({
-			driver: persistent({
-				bullmq: bullmq as unknown as BullMQModule,
-				connection,
-				prefix,
-			}),
-			logger: {
-				error: (...args: unknown[]) => schedulerErrors.push(args),
-			},
-		});
+		const deduplicationWindow = 30_000;
+		function createRegistry() {
+			const registry = createScheduler({
+				driver: persistent({
+					bullmq: bullmq as unknown as BullMQModule,
+					connection,
+					prefix,
+					immediateRunDeduplicationMs: deduplicationWindow,
+				}),
+				logger: { error: (...args: unknown[]) => schedulerErrors.push(args) },
+			});
+			registry.interval('redis-smoke', '30s', () => 'redis-ok', { runImmediately: true });
+			return registry;
+		}
+		const registries = [createRegistry()];
+		const registry = registries[0]!;
 		const queue = new Queue(queueName, { connection, prefix });
 		const queueEvents = new QueueEvents(queueName, { connection, prefix });
 		queue.on('error', () => undefined);
@@ -56,11 +62,36 @@ for (const [version, loadBullMQ] of bullmqVersions) {
 			resolveCompleted = resolve;
 		});
 		registry.once('completed', payload => resolveCompleted?.(payload));
-		registry.interval('redis-smoke', '30s', () => 'redis-ok');
 
 		try {
 			await Promise.all([queue.waitUntilReady(), queueEvents.waitUntilReady()]);
 			await registry.setup({ initialized: true });
+
+			const second = createRegistry();
+			registries.push(second);
+			await second.setup({ initialized: true });
+			const deduplicationId = 'slipher:scheduler:immediate:redis-smoke';
+			const immediateJobs = async () =>
+				(await queue.getJobs()).filter(job => job.opts.deduplication?.id === deduplicationId);
+			const firstWave = await immediateJobs();
+			assert.equal(firstWave.length, 1);
+			assert.equal(firstWave[0]!.opts.deduplication?.ttl, deduplicationWindow);
+			assert.equal(firstWave[0]!.opts.delay, 0);
+			assert.equal(firstWave[0]!.opts.jobId, undefined);
+			assert.equal(await queue.getDeduplicationJobId(deduplicationId), firstWave[0]!.id);
+			const deduplicationKey = `${queue.toKey('de')}:${deduplicationId}`;
+			assert.isAbove(await connection.pttl(deduplicationKey), 0);
+
+			// Expire the real Redis admission window without waiting on the host clock.
+			await connection.pexpire(deduplicationKey, 0);
+			assert.equal(await queue.getDeduplicationJobId(deduplicationId), null);
+			const nextWave = createRegistry();
+			registries.push(nextWave);
+			await nextWave.setup({ initialized: true });
+			const admitted = await immediateJobs();
+			assert.equal(admitted.length, 2);
+			assert.notEqual(admitted[0]!.id, admitted[1]!.id);
+			assert.isAbove(await connection.pttl(deduplicationKey), 0);
 
 			let resolveQueueEvent: (() => void) | undefined;
 			const queueEvent = new Promise<void>(resolve => {
@@ -74,10 +105,10 @@ for (const [version, loadBullMQ] of bullmqVersions) {
 			const [payload] = await Promise.all([withTimeout(completed, 10_000), withTimeout(queueEvent, 10_000)]);
 			assert.equal(payload.task.id, 'redis-smoke');
 			assert.equal(payload.result, 'redis-ok');
-			await registry.close();
+			await Promise.all(registries.map(item => item.close()));
 			assert.deepEqual(schedulerErrors, []);
 		} finally {
-			await registry.close().catch(() => undefined);
+			await Promise.all(registries.map(item => item.close().catch(() => undefined)));
 			await queueEvents.close();
 			await queue.obliterate({ force: true });
 			await queue.close();

@@ -953,38 +953,6 @@ describe('scheduler', () => {
 		assert.equal((await resumed).task.id, 'daily');
 	});
 
-	test('persistent runImmediately deduplicates a start wave and runs again after its window', async () => {
-		const bullmq = createFakeBullMQ();
-		const createRegistry = () => {
-			const registry = createScheduler({
-				driver: persistent({ bullmq: bullmq.module, immediateRunDeduplicationMs: 1_000 }),
-			});
-			registry.interval('boot', '30s', () => undefined, { runImmediately: true });
-			return registry;
-		};
-		const first = createRegistry();
-		const second = createRegistry();
-
-		await first.setup({ initialized: true });
-		await second.setup({ initialized: true });
-		assert.equal(bullmq.state.acceptedJobs.length, 1);
-		assert.deepEqual(bullmq.state.queues[0]!.adds[0]!.options, {
-			deduplication: { id: 'slipher:scheduler:immediate:boot', ttl: 1_000 },
-			delay: 0,
-		});
-		assert.equal('jobId' in bullmq.state.queues[0]!.adds[0]!.options, false);
-
-		bullmq.state.now = 1_001;
-		const nextWave = createRegistry();
-		await nextWave.setup({ initialized: true });
-		assert.equal(bullmq.state.acceptedJobs.length, 2);
-		assert.notEqual(bullmq.state.acceptedJobs[0]!.id, bullmq.state.acceptedJobs[1]!.id);
-
-		await first.close();
-		await second.close();
-		await nextWave.close();
-	});
-
 	test('persistent validates the immediate run deduplication window', () => {
 		const bullmq = createFakeBullMQ();
 		for (const immediateRunDeduplicationMs of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {

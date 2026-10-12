@@ -103,12 +103,14 @@ describe('world voice states', () => {
 		const guild = world.registerGuild({ id: 'voice-guild' });
 		const member = world.registerMember(guild.id, { user: apiUser({ id: 'voice-user' }) });
 		const channel = world.registerChannel(guild.id, { id: 'voice-channel', name: 'Voice', type: 2 });
-		world.registerVoiceState(guild.id, {
+		const voiceState = world.registerVoiceState(guild.id, {
 			userId: member.user.id,
 			channelId: channel.id,
 			selfMute: true,
 			deaf: true,
 		});
+
+		expect(world.build().voiceStates).toEqual([{ guildId: guild.id, voiceState }]);
 
 		await using bot = await createMockBot({ world });
 
