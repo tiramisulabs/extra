@@ -69,54 +69,6 @@ function getPluginContextScope(plugin: ReturnType<typeof cooldownPlugin>): Coold
 	return plugin.options?.({} as never).contextScopes?.[0] as CooldownContextScope | undefined;
 }
 
-class AtomicMemoryAdapter extends MemoryAdapter {
-	readonly supportsAtomicCooldowns = true;
-	evalCalls = 0;
-	inFlight = 0;
-	maxInFlight = 0;
-
-	async eval(_script: string, keys: string[], args: string[]) {
-		this.evalCalls++;
-		this.inFlight++;
-		this.maxInFlight = Math.max(this.maxInFlight, this.inFlight);
-		await Promise.resolve();
-
-		try {
-			const [hashKey] = keys;
-			const [intervalArg, limitArg, costArg, memberKey] = args;
-			const now = Date.now();
-			const interval = Number(intervalArg);
-			const limit = Number(limitArg);
-			const cost = Number(costArg);
-			const data = this.get(hashKey) as CooldownData | null;
-			const invalidData =
-				!!data &&
-				(!Number.isSafeInteger(data.lastDrip) ||
-					data.lastDrip > now ||
-					!Number.isSafeInteger(data.remaining) ||
-					data.remaining < 0 ||
-					data.remaining > limit);
-
-			if (!data || invalidData || now - data.lastDrip >= interval) {
-				const remaining = limit - cost;
-				this.set(hashKey, { interval, remaining, lastDrip: now }, ['cooldowns', memberKey]);
-				return [1, 0, now, limit, remaining];
-			}
-
-			const remainingMs = interval - (now - data.lastDrip);
-			if (data.remaining - cost < 0) {
-				return [0, remainingMs, now + remainingMs, limit, data.remaining];
-			}
-
-			const remaining = data.remaining - cost;
-			this.patch(hashKey, { interval, remaining }, ['cooldowns', memberKey]);
-			return [1, 0, now, limit, remaining];
-		} finally {
-			this.inFlight--;
-		}
-	}
-}
-
 class EvalOnlyMemoryAdapter extends MemoryAdapter {
 	evalCalls = 0;
 
@@ -608,20 +560,23 @@ describe('CooldownManager — atomic storage', () => {
 	});
 
 	test('consume uses an atomic adapter path when the adapter opts in', async () => {
-		const adapter = new AtomicMemoryAdapter();
+		const evalReceipt = vi.fn().mockResolvedValue([0, 750, 750, 2, 0]);
+		const adapter = Object.assign(new MemoryAdapter(), { supportsAtomicCooldowns: true, eval: evalReceipt });
 		client.cache = new Cache(0, adapter, {}, client);
 		manager = new CooldownManager(client);
 
-		const first = await manager.consume({ name: 'ping', target: 'u1' });
-		const second = await manager.consume({ name: 'ping', target: 'u1' });
-		const third = await manager.consume({ name: 'ping', target: 'u1' });
+		const result = await manager.consume({ name: 'ping', target: 'u1' });
 
-		assert.equal(adapter.evalCalls, 3);
-		assert.ok(first && second && third);
-		assert.equal(first.allowed, true);
-		assert.equal(second.allowed, true);
-		assert.equal(third.allowed, false);
-		assert.equal((adapter.get('cooldowns.ping:user:u1') as CooldownData | null)?.remaining, 0);
+		expect(evalReceipt).toHaveBeenCalledOnce();
+		assert.deepEqual(result, {
+			allowed: false,
+			remainingMs: 750,
+			retryAfter: new Date(750),
+			limit: 2,
+			remainingUses: 0,
+			key: 'ping:user:u1',
+		});
+		assert.equal(await manager.resource.get('ping:user:u1'), undefined);
 	});
 
 	test('consume does not use eval without an explicit atomic opt-in', async () => {
@@ -640,32 +595,14 @@ describe('CooldownManager — atomic storage', () => {
 	});
 
 	test('rejects malformed results from an opted-in atomic adapter', async () => {
-		const adapter = new AtomicMemoryAdapter();
-		adapter.eval = async () => [1, 0, Number.NaN, 2, 1];
+		const adapter = Object.assign(new MemoryAdapter(), {
+			supportsAtomicCooldowns: true,
+			eval: vi.fn().mockResolvedValue([1, 0, Number.NaN, 2, 1]),
+		});
 		client.cache = new Cache(0, adapter, {}, client);
 		manager = new CooldownManager(client);
 
 		await expect(manager.consume({ name: 'ping', target: 'u1' }) as Promise<unknown>).rejects.toThrow(/invalid result/);
-	});
-
-	test('atomic adapter path does not overspend under concurrent consumes', async () => {
-		const adapter = new AtomicMemoryAdapter();
-		client.cache = new Cache(0, adapter, {}, client);
-		manager = new CooldownManager(client);
-
-		const results = await Promise.all(Array.from({ length: 5 }, () => manager.consume({ name: 'ping', target: 'u1' })));
-		const allowed = results.filter(result => result?.allowed);
-		const blocked = results.filter(result => result && !result.allowed);
-
-		assert.equal(adapter.evalCalls, 5);
-		assert.ok(adapter.maxInFlight > 1);
-		assert.equal(allowed.length, 2);
-		assert.equal(blocked.length, 3);
-		assert.deepEqual(
-			allowed.map(result => result?.remainingUses),
-			[1, 0],
-		);
-		assert.equal((adapter.get('cooldowns.ping:user:u1') as CooldownData | null)?.remaining, 0);
 	});
 
 	test('Redis atomic path keeps the bucket and relationship index coherent under concurrency', async () => {
@@ -693,6 +630,13 @@ describe('CooldownManager — atomic storage', () => {
 			);
 			assert.equal(results.filter(result => result?.allowed).length, 2);
 			assert.equal(results.filter(result => result && !result.allowed).length, 3);
+			assert.deepEqual(
+				results
+					.filter(result => result?.allowed)
+					.map(result => result?.remainingUses)
+					.sort(),
+				[0, 1],
+			);
 			assert.equal(await adapter.contains('cooldowns', 'ping:user:u1'), true);
 			assert.equal((await adapter.get('cooldowns.ping:user:u1'))?.remaining, 0);
 
@@ -773,29 +717,56 @@ describe('CooldownManager — atomic storage', () => {
 		}
 	});
 
-	test('atomic adapter replaces corrupt buckets with canonical state', async () => {
-		const adapter = new AtomicMemoryAdapter();
-		client.cache = new Cache(0, adapter, {}, client);
+	test('Redis atomic path replaces corrupt buckets with canonical state', async () => {
+		vi.useRealTimers();
+		const adapter = new RedisAdapter({
+			namespace: `cooldown-corruption-${process.pid}-${Date.now()}`,
+			redisOptions: { url: process.env.SLIPHER_REDIS_URL ?? 'redis://127.0.0.1:6379' },
+		});
+		const interval = 60_000;
+		await adapter.start();
+		client = createClient([makeCommand({ name: 'ping', cooldown: { type: 'user', interval, uses: 2 } })], adapter);
 		manager = new CooldownManager(client);
-		const corruptBuckets = [
-			{ lastDrip: 1, remaining: 0 },
-			{ lastDrip: Number.MAX_SAFE_INTEGER + 1, remaining: 0 },
-			{ lastDrip: 0, remaining: 1.5 },
-			{ lastDrip: 0, remaining: -1 },
-			{ lastDrip: 0, remaining: 3 },
-		];
 
-		for (const [index, bucket] of corruptBuckets.entries()) {
-			const target = `corrupt-${index}`;
-			const key = `cooldowns.ping:user:${target}`;
-			adapter.set(key, { interval: 1_000, ...bucket }, ['cooldowns', key.slice('cooldowns.'.length)]);
+		async function serverTime() {
+			const [seconds, microseconds] = (await adapter.client.sendCommand(['TIME'])) as [string, string];
+			return Number(seconds) * 1_000 + Math.floor(Number(microseconds) / 1_000);
+		}
 
-			const result = await manager.consume({ name: 'ping', target });
-			const stored = adapter.get(key) as CooldownData | null;
+		try {
+			const observedAt = await serverTime();
+			const corruptBuckets = [
+				{ lastDrip: Number.MAX_SAFE_INTEGER, remaining: 0 },
+				{ lastDrip: Number.MAX_SAFE_INTEGER + 1, remaining: 0 },
+				{ lastDrip: observedAt, remaining: 1.5 },
+				{ lastDrip: observedAt, remaining: -1 },
+				{ lastDrip: observedAt, remaining: 3 },
+			];
 
-			assert.ok(result?.allowed);
-			assert.equal(result.remainingUses, 1);
-			assert.deepEqual(stored, { interval: 1_000, lastDrip: 0, remaining: 1 });
+			for (const [index, bucket] of corruptBuckets.entries()) {
+				const target = `corrupt-${index}`;
+				const id = `ping:user:${target}`;
+				const key = `cooldowns.${id}`;
+				await adapter.set(key, { interval, ...bucket }, ['cooldowns', id]);
+
+				const before = await serverTime();
+				const result = await manager.consume({ name: 'ping', target });
+				const after = await serverTime();
+				const stored = (await adapter.get(key)) as CooldownData;
+
+				assert.ok(result?.allowed);
+				assert.equal(result.remainingUses, 1);
+				assert.equal(stored.interval, interval);
+				assert.equal(stored.remaining, 1);
+				assert.isAtLeast(stored.lastDrip, before);
+				assert.isAtMost(stored.lastDrip, after);
+				assert.equal(result.retryAfter.getTime(), stored.lastDrip);
+				assert.equal(await adapter.contains('cooldowns', id), true);
+				assert.equal(await adapter.client.hGet(`${adapter.namespace}:relationships:owners`, key), key);
+			}
+		} finally {
+			await adapter.flush();
+			adapter.client.close();
 		}
 	});
 
