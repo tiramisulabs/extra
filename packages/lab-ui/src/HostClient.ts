@@ -510,6 +510,7 @@ export class HostClient implements LabClient, CheckpointClient {
 					scenario: { id: scenario.id, version: scenario.version },
 					...(this.project?.setup ? { setup: this.project.setup } : {}),
 					params: presetParams(choice),
+					...(choice.refs ? { refs: choice.refs } : {}),
 					services: choice.services,
 				},
 			});

@@ -159,6 +159,77 @@ Programmatic use is `startHost(options)` from `@slipher/lab/host`. It returns `{
 
 The host only binds to loopback addresses and only accepts local `Host` and `Origin` headers. Each browser session runs in a child process, and checkpoints are saved as JSON files in the data directory.
 
+## PR recipes and automatic previews
+
+A PR can configure the maintained project without adding a scenario module to the repository. Put one named JSON fence inside a collapsed section at the bottom of the description:
+
+````md
+<details>
+<summary>Scenario Requirements</summary>
+
+```json slipher-lab
+{
+  "scenario": { "id": "workspace", "version": 1 },
+  "params": { "botCanManageRoles": false }
+}
+```
+
+</details>
+````
+
+The JSON uses the existing `Preset` contract: `scenario` can select the shared setup itself or a declared extension; `params`, `services`, `refs` and an explicit shared `setup` reference are optional. Only the `json slipher-lab` fence is configuration. Other code blocks, including documentation examples containing this fence, are ignored. Missing recipes run `project.setup`; malformed, duplicate or incompatible recipes fail instead of silently running the defaults.
+
+The host accepts an immutable PR snapshot, paired with the code you built:
+
+```sh
+gh pr view "$PR_URL" --json body,headRefOid > /tmp/lab-pr.json
+slipher-lab --project dist/lab/project.js --pr /tmp/lab-pr.json \
+  --build-revision "$(git rev-parse HEAD)"
+```
+
+The snapshot is read once. Its head must equal the build revision, and the browser starts with the captured parameters and service choices. Checkpoints contain the session's actual preset and the code revision; replay and exported tests use those values, without fetching the PR description again. Programmatic hosts can pass `pullRequest: { body, headRefOid }` alongside `build: { revision }`.
+
+### Configure hosting once
+
+Install `@slipher/lab` and `@slipher/lab-ui` in the bot project and keep its shared preparation in `lab/project.ts`. Then run:
+
+```sh
+slipher-lab init
+```
+
+The initializer asks for the bot directory, compiled project path, install/build commands, preview domain and either **Dokploy** or **SSH**. It creates `lab.preview.json` and `.github/workflows/lab-preview.yml`, refusing to overwrite existing files. It does not infer guilds, actors or database fixtures from the bot: those remain in the maintained lab project. The generated image uses Node 24 and Corepack; custom install/build commands must work in that Linux environment.
+
+A non-interactive setup for a Docker server looks like:
+
+```sh
+slipher-lab init --provider ssh --ssh-host deploy@your-server \
+  --domain previews.example.com --project dist/lab/project.js
+```
+
+For Dokploy, use `--provider dokploy --dokploy-url https://dokploy.example.com --environment-id <id>`. Add `--server-id <id>` when the Dokploy destination is a remote deployment server.
+
+For a monorepo, `cwd` selects the bot directory inside the repository and `project` is relative to that directory. Install/build commands run from the repository root. Scope a monorepo install to the bot and its dependencies when unrelated packages need additional system tools. For this repository, use `pnpm install --frozen-lockfile --filter lab-bot... --filter seyfert` and `pnpm turbo build --filter lab-bot...`.
+
+Configure a wildcard DNS record for the preview domain pointing at the server. On a **dedicated Docker server** with ports 80 and 443 available, `slipher-lab preview setup` installs a shared Traefik proxy once. Each preview gets its own Compose project and data volume. If the server already has Traefik, configure `provider.proxyNetwork` and `provider.certificateResolver` to use it instead of running setup. Dokploy manages the domain and HTTPS itself.
+
+GitHub configuration:
+
+| Setting | Used for |
+| --- | --- |
+| Secret `LAB_PREVIEW_PASSWORD` | Browser HTTP Basic login, username `lab` |
+| Variable `LAB_REGISTRY_USERNAME` and secret `LAB_REGISTRY_TOKEN` | Pulling private images from GHCR; use a durable account/token with access to the image package |
+| Secret `LAB_DOKPLOY_KEY` | Dokploy API access, for that provider |
+| Secrets `LAB_SSH_KEY` and `LAB_SSH_KNOWN_HOSTS` | SSH key and verified server host-key entry, for that provider |
+| Optional secret `LAB_PREVIEW_ENV` | JSON object of bot service credentials; only names listed in configuration `childEnv` reach the bot |
+
+For example, set `childEnv: ["DATABASE_URL"]` in `lab.preview.json` and provide `LAB_PREVIEW_ENV` as `{"DATABASE_URL":"…"}`. The project's resource hooks must create and clean isolated test data; deleting a preview does not delete an external database. Provider credentials stay outside the bot process. Deployment environment values travel as base64 JSON so quotes, dollar signs and multiline values survive provider serialization.
+
+Commit the generated setup to the base branch before using it on feature PRs. The workflow installs and builds the base branch's controller, uses its configuration, captures the current PR description and exact head, builds an image, validates the recipe against the compiled project, and deploys by image digest. It publishes a GitHub deployment link only when `/api/host` reports that commit and workflow run. Description edits also trigger a build. The saved recipe is available as a CI artifact.
+
+Closing or merging a PR removes the owned Dokploy application or Compose project/volume and marks its GitHub deployment inactive. Repeated cleanup is safe, and delayed closed events skip cleanup if the PR has been reopened. Repository ID and PR number identify a preview across commits; resources with a conflicting ownership marker are refused. The default workflow serves same-repository PRs, serializes their lifecycle events, and rejects a stale head or a closed PR before deployment. Fork previews are not enabled by this template.
+
+Previews, uploaded files and checkpoints are temporary. Export a useful regression before closing the PR. For a parameter-only recipe, its test can import the shared project directly; keep a custom preparation module only when the regression needs additional hooks.
+
 ## Hosted mode
 
 Hosted mode shares one lab with a team, for example as a PR preview:

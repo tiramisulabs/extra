@@ -7,7 +7,7 @@ type ParamValue = ScenarioChoice['params'][string];
 
 /** The running session's preset, or the catalogue's first scenario with its defaults. */
 function defaultChoice(snapshot: LabSnapshot): ScenarioChoice {
-	const preset = snapshot.session?.preset;
+	const preset = snapshot.session?.preset ?? snapshot.host?.preset;
 	const { scenarios, services } = snapshot.project;
 	const scenario =
 		scenarios.find(item => item.id === preset?.scenario.id) ??
@@ -15,6 +15,7 @@ function defaultChoice(snapshot: LabSnapshot): ScenarioChoice {
 		scenarios[0];
 	return {
 		scenarioId: scenario?.id ?? '',
+		...(preset?.refs ? { refs: preset.refs } : {}),
 		params: { ...defaultParams(scenario), ...preset?.params },
 		services: Object.fromEntries(
 			Object.entries(services).map(([name, service]) => [name, preset?.services?.[name] ?? service.default]),
@@ -149,7 +150,9 @@ export function ScenarioForm({
 							name="scenario"
 							value={item.id}
 							checked={item.id === choice.scenarioId}
-							onChange={() => setChoice({ ...choice, scenarioId: item.id, params: defaultParams(item) })}
+							onChange={() =>
+								setChoice({ ...choice, scenarioId: item.id, params: defaultParams(item), refs: undefined })
+							}
 						/>
 						<span className="scenario-card-copy">
 							<strong>{item.title}</strong>

@@ -162,6 +162,7 @@ type ParamValue = boolean | string | number;
 /** What Start sends: a scenario of the project's catalogue with its parameters and service variants. */
 export interface ScenarioChoice {
 	scenarioId: string;
+	refs?: Record<string, string>;
 	/** `null` is an emptied number field. */
 	params: Record<string, ParamValue | null>;
 	services: Record<string, string>;
