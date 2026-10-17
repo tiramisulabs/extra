@@ -1,4 +1,5 @@
 import {
+	type ApiRequestOptions,
 	Command,
 	type CommandContext,
 	ContextMenuCommand,
@@ -154,7 +155,7 @@ function assertStatefulInteractionTypes(bot: MockBot): void {
 
 	const noRouteParam = bot.restCalls()[0]?.params.arbitrary;
 	expectAssignable<undefined>(noRouteParam);
-	expectAssignable<Record<string, unknown> | undefined>(bot.restCalls()[0]?.body);
+	expectAssignable<ApiRequestOptions['body']>(bot.restCalls()[0]?.body);
 	expectAssignable<unknown>(bot.restCalls()[0]?.response);
 	// @ts-expect-error no-route reads cannot invent a string route parameter.
 	const inventedRouteParam: string = noRouteParam;

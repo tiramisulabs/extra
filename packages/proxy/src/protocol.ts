@@ -70,7 +70,7 @@ export interface WireApiRequest {
 	method: HttpMethods;
 	url: `/${string}`;
 	query?: Record<string, unknown>;
-	body?: Record<string, unknown> | unknown[];
+	body?: Record<string, unknown> | readonly unknown[];
 	auth?: boolean;
 	reason?: string;
 	appendToFormData?: boolean;

@@ -10,7 +10,7 @@ Runner-agnostic fixtures and an in-process mock bot for testing Seyfert commands
 pnpm add -D @slipher/testing
 ```
 
-Requires Seyfert v5 and works with the test runner of your choice.
+Requires Seyfert 5.1.0 or newer and works with the test runner of your choice.
 
 ## Quick start
 

@@ -36,8 +36,8 @@ importers:
         specifier: ^17.4.2
         version: 17.4.2
       seyfert:
-        specifier: ^5.0.0
-        version: 5.0.0
+        specifier: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
+        version: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
       youtube-dl-exec:
         specifier: ^3.1.12
         version: 3.1.12(debug@4.4.3)
@@ -65,13 +65,13 @@ importers:
         version: link:../redis-adapter
       '@slipher/testing':
         specifier: workspace:*
-        version: file:packages/testing(seyfert@5.1.0)
+        version: link:../testing
       '@types/node':
         specifier: ^26.0.1
         version: 26.1.1
       seyfert:
-        specifier: 5.1.0
-        version: 5.1.0
+        specifier: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
+        version: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -102,13 +102,13 @@ importers:
         version: link:../redis-adapter
       '@slipher/testing':
         specifier: workspace:*
-        version: file:packages/testing(seyfert@5.1.0)
+        version: link:../testing
       '@types/node':
         specifier: ^26.0.1
         version: 26.1.1
       seyfert:
-        specifier: 5.1.0
-        version: 5.1.0
+        specifier: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
+        version: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -129,8 +129,8 @@ importers:
         specifier: ^10.6.0
         version: 10.6.0
       seyfert:
-        specifier: ^5.0.0
-        version: 5.0.0
+        specifier: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
+        version: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -151,8 +151,8 @@ importers:
         specifier: ^26.0.1
         version: 26.1.1
       seyfert:
-        specifier: ^5.0.0
-        version: 5.0.0
+        specifier: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
+        version: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -179,8 +179,8 @@ importers:
         specifier: ^2.26.0
         version: 2.26.0(vite@8.1.3(@types/node@26.1.1)(esbuild@0.28.2)(tsx@4.23.12))
       seyfert:
-        specifier: ^5.0.0
-        version: 5.0.0
+        specifier: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
+        version: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -208,13 +208,13 @@ importers:
         version: 2.9.0(@opentelemetry/api@1.9.1)
       '@slipher/testing':
         specifier: workspace:*
-        version: file:packages/testing(seyfert@5.1.0)
+        version: link:../testing
       '@types/node':
         specifier: ^26.0.1
         version: 26.1.1
       seyfert:
-        specifier: 5.1.0
-        version: 5.1.0
+        specifier: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
+        version: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -231,8 +231,8 @@ importers:
         specifier: ^26.0.1
         version: 26.1.1
       seyfert:
-        specifier: ^5.0.0
-        version: 5.0.0
+        specifier: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
+        version: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -246,8 +246,8 @@ importers:
         specifier: ^26.0.1
         version: 26.1.1
       seyfert:
-        specifier: ^5.0.0
-        version: 5.0.0
+        specifier: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
+        version: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -265,8 +265,8 @@ importers:
         specifier: ^26.0.1
         version: 26.1.1
       seyfert:
-        specifier: ^5.0.0
-        version: 5.0.0
+        specifier: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
+        version: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -281,8 +281,8 @@ importers:
         specifier: ^26.0.1
         version: 26.1.1
       seyfert:
-        specifier: 5.1.0
-        version: 5.1.0
+        specifier: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
+        version: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -300,8 +300,8 @@ importers:
         specifier: ^8.18.1
         version: 8.18.1
       seyfert:
-        specifier: ^5.0.0
-        version: 5.0.0
+        specifier: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
+        version: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -331,8 +331,8 @@ importers:
         specifier: ^5.10.1
         version: 5.10.1
       seyfert:
-        specifier: ^5.0.0
-        version: 5.0.0
+        specifier: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
+        version: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -346,8 +346,8 @@ importers:
         specifier: ^26.0.1
         version: 26.1.1
       seyfert:
-        specifier: ^5.0.0
-        version: 5.0.0
+        specifier: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
+        version: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -368,8 +368,8 @@ importers:
         specifier: ^26.0.1
         version: 26.1.1
       seyfert:
-        specifier: ^5.0.0
-        version: 5.0.0
+        specifier: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
+        version: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -393,8 +393,8 @@ importers:
         specifier: ^26.0.1
         version: 26.1.1
       seyfert:
-        specifier: ^5.0.0
-        version: 5.0.0
+        specifier: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
+        version: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -415,8 +415,8 @@ importers:
         specifier: ^26.0.1
         version: 26.1.1
       seyfert:
-        specifier: ^5.0.0
-        version: 5.0.0
+        specifier: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
+        version: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -1185,11 +1185,6 @@ packages:
 
   '@rolldown/pluginutils@1.0.1':
     resolution: {integrity: sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw==}
-
-  '@slipher/testing@file:packages/testing':
-    resolution: {directory: packages/testing, type: directory}
-    peerDependencies:
-      seyfert: '>=5.0.0'
 
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
@@ -2047,11 +2042,9 @@ packages:
     resolution: {integrity: sha512-bBZaRwLH9PN5HbLCjPId4dP5bNGEtumcErgOX952IsvOhVPrm3/AeK1y0UHA/QaPG701eg0yEnOKsCOC6X/kaA==}
     engines: {node: '>=20'}
 
-  seyfert@5.0.0:
-    resolution: {integrity: sha512-73tb7/RiToy7+IO1in84zzn736XMXtf2Td0I26bSL2+09wcyEdZG1J4vj5M6twesMACFqv498ELImx6CpddCCQ==}
-
-  seyfert@5.1.0:
-    resolution: {integrity: sha512-FeNWUioMHeQwDnO3An+1xiV0qRcf+8INKfct8b/45OatXHEbqdAAdkbeoL+v0104MdtZPBJoUq6+QRSlM7cJsw==}
+  seyfert@https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9:
+    resolution: {integrity: sha512-GK1JWV/DG1BaKf4yTvU4oCNODPo2GkDOqYlGclMJt7Nf0V0MNQ4Xr/Attn1ToMMkbsZks7pYFPePP0IBwJVjjA==, tarball: https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9}
+    version: 5.2.0
 
   shebang-command@2.0.0:
     resolution: {integrity: sha512-kHxr2zZpYtdmrN1qDjrrX/Z1rR1kG8Dx+gkpK1G4eXmvXswmcE1hTWBWYUzlraYw1/yZp6YuDY77YtvbN0dmDA==}
@@ -2932,10 +2925,6 @@ snapshots:
 
   '@rolldown/pluginutils@1.0.1': {}
 
-  '@slipher/testing@file:packages/testing(seyfert@5.1.0)':
-    dependencies:
-      seyfert: 5.1.0
-
   '@standard-schema/spec@1.1.0': {}
 
   '@turbo/darwin-64@2.10.4':
@@ -3753,9 +3742,7 @@ snapshots:
       non-error: 0.1.0
       type-fest: 5.8.0
 
-  seyfert@5.0.0: {}
-
-  seyfert@5.1.0: {}
+  seyfert@https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9: {}
 
   shebang-command@2.0.0:
     dependencies:
