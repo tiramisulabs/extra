@@ -15,9 +15,11 @@ export interface SignalFlags {
 	cache?: boolean;
 }
 
-/** Gateway health is metrics-only: there is no gateway span. */
+/** Gateway health, process memory, and collector counts are metrics-only. */
 export interface MetricFlags extends SignalFlags {
 	gateway?: boolean;
+	memory?: boolean;
+	collectors?: boolean;
 }
 
 export interface ResolvedSignalFlags {
@@ -29,6 +31,8 @@ export interface ResolvedSignalFlags {
 
 export interface ResolvedMetricFlags extends ResolvedSignalFlags {
 	gateway: boolean;
+	memory: boolean;
+	collectors: boolean;
 }
 
 export type TraceSource =
@@ -79,7 +83,12 @@ export function resolveTraceFlags(flags: SignalFlags = {}): ResolvedSignalFlags 
 }
 
 export function resolveMetricFlags(flags: MetricFlags = {}): ResolvedMetricFlags {
-	return { ...resolveSignalFlags(flags, true), gateway: flags.gateway ?? true };
+	return {
+		...resolveSignalFlags(flags, true),
+		gateway: flags.gateway ?? true,
+		memory: flags.memory ?? true,
+		collectors: flags.collectors ?? true,
+	};
 }
 
 export function resolvePluginOptions(options: OpenTelemetryPluginOptions = {}): ResolvedOpenTelemetryOptions {

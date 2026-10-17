@@ -24,6 +24,8 @@ describe('signal flags', () => {
 			rest: true,
 			cache: true,
 			gateway: true,
+			memory: true,
+			collectors: true,
 		});
 	});
 
