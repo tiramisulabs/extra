@@ -1,7 +1,14 @@
 import { PermissionFlagsBits } from 'seyfert';
 import { type ApiMember, apiChannel, apiGuild, apiUser } from './payloads';
 import { computeChannelPermissions } from './permissions';
-import { apiError, type DiscordErrorInit, DiscordErrors, type MockApiHandler, type RouteMatcher } from './rest';
+import {
+	apiError,
+	type DiscordErrorInit,
+	DiscordErrors,
+	type MockApiHandler,
+	type PendingAction,
+	type RouteMatcher,
+} from './rest';
 import { Routes } from './routes';
 import type { MessageQuery, WorldState } from './state';
 import type { WorldData } from './world';
@@ -22,8 +29,8 @@ export interface WorldDefaultHooks {
 	applicationId: string;
 }
 
-export function bodyRecord(body: Record<string, unknown> | undefined): Record<string, unknown> {
-	return body ?? {};
+export function bodyRecord(body: PendingAction['body']): Record<string, unknown> {
+	return !body || Array.isArray(body) ? {} : (body as Record<string, unknown>);
 }
 
 export function queryString(value: unknown): string | undefined {

@@ -815,8 +815,8 @@ const { users: _v3 } = value;`,
 		{
 			name: 'MenuCommandContext: safe properties',
 			filename,
-			code: `import { MenuCommandContext } from 'seyfert';
-declare const value: InstanceType<typeof MenuCommandContext>;
+			code: `import type { MenuCommandContext, UserCommandInteraction } from 'seyfert';
+declare const value: MenuCommandContext<UserCommandInteraction>;
 const { author: _v0 } = value;
 const { channelId: _v1 } = value;
 const { client: _v2 } = value;
@@ -1627,7 +1627,6 @@ const { fetch: _v0 } = value;`,
 			filename,
 			code: `import { BaseResource } from 'seyfert';
 declare const value: InstanceType<typeof BaseResource>;
-const { addToRelationship: _v0 } = value;
 const { bulk: _v1 } = value;
 const { contains: _v2 } = value;
 const { count: _v3 } = value;
@@ -1640,12 +1639,10 @@ const { keys: _v9 } = value;
 const { patch: _v10 } = value;
 const { remove: _v11 } = value;
 const { removeIfNI: _v12 } = value;
-const { removeToRelationship: _v13 } = value;
 const { set: _v14 } = value;
 const { setIfNI: _v15 } = value;
 const { values: _v16 } = value;`,
 			errors: [
-				{ messageId: 'methodDestructure', data: { name: 'addToRelationship' } },
 				{ messageId: 'methodDestructure', data: { name: 'bulk' } },
 				{ messageId: 'methodDestructure', data: { name: 'contains' } },
 				{ messageId: 'methodDestructure', data: { name: 'count' } },
@@ -1658,7 +1655,6 @@ const { values: _v16 } = value;`,
 				{ messageId: 'methodDestructure', data: { name: 'patch' } },
 				{ messageId: 'methodDestructure', data: { name: 'remove' } },
 				{ messageId: 'methodDestructure', data: { name: 'removeIfNI' } },
-				{ messageId: 'methodDestructure', data: { name: 'removeToRelationship' } },
 				{ messageId: 'methodDestructure', data: { name: 'set' } },
 				{ messageId: 'methodDestructure', data: { name: 'setIfNI' } },
 				{ messageId: 'methodDestructure', data: { name: 'values' } },
@@ -2367,7 +2363,6 @@ const { toString: _v4 } = value;`,
 			filename,
 			code: `import { GuildBasedResource } from 'seyfert';
 declare const value: InstanceType<typeof GuildBasedResource>;
-const { addToRelationship: _v0 } = value;
 const { bulk: _v1 } = value;
 const { contains: _v2 } = value;
 const { count: _v3 } = value;
@@ -2382,13 +2377,10 @@ const { parse: _v11 } = value;
 const { patch: _v12 } = value;
 const { remove: _v13 } = value;
 const { removeIfNI: _v14 } = value;
-const { removeRelationship: _v15 } = value;
-const { removeToRelationship: _v16 } = value;
 const { set: _v17 } = value;
 const { setIfNI: _v18 } = value;
 const { values: _v19 } = value;`,
 			errors: [
-				{ messageId: 'methodDestructure', data: { name: 'addToRelationship' } },
 				{ messageId: 'methodDestructure', data: { name: 'bulk' } },
 				{ messageId: 'methodDestructure', data: { name: 'contains' } },
 				{ messageId: 'methodDestructure', data: { name: 'count' } },
@@ -2403,8 +2395,6 @@ const { values: _v19 } = value;`,
 				{ messageId: 'methodDestructure', data: { name: 'patch' } },
 				{ messageId: 'methodDestructure', data: { name: 'remove' } },
 				{ messageId: 'methodDestructure', data: { name: 'removeIfNI' } },
-				{ messageId: 'methodDestructure', data: { name: 'removeRelationship' } },
-				{ messageId: 'methodDestructure', data: { name: 'removeToRelationship' } },
 				{ messageId: 'methodDestructure', data: { name: 'set' } },
 				{ messageId: 'methodDestructure', data: { name: 'setIfNI' } },
 				{ messageId: 'methodDestructure', data: { name: 'values' } },
@@ -2467,7 +2457,6 @@ const { fetch: _v0 } = value;`,
 			filename,
 			code: `import { GuildRelatedResource } from 'seyfert';
 declare const value: InstanceType<typeof GuildRelatedResource>;
-const { addToRelationship: _v0 } = value;
 const { bulk: _v1 } = value;
 const { contains: _v2 } = value;
 const { count: _v3 } = value;
@@ -2481,13 +2470,10 @@ const { parse: _v10 } = value;
 const { patch: _v11 } = value;
 const { remove: _v12 } = value;
 const { removeIfNI: _v13 } = value;
-const { removeRelationship: _v14 } = value;
-const { removeToRelationship: _v15 } = value;
 const { set: _v16 } = value;
 const { setIfNI: _v17 } = value;
 const { values: _v18 } = value;`,
 			errors: [
-				{ messageId: 'methodDestructure', data: { name: 'addToRelationship' } },
 				{ messageId: 'methodDestructure', data: { name: 'bulk' } },
 				{ messageId: 'methodDestructure', data: { name: 'contains' } },
 				{ messageId: 'methodDestructure', data: { name: 'count' } },
@@ -2501,8 +2487,6 @@ const { values: _v18 } = value;`,
 				{ messageId: 'methodDestructure', data: { name: 'patch' } },
 				{ messageId: 'methodDestructure', data: { name: 'remove' } },
 				{ messageId: 'methodDestructure', data: { name: 'removeIfNI' } },
-				{ messageId: 'methodDestructure', data: { name: 'removeRelationship' } },
-				{ messageId: 'methodDestructure', data: { name: 'removeToRelationship' } },
 				{ messageId: 'methodDestructure', data: { name: 'set' } },
 				{ messageId: 'methodDestructure', data: { name: 'setIfNI' } },
 				{ messageId: 'methodDestructure', data: { name: 'values' } },
@@ -2719,8 +2703,6 @@ const { values: _v10 } = value;`,
 			filename,
 			code: `import { LimitedMemoryAdapter } from 'seyfert';
 declare const value: InstanceType<typeof LimitedMemoryAdapter>;
-const { addToRelationship: _v0 } = value;
-const { bulkAddToRelationShip: _v1 } = value;
 const { bulkGet: _v2 } = value;
 const { bulkPatch: _v3 } = value;
 const { bulkRemove: _v4 } = value;
@@ -2740,8 +2722,6 @@ const { set: _v17 } = value;
 const { start: _v18 } = value;
 const { values: _v19 } = value;`,
 			errors: [
-				{ messageId: 'methodDestructure', data: { name: 'addToRelationship' } },
-				{ messageId: 'methodDestructure', data: { name: 'bulkAddToRelationShip' } },
 				{ messageId: 'methodDestructure', data: { name: 'bulkGet' } },
 				{ messageId: 'methodDestructure', data: { name: 'bulkPatch' } },
 				{ messageId: 'methodDestructure', data: { name: 'bulkRemove' } },
@@ -2827,8 +2807,6 @@ const { toJSON: _v3 } = value;`,
 			filename,
 			code: `import { MemoryAdapter } from 'seyfert';
 declare const value: InstanceType<typeof MemoryAdapter>;
-const { addToRelationship: _v0 } = value;
-const { bulkAddToRelationShip: _v1 } = value;
 const { bulkGet: _v2 } = value;
 const { bulkPatch: _v3 } = value;
 const { bulkRemove: _v4 } = value;
@@ -2848,8 +2826,6 @@ const { set: _v17 } = value;
 const { start: _v18 } = value;
 const { values: _v19 } = value;`,
 			errors: [
-				{ messageId: 'methodDestructure', data: { name: 'addToRelationship' } },
-				{ messageId: 'methodDestructure', data: { name: 'bulkAddToRelationShip' } },
 				{ messageId: 'methodDestructure', data: { name: 'bulkGet' } },
 				{ messageId: 'methodDestructure', data: { name: 'bulkPatch' } },
 				{ messageId: 'methodDestructure', data: { name: 'bulkRemove' } },
@@ -2893,8 +2869,8 @@ const { isMentionableSelectMenu: _v0 } = value;`,
 		{
 			name: 'MenuCommandContext: detached methods',
 			filename,
-			code: `import { MenuCommandContext } from 'seyfert';
-declare const value: InstanceType<typeof MenuCommandContext>;
+			code: `import type { MenuCommandContext, UserCommandInteraction } from 'seyfert';
+declare const value: MenuCommandContext<UserCommandInteraction>;
 const { channel: _v0 } = value;
 const { deferReply: _v1 } = value;
 const { deleteResponse: _v2 } = value;
@@ -3681,8 +3657,6 @@ const { write: _v4 } = value;`,
 			filename,
 			code: `import { WorkerAdapter } from 'seyfert';
 declare const value: InstanceType<typeof WorkerAdapter>;
-const { addToRelationship: _v0 } = value;
-const { bulkAddToRelationShip: _v1 } = value;
 const { bulkGet: _v2 } = value;
 const { bulkPatch: _v3 } = value;
 const { bulkRemove: _v4 } = value;
@@ -3704,8 +3678,6 @@ const { set: _v19 } = value;
 const { start: _v20 } = value;
 const { values: _v21 } = value;`,
 			errors: [
-				{ messageId: 'methodDestructure', data: { name: 'addToRelationship' } },
-				{ messageId: 'methodDestructure', data: { name: 'bulkAddToRelationShip' } },
 				{ messageId: 'methodDestructure', data: { name: 'bulkGet' } },
 				{ messageId: 'methodDestructure', data: { name: 'bulkPatch' } },
 				{ messageId: 'methodDestructure', data: { name: 'bulkRemove' } },

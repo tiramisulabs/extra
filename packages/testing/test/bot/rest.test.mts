@@ -45,6 +45,20 @@ describe('MockApiHandler', () => {
 		});
 	});
 
+	test('preserves array request bodies in interceptors and history', async () => {
+		const rest = new MockApiHandler();
+		const body = [{ name: 'ping', description: 'Ping' }] as const;
+		rest.intercept('PUT', '/applications/:applicationId/commands', action => {
+			expect(action.body).toBe(body);
+			return action.body;
+		});
+
+		const result = await rest.request('PUT', '/applications/123/commands', { body });
+
+		expect(result).toEqual(body);
+		expect(rest.actions[0]?.body).toBe(body);
+	});
+
 	test('world-backed missing fetches fail, while explicit silent fallbacks are stamped synthetic', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'syn-guild' });
@@ -411,12 +425,12 @@ describe('one error model, one predicate', () => {
 		const channel = world.registerChannel(guild.id, { id: 'copy-chan' });
 		const bot = await createMockBot({ world });
 
-		// seyfert renames the error after the status text and the code, so the copy lives on metadata.response
+		// The Discord detail remains available both in the message and on metadata.response.
 		const catalogError = await bot.client.channels.fetch('ghost').then(
 			() => undefined,
 			(reason: unknown) => reason,
 		);
-		expect((catalogError as Error).message).toBe('Api Not found 10003');
+		expect((catalogError as Error).message).toContain('Unknown Channel');
 		expect(discordErrorDetail(catalogError)).toBe('Unknown Channel');
 
 		// per-call detail still overrides the catalog copy, which is why apiError's second argument exists

@@ -27,7 +27,7 @@ describe('emitted declaration surface', () => {
 			/interface RouteMatcher<TRoute extends string = string, TBody = unknown, TResponse = unknown>/,
 		);
 		expect(restDts).toMatch(
-			/type RestCall<TParams extends Record<string, string \| undefined> = Record<string, undefined>, TBody = Record<string, unknown>, TResponse = unknown>/,
+			/type RestCall<TParams extends Record<string, string \| undefined> = Record<string, undefined>, TBody = NonNullable<RecordedAction\['body'\]>, TResponse = unknown>/,
 		);
 		expect(routesDts).toMatch(
 			/createMessage: RouteMatcher<"\/channels\/:channelId\/messages", API\.RESTPostAPIChannelMessageJSONBody, API\.APIMessage>/,

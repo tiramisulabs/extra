@@ -75,7 +75,7 @@ describe('ProxyApiHandler integration', () => {
 	});
 
 	test('preserves top-level JSON arrays used by bulk command routes', async () => {
-		const commands = [{ name: 'ping', description: 'Ping' }];
+		const commands = [{ name: 'ping', description: 'Ping' }] as const;
 		const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
 			assert.equal(init?.body, JSON.stringify(commands));
 			return response(200, commands);
@@ -85,7 +85,7 @@ describe('ProxyApiHandler integration', () => {
 
 		assert.deepEqual(
 			await fixture.handler.request('PUT', '/applications/1/commands', {
-				body: commands as unknown as Record<string, unknown>,
+				body: commands,
 			}),
 			commands,
 		);

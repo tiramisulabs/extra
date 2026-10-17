@@ -60,7 +60,7 @@
 		"bullmq": "6.1.2",
 		"bullmq-v5": "npm:bullmq@5.79.3",
 		"ioredis": "^5.10.1",
-		"seyfert": "^5.0.0",
+		"seyfert": "5.2.0",
 		"typescript": "^6.0.3"
 	}
 }

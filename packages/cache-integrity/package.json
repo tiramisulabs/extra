@@ -33,7 +33,7 @@
 	"devDependencies": {
 		"@slipher/testing": "workspace:*",
 		"@types/node": "^26.0.1",
-		"seyfert": "5.1.0",
+		"seyfert": "5.2.0",
 		"typescript": "^6.0.3",
 		"@slipher/redis-adapter": "workspace:*"
 	},

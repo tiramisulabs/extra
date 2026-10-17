@@ -17,7 +17,7 @@ export interface RecordedAction {
 	sessionKey?: string;
 	method: HttpMethods;
 	route: string;
-	body?: Record<string, unknown>;
+	body?: ApiRequestOptions['body'];
 	query?: Record<string, unknown>;
 	files?: unknown[];
 	/** Audit-log reason, when the command passed one. */
@@ -97,10 +97,9 @@ export function apiError(error: DiscordErrorInit, message?: string): never {
 /**
  * Narrow an unknown caught value to a Discord REST error, by the fields Discord actually sends.
  *
- * `error.message` is not one of them: seyfert's `parseError` names the error `API_<statusText>_<code>` and
- * uses that as the message, so a Missing Permissions failure reads `Api Forbidden 50013`. The status and the
- * code are the contract — the descriptive copy stays on `error.metadata.response.message` for the handful of
- * errors whose text carries per-call detail (Invalid Form Body naming the offending field).
+ * Match the status and code rather than the rendered `error.message`, which includes request details.
+ * Seyfert's `parseError` stores the Discord response on `error.metadata.response`, including descriptive
+ * copy such as Invalid Form Body naming the offending field.
  *
  * ```ts
  * catch (error) {
@@ -231,7 +230,7 @@ export interface RouteMatcher<TRoute extends string = string, TBody = unknown, T
 /** A read-only REST snapshot, enriched with params captured from the supplied route descriptor. */
 export type RestCall<
 	TParams extends Record<string, string | undefined> = Record<string, undefined>,
-	TBody = Record<string, unknown>,
+	TBody = NonNullable<RecordedAction['body']>,
 	TResponse = unknown,
 > = Readonly<
 	Omit<RecordedAction, 'body' | 'response'> & {
@@ -367,8 +366,8 @@ const SYNTHETIC_GET_SHAPES: { pattern: RegExp; shape: () => unknown }[] = [
 	{ pattern: /\/messages\/[^/]+$/, shape: () => apiMessage() },
 ];
 
-function definedBody(body: Record<string, unknown> | undefined): Record<string, unknown> {
-	if (!body) return {};
+function definedBody(body: ApiRequestOptions['body']): Record<string, unknown> {
+	if (!isRecord(body)) return {};
 	return Object.fromEntries(Object.entries(body).filter(([, value]) => value !== undefined));
 }
 

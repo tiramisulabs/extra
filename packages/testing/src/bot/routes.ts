@@ -278,7 +278,7 @@ export const Routes = {
 	}),
 	bulkBan: defineRoute<API.RESTPostAPIGuildBulkBanJSONBody, API.RESTPostAPIGuildBulkBanResult>()({
 		method: 'POST',
-		route: '/guilds/:guildId/bulk-bans',
+		route: '/guilds/:guildId/bulk-ban',
 	}),
 	fetchAutoModRules: defineRoute<never, API.RESTGetAPIAutoModerationRulesResult>()({
 		method: 'GET',

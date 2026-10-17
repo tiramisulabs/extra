@@ -34,11 +34,11 @@
 	"devDependencies": {
 		"@biomejs/biome": "2.5.1",
 		"@types/node": "^26.0.1",
-		"seyfert": "^5.0.0",
+		"seyfert": "5.2.0",
 		"typescript": "^6.0.3",
 		"vitest": "^4.1.9"
 	},
 	"peerDependencies": {
-		"seyfert": ">=5.0.0"
+		"seyfert": ">=5.1.0"
 	}
 }
