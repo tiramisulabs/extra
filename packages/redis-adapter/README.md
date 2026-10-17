@@ -5,7 +5,7 @@ relationship membership supplied by Seyfert; the removed `addToRelationship` and
 part of this API.
 
 The package requires Redis 8.0 or newer and Seyfert `5.1.0` or a later release containing [the final atomic adapter
-contract](https://github.com/tiramisulabs/seyfert/pull/439). The workspace validates the immutable 5.2.0 release candidate;
+contract](https://github.com/tiramisulabs/seyfert/pull/439). The workspace validates the stable 5.2.0 release;
 the affected packages retain 5.1.0 as their peer dependency minimum. Older Seyfert versions use incompatible split-write
 signatures.
 

@@ -43,7 +43,7 @@
 		"@slipher/testing": "workspace:*",
 		"@types/node": "^26.0.1",
 		"evlog": "^2.26.0",
-		"seyfert": "https://pkg.pr.new/seyfert@f73b268f1d0acd3ea94ff5d9729d411e13c0b2a9",
+		"seyfert": "5.2.0",
 		"typescript": "^6.0.3"
 	},
 	"peerDependencies": {
