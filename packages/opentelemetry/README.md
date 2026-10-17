@@ -1,6 +1,6 @@
 # @slipher/opentelemetry
 
-OpenTelemetry traces and duration metrics for Seyfert interactions, events, REST, cache operations, and gateway health.
+OpenTelemetry traces and duration metrics for Seyfert interactions, events, REST, cache operations, gateway health, process memory, and active collectors.
 
 **[Read the complete OpenTelemetry guide on seyfert.dev](https://seyfert.dev/docs/plugins/official/opentelemetry).**
 
@@ -38,3 +38,10 @@ export const client = new Client({ plugins });
 ```
 
 Teardown is terminal for a plugin instance. Create a fresh plugin instance, processor, and exporter for every new client lifecycle.
+
+## Memory diagnostics
+
+Process-wide memory and collector metrics are enabled by default. They help
+separate heap growth from RSS growth; attributing retained objects requires heap
+snapshots or native profiling. See [Memory diagnostics](https://github.com/tiramisulabs/extra/blob/main/packages/opentelemetry/MEMORY_DIAGNOSTICS.md)
+for metric names, exporter configuration, and an attribution workflow.

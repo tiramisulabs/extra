@@ -26,7 +26,15 @@ export function startOpenTelemetry(options: OpenTelemetryBootstrapOptions = {}):
 		contextManager,
 		sdk,
 		traces: { interactions: false, events: false, rest: false, cache: false },
-		metrics: { interactions: false, events: false, rest: false, cache: false, gateway: false },
+		metrics: {
+			interactions: false,
+			events: false,
+			rest: false,
+			cache: false,
+			gateway: false,
+			memory: false,
+			collectors: false,
+		},
 		checkIfShouldTrace: () => true,
 		cache: { skipResources: new Set() },
 	});

@@ -2,6 +2,7 @@ import { type ContextScope, createPlugin } from 'seyfert';
 import { createInteractionContextScope } from './context-scope';
 import { createTraceHandle } from './handle';
 import { instrumentCache } from './instrument/cache';
+import { instrumentCollectors } from './instrument/collectors';
 import type { InstrumentTarget } from './instrument/deps';
 import { instrumentEvents } from './instrument/events';
 import { instrumentGateway } from './instrument/gateway';
@@ -11,6 +12,7 @@ import {
 	instrumentInteractionPresentations,
 	registerInteractionInstrumentation,
 } from './instrument/interactions';
+import { instrumentMemory } from './instrument/memory';
 import { instrumentRest } from './instrument/rest';
 import { type CoreMetrics, createCoreMetrics } from './metrics';
 import { type OpenTelemetryPluginOptions, resolvePluginOptions } from './options';
@@ -106,6 +108,12 @@ export function opentelemetry(options: OpenTelemetryPluginOptions = {}) {
 			}
 			if (resolved.metrics.gateway) {
 				cleanups.push(instrumentGateway(target));
+			}
+			if (resolved.metrics.memory) {
+				cleanups.push(instrumentMemory());
+			}
+			if (resolved.metrics.collectors) {
+				cleanups.push(instrumentCollectors(target));
 			}
 		},
 		async teardown() {
