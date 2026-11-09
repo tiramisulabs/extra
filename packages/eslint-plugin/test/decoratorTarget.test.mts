@@ -24,6 +24,13 @@ createTester().run('decorator-target', rule, {
 		// Transitive bases.
 		code(`class Base extends SubCommand {}\n@Group('g') class S extends Base {}`),
 		code(`class Base extends Command {}\n@AutoLoad() class C extends Base {}`),
+		// A generic class between the decorated class and the seyfert base.
+		code(
+			`abstract class Guild<T> extends SubCommand { state?: T }\nabstract class Mod extends Guild<string> {}\n@Group('g') class S extends Mod {}`,
+		),
+		code(
+			`abstract class Guild<T> extends Command { state?: T }\nabstract class Music extends Guild<string> {}\n@AutoLoad() class C extends Music {}`,
+		),
 		// Wrong-package guard: a local, non-seyfert `Group` must NOT be checked.
 		`function Group(_n: string) { return (_t: unknown) => {}; }
 @Group('g') class X {}`,

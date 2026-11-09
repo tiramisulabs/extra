@@ -40,6 +40,17 @@ createTester().run('decorator-on-command', rule, {
 		code(
 			`abstract class BaseButton extends ComponentCommand {}\n@Middlewares([]) class B extends BaseButton { ${BUTTON} }`,
 		),
+		// A generic class between the decorated class and the seyfert base.
+		code(
+			`abstract class Paged<T> extends ComponentCommand { page?: T }\nabstract class QueuePage extends Paged<string> {}\n@Middlewares([]) class Next extends QueuePage { ${BUTTON} }`,
+		),
+		code(
+			`abstract class Guild<T> extends Command { state?: T }\nabstract class Music extends Guild<string> {}\n@Declare({ name: 'skip', description: 'd' }) @Middlewares([]) class Skip extends Music {}`,
+		),
+		// A base produced by a generic class factory.
+		code(
+			`function button<const Id extends string>(customId: Id) {\n\tabstract class Base extends ComponentCommand { override customId = customId; }\n\treturn Base;\n}\n@Middlewares([]) class Pause extends button('pause') { ${BUTTON} }`,
+		),
 		// Exact repro from tiramisulabs/extra#49.
 		`import { ComponentCommand, type GuildComponentContext, Middlewares } from 'seyfert';
 
@@ -82,5 +93,9 @@ export default class PauseTrackComponent extends ComponentCommand {
 			code: `import { Middlewares } from 'seyfert';\nclass ComponentCommand {}\n@Middlewares([]) class X extends ComponentCommand {}`,
 			errors: [{ messageId: 'onCommandOrComponentOnly' }],
 		},
+		// A generic chain that never reaches a seyfert base is still reported.
+		onCommandOrComponentOnly(
+			`class Local<T> { value?: T }\nclass Mid extends Local<string> {}\n@Middlewares([]) class X extends Mid {}`,
+		),
 	],
 });

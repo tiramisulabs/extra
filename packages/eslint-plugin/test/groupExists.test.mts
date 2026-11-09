@@ -67,6 +67,17 @@ class Local {}
 @Declare({ name: 'c', description: 'd' }) @Groups({ mod: { defaultDescription: 'm' } }) @Options([Sub]) class C extends Command {}`,
 			errors: [{ messageId: 'unknownGroup', data: { group: 'typo' } }],
 		},
+		// Subcommand and command reached through generic intermediate classes.
+		{
+			code: `import { Command, SubCommand, Declare, Options, Group, Groups } from 'seyfert';
+abstract class GuildSub<T> extends SubCommand { state?: T }
+abstract class ModSub extends GuildSub<string> {}
+abstract class GuildCommand<T> extends Command { state?: T }
+abstract class ModCommand extends GuildCommand<string> {}
+@Declare({ name: 's', description: 'd' }) @Group('typo') class Sub extends ModSub {}
+@Declare({ name: 'c', description: 'd' }) @Groups({ mod: { defaultDescription: 'm' } }) @Options([Sub]) class C extends ModCommand {}`,
+			errors: [{ messageId: 'unknownGroup', data: { group: 'typo' } }],
+		},
 		// Subcommand uses a group but the command declares none.
 		{
 			code: `import { Command, SubCommand, Declare, Options, Group } from 'seyfert';

@@ -94,6 +94,11 @@ export function extendsSeyfertClass(checker: ts.TypeChecker, type: ts.Type, name
 		const symbol = current.aliasSymbol ?? current.getSymbol();
 		if (symbol && names.has(symbol.getName()) && isSeyfertSymbol(checker, symbol)) return true;
 		for (const base of current.getBaseTypes() ?? []) stack.push(base);
+		// An instantiated generic (`PagedButton<string>`) has no base types of its
+		// own; its generic declaration (`PagedButton<T>`) carries them.
+		if (current.flags & ts.TypeFlags.Object && (current as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference) {
+			stack.push((current as ts.TypeReference).target);
+		}
 	}
 	return false;
 }

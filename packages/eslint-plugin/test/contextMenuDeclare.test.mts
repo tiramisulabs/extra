@@ -47,6 +47,13 @@ function Declare(_o: unknown) { return (_t: unknown) => {}; }
 			errors: [{ messageId: 'hasDescription' }],
 		},
 		{
+			// Menu base reached through a generic intermediate class.
+			code: code(
+				`abstract class Menu<T> extends ContextMenuCommand { state?: T }\nabstract class UserMenu extends Menu<string> {}\n@Declare({ type: ApplicationCommandType.User, name: 'm', description: 'd' }) class M extends UserMenu {}`,
+			),
+			errors: [{ messageId: 'hasDescription' }],
+		},
+		{
 			// Chat-shaped @Declare on a menu: missing the type AND carrying a description.
 			code: code(`@Declare({ name: 'm', description: 'd' }) class M extends ContextMenuCommand {}`),
 			errors: [{ messageId: 'missingType' }, { messageId: 'hasDescription' }],
