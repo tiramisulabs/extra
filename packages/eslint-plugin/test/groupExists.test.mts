@@ -58,6 +58,43 @@ const g = 'whatever';
 class Local {}
 @Declare({ name: 's', description: 'd' }) @Group('typo') class Sub extends SubCommand {}
 @Groups({ mod: { defaultDescription: 'm' } }) @Options([Sub]) class C extends Local {}`,
+		// Groups the rule can't read in full are never guessed: no report.
+		`import { Command, SubCommand, Declare, Options, Group, Groups } from 'seyfert';
+const config = { groups: { mod: { defaultDescription: 'm' } } };
+@Declare({ name: 's', description: 'd' }) @Group('mod') class Sub extends SubCommand {}
+@Declare({ name: 'c', description: 'd' }) @Groups(config.groups) @Options([Sub]) class C extends Command {}`,
+		`import { Command, SubCommand, Declare, Options, Group, Groups } from 'seyfert';
+function makeGroups() { return { mod: { defaultDescription: 'm' } }; }
+@Declare({ name: 's', description: 'd' }) @Group('mod') class Sub extends SubCommand {}
+@Declare({ name: 'c', description: 'd' }) @Groups({ ...makeGroups(), extra: { defaultDescription: 'e' } }) @Options([Sub]) class C extends Command {}`,
+		`import { Command, SubCommand, Declare, Options, Group, Groups } from 'seyfert';
+const MOD = 'mod';
+@Declare({ name: 's', description: 'd' }) @Group('mod') class Sub extends SubCommand {}
+@Declare({ name: 'c', description: 'd' }) @Groups({ [MOD]: { defaultDescription: 'm' } }) @Options([Sub]) class C extends Command {}`,
+		`import { Command, SubCommand, Declare, Options, Group, Groups } from 'seyfert';
+function aliases() { return ['m']; }
+@Declare({ name: 's', description: 'd' }) @Group('m') class Sub extends SubCommand {}
+@Declare({ name: 'c', description: 'd' }) @Groups({ mod: { defaultDescription: 'm', aliases: aliases() } }) @Options([Sub]) class C extends Command {}`,
+		`import { Command, SubCommand, Declare, Options, Group, Groups } from 'seyfert';
+function makeBase() {
+	@Groups({ mod: { defaultDescription: 'm' } }) class Base extends Command {}
+	return Base;
+}
+@Declare({ name: 's', description: 'd' }) @Group('mod') class Sub extends SubCommand {}
+@Declare({ name: 'c', description: 'd' }) @Options([Sub]) class C extends makeBase() {}`,
+		// Groups inherited from a base command class (seyfert's decorators set class fields).
+		`import { Command, SubCommand, Declare, Options, Group, Groups } from 'seyfert';
+@Groups({ mod: { defaultDescription: 'm' } }) class Base extends Command {}
+@Declare({ name: 's', description: 'd' }) @Group('mod') class Sub extends SubCommand {}
+@Declare({ name: 'c', description: 'd' }) @Options([Sub]) class C extends Base {}`,
+		// Groups assigned as a class field bypass the decorators: not guessed.
+		`import { Command, SubCommand, Declare, Options, Group } from 'seyfert';
+@Declare({ name: 's', description: 'd' }) @Group('mod') class Sub extends SubCommand {}
+@Declare({ name: 'c', description: 'd' }) @Options([Sub]) class C extends Command { override groups = { mod: { defaultDescription: 'm' } }; }`,
+		// `@Groups` and `@GroupsT` on one command are merged.
+		`import { Command, SubCommand, Declare, Options, Group, Groups, GroupsT } from 'seyfert';
+@Declare({ name: 's', description: 'd' }) @Group('mod') class Sub extends SubCommand {}
+@Declare({ name: 'c', description: 'd' }) @Groups({ mod: { defaultDescription: 'm' } }) @GroupsT({ admin: { defaultDescription: 'a' } }) @Options([Sub]) class C extends Command {}`,
 	],
 	invalid: [
 		// Group not declared on the command.
@@ -91,6 +128,22 @@ abstract class ModCommand extends GuildCommand<string> {}
 			code: `import { Command, SubCommand, Declare, Options, Group, Groups } from 'seyfert';
 @Declare({ name: 's', description: 'd' }) @Group({ mod: { defaultDescription: 'm' } }, 'mod') class Sub extends SubCommand {}
 @Declare({ name: 'c', description: 'd' }) @Groups({ admin: { defaultDescription: 'a' } }) @Options([Sub]) class C extends Command {}`,
+			errors: [{ messageId: 'unknownGroup', data: { group: 'mod' } }],
+		},
+		// Inherited groups are still checked.
+		{
+			code: `import { Command, SubCommand, Declare, Options, Group, Groups } from 'seyfert';
+@Groups({ mod: { defaultDescription: 'm' } }) class Base extends Command {}
+@Declare({ name: 's', description: 'd' }) @Group('typo') class Sub extends SubCommand {}
+@Declare({ name: 'c', description: 'd' }) @Options([Sub]) class C extends Base {}`,
+			errors: [{ messageId: 'unknownGroup', data: { group: 'typo' } }],
+		},
+		// A base command class without groups declares none.
+		{
+			code: `import { Command, SubCommand, Declare, Options, Group } from 'seyfert';
+class Base extends Command {}
+@Declare({ name: 's', description: 'd' }) @Group('mod') class Sub extends SubCommand {}
+@Declare({ name: 'c', description: 'd' }) @Options([Sub]) class C extends Base {}`,
 			errors: [{ messageId: 'unknownGroup', data: { group: 'mod' } }],
 		},
 	],

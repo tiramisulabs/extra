@@ -7,7 +7,7 @@ The rule runs from the **command** (which owns the group declarations) and resol
 - **`@Options([Sub, ...])`** — each subcommand class is resolved through the type checker; the error is reported on the offending subcommand reference.
 - **`@AutoLoad()`** — every `SubCommand` default-exported from a `.ts` file in the command's directory (recursive); the error is reported on the `@AutoLoad` decorator, naming the subcommand and file (it lives in another file, so ESLint can't underline it directly).
 
-Group declarations are resolved through `const`/imports, spreads, shorthand, and `defineGroups(...)`. Only literal `@Group` names are checked.
+Group declarations are resolved through `const`/imports, spreads, shorthand, `defineGroups(...)`, and base command classes (seyfert's group decorators are inherited, and `@Groups` and `@GroupsT` are merged). Only literal `@Group` names are checked.
 
 ## ✅ Valid
 
@@ -35,7 +35,7 @@ export default class Admin extends Command {}
 
 ## Notes
 
-Conservative limitations (these under-report, never over-report): a subcommand exported as `export { X as default }`, or compiled-`.js` siblings, are not resolved.
+Conservative limitations (these under-report, never over-report): a subcommand exported as `export { X as default }`, or compiled-`.js` siblings, are not resolved. A command whose groups can't be read in full is skipped rather than guessed: a non-literal `@Groups` argument (`@Groups(config.groups)`, `@Groups(makeGroups())`), an unresolved spread or computed key, unreadable `aliases`, or a base class from a declaration file, factory or mixin.
 
 ## Related
 

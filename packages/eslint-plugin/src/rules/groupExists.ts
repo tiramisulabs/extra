@@ -8,7 +8,6 @@ import {
 	getServices,
 	instanceTypeOfExpression,
 	objectProperty,
-	propertyName,
 	resolveObjectLiteral,
 	seyfertExportName,
 	stringLiteralValue,
@@ -23,6 +22,8 @@ type RuleContext = Readonly<TSESLint.RuleContext<MessageIds, readonly []>>;
 const COMMAND: ReadonlySet<string> = new Set(['Command']);
 const SUBCOMMAND: ReadonlySet<string> = new Set(['SubCommand']);
 const GROUP_DECLARERS: ReadonlySet<string> = new Set(['Groups', 'GroupsT']);
+// The class fields those decorators set; a class may also assign them directly.
+const GROUP_FIELDS: ReadonlySet<string> = new Set(['groups', '__tGroups']);
 
 /** Whether seyfert's loader would treat this file as a command module (`.ts`, excluding `.d.ts`). */
 function isSourceFile(name: string): boolean {
@@ -152,54 +153,103 @@ function resolveGroupsObject(
 	return undefined;
 }
 
-/** Add the aliases declared on a single group-definition object to `groups`. */
-function addAliases(checker: ts.TypeChecker, definition: ts.Expression, groups: Set<string>): void {
-	const object = resolveObjectLiteral(checker, definition, new Set());
-	const aliases = object ? objectProperty(object, 'aliases') : undefined;
-	const array = aliases ? resolveArrayLiteral(checker, aliases, new Set()) : undefined;
-	if (!array) return;
-	for (const element of array.elements) {
-		const alias = stringLiteralValue(element);
-		if (alias !== undefined) groups.add(alias);
+/** A group key readable without evaluating code; `undefined` for a computed or numeric key. */
+function staticKey(name: ts.PropertyName): string | undefined {
+	if (ts.isComputedPropertyName(name)) {
+		return ts.isStringLiteralLike(name.expression) ? name.expression.text : undefined;
 	}
+	return ts.isIdentifier(name) || ts.isStringLiteral(name) ? name.text : undefined;
 }
 
-/** Gather group names (keys + aliases) from a resolved group object, following spreads. */
+/** Add the aliases declared on one group definition to `groups`; `false` if they can't be read. */
+function addAliases(checker: ts.TypeChecker, definition: ts.Expression, groups: Set<string>): boolean {
+	const object = resolveObjectLiteral(checker, definition, new Set());
+	// A spread could carry `aliases` we can't see.
+	if (!object || object.properties.some(ts.isSpreadAssignment)) return false;
+	const aliases = objectProperty(object, 'aliases');
+	if (!aliases) return true;
+	const array = resolveArrayLiteral(checker, aliases, new Set());
+	if (!array) return false;
+	for (const element of array.elements) {
+		const alias = stringLiteralValue(element);
+		if (alias === undefined) return false;
+		groups.add(alias);
+	}
+	return true;
+}
+
+/**
+ * Gather group names (keys + aliases) from a resolved group object, following
+ * spreads. Returns `false` as soon as any part can't be read statically.
+ */
 function collectFromObject(
 	checker: ts.TypeChecker,
 	object: ts.ObjectLiteralExpression,
 	groups: Set<string>,
 	seen: Set<ts.Node>,
-): void {
-	if (seen.has(object)) return;
+): boolean {
+	if (seen.has(object)) return true;
 	seen.add(object);
 	for (const property of object.properties) {
 		if (ts.isPropertyAssignment(property)) {
-			groups.add(propertyName(property.name));
-			addAliases(checker, property.initializer, groups);
+			const key = staticKey(property.name);
+			if (key === undefined || !addAliases(checker, property.initializer, groups)) return false;
+			groups.add(key);
 		} else if (ts.isShorthandPropertyAssignment(property)) {
+			const value = checker.getShorthandAssignmentValueSymbol(property);
+			const initializer = symbolConstInitializer(value && unalias(checker, value));
+			if (!initializer || !addAliases(checker, initializer, groups)) return false;
 			groups.add(property.name.text);
-			const initializer = symbolConstInitializer(checker.getShorthandAssignmentValueSymbol(property));
-			if (initializer) addAliases(checker, initializer, groups);
 		} else if (ts.isSpreadAssignment(property)) {
 			const spread = resolveGroupsObject(checker, property.expression, new Set());
-			if (spread) collectFromObject(checker, spread, groups, seen);
+			if (!spread || !collectFromObject(checker, spread, groups, seen)) return false;
+		} else {
+			return false; // a method or accessor is not a readable group definition
 		}
 	}
+	return true;
 }
 
-/** The group names declared by `@Groups`/`@GroupsT` — keys plus aliases. */
-function collectGroups(
-	checker: ts.TypeChecker,
-	services: Services,
-	groupsArgument: TSESTree.Expression | undefined,
-): Set<string> {
+/**
+ * Every group name (keys + aliases) declared by seyfert's `@Groups`/`@GroupsT` on
+ * `node` or on a class it extends: both decorators set class fields, so subclasses
+ * inherit them, and seyfert merges the two. `undefined` when the set can't be read
+ * in full (a non-literal argument or spread, a computed key, unreadable aliases, or
+ * a base class whose decorators aren't visible), so a group that may exist is never
+ * reported.
+ */
+function declaredGroups(checker: ts.TypeChecker, node: ts.ClassLikeDeclaration): Set<string> | undefined {
 	const groups = new Set<string>();
-	if (!groupsArgument) return groups;
-	const tsNode = services.esTreeNodeToTSNodeMap.get(groupsArgument);
-	const object = tsNode ? resolveGroupsObject(checker, tsNode as ts.Expression, new Set()) : undefined;
-	if (object) collectFromObject(checker, object, groups, new Set());
-	return groups;
+	const seen = new Set<ts.Node>();
+	let current: ts.ClassLikeDeclaration | undefined = node;
+	while (current) {
+		// Decorators are not emitted to declaration files.
+		if (seen.has(current) || current.getSourceFile().isDeclarationFile) return undefined;
+		seen.add(current);
+		// Groups assigned as a class field (`groups = {...}`) bypass the decorators.
+		if (
+			current.members.some(member => member.name && ts.isIdentifier(member.name) && GROUP_FIELDS.has(member.name.text))
+		) {
+			return undefined;
+		}
+		for (const decorator of ts.getDecorators(current) ?? []) {
+			const call = ts.isCallExpression(decorator.expression) ? decorator.expression : undefined;
+			const name = seyfertExportName(checker, checker.getSymbolAtLocation(call?.expression ?? decorator.expression));
+			if (name === undefined || !GROUP_DECLARERS.has(name)) continue;
+			const argument = call?.arguments[0];
+			const object =
+				argument && !ts.isSpreadElement(argument) ? resolveGroupsObject(checker, argument, new Set()) : undefined;
+			if (!object || !collectFromObject(checker, object, groups, new Set())) return undefined;
+		}
+		const base = current.heritageClauses?.find(clause => clause.token === ts.SyntaxKind.ExtendsKeyword)?.types[0];
+		if (!base) return undefined;
+		const symbol = checker.getSymbolAtLocation(base.expression);
+		// seyfert's own command base carries no user group declarations.
+		if (seyfertExportName(checker, symbol) !== undefined) return groups;
+		// A base built by a call, mixin or other expression can't be inspected.
+		current = classOfSymbol(checker, symbol);
+	}
+	return undefined;
 }
 
 /**
@@ -212,14 +262,16 @@ function collectGroups(
  *
  * Type-aware and sound: only seyfert's own decorators are matched, only literal
  * group names are checked, and a name that is also a declared alias is accepted.
- * Group declarations are resolved through `const`/imports, spreads and
- * `defineGroups(...)`. `@AutoLoad` resolution reads the sibling source files from
- * the TypeScript program, so it is a no-op when type information or the files are
- * unavailable.
+ * Group declarations are resolved through `const`/imports, spreads,
+ * `defineGroups(...)` and base command classes; a command whose groups can't be
+ * read in full is skipped. `@AutoLoad` resolution reads the sibling source files
+ * from the TypeScript program, so it is a no-op when type information or the files
+ * are unavailable.
  *
  * Known limitations (conservative — these under-report, never over-report): a
  * subcommand exported as `export { X as default }`, or compiled-`.js` siblings,
- * are not resolved.
+ * are not resolved, and a command with a non-literal `@Groups` argument (e.g.
+ * `config.groups`) is not checked.
  */
 export default function create(createRule: ReturnType<typeof ESLintUtils.RuleCreator>) {
 	return createRule({
@@ -250,8 +302,7 @@ export default function create(createRule: ReturnType<typeof ESLintUtils.RuleCre
 				const superType = instanceTypeOfExpression(checker, services, node.superClass);
 				if (!superType || !extendsSeyfertClass(checker, superType, COMMAND)) return;
 
-				// Locate seyfert's own group/subcommand decorators on this command.
-				let groupsArgument: TSESTree.Expression | undefined;
+				// Locate seyfert's own subcommand decorators on this command.
 				let optionsArgument: TSESTree.Expression | undefined;
 				let autoloadDecorator: TSESTree.Decorator | undefined;
 				for (const decorator of decorators) {
@@ -265,14 +316,15 @@ export default function create(createRule: ReturnType<typeof ESLintUtils.RuleCre
 					}
 					const argument = expression.arguments[0];
 					const expressionArgument = argument && argument.type !== 'SpreadElement' ? argument : undefined;
-					if (GROUP_DECLARERS.has(name)) groupsArgument = expressionArgument;
-					else if (name === 'Options') optionsArgument = expressionArgument;
+					if (name === 'Options') optionsArgument = expressionArgument;
 					else if (name === 'AutoLoad') autoloadDecorator = decorator;
 				}
 
 				if (!optionsArgument && !autoloadDecorator) return; // no discoverable subcommands
 
-				const validGroups = collectGroups(checker, services, groupsArgument);
+				// Stay silent unless every group the command declares is known.
+				const validGroups = declaredGroups(checker, services.esTreeNodeToTSNodeMap.get(node));
+				if (!validGroups) return;
 
 				if (optionsArgument) checkOptions(context, services, checker, optionsArgument, validGroups);
 				if (autoloadDecorator) checkAutoload(context, services, checker, autoloadDecorator, validGroups);
