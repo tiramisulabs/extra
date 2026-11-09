@@ -1,17 +1,28 @@
 import type { ESLintUtils, TSESTree } from '@typescript-eslint/utils';
-import { extendsSeyfertCommand, getServices, instanceTypeOfExpression, seyfertExportName } from '../utils';
+import {
+	extendsSeyfertClass,
+	extendsSeyfertCommand,
+	getServices,
+	instanceTypeOfExpression,
+	seyfertExportName,
+} from '../utils';
 
 // Seyfert command decorators that only make sense on a class extending a command
 // base. `Group`/`Groups`/`GroupsT`/`AutoLoad` are owned by `decorator-target`, so
 // they are deliberately excluded here to avoid double reporting.
 const COMMAND_DECORATORS: ReadonlySet<string> = new Set(['Declare', 'Options', 'Middlewares', 'Locales', 'LocalesT']);
 
+// `@Middlewares` also works on components: seyfert's component handler runs the
+// `middlewares` of `ComponentCommand`/`ModalCommand` subclasses.
+const COMPONENT_BASES: ReadonlySet<string> = new Set(['ComponentCommand', 'ModalCommand']);
+
 /**
- * Seyfert command decorators (`@Declare`, `@Options`, `@Middlewares`, `@Locales`,
- * `@LocalesT`) may only decorate a class that extends a seyfert command base
- * (`Command`, `SubCommand`, …). Type-aware: only seyfert's own decorators are
- * checked, and the base class is resolved through the type checker (transitive
- * bases included), so a same-named local/3rd-party decorator never triggers.
+ * Seyfert command decorators (`@Declare`, `@Options`, `@Locales`, `@LocalesT`)
+ * may only decorate a class that extends a seyfert command base (`Command`,
+ * `SubCommand`, …); `@Middlewares` may also decorate a `ComponentCommand` or
+ * `ModalCommand`. Type-aware: only seyfert's own decorators are checked, and the
+ * base class is resolved through the type checker (transitive bases included),
+ * so a same-named local/3rd-party decorator never triggers.
  *
  * Known limitation: a command base reached only through a TypeScript mixin
  * (`extends Mix(Command)`) or a conditional base is not detected — its instance
@@ -24,11 +35,14 @@ export default function create(createRule: ReturnType<typeof ESLintUtils.RuleCre
 		meta: {
 			type: 'problem',
 			docs: {
-				description: '`@Declare`/`@Options`/`@Middlewares`/`@Locales`/`@LocalesT` belong on a seyfert command class.',
+				description:
+					'`@Declare`/`@Options`/`@Locales`/`@LocalesT` belong on a seyfert command class; `@Middlewares` on a command or component class.',
 			},
 			messages: {
 				onCommandOnly:
 					'`@{{decorator}}` can only be applied to a class that extends a seyfert command base (e.g. `Command`, `SubCommand`).',
+				onCommandOrComponentOnly:
+					'`@{{decorator}}` can only be applied to a class that extends a seyfert command or component base (e.g. `Command`, `ComponentCommand`, `ModalCommand`).',
 			},
 			schema: [],
 		},
@@ -50,13 +64,19 @@ export default function create(createRule: ReturnType<typeof ESLintUtils.RuleCre
 					const name = seyfertExportName(checker, services.getSymbolAtLocation(callee));
 					if (name === undefined || !COMMAND_DECORATORS.has(name)) continue;
 
-					if (!superType || !extendsSeyfertCommand(checker, superType)) {
-						context.report({
-							node: decorator,
-							messageId: 'onCommandOnly',
-							data: { decorator: name },
-						});
+					const middlewares = name === 'Middlewares';
+					if (
+						superType &&
+						(extendsSeyfertCommand(checker, superType) ||
+							(middlewares && extendsSeyfertClass(checker, superType, COMPONENT_BASES)))
+					) {
+						continue;
 					}
+					context.report({
+						node: decorator,
+						messageId: middlewares ? 'onCommandOrComponentOnly' : 'onCommandOnly',
+						data: { decorator: name },
+					});
 				}
 			};
 
