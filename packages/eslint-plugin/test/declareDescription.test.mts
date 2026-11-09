@@ -62,6 +62,15 @@ class C extends Command {}`,
 			errors: [{ messageId: 'emptyDescription', data: { what: 'Command' } }],
 		},
 		{
+			// Empty chat description on a command reached through a generic intermediate class.
+			code: `import { Command, Declare } from 'seyfert';
+abstract class Guild<T> extends Command { state?: T }
+abstract class Music extends Guild<string> {}
+@Declare({ name: 'c', description: '' })
+class C extends Music {}`,
+			errors: [{ messageId: 'emptyDescription', data: { what: 'Command' } }],
+		},
+		{
 			// 101-character chat description.
 			code: `import { Command, Declare } from 'seyfert';
 @Declare({ name: 'c', description: '${long}' })

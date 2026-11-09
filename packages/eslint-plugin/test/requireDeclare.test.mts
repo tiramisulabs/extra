@@ -45,6 +45,14 @@ abstract class Base extends Command {}
 class Ping extends Base {}`,
 			errors: [{ messageId: 'missingDeclare' }],
 		},
+		{
+			// Transitive through a generic intermediate class.
+			code: `import { Command } from 'seyfert';
+abstract class Guild<T> extends Command { state?: T }
+abstract class Music extends Guild<string> {}
+class Skip extends Music {}`,
+			errors: [{ messageId: 'missingDeclare' }],
+		},
 	],
 });
 
