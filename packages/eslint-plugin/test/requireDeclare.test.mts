@@ -26,6 +26,23 @@ abstract class Base extends Command {}`,
 		// Wrong-package guard: a local class named `Command` must NOT trigger.
 		`class Command {}
 class Mine extends Command {}`,
+		// `@Declare` inherited from a declared base (the decorator sets class fields).
+		`import { Command, Declare } from 'seyfert';
+@Declare({ name: 'ping', description: 'Pong' })
+class Ping extends Command {}
+class LoudPing extends Ping {}`,
+		// A base built by a factory call can't be inspected: never guessed.
+		`import { Command, Declare } from 'seyfert';
+function defineCommand(name: string, description: string) {
+	@Declare({ name, description })
+	class Defined extends Command {}
+	return Defined;
+}
+class Ping extends defineCommand('ping', 'Pong') {}`,
+		// Ambient classes can't carry decorators, and can't be inspected as a base.
+		`import { Command } from 'seyfert';
+declare class Shared extends Command {}
+class Ping extends Shared {}`,
 	],
 	invalid: [
 		{

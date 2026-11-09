@@ -27,7 +27,7 @@ export function getServices(context: AnyContext): Services | null {
 }
 
 /** Follow re-exports to the symbol's original declaration. */
-function unalias(checker: ts.TypeChecker, symbol: ts.Symbol): ts.Symbol {
+export function unalias(checker: ts.TypeChecker, symbol: ts.Symbol): ts.Symbol {
 	if (symbol.flags & ts.SymbolFlags.Alias) {
 		try {
 			return checker.getAliasedSymbol(symbol);
