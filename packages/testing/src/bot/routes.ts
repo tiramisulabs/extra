@@ -133,6 +133,10 @@ export const Routes = {
 		method: 'GET',
 		route: '/guilds/:guildId/members/:userId',
 	}),
+	searchMembers: defineRoute<never, API.RESTGetAPIGuildMembersSearchResult>()({
+		method: 'GET',
+		route: '/guilds/:guildId/members/search',
+	}),
 	fetchGuild: defineRoute<never, API.RESTGetAPIGuildResult>()({
 		method: 'GET',
 		route: '/guilds/:guildId',
@@ -475,6 +479,7 @@ export const ROUTE_COVERAGE = {
 	fetchChannel: 'handled',
 	fetchMembers: 'handled',
 	fetchMember: 'handled',
+	searchMembers: 'handled',
 	fetchGuild: 'handled',
 	fetchUser: 'handled',
 	fetchOriginalResponse: 'handled',

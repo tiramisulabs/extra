@@ -50,10 +50,28 @@ export function messageQuery(query: Record<string, unknown> | undefined): Messag
 	};
 }
 
-export function memberListLimit(query: Record<string, unknown> | undefined): number {
-	const requested = Number(queryString(query?.limit) ?? 1);
-	if (!Number.isFinite(requested)) return 1;
+/** A list `limit` as Discord applies it: the endpoint's default when omitted or unparsable, clamped to 1..1000. */
+export function pageLimit(query: Record<string, unknown> | undefined, fallback: number): number {
+	const requested = Number(queryString(query?.limit) ?? fallback);
+	if (!Number.isFinite(requested)) return fallback;
 	return Math.max(1, Math.min(1000, Math.trunc(requested)));
+}
+
+export function memberListLimit(query: Record<string, unknown> | undefined): number {
+	return pageLimit(query, 1);
+}
+
+const NUMERIC_ID = /^\d+$/;
+
+/**
+ * Orders ids the way Discord orders snowflakes, so `9` sorts before `10`. World ids may also be plain names;
+ * those sort after numeric ids and compare as strings.
+ */
+export function compareIds(left: string, right: string): number {
+	const leftNumeric = NUMERIC_ID.test(left);
+	if (leftNumeric !== NUMERIC_ID.test(right)) return leftNumeric ? -1 : 1;
+	if (leftNumeric && left.length !== right.length) return left.length - right.length;
+	return left < right ? -1 : left > right ? 1 : 0;
 }
 
 export function interceptFetchOne<T>(
