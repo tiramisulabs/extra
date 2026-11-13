@@ -282,6 +282,52 @@ describe('stateful world defaults', () => {
 		await bot.close();
 	});
 
+	test('fetchBans pages in ascending id order and lets before win over after', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'ban-page-guild' });
+		for (const userId of ['100', '8', '30', '9', '20', '10']) world.registerBan(guild.id, { userId });
+
+		await using bot = await createMockBot({ world });
+		const page = async (query?: { limit?: number; before?: string; after?: string }) =>
+			(await bot.client.bans.list(guild.id, query, true)).map(ban => ban.user.id);
+
+		// Numeric order, not string order: '9' sorts before '10' and '100'.
+		expect(await page()).toEqual(['8', '9', '10', '20', '30', '100']);
+		expect(await page({ limit: 2 })).toEqual(['8', '9']);
+		expect(await page({ after: '9', limit: 2 })).toEqual(['10', '20']);
+		// `before` keeps the page next to the cursor, still ascending.
+		expect(await page({ before: '30', limit: 2 })).toEqual(['10', '20']);
+		// A range between the cursors would be empty here; Discord ignores `after` instead.
+		expect(await page({ before: '30', after: '20', limit: 3 })).toEqual(['9', '10', '20']);
+	});
+
+	test('member search matches username and nickname prefixes, lowest ids first', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'search-guild' });
+		world.registerMember(guild.id, { user: apiUser({ id: '100', username: 'ALpha' }) });
+		world.registerMember(guild.id, { user: apiUser({ id: '8', username: 'unrelated', globalName: 'Alpha' }) });
+		world.registerMember(guild.id, { user: apiUser({ id: '30', username: 'alpha-three' }) });
+		world.registerMember(guild.id, { user: apiUser({ id: '9', username: 'by-nick' }), nick: 'aLpHa nick' });
+		world.registerMember(guild.id, { user: apiUser({ id: '10', username: 'contains-alpha' }) });
+		world.registerMember(guild.id, { user: apiUser({ id: '7', username: 'alpha-kicked' }) });
+
+		await using bot = await createMockBot({ world });
+		const search = async (query: { query: string; limit?: number }) =>
+			(await bot.client.members.search(guild.id, query)).map(member => member.user.id);
+
+		expect(await search({ query: 'AlP', limit: 1000 })).toEqual(['7', '9', '30', '100']);
+		expect(await search({ query: 'alp', limit: 2 })).toEqual(['7', '9']);
+		// Discord's default limit is 1.
+		expect(await search({ query: 'alp' })).toEqual(['7']);
+		await bot.client.members.kick(guild.id, '7');
+		expect(await search({ query: 'alp', limit: 1000 })).toEqual(['9', '30', '100']);
+		expect(await search({ query: 'nobody', limit: 1000 })).toEqual([]);
+		expect(bot.restCalls(Routes.searchMembers)).toHaveLength(5);
+
+		const rejected = await bot.client.members.search(guild.id, { query: '' }).catch((error: unknown) => error);
+		expect(isDiscordError(rejected, { code: DiscordErrors.InvalidFormBody.code })).toBe(true);
+	});
+
 	test('editChannel patches the channel name in the world', async () => {
 		const world = mockWorld();
 		const guild = world.registerGuild({ id: 'edit-channel-guild' });
