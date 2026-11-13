@@ -17,4 +17,5 @@ import { HandleCommand } from 'seyfert/lib/commands/handle';
 ```ts
 import { AutoLoad } from 'seyfert/lib';                           // → 'seyfert'
 import { Command } from 'seyfert/lib/commands/applications/chat'; // → 'seyfert'
+import { Command } from "seyfert/lib/commands/applications/chat"; // → "seyfert" (the quotes are kept)
 ```
