@@ -24,6 +24,12 @@ createTester().run('no-deep-imports', rule, {
 			errors: [{ messageId: 'preferRoot' }],
 		},
 		{
+			// The fix keeps the quotes the source was written with.
+			code: 'import { Command } from "seyfert/lib/commands/applications/chat";',
+			output: 'import { Command } from "seyfert";',
+			errors: [{ messageId: 'preferRoot' }],
+		},
+		{
 			// A default specifier is present → report but do not auto-rewrite.
 			code: "import def, { Command } from 'seyfert/lib/commands/applications/chat';",
 			output: null,

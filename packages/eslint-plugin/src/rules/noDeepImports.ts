@@ -91,7 +91,14 @@ export default function create(createRule: ReturnType<typeof ESLintUtils.RuleCre
 							node: specifier,
 							messageId: 'preferRoot',
 							data: { name: importedName(specifier), source },
-							fix: allRootAvailable && index === 0 ? fixer => fixer.replaceText(node.source, "'seyfert'") : undefined,
+							fix:
+								allRootAvailable && index === 0
+									? fixer => {
+											// Keep the quotes the source was written with.
+											const quote = context.sourceCode.getText(node.source)[0];
+											return fixer.replaceText(node.source, `${quote}seyfert${quote}`);
+										}
+									: undefined,
 						});
 					});
 				},
