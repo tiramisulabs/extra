@@ -155,6 +155,48 @@ end
 return results
 `;
 
+const INCREMENT_SCRIPT = `${WRITE_SCRIPT_HELPERS}
+local logicalKey = ARGV[1]
+local field = 'N_' .. ARGV[2]
+local delta = tonumber(ARGV[3])
+local minimum = tonumber(ARGV[4])
+
+local function finite(value)
+	return value and value == value and value ~= math.huge and value ~= -math.huge
+end
+
+assert_hash_or_none(KEYS[1])
+if redis.call('HEXISTS', KEYS[1], 'ARRAY_OF') == 1 then return false end
+local previous = tonumber(redis.call('HGET', KEYS[1], field))
+if not finite(previous) then return false end
+local value = previous + delta
+if minimum and value < minimum then value = minimum end
+if not finite(value) then error('ERR cache increment result must be finite') end
+
+assert_hash_or_none(KEYS[2])
+local owner = redis.call('HGET', KEYS[2], logicalKey)
+local to, id = parse_owner(owner)
+local relationshipKey = nil
+if to then
+	local relationshipPrefix = string.sub(KEYS[2], 1, string.len(KEYS[2]) - string.len('owners'))
+	relationshipKey = relationshipPrefix .. to
+	assert_hash_or_none(relationshipKey)
+end
+local expiresAt, expirationError = expiration_deadline(KEYS[1], ARGV[5], tonumber(ARGV[6]))
+if expirationError then error(expirationError) end
+
+-- Lua's numeric replies truncate fractions; use a round-trippable double for storage and the reply.
+local encoded = string.format('%.17g', value)
+redis.call('HSET', KEYS[1], field, encoded)
+if expiresAt >= 0 then redis.call('PEXPIREAT', KEYS[1], expiresAt)
+else redis.call('PERSIST', KEYS[1]) end
+if relationshipKey then
+	hset_with_expiry(relationshipKey, id, logicalKey, expiresAt)
+	hset_with_expiry(KEYS[2], logicalKey, owner, expiresAt)
+end
+return encoded
+`;
+
 const REMOVE_ENTRY_SCRIPT = `${SCRIPT_HELPERS}
 local logicalKey = ARGV[1]
 local relationshipPrefix = string.sub(KEYS[2], 1, string.len(KEYS[2]) - string.len('owners'))
@@ -247,6 +289,7 @@ return 1
 `;
 
 const CACHE_SCRIPTS = [
+	INCREMENT_SCRIPT,
 	WRITE_ENTRY_SCRIPT,
 	BULK_WRITE_SCRIPT,
 	REMOVE_ENTRY_SCRIPT,
@@ -307,6 +350,11 @@ type WriteOutcome =
 	| { reason: unknown; status: 'rejected' };
 
 type ExpirationPolicy = { type: 'preserve' } | { type: 'expire'; milliseconds: number } | { type: 'persist' };
+
+export interface RedisAdapterIncrementOptions {
+	/** Clamp the updated value to this finite minimum. */
+	min?: number;
+}
 
 export interface RedisAdapterOptions {
 	namespace?: string;
@@ -428,6 +476,34 @@ export class RedisAdapter<SupportsAtomicCooldowns extends boolean = true> implem
 
 	async get(key: string): Promise<any> {
 		return toNormal(hashReply(await this.client.hGetAll(this.buildKey(key))));
+	}
+
+	/** Atomically updates an existing numeric field without reading the full record. */
+	async increment(
+		key: string,
+		field: string,
+		delta: number,
+		options?: RedisAdapterIncrementOptions,
+	): Promise<number | undefined> {
+		if (!Number.isFinite(delta)) throw new RangeError('RedisAdapter increment delta must be finite');
+		if (options?.min !== undefined && !Number.isFinite(options.min)) {
+			throw new RangeError('RedisAdapter increment minimum must be finite');
+		}
+		const valueKey = this.buildKey(key);
+		const expiration = this.getExpirationPolicy(key);
+		const result = await this.runScript<string | null>(
+			INCREMENT_SCRIPT,
+			[valueKey, this.relationshipOwnersKey],
+			[
+				valueKey.slice(this.namespace.length + 1),
+				field,
+				String(delta),
+				options?.min === undefined ? '' : String(options.min),
+				expiration.type,
+				expiration.type === 'expire' ? String(expiration.milliseconds) : '0',
+			],
+		);
+		return result === null ? undefined : Number(result);
 	}
 
 	protected async readBeforePatch(key: string) {

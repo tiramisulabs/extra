@@ -78,6 +78,31 @@ The Redis server clock selects expiring writes' absolute deadline, avoiding appl
 its relationship is `message.<channel id>`. Relationship methods therefore return stored logical keys instead of
 reconstructing them from the relationship field.
 
+## Atomic numeric increments
+
+Both adapters provide `increment(key, field, delta, { min? })` for Seyfert's optional
+[atomic increment capability](https://github.com/tiramisulabs/seyfert/pull/477):
+
+```ts
+await adapter.increment('guild.123', 'member_count', -1, { min: 0 });
+```
+
+One Lua operation reads and updates only the encoded numeric field, without fetching or decoding the whole record.
+It returns the updated number, or `undefined` without writing when the record is missing/expired, is an array, or the
+field is missing or nonnumeric. Delta and minimum must be finite; a nonfinite result rejects before mutation.
+Fractional values retain JavaScript double precision. Other fields and the stored relationship owner are preserved.
+
+A successful increment uses the normal patch expiration policy for the value, relationship, and reverse lookup.
+No-ops and validation failures do not refresh TTL. `ExpirableRedisAdapter` invalidates its on-demand entry and pending
+read/write snapshots; the next read fetches current state instead of returning the old counter. It does not fetch the
+full record to warm the local cache during an increment. The existing cross-process on-demand caching limitation
+still applies.
+
+Concurrent increments from independent clients are atomic. Gateway member-count tracking still requires one gateway
+writer per guild to order joins/leaves with snapshots and deletion. Automatic use by Seyfert requires a release
+containing that capability; existing supported releases can call the method directly, without a dependency or storage migration.
+As with other writes, an uncertain connection error is not retried: Redis may already have committed the increment.
+
 ## Expiration and per-resource caching
 
 `ExpirableRedisAdapter` accepts a `default` policy plus overrides for Seyfert resources such as `user`, `guild`, `member`, and `message`.

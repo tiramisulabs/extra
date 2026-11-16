@@ -55,3 +55,12 @@ new ExpirableRedisAdapter({ redisOptions: {} }, { user: { ondemand: 'yes' } });
 // @ts-expect-error resource names are explicit
 const invalidOptions: ExpirableRedisAdapterOptions = { unknown_resource: {} };
 void invalidOptions;
+
+const incrementContract: {
+	increment(key: string, field: string, delta: number, options?: { min?: number }): Promise<number | undefined>;
+} = atomicAdapter;
+const expirableIncrementContract: typeof incrementContract = new ExpirableRedisAdapter({ redisOptions: {} });
+void incrementContract;
+void expirableIncrementContract;
+// @ts-expect-error the increment minimum must be numeric
+atomicAdapter.increment('guild.1', 'member_count', 1, { min: '0' });
