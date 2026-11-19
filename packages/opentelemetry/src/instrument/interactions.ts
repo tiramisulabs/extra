@@ -38,6 +38,12 @@ export interface InteractionApi {
 	};
 }
 
+/**
+ * Every wrapper this module installed, so a second setup on the same client cannot
+ * wrap a wrapper. Keyed by function identity, so nothing is shared between clients.
+ */
+const otelWrappedMiddlewares = new WeakSet<MiddlewareHandler>();
+
 /** Open lifecycle child spans, keyed by interaction context. */
 const openChildren = new WeakMap<object, Span>();
 
@@ -273,7 +279,7 @@ type MiddlewareInvocation = {
 	[key: string]: unknown;
 };
 
-type MiddlewareHandler = (middle: MiddlewareInvocation) => unknown;
+type MiddlewareHandler = (middle: MiddlewareInvocation, ...rest: unknown[]) => unknown;
 
 type MiddlewareClient = {
 	middlewares?: Record<string, MiddlewareHandler>;
@@ -320,17 +326,70 @@ function detectMiddlewareKind(context: unknown): InteractionHandlerKind {
 	return 'command';
 }
 
+/** Shape of the plugin bookkeeping this module reads off the client, all optional. */
+type PluginOwnedMiddlewareClient = {
+	plugins?: { diagnostics?: readonly { middlewares?: readonly string[] }[] };
+	/** @internal Seyfert's own registry; untyped, so it is read defensively. */
+	pluginRegistry?: { installedMiddlewares?: { keys?: () => Iterable<string> } };
+};
+
+/**
+ * Names in `client.middlewares` that a Seyfert plugin contributed.
+ *
+ * Seyfert's `installPluginMiddlewares` only carries an entry forward as
+ * bot-owned when it is *not* the exact function a plugin installed, so replacing
+ * one of these makes the owning plugin re-add it and throw
+ * `Middleware "<name>" is already registered.` Two sources are unioned: the
+ * public `client.plugins.diagnostics` snapshot (which lists both statically
+ * declared and `api.middlewares.add` contributions, but caps each list at 50),
+ * and the names in Seyfert's internal `installedMiddlewares` map. Either one
+ * missing is fine; a name reported by either is left alone.
+ */
+function pluginContributedMiddlewareNames(client: unknown): Set<string> {
+	const names = new Set<string>();
+	if (client === null || typeof client !== 'object') return names;
+	const candidate = client as PluginOwnedMiddlewareClient;
+
+	try {
+		for (const diagnostic of candidate.plugins?.diagnostics ?? []) {
+			for (const name of diagnostic?.middlewares ?? []) {
+				if (typeof name === 'string') names.add(name);
+			}
+		}
+	} catch {
+		// Diagnostics are a live getter; never let it break setup.
+	}
+
+	try {
+		const installed = candidate.pluginRegistry?.installedMiddlewares;
+		if (typeof installed?.keys === 'function') {
+			for (const name of installed.keys()) {
+				if (typeof name === 'string') names.add(name);
+			}
+		}
+	} catch {
+		// Internal registry shape is not part of Seyfert's public API.
+	}
+
+	return names;
+}
+
 /**
  * Wrap registered Seyfert middleware functions with individually named spans.
  *
- * Known limitation — plugin setup runs at `BaseClient.start()` before
- * `installPluginMiddlewares` reassigns `client.middlewares` to a fresh object:
- * - middlewares registered via `setServices` before `start()` are wrapped, and the
- *   wrapped functions survive because the reassignment spreads them forward;
- * - middlewares contributed by plugins are installed afterwards and stay untraced;
- * - cleanup targets the original object, so teardown does not unwrap the live registry.
+ * Plugin-contributed middlewares are skipped and stay untraced. In Seyfert 5.2.x
+ * `installPluginMiddlewares` already runs in the `Client` constructor, so they are
+ * present in `client.middlewares` by the time this runs — but Seyfert compares them
+ * by identity on every reinstall (`start()`, `refreshPluginContributions()`), and a
+ * wrapper fails that check, making the owning plugin re-add the middleware and throw
+ * `Middleware "<name>" is already registered.`. There is no per-middleware plugin
+ * hook to trace them from instead, so they are left alone rather than breaking
+ * startup; their work still shows up inside the surrounding `Middlewares` span.
  *
- * Moving this to the `plugins:setupComplete` hook would fix all three.
+ * Middlewares the bot registered itself (`setServices`) are wrapped in place: Seyfert
+ * carries those forward across reinstalls. Teardown unwraps on the live
+ * `client.middlewares` object, which Seyfert may have replaced since setup, and only
+ * for entries still holding this plugin's wrapper.
  */
 export function instrumentInteractionMiddlewares(
 	target: InstrumentTarget,
@@ -340,17 +399,23 @@ export function instrumentInteractionMiddlewares(
 	const registry = middlewareClient.middlewares;
 	if (!registry) return () => undefined;
 
+	const pluginOwned = pluginContributedMiddlewareNames(middlewareClient);
+
 	const restorations: Array<() => void> = [];
 	for (const [name, original] of Object.entries(registry)) {
 		if (typeof original !== 'function') continue;
+		// Replacing a plugin's function breaks Seyfert's identity check on reinstall.
+		if (pluginOwned.has(name)) continue;
+		// Setup may run again (restart, hot reload) before cleanup restored an entry.
+		if (otelWrappedMiddlewares.has(original)) continue;
 
-		const wrapped: MiddlewareHandler = function otelWrappedMiddleware(this: unknown, middle) {
+		const wrapped: MiddlewareHandler = function otelWrappedMiddleware(this: unknown, middle, ...rest) {
 			const interactionContext = middle.context;
 			const key = asContextKey(interactionContext);
 			const phaseSpan = key ? openChildren.get(key) : undefined;
 			const kind = detectMiddlewareKind(interactionContext);
 			if (!phaseSpan || !shouldTrace(deps, kind, interactionContext)) {
-				return original.call(this, middle);
+				return original.call(this, middle, ...rest);
 			}
 
 			const phaseContext = otelTrace.setSpan(otelContext.active(), phaseSpan);
@@ -366,7 +431,7 @@ export function instrumentInteractionMiddlewares(
 			return otelContext.with(phaseContext, () =>
 				getTracer().startActiveSpan(`middleware ${name}`, span => {
 					try {
-						return endSpanAfterResult(span, original.call(this, instrumentedMiddle));
+						return endSpanAfterResult(span, original.call(this, instrumentedMiddle, ...rest));
 					} catch (error) {
 						markSpanError(span, error);
 						span.end();
@@ -376,14 +441,19 @@ export function instrumentInteractionMiddlewares(
 			);
 		};
 
+		otelWrappedMiddlewares.add(wrapped);
 		registry[name] = wrapped;
 		restorations.push(() => {
-			if (registry[name] === wrapped) registry[name] = original;
+			// Seyfert reassigns client.middlewares on every reinstall; unwrap the live one.
+			const live = middlewareClient.middlewares;
+			if (live && live[name] === wrapped) live[name] = original;
+			if (registry !== live && registry[name] === wrapped) registry[name] = original;
 		});
 	}
 
+	// Idempotent: the entries are dropped as they are restored.
 	return () => {
-		for (const restore of restorations.reverse()) restore();
+		for (const restore of restorations.splice(0).reverse()) restore();
 	};
 }
 
