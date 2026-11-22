@@ -382,11 +382,9 @@ function pluginContributedMiddlewareNames(client: unknown): Set<string> {
  * present in `client.middlewares` by the time this runs — but Seyfert compares them
  * by identity on every reinstall (`start()`, `refreshPluginContributions()`), and a
  * wrapper fails that check, making the owning plugin re-add the middleware and throw
- * `Middleware "<name>" is already registered.`. There is no per-middleware plugin
- * hook to trace them from instead, so they are left alone rather than breaking
- * startup. The `Middlewares` phase span still measures the whole chain, but only a
- * wrapper makes that span the active parent, so spans a plugin middleware creates
- * attach to the interaction root instead.
+ * `Middleware "<name>" is already registered.`. Plugin middlewares inherit
+ * the active span. A wrapped bot middleware's `next()` makes the
+ * `Middlewares` phase span active for the rest of that chain.
  *
  * Middlewares the bot registered itself (`setServices`) are wrapped in place: Seyfert
  * carries those forward across reinstalls. Teardown unwraps on the live

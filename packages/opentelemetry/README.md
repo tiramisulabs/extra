@@ -48,8 +48,9 @@ Middlewares contributed by other plugins (for example `@slipher/cooldown` with
 replacing one with a tracing wrapper makes the owning plugin re-add it and fail with
 `Middleware "<name>" is already registered.`.
 
-They therefore get no `middleware <name>` span, and spans they create themselves attach
-to the interaction root span rather than to the `Middlewares` phase span. That phase
-span still measures the whole middleware chain, plugin middlewares included.
+Plugin middlewares create no automatic `middleware <name>` span. Any spans they create
+inherit the active span, usually the interaction root. When an instrumented bot
+middleware calls `next()`, the rest of that chain continues under the `Middlewares`
+phase span. The phase span measures the middleware chain regardless of span parenting.
 
 Teardown is terminal for a plugin instance. Create a fresh plugin instance, processor, and exporter for every new client lifecycle.

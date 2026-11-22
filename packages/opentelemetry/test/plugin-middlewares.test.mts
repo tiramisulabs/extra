@@ -1,4 +1,4 @@
-import { Client, createPlugin, definePlugins } from 'seyfert';
+import { Client, Command, createPlugin, definePlugins } from 'seyfert';
 import { assert, describe, test } from 'vitest';
 import { createInteractionContextScope } from '../src/context-scope';
 import { opentelemetry } from '../src/plugin';
@@ -159,41 +159,38 @@ describe('plugin-contributed middlewares', () => {
 		});
 	});
 
-	test('spans a plugin middleware creates attach to the interaction root', async () => {
+	test.each([
+		{ chain: ['cooldown', 'usage'], parent: 'command ping' },
+		{ chain: ['usage', 'cooldown'], parent: 'Middlewares' },
+	])('plugin middleware in $chain creates spans under $parent', async ({ chain, parent }) => {
 		await withProvider(async exporter => {
-			const contributed: AnyFn = (async ({ next }: { next: () => void }) => {
+			const contributed = ({ next }: { next: () => void }) => {
 				getTracer().startSpan('plugin work').end();
 				next();
-			}) as unknown as AnyFn;
+			};
+			const usage = ({ next }: { next: () => void }) => next();
 
 			const otel = otelPlugin();
 			const client = createTestClient(definePlugins(middlewarePlugin('cooldown', contributed), otel));
+			client.setServices({ middlewares: { usage } as never });
 			await client.start({}, false);
 
 			const hooks = commandDefaults(client);
-			const context = { fullCommandName: 'ping' };
+			const command = new Command();
+			command.middlewares = chain as never;
+			const context = { client, fullCommandName: 'ping' };
 			await scopeFor()(context, async () => {
 				hooks.onBeforeMiddlewares?.(context);
-				await (middlewares(client).cooldown as (middle: object) => Promise<void>)({
-					context,
-					next() {
-						// nothing to chain
-					},
-				});
+				assert.deepEqual(await client.handleCommand.runMiddlewares(command, context as never), {});
 				hooks.onAfterRun?.(context, undefined);
 			});
 
 			const spans = exporter.getFinishedSpans();
-			const root = spans.find(span => span.name === 'command ping');
-			const phase = spans.find(span => span.name === 'Middlewares');
+			const parentSpan = spans.find(span => span.name === parent);
 			const work = spans.find(span => span.name === 'plugin work');
-			assert.ok(root);
-			assert.ok(phase, 'the phase span still covers the chain');
+			assert.ok(parentSpan);
 			assert.ok(work);
-			// Only a wrapper makes the phase span the active parent, and plugin
-			// middlewares are not wrapped, so their spans hang off the root.
-			assert.equal(work.parentSpanContext?.spanId, root.spanContext().spanId);
-			assert.notEqual(work.parentSpanContext?.spanId, phase.spanContext().spanId);
+			assert.equal(work.parentSpanContext?.spanId, parentSpan.spanContext().spanId);
 			await otel.teardown?.(client as never, {} as never);
 		});
 	});
