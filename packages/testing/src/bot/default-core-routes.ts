@@ -8,6 +8,7 @@ import {
 import type { WorldDefaultContext } from './default-context';
 import {
 	bodyRecord,
+	compareIds,
 	interceptFetchOne,
 	memberListLimit,
 	messageQuery,
@@ -58,6 +59,22 @@ export function registerCoreWorldRoutes(context: WorldDefaultContext): void {
 		const entry = findMember(params.guildId, params.userId);
 		if (world && !entry) apiError(DiscordErrors.UnknownMember);
 		return entry?.member ?? apiMember({ user: apiUser({ id: params.userId }) });
+	});
+	// Registered after fetchMember: the newest interceptor wins, and `/members/:userId` also matches `/members/search`.
+	rest.intercept(Routes.searchMembers, (pending, params) => {
+		requireGuild(params.guildId);
+		const prefix = queryString(pending.query?.query)?.toLowerCase();
+		if (!prefix) return apiError(DiscordErrors.InvalidFormBody, 'Invalid Form Body: query is required');
+		return (world?.members ?? [])
+			.filter(entry => entry.guildId === params.guildId)
+			.filter(entry => !removed.has(key(params.guildId, entry.member.user.id)))
+			.filter(
+				({ member }) =>
+					member.user.username.toLowerCase().startsWith(prefix) || member.nick?.toLowerCase().startsWith(prefix),
+			)
+			.sort((a, b) => compareIds(a.member.user.id, b.member.user.id))
+			.slice(0, memberListLimit(pending.query))
+			.map(entry => entry.member);
 	});
 	interceptFetchOne(
 		rest,

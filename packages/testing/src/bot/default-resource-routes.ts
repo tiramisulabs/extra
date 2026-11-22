@@ -1,6 +1,13 @@
 import { PermissionFlagsBits } from 'seyfert';
 import type { WorldDefaultContext } from './default-context';
-import { bodyRecord, interceptFetchOne, registerGuildCrud } from './default-context';
+import {
+	bodyRecord,
+	compareIds,
+	interceptFetchOne,
+	pageLimit,
+	queryString,
+	registerGuildCrud,
+} from './default-context';
 import { emojiPayload } from './emoji';
 import {
 	type ApiMember,
@@ -222,7 +229,8 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 	rest.intercept(Routes.fetchActiveThreads, (_pending, params) => {
 		requireGuild(params.guildId);
 		return {
-			threads: hooks.state.activeThreads(params.guildId),
+			// Discord orders this list by id, descending.
+			threads: hooks.state.activeThreads(params.guildId).sort((a, b) => compareIds(b.id, a.id)),
 			members: [],
 			has_more: false,
 		};
@@ -406,9 +414,19 @@ export function registerWorldResourceRoutes(context: WorldDefaultContext): void 
 			...(pending.reason === undefined ? {} : { reason: pending.reason }),
 		});
 	});
-	rest.intercept(Routes.fetchBans, (_pending, params) => {
+	rest.intercept(Routes.fetchBans, (pending, params) => {
 		requireGuild(params.guildId);
-		return hooks.state.bans(params.guildId).map(userId => ({
+		const before = queryString(pending.query?.before);
+		// Discord respects only `before` when both cursors are sent.
+		const after = before === undefined ? queryString(pending.query?.after) : undefined;
+		const ids = hooks.state
+			.bans(params.guildId)
+			.filter(id => before === undefined || compareIds(id, before) < 0)
+			.filter(id => after === undefined || compareIds(id, after) > 0)
+			.sort(compareIds);
+		const limit = pageLimit(pending.query, 1000);
+		// Always ascending: `before` keeps the page adjacent to the cursor, anything else the lowest ids.
+		return (before === undefined ? ids.slice(0, limit) : ids.slice(-limit)).map(userId => ({
 			user: resolveUser(userId),
 		}));
 	});

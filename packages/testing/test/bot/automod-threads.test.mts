@@ -145,4 +145,17 @@ describe('active threads', () => {
 		expect(bot.world.all.thread({ guildId: guild.id, archived: false })).toHaveLength(1);
 		await bot.close();
 	});
+
+	test('listGuildActive orders threads by id, descending', async () => {
+		const world = mockWorld();
+		const guild = world.registerGuild({ id: 'at-order-guild' });
+		const parent = world.registerChannel(guild.id, { id: 'at-order-parent' });
+		for (const id of ['9', '100', '30']) world.registerThread(parent.id, { id });
+		world.registerThread(parent.id, { id: '200', archived: true });
+
+		await using bot = await createMockBot({ world });
+		const threads = await bot.client.threads.listGuildActive(guild.id, true);
+		// Numeric order, not string order: '100' is the newest id and '9' the oldest.
+		expect(threads.map(thread => thread.id)).toEqual(['100', '30', '9']);
+	});
 });
