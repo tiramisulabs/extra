@@ -39,18 +39,15 @@ export const client = new Client({ plugins });
 
 ## Middleware spans
 
-Interaction tracing wraps each middleware in a `middleware <name>` span, but only for
-middlewares the bot registers itself through `client.setServices({ middlewares })`.
+With Seyfert versions that expose `api.middlewares.wrap()`, interaction tracing
+creates a `middleware <name>` span for each middleware invocation, including
+global middlewares and those contributed by plugins such as `@slipher/cooldown`.
+These spans share the `Middlewares` phase span as their parent.
 
-Middlewares contributed by other plugins (for example `@slipher/cooldown` with
-`middleware: true`) are left untouched. Seyfert reinstalls plugin middlewares on every
-`client.start()` and contribution refresh, and compares them by function identity, so
-replacing one with a tracing wrapper makes the owning plugin re-add it and fail with
-`Middleware "<name>" is already registered.`.
-
-Plugin middlewares create no automatic `middleware <name>` span. Any spans they create
-inherit the active span, usually the interaction root. When an instrumented bot
-middleware calls `next()`, the rest of that chain continues under the `Middlewares`
-phase span. The phase span measures the middleware chain regardless of span parenting.
+On older versions, bot middlewares registered through `client.setServices({ middlewares })`
+still get individual spans. Plugin middlewares contribute to the `Middlewares` phase
+duration and any spans they create inherit the active span. Seyfert tracks the
+registered plugin functions by identity, so replacing them would break contribution
+reloads.
 
 Teardown is terminal for a plugin instance. Create a fresh plugin instance, processor, and exporter for every new client lifecycle.
