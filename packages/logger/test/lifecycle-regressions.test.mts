@@ -1,6 +1,7 @@
 import { createMockBot } from '@slipher/testing';
 import { createDrainPipeline } from 'evlog/pipeline';
 import {
+	Client,
 	Command,
 	ComponentCommand,
 	createMiddleware,
@@ -168,9 +169,9 @@ describe('logger lifecycle regressions', () => {
 		const skip = createMiddleware<void>(({ stop }) => stop());
 		const command = new SkipCommand();
 		command.middlewares = ['skip'] as never;
-		const context = interactionContext({
-			client: { middlewares: { skip }, logger: { warn() {} } },
-		});
+		const client = new Client({ logger: { active: false } });
+		client.setServices({ middlewares: { skip } as never });
+		const context = interactionContext({ client });
 
 		await options.contextScopes?.[0]?.(context, async () => {
 			await options.commands.defaults.onBeforeMiddlewares(context);
