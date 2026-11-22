@@ -1,7 +1,7 @@
 import type { RedisClientOptions, RedisClientType } from '@redis/client';
 import type { AdapterRelationship } from 'seyfert';
 import { type MakeRequired, MergeOptions } from 'seyfert/lib/common';
-import { RedisAdapter, type RedisAdapterOptions, toNormal } from './adapter';
+import { RedisAdapter, type RedisAdapterIncrementOptions, type RedisAdapterOptions, toNormal } from './adapter';
 
 export interface ResourceLimitedMemoryAdapter {
 	/** Redis key lifetime in milliseconds. Positive values refresh the TTL; non-positive values remove it. */
@@ -436,6 +436,23 @@ export class ExpirableRedisAdapter extends RedisAdapter<false> {
 	override async bulkGet(keys: string[]) {
 		const result = await Promise.all(keys.map(key => this.get(key)));
 		return result.filter(value => value !== undefined);
+	}
+
+	override async increment(
+		key: string,
+		field: string,
+		delta: number,
+		options?: RedisAdapterIncrementOptions,
+	): Promise<number | undefined> {
+		const mutation = this.beginMutation(key);
+		this.deleteCachedValue(key);
+		try {
+			return await super.increment(key, field, delta, options);
+		} finally {
+			this.pendingReads.delete(mutation.normalizedKey);
+			this.deleteCachedValue(key);
+			this.finishMutation(mutation.normalizedKey, mutation.token);
+		}
 	}
 
 	override async remove(key: string): Promise<void> {
