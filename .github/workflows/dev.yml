@@ -1,0 +1,50 @@
+name: Publish dev versions
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'packages/*/src/**'
+
+permissions:
+  contents: read
+
+jobs:
+  publish_dev:
+    name: Publish dev
+    runs-on: ubuntu-latest
+    if: github.repository == 'tiramisulabs/extra'
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - run: corepack enable
+      - name: Install Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24.x'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Publish dev tag
+        shell: bash
+        env:
+          BEFORE: ${{ github.event.before }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          # One --filter per package whose src/ changed in this push (--no-renames: a file moved
+          # between packages counts for both). Without the guard, an empty selection would run
+          # the commands on the workspace root.
+          filters=$(git diff --no-renames --name-only "$BEFORE" HEAD -- packages | awk -F/ '$3 == "src" { print "--filter=./packages/" $2 }' | sort -u)
+          if [ -z "$filters" ]; then echo 'No package src changed.'; exit 0; fi
+          pnpm $filters version prerelease --preid "dev-$GITHUB_RUN_ID" --no-git-tag-version --no-git-checks
+          pnpm $filters publish --tag dev --no-git-checks --ignore-scripts
