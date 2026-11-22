@@ -45,7 +45,7 @@ export interface InteractionApi {
 const otelWrappedMiddlewares = new WeakSet<MiddlewareHandler>();
 
 /** Open lifecycle child spans, keyed by interaction context. */
-const openChildren = new WeakMap<object, Span>();
+const openChildren = new WeakMap<object, { name: string; span: Span }>();
 
 export type InteractionFailurePhase = 'options' | 'middlewares' | 'run';
 
@@ -100,7 +100,7 @@ function middlewareFailure(error: unknown, metadata: unknown): InteractionFailur
 function endChild(context: unknown): void {
 	const key = asContextKey(context);
 	if (!key) return;
-	const span = openChildren.get(key);
+	const span = openChildren.get(key)?.span;
 	if (!span) return;
 	try {
 		span.end();
@@ -110,13 +110,17 @@ function endChild(context: unknown): void {
 	openChildren.delete(key);
 }
 
-function beginChild(context: unknown, name: string): Span | undefined {
+function beginChild(
+	context: unknown,
+	name: string,
+	parentContext?: ReturnType<typeof otelContext.active>,
+): Span | undefined {
 	const key = asContextKey(context);
 	if (!key) return undefined;
 	endChild(key);
 	try {
-		const span = getTracer().startSpan(name);
-		openChildren.set(key, span);
+		const span = getTracer().startSpan(name, {}, parentContext);
+		openChildren.set(key, { name, span });
 		return span;
 	} catch {
 		// never throw from instrumentation
@@ -127,7 +131,7 @@ function beginChild(context: unknown, name: string): Span | undefined {
 function failChild(context: unknown, error: unknown): void {
 	const key = asContextKey(context);
 	if (!key) return;
-	const span = openChildren.get(key);
+	const span = openChildren.get(key)?.span;
 	if (!span) return;
 	try {
 		const err = error instanceof Error ? error : new Error(String(error));
@@ -296,7 +300,7 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
 	return typeof (value as { then?: unknown }).then === 'function';
 }
 
-function endSpanAfterResult(span: Span, result: unknown): unknown {
+function endSpanAfterResult<Result>(span: Span, result: Result): Result | Promise<Awaited<Result>> {
 	if (!isPromiseLike(result)) {
 		span.end();
 		return result;
@@ -313,6 +317,64 @@ function endSpanAfterResult(span: Span, result: unknown): unknown {
 		},
 	);
 }
+
+function traceMiddleware<Invocation extends MiddlewareInvocation, Result>(
+	name: string,
+	middle: Invocation,
+	run: (middle: Invocation) => Result,
+	deps: InteractionInstrumentDeps,
+	ensurePhase = false,
+): Result | Promise<Awaited<Result>> {
+	const key = asContextKey(middle.context);
+	const phase = key ? openChildren.get(key) : undefined;
+	if ((!phase && !ensurePhase) || !shouldTrace(deps, detectMiddlewareKind(middle.context), middle.context)) {
+		return run(middle);
+	}
+
+	let phaseSpan = phase?.span;
+	if (ensurePhase && phase?.name !== 'Middlewares') {
+		// A handler's own lifecycle hook can replace the default that opens this phase.
+		const root = currentInteractionFlow()?.spanContext;
+		phaseSpan = root
+			? beginChild(middle.context, 'Middlewares', otelTrace.setSpanContext(otelContext.active(), root))
+			: undefined;
+	}
+	if (!phaseSpan) return run(middle);
+
+	const phaseContext = otelTrace.setSpan(otelContext.active(), phaseSpan);
+	const next = middle.next;
+	const instrumentedMiddle =
+		typeof next === 'function'
+			? {
+					...middle,
+					next: (...args: unknown[]) =>
+						otelContext.with(otelTrace.setSpan(otelContext.active(), phaseSpan), () => next(...args)),
+				}
+			: middle;
+
+	return otelContext.with(phaseContext, () =>
+		getTracer().startActiveSpan(`middleware ${name}`, span => {
+			try {
+				return endSpanAfterResult(span, run(instrumentedMiddle));
+			} catch (error) {
+				markSpanError(span, error);
+				span.end();
+				throw error;
+			}
+		}),
+	);
+}
+
+type MiddlewareWrapApi = {
+	middlewares?: {
+		wrap?: (
+			wrapper: (
+				middle: MiddlewareInvocation & { name: string },
+				run: (middle: MiddlewareInvocation & { name: string }) => void | PromiseLike<void>,
+			) => void | PromiseLike<void>,
+		) => () => void;
+	};
+};
 
 function detectMiddlewareKind(context: unknown): InteractionHandlerKind {
 	if (context === null || typeof context !== 'object') return 'command';
@@ -375,9 +437,10 @@ function pluginContributedMiddlewareNames(client: unknown): Set<string> {
 }
 
 /**
- * Wrap registered Seyfert middleware functions with individually named spans.
+ * Trace each middleware invocation through Seyfert's wrapper API when available.
  *
- * Plugin-contributed middlewares are skipped and stay untraced. In Seyfert 5.2.x
+ * On older releases this falls back to wrapping bot-owned registry entries.
+ * Plugin-contributed middlewares are skipped on that path.
  * `installPluginMiddlewares` already runs in the `Client` constructor, so they are
  * present in `client.middlewares` by the time this runs — but Seyfert compares them
  * by identity on every reinstall (`start()`, `refreshPluginContributions()`), and a
@@ -395,6 +458,11 @@ export function instrumentInteractionMiddlewares(
 	target: InstrumentTarget,
 	deps: InteractionInstrumentDeps,
 ): () => void {
+	const api = target.api as MiddlewareWrapApi | undefined;
+	if (typeof api?.middlewares?.wrap === 'function') {
+		return api.middlewares.wrap((middle, run) => traceMiddleware(middle.name, middle, run, deps, true));
+	}
+
 	const middlewareClient = target.client as MiddlewareClient;
 	const registry = middlewareClient.middlewares;
 	if (!registry) return () => undefined;
@@ -410,35 +478,7 @@ export function instrumentInteractionMiddlewares(
 		if (otelWrappedMiddlewares.has(original)) continue;
 
 		const wrapped: MiddlewareHandler = function otelWrappedMiddleware(this: unknown, middle, ...rest) {
-			const interactionContext = middle.context;
-			const key = asContextKey(interactionContext);
-			const phaseSpan = key ? openChildren.get(key) : undefined;
-			const kind = detectMiddlewareKind(interactionContext);
-			if (!phaseSpan || !shouldTrace(deps, kind, interactionContext)) {
-				return original.call(this, middle, ...rest);
-			}
-
-			const phaseContext = otelTrace.setSpan(otelContext.active(), phaseSpan);
-			const next = middle.next;
-			const instrumentedMiddle =
-				typeof next === 'function'
-					? {
-							...middle,
-							next: (...args: unknown[]) => otelContext.with(phaseContext, () => next(...args)),
-						}
-					: middle;
-
-			return otelContext.with(phaseContext, () =>
-				getTracer().startActiveSpan(`middleware ${name}`, span => {
-					try {
-						return endSpanAfterResult(span, original.call(this, instrumentedMiddle, ...rest));
-					} catch (error) {
-						markSpanError(span, error);
-						span.end();
-						throw error;
-					}
-				}),
-			);
+			return traceMiddleware(name, middle, invocation => original.call(this, invocation, ...rest), deps);
 		};
 
 		otelWrappedMiddlewares.add(wrapped);
