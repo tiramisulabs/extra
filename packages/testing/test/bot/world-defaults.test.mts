@@ -313,7 +313,7 @@ describe('stateful world defaults', () => {
 
 		await using bot = await createMockBot({ world });
 		const search = async (query: { query: string; limit?: number }) =>
-			(await bot.client.members.search(guild.id, query)).map(member => member.user.id);
+			(await bot.client.members.search(guild.id, query, true)).map(member => member.user.id);
 
 		expect(await search({ query: 'AlP', limit: 1000 })).toEqual(['7', '9', '30', '100']);
 		expect(await search({ query: 'alp', limit: 2 })).toEqual(['7', '9']);
@@ -324,7 +324,7 @@ describe('stateful world defaults', () => {
 		expect(await search({ query: 'nobody', limit: 1000 })).toEqual([]);
 		expect(bot.restCalls(Routes.searchMembers)).toHaveLength(5);
 
-		const rejected = await bot.client.members.search(guild.id, { query: '' }).catch((error: unknown) => error);
+		const rejected = await bot.client.members.search(guild.id, { query: '' }, true).catch((error: unknown) => error);
 		expect(isDiscordError(rejected, { code: DiscordErrors.InvalidFormBody.code })).toBe(true);
 	});
 
