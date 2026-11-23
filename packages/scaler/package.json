@@ -1,6 +1,6 @@
 {
 	"name": "@slipher/scaler",
-	"version": "0.0.1",
+	"version": "0.0.2",
 	"description": "Multi-host process placement for vanilla Seyfert workers",
 	"license": "MIT",
 	"publishConfig": {
