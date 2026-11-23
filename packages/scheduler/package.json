@@ -60,7 +60,7 @@
 		"bullmq": "6.1.2",
 		"bullmq-v5": "npm:bullmq@5.79.3",
 		"ioredis": "^5.10.1",
-		"seyfert": "https://pkg.pr.new/tiramisulabs/seyfert@8f5349706e01bb2dfd5e74f5d29631036cd5af26",
+		"seyfert": "6.0.0",
 		"typescript": "^6.0.3"
 	}
 }

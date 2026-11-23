@@ -8,7 +8,6 @@ allowBuilds:
   protobufjs: true
   seyfert: true
   seyfert@https://codeload.github.com/tiramisulabs/seyfert/tar.gz/4aee9b68314f38b193d3cb2a3ac27c51b0eae0af: true
-  seyfert@https://pkg.pr.new/tiramisulabs/seyfert@8f5349706e01bb2dfd5e74f5d29631036cd5af26: false
   youtube-dl-exec: true
 
 minimumReleaseAgeExclude:

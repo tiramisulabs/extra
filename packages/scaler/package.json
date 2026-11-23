@@ -58,7 +58,7 @@
 	"devDependencies": {
 		"@types/node": "^26.0.1",
 		"@types/ws": "^8.18.1",
-		"seyfert": "https://pkg.pr.new/tiramisulabs/seyfert@8f5349706e01bb2dfd5e74f5d29631036cd5af26",
+		"seyfert": "6.0.0",
 		"typescript": "^6.0.3",
 		"vitest": "^4.1.9"
 	}
