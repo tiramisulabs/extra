@@ -473,6 +473,8 @@ class RedisBinding implements CoordinatorBinding {
 	/** Shards whose contended lease was already reported, so a long wait is recorded once. */
 	private readonly contended = new Set<number>();
 	private queue: PartitionChange[] = [];
+	/** The changes Redis has been sent and has not answered yet. */
+	private sending: PartitionChange[] = [];
 	/** Removals of this process that Redis never answered, oldest first. */
 	private unconfirmed: UnconfirmedRemoval[] = [];
 	private applying: Promise<void> | undefined;
@@ -734,6 +736,7 @@ class RedisBinding implements CoordinatorBinding {
 		while (this.queue.length && !this.leaseLost && !this.closed) {
 			const changes = this.queue;
 			this.queue = [];
+			this.sending = changes;
 			// A shard the batch gives back is judged by its release instead of counted on: Redis may have given
 			// it back already and lost the reply, and asking twice is not losing it.
 			const giving = new Map<number, string>();
@@ -746,7 +749,6 @@ class RedisBinding implements CoordinatorBinding {
 				results = await this.call<string[]>(META_SCRIPT, {
 					ops: changes.map(change => this.metaOp(change)),
 					ttl: this.ttl,
-					held: [...this.owned.keys()].filter(shard => !giving.has(shard)),
 					giving: [...giving],
 				});
 			} catch (cause) {
@@ -754,6 +756,8 @@ class RedisBinding implements CoordinatorBinding {
 				// The reply is unknown. Every change is safe to apply again, so they go back in front.
 				this.queue = [...changes, ...this.queue];
 				throw cause;
+			} finally {
+				this.sending = [];
 			}
 			for (const [index, result] of results.entries()) {
 				const change = changes[index]!;
@@ -1065,6 +1069,16 @@ class RedisBinding implements CoordinatorBinding {
 		return `${this.incarnation}:${generation}`;
 	}
 
+	/**
+	 * The shards this incarnation counts on: the ones it holds and is not giving back right now. A release that
+	 * is on its way may already have gone through, and the batch that carries it is what tells whether the lease
+	 * was lost. An operation that crosses it must not take the answer for itself.
+	 */
+	private counted(): number[] {
+		const leaving = new Set(this.sending.filter(change => change.type === 'suspended').map(change => change.shardId));
+		return [...this.owned.keys()].filter(shard => !leaving.has(shard));
+	}
+
 	/** A read fails closed once the lease is lost: nothing this coordinator would return is trustworthy anymore. */
 	private async reading<T>(miss: T, read: () => Promise<T>): Promise<T> {
 		if (this.leaseLost) return miss;
@@ -1101,7 +1115,7 @@ class RedisBinding implements CoordinatorBinding {
 					cache: this.cachePrefix,
 					ns: this.prefix,
 					inc: this.incarnation,
-					held: [...this.owned.keys()],
+					held: this.counted(),
 					mine: [...this.owned.values()].map(generation => this.token(generation)),
 					hide: this.state.awaiting,
 					...input,

@@ -1010,6 +1010,43 @@ describe.skipIf(!redisUrl)('redisCoordinator against Redis', () => {
 			expect(await owner.adapter.get('role.a')).toMatchObject({ id: 'a' });
 		}));
 
+	it('does not take a read or a write that crosses the release of another shard for a lost lease', () =>
+		withRedis(async ({ worker }) => {
+			const onShard0 = guildOn(2);
+			const onShard1 = guildOn(3);
+			const owner = await worker();
+			await own(owner, [onShard0], { shard: [0, 2] });
+			await own(owner, [onShard1], { shard: [1, 2] });
+			await owner.adapter.set(...role('a', onShard0));
+			// Both are past their turn in line when the worker stops following the other shard and gives it back.
+			const reading = owner.adapter.get('role.a');
+			const writing = owner.adapter.set(...role('b', onShard0));
+			owner.state.suspend(1);
+			const releasing = owner.binding.publish();
+
+			expect(await reading).toMatchObject({ id: 'a' });
+			await Promise.all([writing, releasing]);
+			expect(owner.state.lifecycle).toBe('active');
+			expect(await owner.adapter.get('role.b')).toMatchObject({ id: 'b' });
+		}));
+
+	it('counts again on a shard it gave back and took again in one step', () =>
+		withRedis(async ({ namespace, raw, worker }) => {
+			const owner = await worker();
+			await own(owner, [G]);
+			owner.state.suspend(0);
+			owner.state.ready(0, 'session-2', 1, [G], 1);
+			owner.state.guildAvailable(0, G, 2, { startup: true, unavailable: false });
+			await owner.binding.publish();
+			// The owner stalls until its lease expires and another coordinator has the shard.
+			await raw.set(`${namespace}:reconciler:lease:0`, 'another-incarnation');
+
+			await owner.adapter.set(...role('late'));
+
+			expect(owner.state.snapshot()).toMatchObject({ lifecycle: 'failed', cause: expect.any(Error) });
+			expect(await owner.inner.get('role.late')).toBeUndefined();
+		}));
+
 	it('stops a sweep between batches once teardown began', () =>
 		withRedis(async ({ worker }) => {
 			const owner = await worker();
