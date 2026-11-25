@@ -597,7 +597,8 @@ describe.skipIf(!redisUrl)('redisCoordinator against Redis', () => {
 			const theirs = `role.${elsewhere}`;
 			await owner.inner.set(...role('r-elsewhere', elsewhere));
 			const blind = owner.state.claimGuild(generation, elsewhere)!;
-			await raw.hSet(`${namespace}:reconciler:guilds`, elsewhere, 'another-incarnation:1|4');
+			await raw.set(`${namespace}:reconciler:lease:7`, 'another-incarnation');
+			await raw.hSet(`${namespace}:reconciler:guilds`, elsewhere, 'another-incarnation:1|4|7');
 			for (const remove of [
 				() => owner.adapter.bulkRemove(['role.r-elsewhere']),
 				() => owner.adapter.removeToRelationship(theirs, 'r-elsewhere'),
@@ -811,7 +812,7 @@ describe.skipIf(!redisUrl)('redisCoordinator against Redis', () => {
 			}
 		}));
 
-	it('closes the guilds of a shard it stops following, and leaves them as they were on a clean shutdown', () =>
+	it('stops serving the guilds of a shard once nothing owns it anymore', () =>
 		withRedis(async ({ namespace, raw, worker }) => {
 			const onShard0 = guildOn(2);
 			const onShard1 = guildOn(3);
@@ -829,11 +830,32 @@ describe.skipIf(!redisUrl)('redisCoordinator against Redis', () => {
 			expect(await reader.adapter.get('role.b')).toBeNull();
 			expect(await raw.exists(`${namespace}:reconciler:lease:1`)).toBe(0);
 
+			// A clean shutdown gives the lease back, and what it confirmed goes with it: nobody updates it now.
+			expect(await reader.adapter.get('role.a')).toMatchObject({ id: 'a' });
 			first.state.beginClose();
 			await first.binding.close();
 			expect(await raw.exists(`${namespace}:reconciler:lease:0`)).toBe(0);
-			// What the last owner confirmed stays readable until the next owner's READY.
-			expect(await reader.adapter.get('role.a')).toMatchObject({ id: 'a' });
+			expect(await reader.adapter.get('role.a')).toBeNull();
+			expect(await reader.adapter.keys(`role.${onShard0}`)).toEqual([]);
+			// The entries themselves are still stored for the next owner to confirm or remove.
+			expect(await reader.inner.get('role.a')).toMatchObject({ id: 'a' });
+		}));
+
+	it('stops serving a crashed owner once its lease expires, before anyone takes the shard', () =>
+		withRedis(async ({ namespace, raw, worker }) => {
+			const crashed = await worker();
+			const reader = await worker();
+			await own(crashed, [G]);
+			await crashed.adapter.set(...role('1'));
+			expect(await reader.adapter.get('role.1')).toMatchObject({ id: '1' });
+
+			// The process is gone: nothing renews the lease and nothing releases it.
+			await raw.del(`${namespace}:reconciler:lease:0`);
+
+			expect(await reader.adapter.get('role.1')).toBeNull();
+			// A write from a process that owns nothing does not bring the guild back.
+			await reader.adapter.set(...role('2'));
+			expect(await reader.adapter.keys(ROLES)).toEqual([]);
 		}));
 
 	it('waits for a contended shard without holding up its other shards or its own teardown', () =>
@@ -863,6 +885,8 @@ describe.skipIf(!redisUrl)('redisCoordinator against Redis', () => {
 			successor.state.beginClose();
 			await waiting;
 			expect(holder.state.lifecycle).toBe('active');
+			// The write that waited is older than whatever the shard's owner cached since, so it is not applied.
+			expect(await holder.inner.get('role.a')).toBeUndefined();
 		}));
 
 	it('stops waiting for a lease when teardown begins while another attempt is on its way', () =>
@@ -883,6 +907,184 @@ describe.skipIf(!redisUrl)('redisCoordinator against Redis', () => {
 
 			expect(attempts).toBe(2);
 			expect(holder.state.lifecycle).toBe('active');
+		}));
+
+	it('keeps what a shard reports while its attempt at a contended lease is on its way', () =>
+		withRedis(async ({ worker }) => {
+			const gone = guildOn(4);
+			const holder = await worker();
+			await holder.inner.set(...role('ghost', gone));
+			await own(holder, [G, gone]);
+			await holder.adapter.set(...role('ghost', gone));
+			const successor = await worker();
+			successor.state.ready(0, 'session-2', 1, [G, gone], 1);
+			successor.state.guildAvailable(0, gone, 2, { startup: true, unavailable: false });
+			// The attempt leaves for Redis now. One guild's startup packet and the removal of another arrive
+			// before the answer, which is that the lease is still held.
+			const publishing = successor.binding.publish();
+			successor.state.guildAvailable(0, G, 3, { startup: true, unavailable: false });
+			successor.state.closeGuild(gone, 4);
+			await publishing;
+
+			// Rolling restart: the previous owner shuts down cleanly and the successor takes the shard.
+			holder.state.beginClose();
+			await holder.binding.close();
+			await successor.adapter.set(...role('1', G, { name: 'fresh' }));
+			await successor.adapter.set(...role('ghost', gone));
+
+			const reader = await worker();
+			expect(await reader.adapter.get('role.1')).toMatchObject({ name: 'fresh' });
+			expect(await reader.adapter.get('role.ghost')).toBeNull();
+		}));
+
+	it('does not overwrite the owner with a write that was still waiting for the lease at teardown', () =>
+		withRedis(async ({ worker }) => {
+			const holder = await worker();
+			await own(holder, [G]);
+			await holder.adapter.set(...role('1', G, { name: 'first' }));
+			const successor = await worker();
+			successor.state.ready(0, 'session-2', 1, [G], 1);
+			successor.state.guildAvailable(0, G, 2, { startup: true, unavailable: false });
+			const waiting = Promise.resolve(successor.adapter.set(...role('1', G, { name: 'waited' })));
+			await sleep(LEASE_TTL / 3);
+			// The owner keeps receiving events and caches a newer value.
+			holder.state.observe(0, 10);
+			await holder.adapter.set(...role('1', G, { name: 'newest' }));
+
+			// The successor is torn down while it still waits: a failed deploy, a rollback.
+			successor.state.beginClose();
+			await waiting;
+
+			expect(await holder.adapter.get('role.1')).toMatchObject({ name: 'newest' });
+		}));
+
+	it('does not take a renewal that crosses the release of a shard it stopped following for a lost lease', () =>
+		withRedis(async ({ worker }) => {
+			const onShard0 = guildOn(2);
+			const onShard1 = guildOn(3);
+			const owner = await worker();
+			await own(owner, [onShard0], { shard: [0, 2] });
+			await own(owner, [onShard1], { shard: [1, 2] });
+			await owner.adapter.set(...role('a', onShard0));
+			owner.state.suspend(1);
+			const releasing = owner.binding.publish();
+			// The renewal timer fires while the release is on its way.
+			await Reflect.get(owner.binding, 'renew').call(owner.binding);
+			await releasing;
+
+			expect(owner.state.lifecycle).toBe('active');
+			expect(await owner.adapter.get('role.a')).toMatchObject({ id: 'a' });
+		}));
+
+	it('stops a sweep between batches once teardown began', () =>
+		withRedis(async ({ worker }) => {
+			const owner = await worker();
+			const ghosts = Array.from({ length: 250 }, (_, index) => role(`ghost-${index}`));
+			await owner.inner.bulkSet(ghosts);
+			const [cut] = await own(owner, [G]);
+			const targets = ghosts.map(([key, , relationship]) => owner.layout.target(key, relationship)!);
+			let sweeps = 0;
+			const restore = onScript(owner.inner.client, input => {
+				if (input.mode === 'sweep' && ++sweeps === 1) owner.state.beginClose();
+			});
+
+			const result = await owner.binding.sweep(targets, cut!);
+			restore();
+
+			expect(sweeps).toBe(1);
+			expect(result).toMatchObject({ failed: [] });
+			expect(result.removed).toHaveLength(100);
+		}));
+
+	it('stops serving a guild that a new shard count moved, before its new shard delivers it', () =>
+		withRedis(async ({ worker }) => {
+			// With one shard this guild is on shard 0; with two it is on shard 1.
+			const moved = guildOn(3);
+			const before = await worker();
+			await own(before, [moved], { shard: [0, 1] });
+			await before.adapter.set(...role('r', moved, { name: 'old-layout' }));
+			before.state.beginClose();
+			await before.binding.close();
+
+			// Nothing owns shard 0 anymore, so its guilds are not served whichever shard they belong to now.
+			const onShard1 = await worker();
+			const reader = await worker();
+			onShard1.state.ready(1, 'session-2', 2, [moved], 1);
+			await onShard1.binding.publish();
+			expect(await reader.adapter.get('role.r')).toBeNull();
+			expect(await onShard1.adapter.get('role.r')).toBeNull();
+
+			onShard1.state.guildAvailable(1, moved, 2, { startup: true, unavailable: false });
+			await onShard1.adapter.set(...role('r', moved, { name: 'new-layout' }));
+			expect(await reader.adapter.get('role.r')).toMatchObject({ name: 'new-layout' });
+		}));
+
+	it('removes a guild the bot left while offline even when its old shard no longer exists', () =>
+		withRedis(async ({ worker }) => {
+			// On shard 1 of 2, and on shard 0 once there is a single shard.
+			const left = guildOn(3);
+			const onShard1 = await worker();
+			await own(onShard1, [left], { shard: [1, 2] });
+			await onShard1.adapter.bulkSet([[`guild.${left}`, { id: left }, ['guild', left]], role('r-left', left)]);
+			onShard1.state.beginClose();
+			await onShard1.binding.close();
+
+			// The bot now runs one shard, and its READY no longer lists the guild.
+			const single = await worker();
+			const reader = await worker();
+			single.state.ready(0, 'session-2', 1, [G], 1);
+			single.state.settle(single.state.guildAvailable(0, G, 2, { startup: true, unavailable: false })!, 'reconciled');
+			const generation = single.state.guildsReady(0)!;
+			await single.binding.publish();
+			expect(await reader.adapter.get('role.r-left')).toBeNull();
+
+			const cache = new Cache(0, single.adapter, {}, {} as never);
+			await runUnfiltered(single.adapter, single.state.claimGuild(generation, left)!, () => cache.guilds!.remove(left));
+
+			expect(await single.inner.get('role.r-left')).toBeUndefined();
+			expect(await single.inner.get(`guild.${left}`)).toBeUndefined();
+		}));
+
+	it('ends a claimed removal its own next READY overtakes', () =>
+		withRedis(async ({ worker }) => {
+			const left = guildOn(4);
+			const owner = await worker();
+			const leftovers = Array.from({ length: 150 }, (_, index) => role(`left-${index}`, left));
+			await owner.inner.bulkSet(leftovers);
+			await own(owner, [G]);
+			owner.state.settle(owner.state.guildAvailable(0, G, 2, { startup: true, unavailable: false })!, 'reconciled');
+			const claim = owner.state.claimGuild(owner.state.guildsReady(0)!, left)!;
+			// The shard reconnects while the first batch is on its way, and something else publishes the new
+			// session before the second batch leaves. The guild may be back in that session.
+			let removals = 0;
+			const restore = onScript(owner.inner.client, input => {
+				if (input.mode !== 'claim' || ++removals !== 1) return;
+				owner.state.ready(0, 'session-2', 1, [G, left], 1);
+				queueMicrotask(() => void owner.binding.publish());
+			});
+
+			await expect(
+				runUnfiltered(owner.adapter, claim, () => owner.adapter.bulkRemove(leftovers.map(([key]) => key))),
+			).rejects.toBeInstanceOf(ReconciliationCancelled);
+			restore();
+
+			expect(removals).toBe(2);
+			expect(await owner.inner.getToRelationship(`role.${left}`)).toHaveLength(50);
+			expect(owner.state.lifecycle).toBe('active');
+		}));
+
+	it('removes with a sweep what another process cached at the very packet of the snapshot', () =>
+		withRedis(async ({ worker }) => {
+			const owner = await worker();
+			const rest = await worker();
+			const [cut] = await own(owner, [G]);
+			// A process that owns nothing cannot know the owner's position, so its write counts as made at the
+			// snapshot. A sweep of that snapshot that does not list the role takes it; the next read is a miss.
+			await rest.adapter.set(...role('1'));
+			const target = owner.layout.target('role.1', [ROLES, '1'])!;
+
+			expect(await owner.binding.sweep([target], cut!)).toEqual({ removed: ['role.1'], failed: [] });
+			expect(await rest.adapter.get('role.1')).toBeNull();
 		}));
 
 	it('lets a successor take over once the lease of a stalled owner expires', () =>

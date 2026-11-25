@@ -273,27 +273,30 @@ The coordinator also keeps one visibility record per reconciled key in Redis, in
 Each coordinator instance has a unique identity and takes a lease per shard when the shard's `READY` arrives. The
 lease lasts 30 seconds and is renewed every 10.
 
+- A guild is served only while the instance that delivered it still holds the lease of its shard. When that process
+  shuts down, its guilds stop being served to every other process at once; when it crashes, they stop once its lease
+  expires. The entries stay stored, and the next owner's snapshots make them readable again or remove them. Expect
+  other processes to see cache misses for a shard's guilds while its owner restarts.
 - While another instance holds a shard's lease, a new owner waits for it to be released or to expire, and keeps
   reading what that instance maintains. Its cache writes and cleanup for that shard wait with it. Seyfert caches a
   packet before it runs the event's listeners, so the events of that shard wait too: after a crash, a process that
   restarts quickly handles nothing on that shard until the old lease expires. Its other shards are not held up.
-  `status().failures` reports the wait once.
+  `status().failures` reports the wait once. If the waiting process is closed first, what it was waiting to write is
+  dropped.
 - Losing a lease is terminal for that instance. It enters `failed`, its reads of reconciled resources miss, its
   reconciled writes and removals are dropped instead of being applied unfenced, and it never takes the lease again.
   Resources of other plugins keep working. Restart the process to recover.
 - A new session of the same instance replaces its previous one without giving up the lease.
-- After a clean shutdown or a crash, other processes keep reading what the last owner confirmed until the next owner
-  acquires the shard. Nobody updates those entries in between.
 
-A guild is served only once a process that runs the plugin owns its shard. A process that owns no shard, such as an
-HTTP worker, can read and write normally; what it writes into a guild is served under that guild's current owner.
+A process that owns no shard, such as an HTTP worker, can read and write normally. What it writes into a guild is
+served under that guild's current owner, and is stored without being served while the guild has none.
 
 ### Transport ownership
 
 The Redis client is yours. The coordinator issues commands on it and never connects or closes it; the wrapped
 `RedisAdapter` keeps starting it as before. When the client closes, the plugin stops taking on work, waits for
-running cleanup, stops renewing, releases the leases it still holds, and restores the original adapter. Close the
-Redis client after `client.close()` resolves.
+running cleanup, stops renewing, releases the leases it still holds, which is what stops its guilds from being
+served, and restores the original adapter. Close the Redis client after `client.close()` resolves.
 
 `client.close()` does not stop the Gateway. Packets that still arrive afterwards are cached through the original
 adapter, outside every guarantee here, so stop the shards before or together with closing the client.
@@ -312,5 +315,9 @@ adapter, outside every guarantee here, so stop the shards before or together wit
   miss.
 - Two processes connected to the same shard at once are only meant to overlap briefly, as in a rolling restart. The
   second one waits for the first one's lease for as long as the first one lives.
-- When the shard count changes, guilds move between shards. Entries of a moved guild are unreadable until its new
-  shard delivers its snapshot.
+- Change the shard count with the previous processes stopped. Guilds move between shards, and each one is unreadable
+  until its new shard delivers it. Processes of two shard counts running against the same cache at once are not a
+  supported way to reshard: a new shard waits for the old shard that has the same number, and a guild both of them
+  receive is served by whichever delivered it last.
+- With `redisCoordinator()`, `increment` on a reconciled key checks that the key is readable and then increments
+  through the adapter. It is the one change to a reconciled key that is not a single script.

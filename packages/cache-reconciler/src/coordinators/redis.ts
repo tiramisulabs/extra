@@ -43,8 +43,13 @@ const MAX_UNCONFIRMED = 1024;
  * `<to>.<id>`.
  *
  * Coordinator state: `vis` maps a key to `<generation>|<sequence>|<guild>`, `guilds` maps an open guild
- * partition to `<generation>|<cut>`, `shard:<id>` holds the generation that owns a shard, `shard:<id>:guilds`
- * lists the partitions opened under it, and `lease:<id>` names the coordinator incarnation that owns the shard.
+ * partition to `<generation>|<cut>|<shard>`, `shard:<id>` holds the generation that owns a shard,
+ * `shard:<id>:guilds` lists the partitions opened under it, and `lease:<id>` names the coordinator incarnation
+ * that owns the shard. A generation is `<incarnation>:<number>`.
+ *
+ * A partition only stands while the incarnation that opened it still holds the lease of the shard it opened it
+ * under. Whatever ends that ownership, a shutdown, a crash, or a shard count that moved the guild to a shard
+ * nobody acquired, also ends what the partition confirmed.
  *
  * `input.held` lists the shards this incarnation believes it owns. If any of those leases is gone the caller is
  * a former owner, and every script refuses to act for it.
@@ -58,8 +63,19 @@ local visKey = ns .. 'vis'
 local guildsKey = ns .. 'guilds'
 local ownersKey = cache .. 'relationships:owners'
 
+local leases = {}
+local function holder(shard)
+	local id = tostring(shard)
+	local known = leases[id]
+	if known == nil then
+		known = redis.call('GET', ns .. 'lease:' .. id) or false
+		leases[id] = known
+	end
+	return known
+end
+
 local function holds(shard)
-	return redis.call('GET', ns .. 'lease:' .. shard) == inc
+	return holder(shard) == inc
 end
 
 local fenced = false
@@ -77,8 +93,13 @@ local function partition(guild)
 		local value = redis.call('HGET', guildsKey, guild)
 		known = false
 		if value then
-			local gen, cut = string.match(value, '^(.*)|(%d+)$')
-			known = { gen, tonumber(cut) }
+			local gen, cut, shard = string.match(value, '^(.*)|(%d+)|(%d+)$')
+			if holder(shard) == string.match(gen, '^(.*):%d+$') then
+				known = { gen, tonumber(cut) }
+			else
+				-- Its owner is gone and never comes back under that incarnation.
+				redis.call('HDEL', guildsKey, guild)
+			end
 		end
 		partitions[guild] = known
 	end
@@ -162,16 +183,17 @@ for index, op in ipairs(input.ops) do
 			break
 		end
 		redis.call('SET', leaseKey, inc, 'PX', input.ttl)
+		leases[tostring(shard)] = inc
+		partitions = {}
 		invalidate(redis.call('HGET', shardKey, 'gen'))
 		redis.call('HSET', shardKey, 'gen', gen, 'owner', inc, 'committed', '0')
 		results[index] = 'ok'
 	elseif kind == 'release' then
+		-- Giving the lease back is what closes the shard's guilds for every reader.
 		if holds(shard) then
 			redis.call('DEL', leaseKey)
-			if op[4] == 1 then
-				invalidate(redis.call('HGET', shardKey, 'gen'))
-				redis.call('DEL', shardKey)
-			end
+			leases[tostring(shard)] = false
+			partitions = {}
 		end
 		results[index] = 'ok'
 	elseif not holds(shard) or redis.call('HGET', shardKey, 'gen') ~= gen then
@@ -181,7 +203,7 @@ for index, op in ipairs(input.ops) do
 		redis.call('PEXPIRE', leaseKey, input.ttl)
 		results[index] = 'ok'
 	elseif kind == 'open' then
-		redis.call('HSET', guildsKey, op[4], gen .. '|' .. string.format('%d', op[5]))
+		redis.call('HSET', guildsKey, op[4], gen .. '|' .. string.format('%d', op[5]) .. '|' .. tostring(shard))
 		redis.call('SADD', membersKey, op[4])
 		partitions[op[4]] = nil
 		results[index] = 'ok'
@@ -345,8 +367,7 @@ const SCRIPTS = [META_SCRIPT, WRITE_SCRIPT, REMOVE_SCRIPT, MEMBERS_SCRIPT, VISIB
 const SCRIPT_SHAS = new Map(SCRIPTS.map(script => [script, createHash('sha1').update(script).digest('hex')]));
 
 type MetaOp =
-	| [kind: 'acquire' | 'commit' | 'renew', shard: number, gen: string]
-	| [kind: 'release', shard: number, gen: string, invalidate: 0 | 1]
+	| [kind: 'acquire' | 'commit' | 'renew' | 'release', shard: number, gen: string]
 	| [kind: 'open', shard: number, gen: string, guild: string, cut: number]
 	| [kind: 'close', shard: number, gen: string, guild: string];
 
@@ -470,12 +491,7 @@ class RedisBinding implements CoordinatorBinding {
 		clearInterval(this.renewal);
 		this.unpark();
 		await this.applying?.catch(() => undefined);
-		const releases: MetaOp[] = [...this.owned].map(([shard, generation]) => [
-			'release',
-			shard,
-			this.token(generation),
-			0,
-		]);
+		const releases: MetaOp[] = [...this.owned].map(([shard, generation]) => ['release', shard, this.token(generation)]);
 		if (!releases.length || this.leaseLost) return;
 		try {
 			await this.call(META_SCRIPT, { ops: releases, ttl: this.ttl });
@@ -529,7 +545,8 @@ class RedisBinding implements CoordinatorBinding {
 			for (let offset = 0; offset < managed.length; offset += BATCH) {
 				const batch = managed.slice(offset, offset + BATCH);
 				await this.published(batch.map(([key, , relationship]) => this.shardOf(key, relationship)));
-				await this.call<string[]>(WRITE_SCRIPT, { entries: batch.map(entry => this.encode(entry, patch)) });
+				const encoded = batch.map(entry => this.encode(entry, patch)).filter(entry => entry !== undefined);
+				if (encoded.length) await this.call<string[]>(WRITE_SCRIPT, { entries: encoded });
 			}
 		} catch (cause) {
 			// A coordinator that lost its lease stops admitting reconciled writes instead of writing unfenced.
@@ -649,6 +666,8 @@ class RedisBinding implements CoordinatorBinding {
 		if (shard === undefined || !this.state.admits) return result;
 		const fence = { mode: 'sweep', shard, gen: this.token(cut.generation), guild: cut.guildId, cut: cut.sequence };
 		for (let offset = 0; offset < keys.length; offset += BATCH) {
+			// Closing or failing fences every delete that has not left yet.
+			if (!this.state.admits) break;
 			const batch = keys.slice(offset, offset + BATCH);
 			try {
 				await this.published([shard]);
@@ -757,9 +776,19 @@ class RedisBinding implements CoordinatorBinding {
 	 * changes wait together and are tried again later, while everything else carries on.
 	 */
 	private park(shardId: number, rest: PartitionChange[]): void {
-		this.queue = [...rest.filter(change => change.shardId !== shardId), ...this.queue];
+		// What was reported for the shard while the attempt was on its way sits in the queue, behind `rest`.
+		const waiting = [...rest, ...this.queue];
+		this.queue = waiting.filter(change => change.shardId !== shardId);
+		const changes = waiting.filter(change => change.shardId === shardId);
 		// An attempt that was already on its way when the instance stopped must not start the wait again.
 		if (this.stopped) return;
+		// A parked shard's changes never reach a script, so there is no second wait to start. Should that ever
+		// change, the first wait keeps its timer and whoever waits on it.
+		const parked = this.parked.get(shardId);
+		if (parked) {
+			parked.changes.push(...changes);
+			return;
+		}
 		let settle!: () => void;
 		const acquired = new Promise<void>(resolve => {
 			settle = resolve;
@@ -772,7 +801,7 @@ class RedisBinding implements CoordinatorBinding {
 			void this.sync().then(parked.settle, parked.settle);
 		}, this.retryDelay);
 		timer.unref();
-		this.parked.set(shardId, { changes: rest.filter(change => change.shardId === shardId), timer, acquired, settle });
+		this.parked.set(shardId, { changes, timer, acquired, settle });
 		if (this.contended.has(shardId)) return;
 		this.contended.add(shardId);
 		this.state.recordFailure({
@@ -818,8 +847,8 @@ class RedisBinding implements CoordinatorBinding {
 			case 'generation':
 				return ['acquire', change.shardId, gen];
 			case 'suspended':
-				// The shard's cache is no longer followed, so its partitions close for every reader.
-				return ['release', change.shardId, gen, 1];
+				// The shard's cache is no longer followed, and nothing stays readable without an owner.
+				return ['release', change.shardId, gen];
 			case 'opened':
 				return ['open', change.shardId, gen, change.guildId, change.cut];
 			case 'closed':
@@ -829,17 +858,31 @@ class RedisBinding implements CoordinatorBinding {
 		}
 	}
 
-	/** Extends the owned leases. A lease that could not be confirmed for its whole lifetime counts as lost. */
+	/**
+	 * Extends the owned leases. A lease that could not be confirmed for its whole lifetime counts as lost. The
+	 * renewal names its shards one by one instead of counting on all of them, because a shard this coordinator
+	 * is giving back at that moment is not a lost lease.
+	 */
 	private async renew(): Promise<void> {
 		if (this.closed || this.leaseLost || !this.owned.size) return;
-		const ops: MetaOp[] = [...this.owned].map(([shard, generation]) => ['renew', shard, this.token(generation)]);
+		const leases = [...this.owned];
+		const ops: MetaOp[] = leases.map(([shard, generation]) => ['renew', shard, this.token(generation)]);
+		let results: string[];
 		try {
-			await this.call(META_SCRIPT, { ops, ttl: this.ttl });
-			this.lastRenewal = performance.now();
+			results = await this.call<string[]>(META_SCRIPT, { ops, ttl: this.ttl, held: [] });
 		} catch (cause) {
 			if (cause instanceof LeaseLost || performance.now() - this.lastRenewal < this.ttl) return;
 			this.lost('The shard leases could not be renewed before they expired.', cause);
+			return;
 		}
+		// A release or a new READY that was on its way decides what this coordinator still owns.
+		await this.applying?.catch(() => undefined);
+		for (const [index, [shard, generation]] of leases.entries()) {
+			if (results[index] === 'ok' || this.owned.get(shard) !== generation) continue;
+			this.lost('A shard lease this coordinator held is owned by another coordinator or expired.');
+			return;
+		}
+		this.lastRenewal = performance.now();
 	}
 
 	private lost(message: string, cause?: unknown): void {
@@ -857,7 +900,12 @@ class RedisBinding implements CoordinatorBinding {
 		return Math.max(1, Math.floor(this.ttl / 3));
 	}
 
-	private encode([key, value, relationship]: AdapterEntry, patch: boolean): unknown[] {
+	/**
+	 * An entry as the write script takes it, or nothing for a guild whose shard this process was given a session
+	 * for but does not hold. That only happens once it stopped waiting for the lease, and then its write is
+	 * older than whatever the shard's owner cached since.
+	 */
+	private encode([key, value, relationship]: AdapterEntry, patch: boolean): unknown[] | undefined {
 		const fields = Object.entries(toDb(value)).flat();
 		const logicalFields = Array.isArray(value) ? [] : Object.keys(value);
 		const op = !patch || Array.isArray(value) ? 'replace' : 'auto';
@@ -867,7 +915,8 @@ class RedisBinding implements CoordinatorBinding {
 		const guildId = this.layout.target(key, relationship)?.guildId;
 		if (guildId === undefined) return [...head, 'g', ''];
 		const owner = this.state.ownership(guildId);
-		if (!owner || !this.owned.has(owner.shardId)) return [...head, 'f', guildId];
+		if (!owner) return [...head, 'f', guildId];
+		if (!this.owned.has(owner.shardId)) return;
 		return [...head, 'o', guildId, this.token(owner.generation), owner.sequence];
 	}
 
