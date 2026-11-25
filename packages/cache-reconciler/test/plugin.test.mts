@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { dirname, relative, resolve } from 'node:path';
 import { createMockBot } from '@slipher/testing';
 import {
 	BaseResource,
@@ -15,6 +17,8 @@ import { ReconciledAdapter } from '../src/adapter';
 import { PacketCorrelation } from '../src/correlation';
 import { innerCloner, outerCloner, packetEntry, realClient, startBot, workerClient } from './clients';
 import { AsyncAdapter, BOT_ID, deferred, guildPacket, readyPacket } from './support';
+
+const SOURCE = resolve(__dirname, '../src');
 
 class ProbeResource extends BaseResource {
 	namespace = 'reconciler_probe';
@@ -368,5 +372,69 @@ describe('installation', () => {
 		]);
 		expect(Object.keys(manager)).toEqual([]);
 		await bot.close();
+	});
+});
+
+/** Every source file reachable from `entry` through relative imports, and every package any of them names. */
+function importGraph(entry: string): { files: string[]; packages: string[] } {
+	const files = new Set<string>();
+	const packages = new Set<string>();
+	const visit = (file: string) => {
+		if (files.has(file)) return;
+		files.add(file);
+		// Every way a module names another one: `from`, a bare or dynamic `import`, and `require`. Type-only imports
+		// count too, because a consumer's compiler has to resolve them.
+		for (const [, specifier] of readFileSync(file, 'utf8').matchAll(
+			/(?:\bfrom\s+|\bimport\s*\(?\s*|\brequire\s*\(\s*)'([^']+)'/g,
+		)) {
+			if (specifier!.startsWith('.')) visit(resolve(dirname(file), `${specifier}.ts`));
+			else packages.add(specifier!);
+		}
+	};
+	visit(entry);
+	return { files: [...files].map(file => relative(SOURCE, file)).sort(), packages: [...packages].sort() };
+}
+
+describe('package entry points', () => {
+	it('keeps Redis out of the package root', () => {
+		const root = importGraph(resolve(SOURCE, 'index.ts'));
+		const redis = importGraph(resolve(SOURCE, 'coordinators/redis.ts'));
+
+		expect(root.files).toContain('coordinators/memory.ts');
+		expect(root.files).not.toContain('coordinators/redis.ts');
+		expect(root.packages).toEqual(['node:async_hooks', 'seyfert']);
+		// The same walk does find Redis where it belongs.
+		expect(redis.packages).toEqual(expect.arrayContaining(['@redis/client', '@slipher/redis-adapter']));
+	});
+
+	it('publishes the Redis coordinator on its own subpath, with optional peers pinned to what it was tested with', () => {
+		const manifest = JSON.parse(readFileSync(resolve(SOURCE, '../package.json'), 'utf8'));
+		// The adapter the Redis suite runs against is the workspace's own.
+		const tested = JSON.parse(readFileSync(resolve(SOURCE, '../../redis-adapter/package.json'), 'utf8'));
+		const entry = (file: string) => ({
+			types: `./lib/${file}.d.ts`,
+			import: `./lib/${file}.js`,
+			require: `./lib/${file}.js`,
+			default: `./lib/${file}.js`,
+		});
+
+		expect(manifest.exports).toEqual({
+			'.': entry('index'),
+			'./coordinators/redis': entry('coordinators/redis'),
+			'./package.json': './package.json',
+		});
+		// The coordinator's scripts follow this adapter's storage layout. A new adapter version has to pass the
+		// Redis suite before the pin moves to it.
+		expect(manifest.peerDependencies['@slipher/redis-adapter']).toBe(tested.version);
+		expect(Object.keys(manifest.peerDependencies).sort()).toEqual([
+			'@redis/client',
+			'@slipher/redis-adapter',
+			'seyfert',
+		]);
+		expect(manifest.peerDependenciesMeta).toEqual({
+			'@redis/client': { optional: true },
+			'@slipher/redis-adapter': { optional: true },
+		});
+		expect(manifest.dependencies).toBeUndefined();
 	});
 });
