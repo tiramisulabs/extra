@@ -523,6 +523,29 @@ describe('guilds the shard is no longer in', () => {
 		await bot.close();
 	});
 
+	it('removes a stale guild when the startup commits with its last guild, after GUILDS_READY', async () => {
+		const left = guildOn(4);
+		const adapter = new AsyncAdapter();
+		leftover(adapter.memory, `guild.${left}`, 'guild');
+		leftover(adapter.memory, 'role.r-left', `role.${left}`);
+		const { bot, dispatch, manager } = await startReconciled(adapter);
+		await dispatch(readyPacket({ guilds: [G] }));
+		// The sweep of the only READY guild is still reading the store when GUILDS_READY arrives.
+		const reading = deferred();
+		adapter.gate('getToRelationship', reading.promise);
+		await dispatch(guildPacket('RAW_GUILD_CREATE', 2, snapshot(G)));
+		await dispatch(guildsReadyPacket(2));
+		expect(manager.status().shards[0]).toMatchObject({ startup: 'awaiting-guilds', settledGuilds: 0 });
+		expect(adapter.memory.get(`guild.${left}`)).not.toBeNull();
+
+		reading.resolve();
+		await manager.waitForIdle();
+
+		expect(manager.status().shards[0]).toMatchObject({ startup: 'committed', settledGuilds: 1 });
+		expect(stored(adapter.memory)).toEqual([`guild.${G}`, `user.${BOT_ID}`]);
+		await bot.close();
+	});
+
 	it('leaves a guild alone when the bot joined it again before its delete was cleaned up', async () => {
 		const held = deferred();
 		// Seyfert runs cache-resource callbacks in registration order, so this one delays the reconciler's.

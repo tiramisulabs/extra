@@ -97,6 +97,24 @@ describe('lifecycle', () => {
 		expect(state.ready(0, 'session-2', 1, [], 1)).toEqual([]);
 	});
 
+	it('tells its listener once that it stopped admitting work, whether it failed or began to close', () => {
+		const closing = new ReconciliationState();
+		const failing = new ReconciliationState();
+		const stops: string[] = [];
+		closing.onStop(() => stops.push('closing'));
+		failing.onStop(() => stops.push('failing'));
+		closing.activate();
+		failing.activate();
+		expect(stops).toEqual([]);
+
+		closing.beginClose();
+		closing.close();
+		failing.fail(new Error('lease lost'));
+		failing.beginClose();
+
+		expect(stops).toEqual(['closing', 'failing']);
+	});
+
 	it('cannot be revived once closed', () => {
 		const state = activeState();
 		state.ready(0, 'session-1', 1, [], 1);

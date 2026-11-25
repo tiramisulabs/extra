@@ -755,6 +755,47 @@ describe('own failures', () => {
 		await client.close();
 	});
 
+	it('does not report a settled adapter failure again while another packet of the same event is caching', async () => {
+		const adapter = new AsyncAdapter();
+		const listeners = createPlugin({
+			name: 'listeners',
+			register(api) {
+				api.events.on('GUILD_DELETE', () => undefined);
+			},
+		});
+		const client = realClient(adapter, cacheReconciler({ coordinator: memoryCoordinator() }), listeners);
+		await client.start({}, false);
+		const dispatch = packetEntry(client, 'shard-first');
+		const manager = managerOf(client);
+		const first = guildOn(4);
+		const second = guildOn(6);
+		await dispatch(readyPacket({ guilds: [] }));
+		await dispatch(guildPacket('GUILD_CREATE', 2, guild(first)));
+		await dispatch(guildPacket('GUILD_CREATE', 3, guild(second)));
+
+		// The first removal is held open in the adapter; the second one fails there.
+		const removal = deferred();
+		adapter.gate('bulkRemove', removal.promise);
+		const caching = dispatch(guildDeletePacket('GUILD_DELETE', 4, { id: first }));
+		await vi.waitFor(() => expect(adapter.calls).toContain('bulkRemove'));
+		const failure = new Error('bulkRemove failed');
+		adapter.failNext('bulkRemove', failure);
+		await dispatch(guildDeletePacket('GUILD_DELETE', 5, { id: second }));
+
+		// Seyfert reports the failure for the event, whose other packet is fine and simply not done yet.
+		expect(manager.status()).toMatchObject({ pending: { guilds: 1 } });
+		expect(manager.status().failures).toMatchObject([
+			{ kind: 'removal', cause: failure },
+			{ kind: 'guild', guildId: second, cause: failure },
+		]);
+
+		removal.resolve();
+		await caching;
+		await vi.waitFor(() => expect(manager.status()).toMatchObject({ pending: { guilds: 0, tasks: 0 } }));
+		expect(manager.status().failureCount).toBe(2);
+		await client.close();
+	});
+
 	it('reports a replaced adapter as soon as a packet is observed', async () => {
 		const { bot, client, dispatch } = await startReconciled(new MemoryAdapter());
 		client.cache.adapter = new MemoryAdapter();
