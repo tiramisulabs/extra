@@ -76,6 +76,30 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
+  packages/cache-reconciler:
+    dependenciesMeta:
+      '@slipher/testing':
+        injected: true
+    devDependencies:
+      '@redis/client':
+        specifier: ^6.0.1
+        version: 6.1.0(@opentelemetry/api@1.9.1)
+      '@slipher/redis-adapter':
+        specifier: workspace:*
+        version: link:../redis-adapter
+      '@slipher/testing':
+        specifier: workspace:*
+        version: link:../testing
+      '@types/node':
+        specifier: ^26.0.1
+        version: 26.1.1
+      seyfert:
+        specifier: 6.0.0
+        version: 6.0.0
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
   packages/chartjs:
     dependencies:
       '@napi-rs/canvas':
@@ -2166,6 +2190,7 @@ packages:
   typescript@6.0.3:
     resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
     engines: {node: '>=14.17'}
+    hasBin: true
 
   uWebSockets.js@https://codeload.github.com/uNetworking/uWebSockets.js/tar.gz/6609a88ffa9a16ac5158046761356ce03250a0df:
     resolution: {gitHosted: true, integrity: sha512-eUPBlSskGAN5hYzFjuf+b0LFohKxIRe8EdMmkaNrZ6r8JtEnU05CKXZknoInYJaNfMLUfjgDA7bwsynah5pX9g==, tarball: https://codeload.github.com/uNetworking/uWebSockets.js/tar.gz/6609a88ffa9a16ac5158046761356ce03250a0df}
