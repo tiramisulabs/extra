@@ -1,8 +1,9 @@
 import { createMockBot } from '@slipher/testing';
 import { type Adapter, CacheFrom, Client, createPlugin, definePlugins, MemoryAdapter, PluginOrder } from 'seyfert';
 import { describe, expect, it, vi } from 'vitest';
-import { type CacheReconcilerCoordinator, cacheReconciler, memoryCoordinator } from '../src';
+import { cacheReconciler, memoryCoordinator } from '../src';
 import { ReconciledAdapter } from '../src/adapter';
+import type { BoundCoordinator } from '../src/coordinator';
 import {
 	innerCloner,
 	managerOf,
@@ -481,10 +482,11 @@ describe('packets Seyfert never caches', () => {
 	it('settles a removed guild when the coordinator names a guild the failed keys do not', async () => {
 		const failure = new Error('removal failed');
 		// Stands in for a coordinator that learns the guild from the relationship it was asked to remove.
-		const coordinator: CacheReconcilerCoordinator = {
+		const memory = memoryCoordinator() as BoundCoordinator;
+		const coordinator: BoundCoordinator = {
 			kind: 'memory',
 			bind(host) {
-				const binding = memoryCoordinator().bind(host);
+				const binding = memory.bind(host);
 				binding.remove = () => {
 					host.mutationFailed?.([], failure, [undefined, G]);
 					throw failure;

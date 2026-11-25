@@ -1,12 +1,17 @@
 import { randomUUID } from 'node:crypto';
-import { createClient, type RedisClientType } from '@redis/client';
+import { createClient, ErrorReply, type RedisClientType } from '@redis/client';
 import { ExpirableRedisAdapter, RedisAdapter } from '@slipher/redis-adapter';
 import { createMockBot } from '@slipher/testing';
 import { type Adapter, type AdapterEntry, Cache, Client, definePlugins, MemoryAdapter } from 'seyfert';
 import { describe, expect, it, vi } from 'vitest';
 import { cacheReconciler } from '../src';
 import { ReconciledAdapter, runUnfiltered } from '../src/adapter';
-import { type CoordinatorBinding, type CoordinatorHost, ReconciliationCancelled } from '../src/coordinator';
+import {
+	type BoundCoordinator,
+	type CoordinatorBinding,
+	type CoordinatorHost,
+	ReconciliationCancelled,
+} from '../src/coordinator';
 import { redisCoordinator } from '../src/coordinators/redis';
 import { KeyLayout } from '../src/keys';
 import { ReconciliationState } from '../src/state';
@@ -78,18 +83,25 @@ interface WorkerOptions {
 	mutationFailed?: NonNullable<CoordinatorHost['mutationFailed']>;
 }
 
+/** The coordinator as the plugin itself sees it, which is how a test attaches one without a client. */
+function bound(coordinator: ReturnType<typeof redisCoordinator>): BoundCoordinator {
+	return coordinator as BoundCoordinator;
+}
+
 /** One process sharing the cache: its own RedisAdapter connection, state, and coordinator incarnation. */
 function createWorker(options: WorkerOptions): Worker {
 	const namespace = options.namespace!;
 	const inner = new RedisAdapter({ redisOptions: { url: redisUrl }, namespace });
 	const state = new ReconciliationState();
 	const layout = new KeyLayout(() => APPLICATION_ID);
-	const binding = redisCoordinator({
-		client: inner.client,
-		cacheNamespace: namespace,
-		namespace: `${namespace}:reconciler`,
-		leaseTtl: options.leaseTtl ?? LEASE_TTL,
-	}).bind({ inner, state, layout, ...(options.mutationFailed && { mutationFailed: options.mutationFailed }) });
+	const binding = bound(
+		redisCoordinator({
+			client: inner.client,
+			cacheNamespace: namespace,
+			namespace: `${namespace}:reconciler`,
+			leaseTtl: options.leaseTtl ?? LEASE_TTL,
+		}),
+	).bind({ inner, state, layout, ...(options.mutationFailed && { mutationFailed: options.mutationFailed }) });
 	const adapter = new ReconciledAdapter(inner, { state, layout, binding });
 	return { inner, adapter, state, binding, layout };
 }
@@ -164,7 +176,7 @@ describe('redisCoordinator configuration', () => {
 		const adapter = new RedisAdapter({ redisOptions: {}, namespace: 'cache' });
 		const other = new RedisAdapter({ redisOptions: {}, namespace: 'cache' });
 		const bind = (inner: Adapter, coordinator = redisCoordinator(options(adapter))) =>
-			coordinator.bind({ inner, state: new ReconciliationState(), layout: new KeyLayout(() => undefined) });
+			bound(coordinator).bind({ inner, state: new ReconciliationState(), layout: new KeyLayout(() => undefined) });
 
 		expect(() => bind(new Subclass({ redisOptions: {}, namespace: 'cache' }))).toThrow('exact RedisAdapter');
 		expect(() => bind(new MemoryAdapter())).toThrow('exact RedisAdapter');
@@ -614,13 +626,22 @@ describe.skipIf(!redisUrl)('redisCoordinator against Redis', () => {
 			expect(owner.state.lifecycle).toBe('active');
 		}));
 
-	it('refuses an adapter that does not store entries the way its scripts expect', () =>
-		withRedis(async ({ namespace }) => {
+	it.each<[string, (inner: RedisAdapter) => RedisAdapter['set']]>([
+		['files entries somewhere else', () => async () => undefined],
+		[
+			'encodes typed fields differently',
+			inner => (key, value, relationship) =>
+				RedisAdapter.prototype.set.call(inner, key, { ...value, flag: 'true' }, relationship),
+		],
+	])('refuses an adapter that %s than its scripts expect', (_name, differently) =>
+		withRedis(async ({ namespace, raw }) => {
 			const worker = createWorker({ namespace });
-			// Stands in for a release of the adapter that files entries differently.
-			Reflect.set(worker.inner, 'set', async () => undefined);
+			// Stands in for a release of the adapter with another storage layout.
+			Reflect.set(worker.inner, 'set', differently(worker.inner));
 			try {
 				await expect(worker.adapter.start()).rejects.toThrow('does not recognize the storage layout');
+				// The probe entry does not outlive the check.
+				expect(await raw.keys(`${namespace}:cache_reconciler_probe*`)).toEqual([]);
 			} finally {
 				if (worker.inner.client.isOpen) worker.inner.client.close();
 			}
@@ -955,6 +976,194 @@ describe.skipIf(!redisUrl)('redisCoordinator against Redis', () => {
 			expect(await former.inner.get('role.later')).toBeUndefined();
 		}));
 
+	it('applies a removal Redis never answered before anything else the process does', () =>
+		withRedis(async ({ worker }) => {
+			const owner = await worker();
+			const reader = await worker();
+			await own(owner, [G]);
+			await owner.adapter.bulkSet([role('1'), role('2'), role('3')]);
+			// The connection drops while each of these removals is on its way.
+			const restore = onScript(owner.inner.client, input => {
+				if ('mode' in input) throw new Error('Socket closed unexpectedly');
+			});
+			await expect(owner.adapter.remove('role.1')).rejects.toThrow('Socket closed unexpectedly');
+			await expect(owner.adapter.removeToRelationship(ROLES, '2')).rejects.toThrow('Socket closed unexpectedly');
+			restore();
+			expect(await owner.inner.get('role.1')).toMatchObject({ id: '1' });
+
+			// Discord said both roles are gone, and that did not stop being true. The role created again after
+			// its removal must be the one that stays.
+			await owner.adapter.set(...role('1', G, { name: 'created again' }));
+
+			for (const { adapter } of [owner, reader]) {
+				expect(await adapter.get('role.1')).toEqual({ id: '1', guild_id: G, name: 'created again' });
+				expect((await adapter.keys(ROLES)).sort()).toEqual(['role.1', 'role.3']);
+			}
+			expect(await owner.inner.get('role.2')).toBeUndefined();
+			expect(owner.state.snapshot().failures.map(failure => failure.kind)).toEqual(['removal', 'removal']);
+		}));
+
+	it('keeps failing while Redis still does not answer a removal, and recovers by itself', () =>
+		withRedis(async ({ worker }) => {
+			const owner = await worker();
+			await own(owner, [G]);
+			await owner.adapter.set(...role('1'));
+			const restore = onScript(owner.inner.client, input => {
+				if ('mode' in input) throw new Error('Socket closed unexpectedly');
+			});
+			await expect(owner.adapter.remove('role.1')).rejects.toThrow('Socket closed unexpectedly');
+
+			// Serving anything now could mean serving what was just removed.
+			await expect(owner.adapter.get('role.1')).rejects.toThrow('Socket closed unexpectedly');
+			await expect(owner.adapter.set(...role('2'))).rejects.toThrow('Socket closed unexpectedly');
+			// Another plugin's resource does not depend on any of this.
+			await owner.adapter.set('cooldown.a', { uses: 1 }, ['cooldown', 'a']);
+			expect(await owner.adapter.get('cooldown.a')).toEqual({ uses: 1 });
+			await owner.adapter.remove('cooldown.a');
+			expect(await owner.inner.get('cooldown.a')).toBeUndefined();
+			restore();
+
+			expect(await owner.adapter.get('role.1')).toBeNull();
+			await owner.adapter.set(...role('2'));
+			expect(await owner.adapter.keys(ROLES)).toEqual(['role.2']);
+			expect(owner.state.lifecycle).toBe('active');
+		}));
+
+	it('does not try a removal again when Redis answered it with an error', () =>
+		withRedis(async ({ worker }) => {
+			const owner = await worker();
+			await own(owner, [G]);
+			await owner.adapter.set(...role('1'));
+			let scripts = 0;
+			const restore = onScript(owner.inner.client, input => {
+				if (!('mode' in input)) return;
+				scripts++;
+				throw new ErrorReply('ERR the script could not run');
+			});
+
+			await expect(owner.adapter.remove('role.1')).rejects.toThrow('ERR the script could not run');
+			expect(await owner.adapter.get('role.1')).toMatchObject({ id: '1' });
+			await owner.adapter.set(...role('2'));
+			restore();
+
+			expect(scripts).toBe(1);
+			expect(await owner.adapter.keys(ROLES)).toEqual(['role.1', 'role.2']);
+		}));
+
+	it('gives up a removal Redis rejects when it is tried again, without holding up what follows', () =>
+		withRedis(async ({ worker }) => {
+			const owner = await worker();
+			await own(owner, [G]);
+			await owner.adapter.bulkSet([role('1'), role('2')]);
+			let attempts = 0;
+			const restore = onScript(owner.inner.client, input => {
+				if (!('mode' in input)) return;
+				// The first attempt gets no answer; the second one gets an error for one.
+				if (++attempts === 1) throw new Error('Socket closed unexpectedly');
+				if (attempts === 2) throw new ErrorReply('ERR the script could not run');
+			});
+			await expect(owner.adapter.remove('role.1')).rejects.toThrow('Socket closed unexpectedly');
+
+			await owner.adapter.remove('role.2');
+			restore();
+
+			expect(attempts).toBe(3);
+			expect(await owner.adapter.keys(ROLES)).toEqual(['role.1']);
+			expect(owner.state.snapshot().failures).toMatchObject([
+				{ kind: 'removal', key: 'role.1' },
+				{ kind: 'removal', key: 'role.1', message: expect.stringContaining('rejected a removal') },
+			]);
+		}));
+
+	it('does not try the engine own cleanup again', () =>
+		withRedis(async ({ worker }) => {
+			const left = guildOn(4);
+			const owner = await worker();
+			await owner.inner.set(...role('r-left', left));
+			await own(owner, [G]);
+			owner.state.settle(owner.state.guildAvailable(0, G, 2, { startup: true, unavailable: false })!, 'reconciled');
+			owner.state.guildsReady(0);
+			const claim = owner.state.claimGuild(owner.state.ownership(G)!.generation, left)!;
+			let removals = 0;
+			const restore = onScript(owner.inner.client, input => {
+				if (!('mode' in input)) return;
+				removals++;
+				throw new Error('Socket closed unexpectedly');
+			});
+			await expect(
+				runUnfiltered(owner.adapter, claim, () => owner.adapter.bulkRemove(['role.r-left'])),
+			).rejects.toThrow('Socket closed unexpectedly');
+			restore();
+
+			// What it could not remove is unreadable already, and a later reconciliation claims it again.
+			await owner.adapter.set(...role('1'));
+			expect(removals).toBe(1);
+			expect(await owner.inner.get('role.r-left')).toMatchObject({ id: 'r-left' });
+		}));
+
+	it('bounds how many unanswered removals it keeps', () =>
+		withRedis(async ({ worker }) => {
+			const owner = await worker();
+			await own(owner, [G]);
+			const total = 1030;
+			await owner.adapter.bulkSet(Array.from({ length: total }, (_, index) => role(`r${index}`)));
+			const restore = onScript(owner.inner.client, input => {
+				if ('mode' in input) throw new Error('Socket closed unexpectedly');
+			});
+			for (let index = 0; index < total; index++) {
+				await expect(owner.adapter.remove(`role.r${index}`)).rejects.toThrow('Socket closed unexpectedly');
+			}
+			restore();
+
+			// The six oldest were given up and reported; everything kept is applied with the next operation.
+			const kept = (await owner.adapter.keys(ROLES)).sort();
+			expect(kept).toEqual(['role.r0', 'role.r1', 'role.r2', 'role.r3', 'role.r4', 'role.r5']);
+			const givenUp = owner.state.snapshot().failures.filter(failure => failure.message.startsWith('Too many'));
+			expect(givenUp.map(failure => failure.key)).toEqual(kept);
+		}));
+
+	it('reports a failed removal of another plugin resource and still removes what it reconciles', () =>
+		withRedis(async ({ worker }) => {
+			const owner = await worker();
+			await own(owner, [G]);
+			await owner.adapter.bulkSet([role('1'), ['cooldown.a', { uses: 1 }, ['cooldown', 'a']]]);
+			const failure = new Error('the adapter could not remove it');
+			Reflect.set(owner.inner, 'bulkRemove', () => Promise.reject(failure));
+
+			await expect(owner.adapter.bulkRemove(['cooldown.a', 'role.1'])).rejects.toBe(failure);
+
+			expect(await owner.inner.get('role.1')).toBeUndefined();
+			expect(await owner.inner.get('cooldown.a')).toEqual({ uses: 1 });
+			expect(owner.state.snapshot().failures).toMatchObject([{ kind: 'removal', cause: failure }]);
+			// Nothing of it is left to try again.
+			await owner.adapter.set(...role('2'));
+			expect(await owner.adapter.keys(ROLES)).toEqual(['role.2']);
+		}));
+
+	it('does not involve Redis coordination in a removal of resources it does not reconcile', () =>
+		withRedis(async ({ worker }) => {
+			const owner = await worker();
+			await own(owner, [G]);
+			await owner.adapter.bulkSet([
+				['cooldown.a', { uses: 1 }, ['cooldown', 'a']],
+				['cooldown.b', { uses: 1 }, ['cooldown', 'b']],
+				['cooldown.c', { uses: 1 }, ['cooldown', 'c']],
+			]);
+			let scripts = 0;
+			const restore = onScript(owner.inner.client, () => {
+				scripts++;
+			});
+
+			await owner.adapter.remove('cooldown.a');
+			await owner.adapter.removeToRelationship('cooldown', 'b');
+			await owner.adapter.removeRelationship('cooldown');
+			restore();
+
+			expect(scripts).toBe(0);
+			expect(await owner.inner.getToRelationship('cooldown')).toEqual([]);
+			expect(await owner.inner.get('cooldown.c')).toBeUndefined();
+		}));
+
 	it('names the guilds of a mutation that failed', () =>
 		withRedis(async ({ worker }) => {
 			const reported: { keys: readonly string[]; guildIds: readonly (string | undefined)[] | undefined }[] = [];
@@ -1033,9 +1242,12 @@ describe.skipIf(!redisUrl)('redisCoordinator against Redis', () => {
 				const status = client.cacheReconciler.status();
 				expect(status).toMatchObject({ lifecycle: 'active', idle: true, pending: { guilds: 0 } });
 				expect(status.failures).toContainEqual(expect.objectContaining({ kind: 'guild', guildId: G, cause: failure }));
-				// The guild is still stored, and no process is served it anymore.
-				expect(await raw.exists(`${namespace}:role.r-1`)).toBe(1);
-				expect(await reader.adapter.get('role.r-1')).toBeNull();
+				// What Seyfert asked to remove went through once Redis answered again. The guild record it never
+				// got to is still stored, and no process is served it anymore.
+				expect(await raw.exists(`${namespace}:role.r-1`)).toBe(0);
+				expect(await raw.exists(`${namespace}:guild.${G}`)).toBe(1);
+				expect(await reader.adapter.get(`guild.${G}`)).toBeNull();
+				expect(await client.cache.guilds!.raw(G)).toBeUndefined();
 				expect(await client.cache.roles!.keys(G)).toEqual([]);
 			} finally {
 				await bot.close();

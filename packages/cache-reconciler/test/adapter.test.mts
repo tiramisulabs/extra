@@ -1,7 +1,7 @@
 import { type Adapter, type AdapterEntry, Cache, MemoryAdapter } from 'seyfert';
 import { describe, expect, it } from 'vitest';
 import { ReconciledAdapter, runUnfiltered } from '../src/adapter';
-import { ReconciliationCancelled } from '../src/coordinator';
+import { type BoundCoordinator, ReconciliationCancelled } from '../src/coordinator';
 import { memoryCoordinator } from '../src/coordinators/memory';
 import { KeyLayout } from '../src/keys';
 import { ReconciliationState, type SnapshotCut } from '../src/state';
@@ -23,7 +23,7 @@ type AdapterMethod = Exclude<keyof Adapter, 'isAsync'>;
 function harness(inner: Adapter) {
 	const state = new ReconciliationState();
 	const layout = new KeyLayout(() => APPLICATION_ID);
-	const binding = memoryCoordinator().bind({ inner, state, layout });
+	const binding = (memoryCoordinator() as BoundCoordinator).bind({ inner, state, layout });
 	const adapter = new ReconciledAdapter(inner, { state, layout, binding });
 	const store = inner instanceof AsyncAdapter ? inner.memory : (inner as MemoryAdapter<unknown>);
 	return { adapter, inner, store, state, layout, binding };

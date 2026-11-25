@@ -1,5 +1,6 @@
 import type { Adapter, AdapterEntry, AdapterIncrementOptions } from 'seyfert';
 import {
+	type BoundCoordinator,
 	type CacheReconcilerCoordinator,
 	type CoordinatorBinding,
 	type CoordinatorHost,
@@ -23,10 +24,11 @@ const SWEEP_CHUNK = 100;
  * the store in the order the adapter was asked for them.
  */
 export function memoryCoordinator(): CacheReconcilerCoordinator {
-	return {
+	const coordinator: BoundCoordinator = {
 		kind: 'memory',
 		bind: host => new MemoryBinding(host),
 	};
+	return coordinator;
 }
 
 class MemoryBinding implements CoordinatorBinding {

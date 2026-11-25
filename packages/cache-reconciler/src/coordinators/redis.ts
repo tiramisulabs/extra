@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { RedisClientType } from '@redis/client';
+import { ErrorReply, type RedisClientType } from '@redis/client';
 import { ExpirableRedisAdapter, RedisAdapter, toDb } from '@slipher/redis-adapter';
 import type { AdapterEntry, AdapterIncrementOptions } from 'seyfert';
 import {
+	type BoundCoordinator,
 	type CacheReconcilerCoordinator,
 	type CoordinatorBinding,
 	type CoordinatorHost,
@@ -32,6 +33,8 @@ const PLUGIN_NAME = '@slipher/cache-reconciler';
 const DEFAULT_LEASE_TTL = 30_000;
 /** Entries per script call, the batch size RedisAdapter itself uses. */
 const BATCH = 100;
+/** Removals kept while Redis does not answer. Beyond it the oldest is given up. */
+const MAX_UNCONFIRMED = 1024;
 
 /**
  * Shared by every script. All keys derive from the two prefixes, which is the layout contract with
@@ -353,6 +356,25 @@ type Fence = { mode: 'plain' } | { mode: 'claim'; shard: number; gen: string; gu
 /** Raised inside the binding once a script found one of this incarnation's leases gone. */
 class LeaseLost extends Error {}
 
+/** One removal as the adapter was asked for it. */
+interface Removal {
+	/** Keys the failure is reported with. A guild record among them closes its guild. */
+	readonly keys: string[];
+	/** Relationships addressed, which name the guild where the keys do not. */
+	readonly relationships: string[];
+	readonly claim: GuildClaim | undefined;
+	/** The part that belongs to other plugins' resources, which goes to the adapter as it came. */
+	readonly passthrough: (() => Promise<unknown>) | undefined;
+	/** The reconciled part, as coordinator scripts. Absent when nothing reconciled is addressed. */
+	readonly scripted: ((fence: Fence) => Promise<string>) | undefined;
+}
+
+/** A caller's removal Redis never answered. */
+interface UnconfirmedRemoval {
+	readonly key: string | undefined;
+	run(): Promise<unknown>;
+}
+
 /** Changes of a shard whose lease another incarnation still holds, waiting for it to be given up. */
 interface ParkedShard {
 	readonly changes: PartitionChange[];
@@ -384,10 +406,11 @@ export function redisCoordinator(options: RedisCoordinatorOptions): CacheReconci
 	if (!Number.isInteger(ttl) || ttl <= 0) {
 		throw new TypeError(`${PLUGIN_NAME} redisCoordinator leaseTtl must be a positive integer.`);
 	}
-	return {
+	const coordinator: BoundCoordinator = {
 		kind: 'redis',
 		bind: host => new RedisBinding(host, { ...options, leaseTtl: ttl }),
 	};
+	return coordinator;
 }
 
 class RedisBinding implements CoordinatorBinding {
@@ -406,6 +429,8 @@ class RedisBinding implements CoordinatorBinding {
 	/** Shards whose contended lease was already reported, so a long wait is recorded once. */
 	private readonly contended = new Set<number>();
 	private queue: PartitionChange[] = [];
+	/** Removals of this process that Redis never answered, oldest first. */
+	private unconfirmed: UnconfirmedRemoval[] = [];
 	private applying: Promise<void> | undefined;
 	private renewal: NodeJS.Timeout | undefined;
 	private lastRenewal = 0;
@@ -537,38 +562,54 @@ class RedisBinding implements CoordinatorBinding {
 	remove(_method: 'remove' | 'bulkRemove', keys: string[], claim?: GuildClaim): Promise<void> {
 		const managed = keys.filter(key => this.layout.manages(key));
 		const unmanaged = keys.filter(key => !this.layout.manages(key));
-		return this.removing(keys, [], claim, async fence => {
-			if (unmanaged.length) await this.inner.bulkRemove(unmanaged);
-			for (let offset = 0; offset < managed.length; offset += BATCH) {
-				const status = await this.status(REMOVE_SCRIPT, { ...fence, keys: managed.slice(offset, offset + BATCH) });
-				if (status !== 'ok') return status;
-			}
-			return 'ok';
+		return this.removing({
+			keys,
+			relationships: [],
+			claim,
+			passthrough: unmanaged.length ? () => this.inner.bulkRemove(unmanaged) : undefined,
+			scripted: managed.length
+				? async fence => {
+						for (let offset = 0; offset < managed.length; offset += BATCH) {
+							const batch = managed.slice(offset, offset + BATCH);
+							const status = await this.status(REMOVE_SCRIPT, { ...fence, keys: batch });
+							if (status !== 'ok') return status;
+						}
+						return 'ok';
+					}
+				: undefined,
 		});
 	}
 
 	removeMembers(to: string, ids: string[], claim?: GuildClaim): Promise<void> {
 		// A member of the guild relationship is a guild record, whose removal closes the guild.
 		const records = ids.map(id => `${to}.${id}`).filter(key => this.layout.guildRecord(key) !== undefined);
-		return this.removing(records, [to], claim, async fence => {
-			if (!this.layout.manages(to)) {
-				await this.inner.removeToRelationship(to, ids);
-				return 'ok';
-			}
-			return this.status(MEMBERS_SCRIPT, { ...fence, action: 'remove', to, ids });
+		const managed = this.layout.manages(to);
+		return this.removing({
+			keys: records,
+			relationships: [to],
+			claim,
+			passthrough: managed ? undefined : () => this.inner.removeToRelationship(to, ids),
+			scripted: managed ? fence => this.status(MEMBERS_SCRIPT, { ...fence, action: 'remove', to, ids }) : undefined,
 		});
 	}
 
 	removeRelationships(relationships: string[], claim?: GuildClaim): Promise<void> {
-		return this.removing([], relationships, claim, async fence => {
-			const unmanaged = relationships.filter(to => !this.layout.manages(to));
-			if (unmanaged.length) await this.inner.removeRelationship(unmanaged);
-			const managed = relationships.filter(to => this.layout.manages(to));
-			for (const to of await this.expand(managed)) {
-				const status = await this.status(MEMBERS_SCRIPT, { ...fence, action: 'drop', to });
-				if (status !== 'ok') return status;
-			}
-			return 'ok';
+		const managed = relationships.filter(to => this.layout.manages(to));
+		const unmanaged = relationships.filter(to => !this.layout.manages(to));
+		return this.removing({
+			keys: [],
+			relationships,
+			claim,
+			passthrough: unmanaged.length ? () => this.inner.removeRelationship(unmanaged) : undefined,
+			scripted: managed.length
+				? async fence => {
+						for (const to of await this.expand(managed)) {
+							const status = await this.status(MEMBERS_SCRIPT, { ...fence, action: 'drop', to });
+							if (status !== 'ok') return status;
+						}
+						return 'ok';
+					}
+				: undefined,
 		});
 	}
 
@@ -633,7 +674,7 @@ class RedisBinding implements CoordinatorBinding {
 	 * on it. A shard whose lease is still held elsewhere is set aside so it does not hold up the others.
 	 */
 	private async sync(): Promise<void> {
-		while ((this.applying || this.queue.length) && !this.closed && !this.leaseLost) {
+		while ((this.applying || this.queue.length || this.unconfirmed.length) && !this.closed && !this.leaseLost) {
 			this.applying ??= this.applyChanges().finally(() => {
 				this.applying = undefined;
 			});
@@ -670,6 +711,45 @@ class RedisBinding implements CoordinatorBinding {
 				} else if (change.type === 'suspended') this.owned.delete(change.shardId);
 			}
 		}
+		await this.confirmRemovals();
+	}
+
+	/**
+	 * Runs the removals Redis never answered, oldest first and ahead of anything this process does next, so
+	 * nothing it reads or writes afterwards meets an entry that evidence already removed. While Redis still does
+	 * not answer, the operation behind it fails too.
+	 */
+	private async confirmRemovals(): Promise<void> {
+		while (this.unconfirmed.length && !this.leaseLost && !this.closed) {
+			const removal = this.unconfirmed[0]!;
+			try {
+				await removal.run();
+			} catch (cause) {
+				if (cause instanceof LeaseLost) return;
+				if (!(cause instanceof ErrorReply)) throw cause;
+				// An error reply is an answer. This removal will not go through, and must not hold up the rest.
+				this.state.recordFailure({
+					kind: 'removal',
+					message: 'Redis rejected a removal when it was tried again; its entries stay as they were.',
+					key: removal.key,
+					cause,
+				});
+			}
+			if (this.unconfirmed[0] === removal) this.unconfirmed.shift();
+		}
+	}
+
+	/** Keeps a removal Redis never answered, to run it again ahead of this process's next operation. */
+	private unconfirm(key: string | undefined, run: () => Promise<unknown>): void {
+		this.unconfirmed.push({ key, run });
+		if (this.unconfirmed.length <= MAX_UNCONFIRMED) return;
+		const dropped = this.unconfirmed.shift();
+		this.state.recordFailure({
+			kind: 'removal',
+			message:
+				'Too many removals are waiting for Redis. The oldest was given up; its entries stay as they were until the next READY of their shard.',
+			key: dropped?.key,
+		});
 	}
 
 	/**
@@ -769,6 +849,7 @@ class RedisBinding implements CoordinatorBinding {
 		this.unpark();
 		this.owned.clear();
 		this.queue = [];
+		this.unconfirmed = [];
 		this.state.fail(new Error(`${PLUGIN_NAME}: ${message} This coordinator stopped serving the cache.`, { cause }));
 	}
 
@@ -791,12 +872,7 @@ class RedisBinding implements CoordinatorBinding {
 	}
 
 	/** Runs a removal, fenced by the guild claim when the reconciliation engine issued it. */
-	private async removing(
-		keys: string[],
-		relationships: string[],
-		claim: GuildClaim | undefined,
-		run: (fence: Fence) => Promise<string>,
-	): Promise<void> {
+	private async removing({ keys, relationships, claim, passthrough, scripted }: Removal): Promise<void> {
 		let fence: Fence = { mode: 'plain' };
 		let shard: number | undefined;
 		if (claim) {
@@ -809,15 +885,31 @@ class RedisBinding implements CoordinatorBinding {
 			const guildId = this.layout.guildRecord(key);
 			if (guildId !== undefined) this.state.closeGuild(guildId);
 		}
-		let status: string;
+		let failure: { cause: unknown } | undefined;
 		try {
-			await this.published([shard]);
-			status = await run(fence);
+			await passthrough?.();
 		} catch (cause) {
-			if (cause instanceof LeaseLost) {
-				if (claim) throw new ReconciliationCancelled();
-				return;
+			failure = { cause };
+		}
+		let status = 'ok';
+		if (scripted) {
+			try {
+				await this.published([shard]);
+				status = await scripted(fence);
+			} catch (cause) {
+				if (cause instanceof LeaseLost) {
+					if (claim) throw new ReconciliationCancelled();
+				} else {
+					// Redis never answered, so the removal may not have happened, and what it was evidence of still
+					// holds. An error reply is an answer and is not tried again; neither is the engine's own cleanup,
+					// whose entries are unreadable already.
+					if (!claim && !(cause instanceof ErrorReply)) this.unconfirm(keys[0], () => scripted(fence));
+					failure ??= { cause };
+				}
 			}
+		}
+		if (failure) {
+			const { cause } = failure;
 			this.state.recordFailure({ kind: 'removal', message: 'A removal failed in Redis.', key: keys[0], cause });
 			this.host.mutationFailed?.(
 				keys,
@@ -849,20 +941,22 @@ class RedisBinding implements CoordinatorBinding {
 
 	/**
 	 * Confirms the adapter still stores an entry the way the scripts expect, with an entry of a resource the
-	 * reconciler does not manage. A different layout means an untested adapter version.
+	 * reconciler does not manage: where the value, its relationship membership, and its owner go, and how the
+	 * fields the scripts remove by name are encoded. A different layout means an untested adapter version.
 	 */
 	private async assertLayout(): Promise<void> {
 		const id = randomUUID();
 		const to = 'cache_reconciler_probe';
 		const key = `${to}.${id}`;
-		await this.inner.set(key, { id }, [to, id]);
+		await this.inner.set(key, { id, flag: true, count: 1, extra: null }, [to, id]);
 		try {
-			const [value, member, owner] = await Promise.all([
-				this.client.hGet(`${this.cachePrefix}${key}`, 'id'),
+			const [fields, member, owner] = await Promise.all([
+				this.client.hmGet(`${this.cachePrefix}${key}`, ['id', 'B_flag', 'N_count', 'O_extra']),
 				this.client.hGet(`${this.cachePrefix}relationships:${to}`, id),
 				this.client.hGet(`${this.cachePrefix}relationships:owners`, key),
 			]);
-			if (value !== id || member !== key || owner !== `${to}.${id}`) {
+			const encoded = fields.every(field => typeof field === 'string') && fields[0] === id;
+			if (!encoded || member !== key || owner !== `${to}.${id}`) {
 				throw new TypeError(
 					`${PLUGIN_NAME} redisCoordinator does not recognize the storage layout of the installed @slipher/redis-adapter; use the version this package pins.`,
 				);

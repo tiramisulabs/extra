@@ -3,12 +3,25 @@ import type { KeyLayout } from './keys';
 import type { GuildClaim, KeyTarget, ReconciliationState, SnapshotCut } from './state';
 import type { Awaitable } from './sync';
 
-/** Coordination backend selected through `cacheReconciler({ coordinator })`. */
+/**
+ * Coordination backend selected through `cacheReconciler({ coordinator })`. Create one with
+ * `memoryCoordinator()` or `redisCoordinator()`.
+ */
 export interface CacheReconcilerCoordinator {
 	/** `memory` coordinates a single process; `redis` coordinates every worker sharing one Redis cache. */
 	readonly kind: 'memory' | 'redis';
-	/** @internal Binds the coordinator to one installation. Throws to refuse an adapter it cannot fence. */
-	bind(host: CoordinatorHost): CoordinatorBinding;
+	/** How the plugin attaches the coordinator to a client. Not meant to be called or implemented elsewhere. */
+	readonly bind: (host: never) => unknown;
+}
+
+/**
+ * A coordinator as the plugin uses it: `bind` attaches it to one installation, and throws to refuse an
+ * adapter it cannot fence.
+ *
+ * @internal
+ */
+export interface BoundCoordinator extends CacheReconcilerCoordinator {
+	readonly bind: (host: CoordinatorHost) => CoordinatorBinding;
 }
 
 /** @internal */
@@ -95,7 +108,8 @@ export class ReconciliationCancelled extends Error {
 	}
 }
 
-export function isCoordinator(value: unknown): value is CacheReconcilerCoordinator {
+/** @internal */
+export function isCoordinator(value: unknown): value is BoundCoordinator {
 	if (typeof value !== 'object' || value === null || typeof Reflect.get(value, 'bind') !== 'function') return false;
 	const kind = Reflect.get(value, 'kind');
 	return kind === 'memory' || kind === 'redis';

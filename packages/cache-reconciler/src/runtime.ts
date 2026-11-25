@@ -10,7 +10,7 @@ import {
 	WorkerClient,
 } from 'seyfert';
 import { ReconciledAdapter } from './adapter';
-import type { CacheReconcilerCoordinator, CoordinatorBinding } from './coordinator';
+import type { BoundCoordinator, CacheReconcilerCoordinator, CoordinatorBinding } from './coordinator';
 import { PacketCorrelation } from './correlation';
 import { ReconciliationEngine } from './engine';
 import { KeyLayout } from './keys';
@@ -31,9 +31,9 @@ export type CacheReconcilerAdapterStatus = 'pending' | 'installed' | 'replaced' 
 export interface CacheReconcilerStatus extends StateSnapshot {
 	coordinator: CacheReconcilerCoordinator['kind'];
 	/**
-	 * `replaced` means another owner assigned `client.cache.adapter` after setup. Cache traffic then bypasses
-	 * reconciliation and this plugin leaves the newer adapter in place. The check runs on every observed
-	 * Gateway packet, when status is read, and when the client closes.
+	 * `replaced` means another owner assigned `client.cache.adapter` after setup. Unless that adapter delegates
+	 * to this plugin's, cache traffic bypasses reconciliation; either way this plugin leaves the newer adapter
+	 * in place. The check runs on every observed Gateway packet, when status is read, and when the client closes.
 	 */
 	adapter: CacheReconcilerAdapterStatus;
 }
@@ -87,7 +87,7 @@ export class ReconcilerRuntime {
 	private adapterStatus: CacheReconcilerAdapterStatus = 'pending';
 	private diagnostics: Pick<SeyfertPluginApi['diagnostics'], 'warn'> | undefined;
 
-	constructor(private readonly coordinator: CacheReconcilerCoordinator) {}
+	constructor(private readonly coordinator: BoundCoordinator) {}
 
 	status(): CacheReconcilerStatus {
 		this.checkOwnership();
@@ -522,7 +522,7 @@ export class ReconcilerRuntime {
 		if (installation.client.cache.adapter === installation.wrapper) return;
 		this.adapterStatus = 'replaced';
 		this.diagnostics?.warn(
-			`${PLUGIN_NAME} no longer owns client.cache.adapter: it was replaced after setup, so cache traffic bypasses reconciliation.`,
+			`${PLUGIN_NAME} no longer owns client.cache.adapter: it was replaced after setup. Cache traffic bypasses reconciliation unless the new adapter delegates to the one it replaced.`,
 			{ code: 'cache-reconciler-adapter-replaced', phase: 'runtime' },
 		);
 	}
