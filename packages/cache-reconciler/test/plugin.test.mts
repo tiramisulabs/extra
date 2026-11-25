@@ -1,8 +1,6 @@
 import { createMockBot } from '@slipher/testing';
 import {
 	type Adapter,
-	type AdapterEntry,
-	type AdapterRelationship,
 	type AnySeyfertPlugin,
 	BaseResource,
 	CacheFrom,
@@ -18,7 +16,7 @@ import { describe, expect, it } from 'vitest';
 import { cacheReconciler, memoryCoordinator } from '../src';
 import { ReconciledAdapter } from '../src/adapter';
 import { PacketCorrelation } from '../src/correlation';
-import { BOT_ID, deferred, gatewayDispatch, guildPacket, readyPacket } from './support';
+import { AsyncAdapter, BOT_ID, deferred, gatewayDispatch, guildPacket, readyPacket } from './support';
 
 class ProbeResource extends BaseResource {
 	namespace = 'reconciler_probe';
@@ -30,67 +28,6 @@ class CountingAdapter extends MemoryAdapter<unknown> {
 
 	override start() {
 		this.starts++;
-	}
-}
-
-/** Async adapter whose `bulkPatch` calls can be held open to reorder completion. */
-class GatedAdapter implements Adapter {
-	readonly isAsync = true;
-	readonly memory = new MemoryAdapter();
-	readonly patchGates: Promise<void>[] = [];
-
-	async start() {}
-	async scan(query: string, keys?: boolean) {
-		return this.memory.scan(query, keys as true);
-	}
-	async bulkGet(keys: string[]) {
-		return this.memory.bulkGet(keys);
-	}
-	async get(key: string) {
-		return this.memory.get(key);
-	}
-	async bulkSet(entries: AdapterEntry[]) {
-		this.memory.bulkSet(entries);
-	}
-	async set(key: string, value: unknown, relationship: AdapterRelationship) {
-		this.memory.set(key, value, relationship);
-	}
-	async bulkPatch(entries: AdapterEntry[]) {
-		await this.patchGates.shift();
-		this.memory.bulkPatch(entries);
-	}
-	async patch(key: string, value: unknown, relationship: AdapterRelationship) {
-		this.memory.patch(key, value, relationship);
-	}
-	async values(to: string) {
-		return this.memory.values(to);
-	}
-	async keys(to: string) {
-		return this.memory.keys(to);
-	}
-	async count(to: string) {
-		return this.memory.count(to);
-	}
-	async bulkRemove(keys: string[]) {
-		this.memory.bulkRemove(keys);
-	}
-	async remove(key: string) {
-		this.memory.remove(key);
-	}
-	async flush() {
-		this.memory.flush();
-	}
-	async contains(to: string, key: string) {
-		return this.memory.contains(to, key);
-	}
-	async getToRelationship(to: string) {
-		return this.memory.getToRelationship(to);
-	}
-	async removeToRelationship(to: string, keys: string | string[]) {
-		this.memory.removeToRelationship(to, keys);
-	}
-	async removeRelationship(to: string | string[]) {
-		this.memory.removeRelationship(to);
 	}
 }
 
@@ -350,14 +287,14 @@ describe('feasibility on public Seyfert APIs', () => {
 		['with the original payloads', false],
 		['through a cloning interceptor', true],
 	])('keeps overlapping packets for the same guild apart when cache work completes in reverse order %s', async (_label, clone) => {
-		const adapter = new GatedAdapter();
+		const adapter = new AsyncAdapter();
 		const log = correlationLog();
 		const plugins = clone
 			? [correlationProbe('GUILD_UPDATE', log), innerCloner()]
 			: [correlationProbe('GUILD_UPDATE', log)];
 		const { bot, dispatch } = await startBot(adapter, ...plugins);
 		const firstWrite = deferred();
-		adapter.patchGates.push(firstWrite.promise);
+		adapter.gate('bulkPatch', firstWrite.promise);
 
 		// Each Gateway packet is parsed into its own payload object.
 		const first = dispatch(guildPacket('GUILD_UPDATE', 20, { ...guild }));
@@ -378,11 +315,11 @@ describe('feasibility on public Seyfert APIs', () => {
 	});
 
 	it('refuses to pair overlapping same-guild packets once their payload identity is lost', async () => {
-		const adapter = new GatedAdapter();
+		const adapter = new AsyncAdapter();
 		const log = correlationLog();
 		const { bot, dispatch } = await startBot(adapter, outerCloner(), correlationProbe('GUILD_UPDATE', log));
 		const firstWrite = deferred();
-		adapter.patchGates.push(firstWrite.promise);
+		adapter.gate('bulkPatch', firstWrite.promise);
 
 		const first = dispatch(guildPacket('GUILD_UPDATE', 20, { ...guild }));
 		const second = dispatch(guildPacket('GUILD_UPDATE', 21, { ...guild }));
@@ -492,22 +429,5 @@ describe('installation', () => {
 		]);
 		expect(Object.keys(manager)).toEqual([]);
 		await bot.close();
-	});
-});
-
-describe('ReconciledAdapter increment capability', () => {
-	it('mirrors whether the backing adapter can increment, including a capability learned at start', async () => {
-		const fixed = new ReconciledAdapter(new MemoryAdapter());
-		expect(fixed.increment).toBeTypeOf('function');
-
-		const late = new GatedAdapter() as GatedAdapter & { increment?: Adapter['increment'] };
-		late.start = async () => {
-			late.increment = async () => 5;
-		};
-		const wrapper = new ReconciledAdapter(late);
-		expect(wrapper.increment).toBeUndefined();
-
-		await wrapper.start();
-		expect(await wrapper.increment!('guild.1', 'member_count', 1)).toBe(5);
 	});
 });

@@ -1,4 +1,11 @@
 import type { MockBot } from '@slipher/testing';
+import {
+	type Adapter,
+	type AdapterEntry,
+	type AdapterIncrementOptions,
+	type AdapterRelationship,
+	MemoryAdapter,
+} from 'seyfert';
 
 export const BOT_ID = '1000';
 export const APPLICATION_ID = '2000';
@@ -52,4 +59,102 @@ export function deferred() {
 		resolve = res;
 	});
 	return { promise, resolve };
+}
+
+/** A guild ID Discord's shard formula assigns to `index % totalShards`. */
+export function guildOn(index: number): string {
+	return (BigInt(index) << 22n).toString();
+}
+
+type AdapterMethod = Exclude<keyof Adapter, 'isAsync'>;
+
+/**
+ * Asynchronous adapter over an in-memory store. Individual calls can be held open or made to reject, which is
+ * how the tests reorder completion and exercise storage failures.
+ */
+export class AsyncAdapter implements Adapter {
+	readonly isAsync = true;
+	readonly memory = new MemoryAdapter();
+	readonly calls: AdapterMethod[] = [];
+	private readonly gates = new Map<AdapterMethod, Promise<void>[]>();
+	private readonly failures = new Map<AdapterMethod, { error: unknown; partial?: () => void }[]>();
+
+	/** Holds the next call of `method` open until `until` settles. */
+	gate(method: AdapterMethod, until: Promise<void>): void {
+		this.gates.set(method, [...(this.gates.get(method) ?? []), until]);
+	}
+
+	/** Makes the next call of `method` reject, optionally after `partial` already changed the store. */
+	failNext(method: AdapterMethod, error: unknown, partial?: () => void): void {
+		this.failures.set(method, [...(this.failures.get(method) ?? []), { error, partial }]);
+	}
+
+	private async run<T>(method: AdapterMethod, apply: () => T): Promise<T> {
+		this.calls.push(method);
+		await this.gates.get(method)?.shift();
+		const failure = this.failures.get(method)?.shift();
+		if (failure) {
+			failure.partial?.();
+			throw failure.error;
+		}
+		return apply();
+	}
+
+	start() {
+		return this.run('start', () => undefined);
+	}
+	scan(query: string, keys?: boolean) {
+		return this.run('scan', () => this.memory.scan(query, keys as true));
+	}
+	bulkGet(keys: string[]) {
+		return this.run('bulkGet', () => this.memory.bulkGet(keys));
+	}
+	get(key: string) {
+		return this.run('get', () => this.memory.get(key));
+	}
+	bulkSet(entries: AdapterEntry[]) {
+		return this.run('bulkSet', () => this.memory.bulkSet(entries));
+	}
+	set(key: string, value: unknown, relationship: AdapterRelationship) {
+		return this.run('set', () => this.memory.set(key, value, relationship));
+	}
+	bulkPatch(entries: AdapterEntry[]) {
+		return this.run('bulkPatch', () => this.memory.bulkPatch(entries));
+	}
+	patch(key: string, value: unknown, relationship: AdapterRelationship) {
+		return this.run('patch', () => this.memory.patch(key, value, relationship));
+	}
+	increment(key: string, field: string, delta: number, options?: AdapterIncrementOptions) {
+		return this.run('increment', () => this.memory.increment(key, field, delta, options));
+	}
+	values(to: string) {
+		return this.run('values', () => this.memory.values(to));
+	}
+	keys(to: string) {
+		return this.run('keys', () => this.memory.keys(to));
+	}
+	count(to: string) {
+		return this.run('count', () => this.memory.count(to));
+	}
+	bulkRemove(keys: string[]) {
+		return this.run('bulkRemove', () => this.memory.bulkRemove(keys));
+	}
+	remove(key: string) {
+		return this.run('remove', () => this.memory.remove(key));
+	}
+	flush() {
+		return this.run('flush', () => this.memory.flush());
+	}
+	contains(to: string, key: string) {
+		return this.run('contains', () => this.memory.contains(to, key));
+	}
+	getToRelationship(to: string) {
+		return this.run('getToRelationship', () => this.memory.getToRelationship(to));
+	}
+	removeToRelationship(to: string, keys: string | string[]) {
+		return this.run('removeToRelationship', () => this.memory.removeToRelationship(to, keys));
+	}
+	removeRelationship(to: string | string[]) {
+		return this.run('removeRelationship', () => this.memory.removeRelationship(to));
+	}
 }

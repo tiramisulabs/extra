@@ -1,6 +1,8 @@
 import { type Adapter, type SeyfertPluginApi, WorkerAdapter, WorkerClient } from 'seyfert';
 import { ReconciledAdapter } from './adapter';
 import type { CacheReconcilerCoordinator } from './coordinator';
+import { KeyLayout } from './keys';
+import { ReconciliationState } from './state';
 
 const PLUGIN_NAME = '@slipher/cache-reconciler';
 
@@ -19,6 +21,7 @@ export interface CacheReconcilerStatus {
 
 interface CacheClient {
 	cache: { adapter: Adapter };
+	applicationId?: string;
 }
 
 type Diagnostics = Pick<SeyfertPluginApi['diagnostics'], 'warn'>;
@@ -35,6 +38,7 @@ export class ReconcilerRuntime {
 	private adapterStatus: CacheReconcilerAdapterStatus = 'pending';
 	private client: CacheClient | undefined;
 	private diagnostics: Diagnostics | undefined;
+	private readonly state = new ReconciliationState();
 
 	constructor(private readonly coordinator: CacheReconcilerCoordinator) {}
 
@@ -48,12 +52,15 @@ export class ReconcilerRuntime {
 	install(client: CacheClient, diagnostics?: Diagnostics): void {
 		const original = client.cache.adapter;
 		assertSupportedClient(client, original);
+		const layout = new KeyLayout(() => client.applicationId || undefined);
+		const binding = this.coordinator.bind({ inner: original, state: this.state, layout });
+		const wrapper = new ReconciledAdapter(original, { state: this.state, layout, binding });
 		this.original = original;
 		this.client = client;
 		this.diagnostics = diagnostics;
 		// Assignment stays last: Seyfert does not run teardown for a plugin whose own setup throws.
-		this.wrapper = new ReconciledAdapter(original);
-		client.cache.adapter = this.wrapper;
+		this.wrapper = wrapper;
+		client.cache.adapter = wrapper;
 		this.adapterStatus = 'installed';
 	}
 

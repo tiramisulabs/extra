@@ -358,8 +358,26 @@ export class ReconciliationState {
 
 	/** Returns the visible key filed under a relationship member, if any. */
 	visibleMember(to: string, id: string): string | undefined {
-		const key = this.members.get(to)?.get(id);
+		const key = this.memberKey(to, id);
 		return key !== undefined && this.isVisible(key) ? key : undefined;
+	}
+
+	/** Returns the key filed under a relationship member, whether or not it is readable. */
+	memberKey(to: string, id: string): string | undefined {
+		return this.members.get(to)?.get(id);
+	}
+
+	/** The guild partition a filed key belongs to. */
+	guildOf(key: string): string | undefined {
+		return this.records.get(key)?.guildId;
+	}
+
+	/**
+	 * Whether a partial write may merge into what the store holds for the key. A key that is neither readable
+	 * nor being written is a cache miss, and merging into it would surface fields nothing confirmed.
+	 */
+	canPatch(key: string): boolean {
+		return this.attempts.has(key) || this.isVisible(key);
 	}
 
 	/** Every key this instance filed under relationships matching `to`, where `*` matches any run of characters. */

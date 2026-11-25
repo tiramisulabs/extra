@@ -1,11 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { isStaleChannel, planGuildSnapshot } from '../src/snapshot';
 import { type KeyTarget, ReconciliationState, type SnapshotCut, shardOf } from '../src/state';
-
-/** A guild ID Discord's shard formula assigns to `index % totalShards`. */
-function guildOn(index: number): string {
-	return (BigInt(index) << 22n).toString();
-}
+import { guildOn } from './support';
 
 function role(guildId: string, id: string): KeyTarget {
 	return { key: `role.${id}`, to: `role.${guildId}`, id, guildId, replaceable: true };
