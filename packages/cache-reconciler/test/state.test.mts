@@ -789,6 +789,44 @@ describe('guild claims', () => {
 	});
 });
 
+describe('closing a removed guild', () => {
+	it('closes the partition for a removal that is the latest evidence', () => {
+		const { state } = reconciledGuild(G);
+		write(state, role(G, '1'));
+
+		state.closeGuild(G);
+
+		expect(state.isVisible('role.1')).toBe(false);
+	});
+
+	it('keeps a guild open when it was reported as available after the delete that removes it', () => {
+		const { state } = reconciledGuild(G);
+		const removal = state.guildGone(0, G, 10, { startup: false, unavailable: false })!;
+		// The bot joined again before the delete finished being applied.
+		state.guildAvailable(0, G, 11, { startup: false, unavailable: false });
+		write(state, role(G, 'after-rejoin'));
+
+		// Removing the guild record while that delete is being applied belongs to the delete.
+		state.closeGuild(G);
+		state.closeGuild(G, removal.sequence);
+
+		expect(state.isVisible('role.after-rejoin')).toBe(true);
+		expect(state.claimGuild(removal.generation, G, removal)).toBeUndefined();
+	});
+
+	it('closes a guild whose delete is the newest evidence about it', () => {
+		const { state } = reconciledGuild(G);
+		write(state, role(G, '1'));
+		const removal = state.guildGone(0, G, 10, { startup: false, unavailable: false })!;
+		state.observe(0, 12);
+
+		state.closeGuild(G, removal.sequence);
+
+		expect(state.isVisible('role.1')).toBe(false);
+		expect(state.claimGuild(removal.generation, G, removal)).toBeDefined();
+	});
+});
+
 describe('failure log', () => {
 	it('keeps a bounded tail and the total count', () => {
 		const state = activeState();

@@ -69,6 +69,11 @@ export interface CoordinatorBinding {
 	removeRelationships(relationships: string[], claim?: GuildClaim): Awaitable<void>;
 	flush(): Awaitable<void>;
 
+	/**
+	 * Closes the partition of a guild removed by evidence at sequence `upTo`, unless the guild was reported as
+	 * available after it.
+	 */
+	closeGuild(guildId: string, upTo: number): Awaitable<void>;
 	/** Deletes the snapshot candidates the fence still allows. A failed removal is recorded, not thrown. */
 	sweep(targets: readonly KeyTarget[], cut: SnapshotCut): Awaitable<SweepResult>;
 }

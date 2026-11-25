@@ -7,7 +7,7 @@ import type { KeyTarget } from './state';
  * `replaceable` is the resource policy: only these resources are listed completely by a startup guild snapshot,
  * so only they may be deleted for being absent from it.
  */
-const RESOURCES: ReadonlyMap<string, { scoped: boolean; replaceable: boolean }> = new Map([
+const RESOURCES: ReadonlyMap<string, { scoped: boolean; keyed?: boolean; replaceable: boolean }> = new Map([
 	['guild', { scoped: false, replaceable: false }],
 	['user', { scoped: false, replaceable: false }],
 	['role', { scoped: true, replaceable: true }],
@@ -16,10 +16,11 @@ const RESOURCES: ReadonlyMap<string, { scoped: boolean; replaceable: boolean }> 
 	['sticker', { scoped: true, replaceable: true }],
 	['overwrite', { scoped: true, replaceable: true }],
 	['stage_instance', { scoped: true, replaceable: true }],
-	['voice_state', { scoped: true, replaceable: true }],
-	['member', { scoped: true, replaceable: false }],
-	['presence', { scoped: true, replaceable: false }],
-	['ban', { scoped: true, replaceable: false }],
+	// `keyed` resources carry the guild in the key too: `resource.guild.id`.
+	['voice_state', { scoped: true, keyed: true, replaceable: true }],
+	['member', { scoped: true, keyed: true, replaceable: false }],
+	['presence', { scoped: true, keyed: true, replaceable: false }],
+	['ban', { scoped: true, keyed: true, replaceable: false }],
 	// Messages are scoped by channel; their guild is the one their channel was filed under, when that is known.
 	['message', { scoped: false, replaceable: false }],
 ]);
@@ -63,6 +64,17 @@ export class KeyLayout {
 			guildId: namespace === GUILD ? guildScope(id) : resource.scoped ? this.guildOf(to) : undefined,
 			replaceable: resource.replaceable,
 		};
+	}
+
+	/** The relationship a guild's entries of one resource hang from. */
+	guildRelationship(namespace: string, guildId: string): string {
+		return `${namespace}.${guildId}`;
+	}
+
+	/** The target for a member of a guild relationship, built the way Seyfert files it. */
+	guildMember(namespace: string, guildId: string, id: string): KeyTarget | undefined {
+		const key = RESOURCES.get(namespace)?.keyed ? `${namespace}.${guildId}.${id}` : `${namespace}.${id}`;
+		return this.target(key, [this.guildRelationship(namespace, guildId), id]);
 	}
 
 	/**

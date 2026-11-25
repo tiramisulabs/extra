@@ -1,6 +1,6 @@
 import { createMockBot } from '@slipher/testing';
 import { type Adapter, CacheFrom, Client, createPlugin, definePlugins, MemoryAdapter, PluginOrder } from 'seyfert';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { cacheReconciler, memoryCoordinator } from '../src';
 import { ReconciledAdapter } from '../src/adapter';
 import { innerCloner, managerOf, outerCloner, packetEntry, realClient, startReconciled, workerClient } from './clients';
@@ -168,6 +168,7 @@ describe('startup guild stream', () => {
 		});
 
 		await dispatch(guildDeletePacket('RAW_GUILD_DELETE', 3, { id: last }));
+		await manager.waitForIdle();
 		expect(manager.status().shards).toMatchObject([{ startup: 'committed', outcomes: { reconciled: 1, deleted: 1 } }]);
 		await bot.close();
 	});
@@ -285,10 +286,11 @@ describe('correlation with other interceptors', () => {
 		const first = dispatch(guildDeletePacket('GUILD_DELETE', 10, { id: G }));
 		const second = dispatch(guildDeletePacket('GUILD_DELETE', 11, { id: G }));
 		await second;
-		expect(manager.status()).toMatchObject({ pending: { guilds: 1 }, failures: [] });
+		await vi.waitFor(() => expect(manager.status()).toMatchObject({ pending: { guilds: 1 }, failures: [] }));
 
 		firstRemoval.resolve();
 		await first;
+		await manager.waitForIdle();
 		expect(manager.status()).toMatchObject({ pending: { guilds: 0 }, failures: [] });
 		await bot.close();
 	});
@@ -305,10 +307,12 @@ describe('correlation with other interceptors', () => {
 		await dispatch(readyPacket({ guilds: [G], sessionId: 'session-2' }));
 		await dispatch(guildPacket('RAW_GUILD_CREATE', 2, guild()));
 
-		expect(manager.status()).toMatchObject({
-			shards: [{ sessionId: 'session-2', outcomes: { reconciled: 1 } }],
-			failures: [],
-		});
+		await vi.waitFor(() =>
+			expect(manager.status()).toMatchObject({
+				shards: [{ sessionId: 'session-2', outcomes: { reconciled: 1 } }],
+				failures: [],
+			}),
+		);
 		caching.resolve();
 		await previous;
 		expect(manager.status().failures).toEqual([]);
@@ -479,6 +483,8 @@ describe('packets Seyfert never caches', () => {
 
 		caching.resolve();
 		await snapshot;
+		await dispatch(guildsReadyPacket(2));
+		await manager.waitForIdle();
 		expect(manager.status().shards).toMatchObject([{ outcomes: { reconciled: 1, failed: 0 } }]);
 		await bot.close();
 	});
@@ -507,6 +513,8 @@ describe('packets Seyfert never caches', () => {
 
 		held.resolve();
 		await snapshot;
+		await dispatch(guildsReadyPacket(2));
+		await manager.waitForIdle();
 		expect(manager.status().shards).toMatchObject([{ outcomes: { reconciled: 1, failed: 0 } }]);
 		await bot.close();
 	});
@@ -696,11 +704,11 @@ describe('own failures', () => {
 		adapter.gate('bulkRemove', removal.promise);
 		const caching = dispatch(guildDeletePacket('GUILD_DELETE', 5, { id: first }));
 		await dispatch(guildDeletePacket('GUILD_DELETE', 6, { id: second }));
-		expect(manager.status()).toMatchObject({ pending: { guilds: 1 }, failureCount: 2 });
+		await vi.waitFor(() => expect(manager.status()).toMatchObject({ pending: { guilds: 1 }, failureCount: 2 }));
 
 		removal.resolve();
 		await caching;
-		expect(manager.status()).toMatchObject({ pending: { guilds: 0 }, failureCount: 2 });
+		await vi.waitFor(() => expect(manager.status()).toMatchObject({ pending: { guilds: 0 }, failureCount: 2 }));
 		await client.close();
 	});
 

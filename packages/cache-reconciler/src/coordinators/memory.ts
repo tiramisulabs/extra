@@ -140,6 +140,10 @@ class MemoryBinding implements CoordinatorBinding {
 		);
 	}
 
+	closeGuild(guildId: string, upTo: number): void {
+		this.state.closeGuild(guildId, upTo);
+	}
+
 	sweep(targets: readonly KeyTarget[], cut: SnapshotCut): Awaitable<SweepResult> {
 		const claim = this.state.claimSweep(targets, cut);
 		const result: SweepResult = { removed: [], failed: [] };
@@ -165,7 +169,10 @@ class MemoryBinding implements CoordinatorBinding {
 			result.failed.push(key);
 		};
 		const pending: PromiseLike<void>[] = [];
-		for (const key of this.state.confirmSweep(chunk, cut)) {
+		const confirmed = this.state.confirmSweep(chunk, cut);
+		// Whatever the fence no longer allows goes back unowned, so a later reconciliation may claim it.
+		this.state.abandonRemoval({ order: chunk.order, keys: chunk.keys.filter(key => !confirmed.includes(key)) });
+		for (const key of confirmed) {
 			try {
 				const removing = this.inner.remove(key);
 				if (isThenable<void>(removing)) {

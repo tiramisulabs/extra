@@ -1,6 +1,7 @@
 import {
 	type Adapter,
 	BaseResource,
+	type Cache,
 	type GatewayDispatchPayload,
 	PluginOrder,
 	type SeyfertPluginApi,
@@ -11,7 +12,9 @@ import {
 import { ReconciledAdapter } from './adapter';
 import type { CacheReconcilerCoordinator, CoordinatorBinding } from './coordinator';
 import { PacketCorrelation } from './correlation';
+import { ReconciliationEngine } from './engine';
 import { KeyLayout } from './keys';
+import { type GuildSnapshotPlan, planGuildSnapshot } from './snapshot';
 import { type GuildOutcome, type GuildWork, ReconciliationState, type StateSnapshot } from './state';
 
 const PLUGIN_NAME = '@slipher/cache-reconciler';
@@ -35,7 +38,7 @@ export interface CacheReconcilerStatus extends StateSnapshot {
 }
 
 interface CacheClient {
-	cache: { adapter: Adapter };
+	cache: Cache;
 	applicationId?: string;
 }
 
@@ -44,6 +47,8 @@ interface TrackedWork {
 	readonly work: GuildWork;
 	/** Gateway event that registered the work; part of the structured correlation key. */
 	readonly event: string;
+	/** What a startup snapshot lists, read from the payload the interceptor chain handed to Seyfert. */
+	plan: GuildSnapshotPlan | undefined;
 	/** Set once the interceptor chain handed the packet to Seyfert for caching. */
 	dispatched: boolean;
 }
@@ -55,6 +60,7 @@ interface Installation {
 	readonly wrapper: ReconciledAdapter;
 	readonly binding: CoordinatorBinding;
 	readonly layout: KeyLayout;
+	readonly engine: ReconciliationEngine;
 }
 
 /** Gives the plugin a cache-resource slot, which is how Seyfert calls it back after its core cache mutation. */
@@ -135,7 +141,8 @@ export class ReconcilerRuntime {
 			binding,
 			beforeStart: () => this.assertObserver(),
 		});
-		this.installation = { client, original, wrapper, binding, layout };
+		const engine = new ReconciliationEngine({ cache: client.cache, wrapper, binding, layout, state: this.state });
+		this.installation = { client, original, wrapper, binding, layout, engine };
 		// Assignment stays last: Seyfert does not run teardown for a plugin whose own setup throws, so nothing
 		// that can fail may follow it.
 		client.cache.adapter = wrapper;
@@ -217,9 +224,13 @@ export class ReconcilerRuntime {
 			} else if (final.t !== packet.t || guildOf(final) !== tracked.work.guildId) {
 				this.abandon(tracked, 'A later Gateway interceptor replaced the packet with a different event or guild.');
 			} else {
+				// A later interceptor may have cloned or changed the payload; Seyfert caches the one it returned.
+				const payload = payloadOf(final);
+				if (tracked.work.kind === 'snapshot' && typeof payload === 'object' && payload !== null) {
+					tracked.plan = planGuildSnapshot(tracked.work.guildId, payload);
+				}
+				this.correlation.retarget(payload, tracked);
 				tracked.dispatched = true;
-				// A later interceptor may have cloned the payload; Seyfert caches the one it returned.
-				this.correlation.retarget(payloadOf(final), tracked);
 			}
 		} catch (cause) {
 			this.state.recordFailure({
@@ -275,7 +286,7 @@ export class ReconcilerRuntime {
 					}),
 				);
 			case 'GUILDS_READY':
-				this.state.guildsReady(shardId);
+				this.startupCommitted(this.state.guildsReady(shardId));
 				return;
 			default:
 				this.state.observe(shardId, packet.s);
@@ -304,7 +315,7 @@ export class ReconcilerRuntime {
 
 	private track(packet: { t: string; d: { id: string } }, work: GuildWork | undefined): TrackedWork | undefined {
 		if (!work) return;
-		const tracked: TrackedWork = { work, event: packet.t, dispatched: false };
+		const tracked: TrackedWork = { work, event: packet.t, plan: undefined, dispatched: false };
 		this.correlation.track(packet.d, packet.t, work.guildId, tracked);
 		return tracked;
 	}
@@ -349,22 +360,54 @@ export class ReconcilerRuntime {
 		}
 	}
 
+	/**
+	 * Seyfert cached the packet. The physical cleanup runs in the background: what it removes is already
+	 * unreadable, and Seyfert awaits this callback before it runs the event's listeners.
+	 */
 	private reconcile(tracked: TrackedWork): void {
-		if (tracked.work.settled !== undefined) return;
-		switch (tracked.work.kind) {
-			case 'unavailable':
-				this.finish(tracked, 'unavailable-preserved');
-				return;
-			case 'delete':
-				// Core removes the guild record through the wrapper, which closes the partition; this covers a
-				// client that does not cache guild records at all.
-				this.state.closeGuild(tracked.work.guildId);
-				this.finish(tracked, 'deleted');
-				return;
-			case 'snapshot':
-				this.finish(tracked, 'reconciled');
-				return;
+		const engine = this.installation?.engine;
+		const { work, plan } = tracked;
+		if (work.settled !== undefined || !engine) return;
+		// An unavailable guild confirms nothing about its descendants; they stay as they are, unreadable.
+		if (work.kind === 'unavailable') {
+			this.finish(tracked, 'unavailable-preserved');
+			return;
 		}
+		// The callback ran, so a later failure cannot be this packet's cache phase anymore.
+		this.correlation.release(tracked.event, work.guildId, tracked);
+		this.background(async () => {
+			try {
+				const outcome =
+					work.kind === 'snapshot' && plan ? await engine.sweepSnapshot(work, plan) : await engine.removeGuild(work);
+				if (outcome !== 'failed') this.finish(tracked, outcome);
+				else this.abandon(tracked, 'Some stale entries of the guild could not be removed; they stay hidden.');
+			} catch (cause) {
+				this.abandon(
+					tracked,
+					`Reconciling the guild after ${tracked.event} failed; its stale entries stay hidden.`,
+					cause,
+				);
+			}
+		});
+	}
+
+	/** The startup snapshot of a shard is complete: guilds it never listed are stale. */
+	private startupCommitted(generation: number | undefined): void {
+		const engine = this.installation?.engine;
+		if (generation === undefined || !engine) return;
+		this.background(() => engine.sweepStaleGuilds(generation));
+	}
+
+	/**
+	 * Runs cleanup as pending work, so `waitForIdle()` and teardown wait for it. It starts on a later microtask:
+	 * the Gateway interceptor and the post-cache callback that schedule it never do the first read themselves.
+	 */
+	private background(run: () => Promise<void>): void {
+		const done = this.state.beginTask();
+		Promise.resolve()
+			.then(run)
+			.catch(cause => this.state.recordFailure({ kind: 'guild', message: 'Background cleanup failed.', cause }))
+			.finally(done);
 	}
 
 	/**
@@ -402,7 +445,7 @@ export class ReconcilerRuntime {
 
 	private finish(tracked: TrackedWork, outcome: GuildOutcome): void {
 		this.correlation.release(tracked.event, tracked.work.guildId, tracked);
-		this.state.settle(tracked.work, outcome);
+		this.startupCommitted(this.state.settle(tracked.work, outcome));
 	}
 
 	/**

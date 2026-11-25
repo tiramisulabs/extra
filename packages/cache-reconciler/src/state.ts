@@ -131,6 +131,8 @@ interface Generation {
 	readonly expected: Map<string, GuildOutcome | undefined>;
 	/** Open guild partitions and the sequence their current evidence starts at. */
 	readonly cuts: Map<string, number>;
+	/** Sequence of the latest packet that reported each guild as available. */
+	readonly seen: Map<string, number>;
 	guildsReady: boolean;
 	committed: boolean;
 }
@@ -240,6 +242,7 @@ export class ReconciliationState {
 			sequence,
 			expected: new Map(guildIds.map(id => [id, undefined])),
 			cuts: new Map(),
+			seen: new Map(),
 			guildsReady: false,
 			committed: false,
 		};
@@ -294,6 +297,7 @@ export class ReconciliationState {
 		const generation = this.admits ? this.generations.get(shardId) : undefined;
 		if (!generation) return;
 		advance(generation, sequence);
+		if (sequence > (generation.seen.get(guildId) ?? 0)) generation.seen.set(guildId, sequence);
 		if (options.startup || !generation.cuts.has(guildId)) generation.cuts.set(guildId, sequence);
 		if (!options.startup) return;
 		return this.register(generation, options.unavailable ? 'unavailable' : 'snapshot', guildId, sequence, true);
@@ -349,9 +353,23 @@ export class ReconciliationState {
 		return committed;
 	}
 
-	/** Closes a guild partition: every descendant stops being readable at once. */
-	closeGuild(guildId: string): void {
-		this.ownerOf(guildId)?.cuts.delete(guildId);
+	/**
+	 * Closes a guild partition: every descendant stops being readable at once.
+	 *
+	 * `upTo` is the sequence of the evidence that removed the guild. A guild reported as available after it was
+	 * joined again, and stays open. Without `upTo` the removal is taken to belong to the delete Discord sent
+	 * for the guild, if one is still being applied, and otherwise to be the latest evidence.
+	 */
+	closeGuild(guildId: string, upTo?: number): void {
+		const owner = this.ownerOf(guildId);
+		if (!owner) return;
+		let limit = upTo ?? owner.sequence;
+		if (upTo === undefined) {
+			for (const work of this.work) {
+				if (work.kind === 'delete' && work.guildId === guildId && work.sequence < limit) limit = work.sequence;
+			}
+		}
+		if ((owner.seen.get(guildId) ?? 0) <= limit) owner.cuts.delete(guildId);
 	}
 
 	/** Guild IDs the generation currently knows: the READY list plus guilds that became available since. */

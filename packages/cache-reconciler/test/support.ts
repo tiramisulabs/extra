@@ -52,7 +52,14 @@ export interface GuildPayload {
 	name?: string;
 	unavailable?: boolean;
 	roles?: { id: string; name?: string }[];
+	channels?: { id: string; type: number; name?: string; permission_overwrites?: object[] }[];
+	threads?: { id: string; type: number; thread_metadata?: { archived: boolean } }[];
+	emojis?: { id: string; name?: string }[];
+	stickers?: { id: string; name?: string }[];
 	members?: { user: { id: string; username?: string }; roles?: string[] }[];
+	voice_states?: { user_id: string; channel_id: string }[];
+	presences?: { user: { id: string }; status?: string }[];
+	stage_instances?: { id: string; channel_id: string }[];
 }
 
 export function guildPacket(
@@ -100,6 +107,9 @@ type AdapterMethod = Exclude<keyof Adapter, 'isAsync'>;
 /**
  * Asynchronous adapter over an in-memory store. Individual calls can be held open or made to reject, which is
  * how the tests reorder completion and exercise storage failures.
+ *
+ * By default a held call lets later calls overtake it. With `serial`, calls reach the store in the order they
+ * were issued, like commands on one connection: a held call holds everything issued after it.
  */
 export class AsyncAdapter implements Adapter {
 	readonly isAsync = true;
@@ -107,6 +117,9 @@ export class AsyncAdapter implements Adapter {
 	readonly calls: AdapterMethod[] = [];
 	private readonly gates = new Map<AdapterMethod, Promise<void>[]>();
 	private readonly failures = new Map<AdapterMethod, { error: unknown; partial?: () => void }[]>();
+	private tail: Promise<unknown> = Promise.resolve();
+
+	constructor(private readonly options: { serial?: boolean } = {}) {}
 
 	/** Holds the next call of `method` open until `until` settles. */
 	gate(method: AdapterMethod, until: Promise<void>): void {
@@ -118,15 +131,22 @@ export class AsyncAdapter implements Adapter {
 		this.failures.set(method, [...(this.failures.get(method) ?? []), { error, partial }]);
 	}
 
-	private async run<T>(method: AdapterMethod, apply: () => T): Promise<T> {
+	private run<T>(method: AdapterMethod, apply: () => T): Promise<T> {
 		this.calls.push(method);
-		await this.gates.get(method)?.shift();
-		const failure = this.failures.get(method)?.shift();
-		if (failure) {
-			failure.partial?.();
-			throw failure.error;
-		}
-		return apply();
+		const gate = this.gates.get(method)?.shift();
+		const execute = async () => {
+			await gate;
+			const failure = this.failures.get(method)?.shift();
+			if (failure) {
+				failure.partial?.();
+				throw failure.error;
+			}
+			return apply();
+		};
+		if (!this.options.serial) return execute();
+		const result = this.tail.then(execute);
+		this.tail = result.catch(() => undefined);
+		return result;
 	}
 
 	start() {
