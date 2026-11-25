@@ -1,7 +1,5 @@
 import { createMockBot } from '@slipher/testing';
 import {
-	type Adapter,
-	type AnySeyfertPlugin,
 	BaseResource,
 	CacheFrom,
 	Client,
@@ -10,13 +8,13 @@ import {
 	MemoryAdapter,
 	PluginOrder,
 	WorkerAdapter,
-	WorkerClient,
 } from 'seyfert';
 import { describe, expect, it } from 'vitest';
 import { cacheReconciler, memoryCoordinator } from '../src';
 import { ReconciledAdapter } from '../src/adapter';
 import { PacketCorrelation } from '../src/correlation';
-import { AsyncAdapter, BOT_ID, deferred, gatewayDispatch, guildPacket, readyPacket } from './support';
+import { innerCloner, outerCloner, packetEntry, realClient, startBot, workerClient } from './clients';
+import { AsyncAdapter, BOT_ID, deferred, guildPacket, readyPacket } from './support';
 
 class ProbeResource extends BaseResource {
 	namespace = 'reconciler_probe';
@@ -85,68 +83,6 @@ function correlationLog(): CorrelationLog {
 	return { resolved: [], ambiguous: [] };
 }
 
-/** An interceptor registered after the reconciler's: it clones before the rest of the chain runs. */
-function innerCloner() {
-	return createPlugin({
-		name: 'inner-cloner',
-		register(api) {
-			api.gateway.onDispatch((packet, next) => next(structuredClone(packet)));
-		},
-	});
-}
-
-/** An interceptor that runs outside the reconciler's and swaps the payload after the whole chain resolved. */
-function outerCloner() {
-	return createPlugin({
-		name: 'outer-cloner',
-		register(api) {
-			api.gateway.onDispatch(
-				async (_packet, next) => {
-					const final = await next();
-					return final ? structuredClone(final) : final;
-				},
-				{ order: PluginOrder.Before },
-			);
-		},
-	});
-}
-
-async function startBot(adapter: Adapter, ...plugins: AnySeyfertPlugin[]) {
-	const client = new Client({ plugins: definePlugins(...plugins) });
-	client.setServices({ cache: { adapter } });
-	const bot = await createMockBot({ client });
-	return { bot, client, dispatch: gatewayDispatch(bot) };
-}
-
-/** A client whose own `start()` runs: it only reaches the network to build a ShardManager, which is preset. */
-function realClient(adapter: Adapter, ...plugins: AnySeyfertPlugin[]) {
-	// `getRC` is how Seyfert's own tests supply a runtime config; it is not part of the typed client options.
-	const runtimeConfig: object = {
-		getRC: () => ({ token: 'token', intents: 0, debug: false, locations: { base: '.' } }),
-	};
-	const client = new Client({ plugins: definePlugins(...plugins), ...runtimeConfig });
-	Reflect.set(client, 'gateway', { spawnShards: async () => undefined });
-	client.setServices({ cache: { adapter } });
-	return client;
-}
-
-function workerClient(adapter: Adapter, workerData: Record<string, unknown>, ...plugins: AnySeyfertPlugin[]) {
-	const client = new WorkerClient({
-		plugins: definePlugins(...plugins),
-		postMessage: async () => undefined,
-	} as never);
-	client.setWorkerData({
-		workerId: 0,
-		shards: [0],
-		intents: 1,
-		totalShards: 1,
-		mode: 'custom',
-		...workerData,
-	} as never);
-	client.setServices({ cache: { adapter } });
-	return client;
-}
-
 const guild = { id: '100', name: 'guild', roles: [{ id: '101', name: 'role' }] };
 
 describe('feasibility on public Seyfert APIs', () => {
@@ -168,7 +104,11 @@ describe('feasibility on public Seyfert APIs', () => {
 		expect(atReady).toEqual([{ wrapped: true, starts: 0 }]);
 		expect((client.cache.adapter as ReconciledAdapter).inner).toBe(original);
 		expect(original.starts).toBe(1);
-		expect(client.cacheReconciler.status()).toEqual({ coordinator: 'memory', adapter: 'installed' });
+		expect(client.cacheReconciler.status()).toMatchObject({
+			coordinator: 'memory',
+			adapter: 'installed',
+			lifecycle: 'active',
+		});
 
 		await client.close();
 		expect(client.cache.adapter).toBe(original);
@@ -367,11 +307,10 @@ describe('installation', () => {
 			correlationProbe('GUILD_UPDATE', log),
 		);
 		const bot = await createMockBot({ client: client as never });
-		// WorkerClient routes shard payloads through this protected method; it has no public entry without a socket.
-		const onPacket = Reflect.get(client, 'onPacket') as (packet: unknown, shardId: number) => Promise<unknown>;
+		const dispatch = packetEntry(client, 'packet-first');
 
-		await onPacket.call(client, readyPacket({ guilds: [] }), 0);
-		await onPacket.call(client, guildPacket('GUILD_UPDATE', 2, guild), 0);
+		await dispatch(readyPacket({ guilds: [] }));
+		await dispatch(guildPacket('GUILD_UPDATE', 2, guild));
 
 		expect(client.cache.adapter).toBeInstanceOf(ReconciledAdapter);
 		expect(original.get(`user.${BOT_ID}`)).toMatchObject({ id: BOT_ID });

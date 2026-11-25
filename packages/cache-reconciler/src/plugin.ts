@@ -25,11 +25,14 @@ export function cacheReconciler(options: CacheReconcilerOptions): CacheReconcile
 		client: {
 			cacheReconciler: () => manager,
 		},
-		setup(client, api) {
-			runtime.install(client, api?.diagnostics);
+		register(api) {
+			runtime.register(api);
+		},
+		setup(client) {
+			runtime.install(client);
 		},
 		teardown(client) {
-			runtime.uninstall(client);
+			return runtime.uninstall(client);
 		},
 	}) as CacheReconcilerPlugin;
 }

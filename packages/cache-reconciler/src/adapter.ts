@@ -10,6 +10,8 @@ export interface ReconciledAdapterHost {
 	readonly state: ReconciliationState;
 	readonly layout: KeyLayout;
 	readonly binding: CoordinatorBinding;
+	/** Throws to refuse a start before the wrapped adapter is touched; unlike a later failure it is not terminal. */
+	beforeStart?(): void;
 }
 
 interface UnfilteredScope {
@@ -19,6 +21,19 @@ interface UnfilteredScope {
 
 // One storage for every wrapper keeps a rebuilt plugin from accumulating AsyncLocalStorage instances.
 const unfilteredScope = new AsyncLocalStorage<UnfilteredScope>();
+
+/**
+ * Runs reconciliation that must see and remove what is left of a guild, including entries hidden from callers.
+ * The scope follows the calling async task, so concurrent callers stay filtered. It lifts read visibility
+ * only: every removal inside still revalidates `claim`.
+ *
+ * It is a module function on purpose: nothing reachable from `client.cache.adapter` can open the scope.
+ *
+ * @internal
+ */
+export function runUnfiltered<T>(adapter: ReconciledAdapter, claim: GuildClaim, run: () => T): T {
+	return unfilteredScope.run({ adapter, claim }, run);
+}
 
 /**
  * Decorates the configured cache adapter so callers only read entries the reconciliation state confirms.
@@ -37,6 +52,7 @@ export class ReconciledAdapter implements Adapter {
 	private readonly state: ReconciliationState;
 	private readonly layout: KeyLayout;
 	private readonly binding: CoordinatorBinding;
+	private readonly beforeStart: (() => void) | undefined;
 	private startup:
 		| { status: 'pending' }
 		| { status: 'started'; result: Awaitable<void> }
@@ -49,6 +65,7 @@ export class ReconciledAdapter implements Adapter {
 		this.state = host.state;
 		this.layout = host.layout;
 		this.binding = host.binding;
+		this.beforeStart = host.beforeStart;
 		this.exposeIncrement();
 	}
 
@@ -64,6 +81,11 @@ export class ReconciledAdapter implements Adapter {
 	start(): ReturnType<Adapter['start']> {
 		if (this.startup.status === 'failed') return this.rethrow(this.startup.cause);
 		if (this.startup.status === 'started') return this.startup.result;
+		try {
+			this.beforeStart?.();
+		} catch (cause) {
+			return this.rethrow(cause);
+		}
 		let result: Awaitable<void>;
 		try {
 			result = map(
@@ -85,13 +107,9 @@ export class ReconciledAdapter implements Adapter {
 		return result;
 	}
 
-	/**
-	 * Runs reconciliation that must see and remove what is left of a guild, including entries hidden from
-	 * callers. The scope follows the calling async task, so concurrent callers stay filtered. It lifts read
-	 * visibility only: every removal inside still revalidates `claim`.
-	 */
-	runUnfiltered<T>(claim: GuildClaim, run: () => T): T {
-		return unfilteredScope.run({ adapter: this, claim }, run);
+	/** Whether `start()` was ever called, and with it the wrapped adapter possibly touched. */
+	get startAttempted(): boolean {
+		return this.startup.status !== 'pending';
 	}
 
 	scan(query: string, keys?: false): ReturnType<Adapter['scan']>;

@@ -72,8 +72,17 @@ export interface RemovalClaim {
 	readonly keys: readonly string[];
 }
 
+/**
+ * - `write` / `removal`: a cache mutation failed in the store.
+ * - `guild`: a guild packet could not be reconciled.
+ * - `session`: a shard has no usable generation and stays unreadable until its next READY.
+ * - `dispatch`: Seyfert reported a failure while a guild packet was being cached.
+ * - `observation`: the plugin's own bookkeeping failed.
+ */
+export type ReconcilerFailureKind = 'write' | 'removal' | 'guild' | 'session' | 'dispatch' | 'observation';
+
 export interface ReconcilerFailure {
-	readonly kind: string;
+	readonly kind: ReconcilerFailureKind;
 	readonly message: string;
 	readonly shardId?: number;
 	readonly guildId?: string;
@@ -250,6 +259,20 @@ export class ReconciliationState {
 		if (this.generations.has(shardId)) return true;
 		this.awaitingReady.add(shardId);
 		return false;
+	}
+
+	/**
+	 * The shard's cache stopped following the Gateway, so nothing recorded for its generation can be trusted.
+	 * Its guilds fail closed until a new READY, like an unvalidated RESUMED. Returns whether this call changed
+	 * the shard.
+	 */
+	suspend(shardId: number): boolean {
+		if (!this.admits || (this.awaitingReady.has(shardId) && !this.generations.has(shardId))) return false;
+		this.generations.delete(shardId);
+		this.awaitingReady.add(shardId);
+		this.owners.clear();
+		this.cancelWork(shardId);
+		return true;
 	}
 
 	/** Records the causal position of a packet before core cache processes it. */

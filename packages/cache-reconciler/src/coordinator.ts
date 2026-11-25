@@ -17,6 +17,8 @@ export interface CoordinatorHost {
 	readonly inner: Adapter;
 	readonly state: ReconciliationState;
 	readonly layout: KeyLayout;
+	/** Called with the keys of a caller's write or removal that failed, before the failure reaches the caller. */
+	mutationFailed?(keys: readonly string[], cause: unknown): void;
 }
 
 export interface RelationshipMember {

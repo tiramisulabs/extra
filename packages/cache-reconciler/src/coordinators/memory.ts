@@ -34,7 +34,7 @@ class MemoryBinding implements CoordinatorBinding {
 	private readonly state: ReconciliationState;
 	private readonly layout: KeyLayout;
 
-	constructor(host: CoordinatorHost) {
+	constructor(private readonly host: CoordinatorHost) {
 		this.inner = host.inner;
 		this.state = host.state;
 		this.layout = host.layout;
@@ -65,6 +65,19 @@ class MemoryBinding implements CoordinatorBinding {
 	}
 
 	write(method: WriteMethod, entries: AdapterEntry[]): Awaitable<void> {
+		// One caller write may run as two store calls, so its failure is reported for the write as a whole.
+		return settle(
+			() => this.apply(method, entries),
+			() => undefined,
+			cause =>
+				this.host.mutationFailed?.(
+					entries.map(([key]) => key),
+					cause,
+				),
+		);
+	}
+
+	private apply(method: WriteMethod, entries: AdapterEntry[]): Awaitable<void> {
 		if (method === 'set') return this.writing(entries, () => this.inner.set(...entries[0]!));
 		if (method === 'bulkSet') return this.writing(entries, () => this.inner.bulkSet(entries));
 		// Patching a cache miss must not merge into whatever the store still holds for the key, so an entry the
@@ -211,7 +224,10 @@ class MemoryBinding implements CoordinatorBinding {
 		return settle(
 			run,
 			() => this.state.commitRemoval(removal),
-			cause => this.removalFailed(removal, cause),
+			cause => {
+				this.removalFailed(removal, cause);
+				this.host.mutationFailed?.(removal.keys, cause);
+			},
 		);
 	}
 

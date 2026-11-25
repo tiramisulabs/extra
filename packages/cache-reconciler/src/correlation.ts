@@ -43,6 +43,15 @@ export class PacketCorrelation<T extends object> {
 		return pending?.length === 1 ? pending[0] : undefined;
 	}
 
+	/** Every entry that was tracked and not released yet. */
+	pending(): T[] {
+		const entries: T[] = [];
+		for (const entities of this.byKey.values()) {
+			for (const pending of entities.values()) entries.push(...pending);
+		}
+		return entries;
+	}
+
 	/** Pending entries that `resolve` refused to choose between; the caller must fail them closed. */
 	ambiguous(event: string, entity: string): T[] {
 		const pending = this.byKey.get(event)?.get(entity);

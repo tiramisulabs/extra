@@ -13,7 +13,12 @@ export class CacheReconcilerManager {
 		return this.#runtime.status();
 	}
 
-	/** Resolves once no reconciliation work is pending. */
+	/**
+	 * Resolves once no reconciliation work is pending: no guild packet is being reconciled, no sweep is running,
+	 * and every shard that received READY committed its startup snapshot. It resolves immediately before the
+	 * first READY. It does not time out: a READY guild Discord never delivers keeps it pending, so race it with
+	 * your own deadline when the wait has to be bounded.
+	 */
 	waitForIdle(): Promise<void> {
 		return this.#runtime.waitForIdle();
 	}

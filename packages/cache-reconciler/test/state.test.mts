@@ -232,6 +232,31 @@ describe('generations', () => {
 		expect(state.snapshot().shards).toMatchObject([{ generation: 1, startup: 'awaiting-guilds' }]);
 	});
 
+	it('fails a shard closed once its cache stopped following the Gateway', () => {
+		const other = guildOn(3);
+		const state = activeState();
+		state.ready(0, 'session-a', 2, [G], 1);
+		state.ready(1, 'session-b', 2, [other], 1);
+		const work = state.guildAvailable(0, G, 2, { startup: true, unavailable: false })!;
+		const otherWork = state.guildAvailable(1, other, 2, { startup: true, unavailable: false })!;
+		write(state, role(G, '1'), role(other, '2'));
+
+		expect(state.suspend(0)).toBe(true);
+		expect(state.suspend(0)).toBe(false);
+
+		expect(work.settled).toBe('cancelled');
+		expect(otherWork.settled).toBeUndefined();
+		expect(state.isVisible('role.1')).toBe(false);
+		expect(state.isVisible('role.2')).toBe(true);
+		expect(state.snapshot().shards).toMatchObject([
+			{ shardId: 0, generation: undefined, startup: 'awaiting-ready' },
+			{ shardId: 1, startup: 'awaiting-guilds' },
+		]);
+		// Only a new READY brings the shard back, and it has to suspend again if the cache is still not followed.
+		state.ready(0, 'session-c', 2, [G], 1);
+		expect(state.suspend(0)).toBe(true);
+	});
+
 	it('treats a guild no generation owns as unscoped', () => {
 		const foreign = guildOn(3);
 		const state = activeState();
@@ -768,7 +793,7 @@ describe('failure log', () => {
 	it('keeps a bounded tail and the total count', () => {
 		const state = activeState();
 
-		for (let index = 0; index < 60; index++) state.recordFailure({ kind: 'cleanup', message: `failure ${index}` });
+		for (let index = 0; index < 60; index++) state.recordFailure({ kind: 'removal', message: `failure ${index}` });
 
 		const snapshot = state.snapshot();
 		expect(snapshot.failureCount).toBe(60);

@@ -1,6 +1,6 @@
 import { type Adapter, type AdapterEntry, Cache, MemoryAdapter } from 'seyfert';
 import { describe, expect, it } from 'vitest';
-import { ReconciledAdapter } from '../src/adapter';
+import { ReconciledAdapter, runUnfiltered } from '../src/adapter';
 import { ReconciliationCancelled } from '../src/coordinator';
 import { memoryCoordinator } from '../src/coordinators/memory';
 import { KeyLayout } from '../src/keys';
@@ -526,10 +526,10 @@ describe('unfiltered reconciliation scope', () => {
 		const held = deferred();
 		inner.gate('get', held.promise);
 
-		const engine = adapter.runUnfiltered(claim, async () => {
+		const engine = runUnfiltered(adapter, claim, async () => {
 			const value = await adapter.get('role.9');
 			// Still unfiltered after an await, and inside a nested scope.
-			const nested = await adapter.runUnfiltered(claim, () => adapter.keys(ROLES));
+			const nested = await runUnfiltered(adapter, claim, () => adapter.keys(ROLES));
 			return { value, nested, after: await adapter.getToRelationship(ROLES) };
 		});
 		const caller = { get: await adapter.get('role.9'), keys: await adapter.keys(ROLES) };
@@ -547,7 +547,7 @@ describe('unfiltered reconciliation scope', () => {
 		second.store.set(...ghost);
 		const claim = staleGuild(first.state, G);
 
-		const seen = await first.adapter.runUnfiltered(claim, async () => ({
+		const seen = await runUnfiltered(first.adapter, claim, async () => ({
 			bulkGet: await first.adapter.bulkGet(['role.9']),
 			scan: await first.adapter.scan('role.*', true),
 			values: await first.adapter.values(ROLES),
@@ -578,7 +578,7 @@ describe('unfiltered reconciliation scope', () => {
 			() => adapter.removeToRelationship(ROLES, '9'),
 			() => adapter.removeRelationship(ROLES),
 		]) {
-			expect(await outcome(inner, () => adapter.runUnfiltered(claim, remove))).toBeInstanceOf(ReconciliationCancelled);
+			expect(await outcome(inner, () => runUnfiltered(adapter, claim, remove))).toBeInstanceOf(ReconciliationCancelled);
 		}
 		expect(store.get('role.9')).toEqual(ghost[1]);
 	});
@@ -597,7 +597,7 @@ describe('unfiltered reconciliation scope', () => {
 		// A normal caller sees none of it, so a filtered cascade would orphan every child.
 		expect(await cache.roles!.keys(G)).toEqual([]);
 
-		await adapter.runUnfiltered(claim, () => cache.guilds!.remove(G));
+		await runUnfiltered(adapter, claim, () => cache.guilds!.remove(G));
 
 		expect(store.scan('*.*', true)).toEqual([]);
 		expect(store.scan('*.*.*', true)).toEqual([]);
@@ -613,7 +613,7 @@ describe('unfiltered reconciliation scope', () => {
 		// The bot joined the guild again before the cleanup ran.
 		state.guildAvailable(0, G, 5, { startup: false, unavailable: false });
 
-		const error = await rejection(() => adapter.runUnfiltered(claim, () => cache.guilds!.remove(G)));
+		const error = await rejection(() => runUnfiltered(adapter, claim, () => cache.guilds!.remove(G)));
 
 		expect(error).toBeInstanceOf(ReconciliationCancelled);
 		expect(store.get('role.9')).toEqual(ghost[1]);

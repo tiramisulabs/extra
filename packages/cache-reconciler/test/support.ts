@@ -25,18 +25,23 @@ export function gatewayDispatch(bot: MockBot): Dispatch {
 	return (packet, shardId = 0) => handlePayload(shardId, packet);
 }
 
-export function readyPacket(options: { guilds: string[] }): DispatchPacket {
+export function readyPacket(options: {
+	guilds: string[];
+	s?: number;
+	sessionId?: string;
+	shard?: [id: number, total: number];
+}): DispatchPacket {
 	return {
 		op: 0,
 		t: 'READY',
-		s: 1,
+		s: options.s ?? 1,
 		d: {
 			v: 10,
 			user: { id: BOT_ID, username: 'bot', discriminator: '0', avatar: null, global_name: null },
 			guilds: options.guilds.map(id => ({ id, unavailable: true })),
-			session_id: 'session-1',
+			session_id: options.sessionId ?? 'session-1',
 			resume_gateway_url: 'wss://gateway.invalid',
-			shard: [0, 1],
+			shard: options.shard ?? [0, 1],
 			application: { id: APPLICATION_ID, flags: 0 },
 		},
 	};
@@ -45,11 +50,30 @@ export function readyPacket(options: { guilds: string[] }): DispatchPacket {
 export interface GuildPayload {
 	id: string;
 	name?: string;
+	unavailable?: boolean;
 	roles?: { id: string; name?: string }[];
+	members?: { user: { id: string; username?: string }; roles?: string[] }[];
 }
 
-export function guildPacket(t: 'GUILD_UPDATE' | 'RAW_GUILD_CREATE', s: number, guild: GuildPayload) {
-	return { op: 0, t, s, d: guild } satisfies DispatchPacket;
+export function guildPacket(
+	t: 'GUILD_CREATE' | 'GUILD_UPDATE' | 'RAW_GUILD_CREATE',
+	s: number,
+	guild: GuildPayload,
+): DispatchPacket {
+	return { op: 0, t, s, d: guild };
+}
+
+export function guildDeletePacket(
+	t: 'GUILD_DELETE' | 'RAW_GUILD_DELETE',
+	s: number,
+	guild: { id: string; unavailable?: boolean },
+): DispatchPacket {
+	return { op: 0, t, s, d: guild };
+}
+
+/** Seyfert emits this without a payload, reusing the sequence of the packet that completed the stream. */
+export function guildsReadyPacket(s: number): DispatchPacket {
+	return { op: 0, t: 'GUILDS_READY', s };
 }
 
 /** A promise with its resolver, for holding an operation open across other work. */
@@ -59,6 +83,11 @@ export function deferred() {
 		resolve = res;
 	});
 	return { promise, resolve };
+}
+
+/** Lets promise continuations that are already queued run, without advancing timers. */
+export async function settleMicrotasks(turns = 30): Promise<void> {
+	for (let turn = 0; turn < turns; turn++) await Promise.resolve();
 }
 
 /** A guild ID Discord's shard formula assigns to `index % totalShards`. */
