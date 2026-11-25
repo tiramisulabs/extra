@@ -94,10 +94,10 @@ local function partition(guild)
 		known = false
 		if value then
 			local gen, cut, shard = string.match(value, '^(.*)|(%d+)|(%d+)$')
-			if holder(shard) == string.match(gen, '^(.*):%d+$') then
+			if gen and holder(shard) == string.match(gen, '^(.*):%d+$') then
 				known = { gen, tonumber(cut) }
 			else
-				-- Its owner is gone and never comes back under that incarnation.
+				-- Its owner is gone and never comes back under that incarnation, or nothing readable opened it.
 				redis.call('HDEL', guildsKey, guild)
 			end
 		end
@@ -177,8 +177,8 @@ for index, op in ipairs(input.ops) do
 		partitions = {}
 	end
 	if kind == 'acquire' then
-		local holder = redis.call('GET', leaseKey)
-		if holder and holder ~= inc then
+		local current = redis.call('GET', leaseKey)
+		if current and current ~= inc then
 			results[index] = 'busy'
 			break
 		end
@@ -705,11 +705,15 @@ class RedisBinding implements CoordinatorBinding {
 		while (this.queue.length && !this.leaseLost && !this.closed) {
 			const changes = this.queue;
 			this.queue = [];
+			// A shard the batch gives back is not one it counts on: Redis may have released it already and lost
+			// the reply, and giving it back twice is not losing it.
+			const releasing = new Set(changes.filter(change => change.type === 'suspended').map(change => change.shardId));
 			let results: string[];
 			try {
 				results = await this.call<string[]>(META_SCRIPT, {
 					ops: changes.map(change => this.metaOp(change)),
 					ttl: this.ttl,
+					held: [...this.owned.keys()].filter(shard => !releasing.has(shard)),
 				});
 			} catch (cause) {
 				if (cause instanceof LeaseLost) return;
@@ -875,12 +879,20 @@ class RedisBinding implements CoordinatorBinding {
 			this.lost('The shard leases could not be renewed before they expired.', cause);
 			return;
 		}
-		// A release or a new READY that was on its way decides what this coordinator still owns.
-		await this.applying?.catch(() => undefined);
-		for (const [index, [shard, generation]] of leases.entries()) {
-			if (results[index] === 'ok' || this.owned.get(shard) !== generation) continue;
-			this.lost('A shard lease this coordinator held is owned by another coordinator or expired.');
-			return;
+		const refused = leases.filter((_, index) => results[index] !== 'ok');
+		if (refused.length) {
+			// A release or a new READY of its own may be what moved the shard on, also one Redis applied without
+			// its reply ever arriving. Whatever is queued is applied before the refusal is judged; if that cannot
+			// be done now, the next renewal judges it.
+			try {
+				await this.sync();
+			} catch {
+				return;
+			}
+			if (refused.some(([shard, generation]) => this.owned.get(shard) === generation)) {
+				this.lost('A shard lease this coordinator held is owned by another coordinator or expired.');
+				return;
+			}
 		}
 		this.lastRenewal = performance.now();
 	}

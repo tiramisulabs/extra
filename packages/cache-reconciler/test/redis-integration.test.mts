@@ -88,6 +88,30 @@ function bound(coordinator: ReturnType<typeof redisCoordinator>): BoundCoordinat
 	return coordinator as BoundCoordinator;
 }
 
+/**
+ * Observes the coordinator scripts Redis already ran, before their reply reaches the coordinator. A hook that
+ * throws stands for a connection that dropped after the script was applied. Returns the undo.
+ */
+function onReply(client: RedisClientType, hook: (input: Record<string, unknown>) => void): () => void {
+	const scripted = client as unknown as {
+		evalSha(sha: string, options: { keys: string[]; arguments: string[] }): Promise<unknown>;
+	};
+	const original = scripted.evalSha;
+	scripted.evalSha = async (sha, options) => {
+		const reply = await original.call(scripted, sha, options);
+		if (!options.keys.length) hook(JSON.parse(options.arguments[0]!));
+		return reply;
+	};
+	return () => {
+		scripted.evalSha = original;
+	};
+}
+
+/** Whether a script input carries an ownership change of this kind. */
+function carries(input: Record<string, unknown>, kind: string): boolean {
+	return Array.isArray(input.ops) && input.ops.some(op => Array.isArray(op) && op[0] === kind);
+}
+
 /** One process sharing the cache: its own RedisAdapter connection, state, and coordinator incarnation. */
 function createWorker(options: WorkerOptions): Worker {
 	const namespace = options.namespace!;
@@ -1085,6 +1109,86 @@ describe.skipIf(!redisUrl)('redisCoordinator against Redis', () => {
 
 			expect(await owner.binding.sweep([target], cut!)).toEqual({ removed: ['role.1'], failed: [] });
 			expect(await rest.adapter.get('role.1')).toBeNull();
+		}));
+
+	it('survives a renewal that follows a new session Redis took without answering', () =>
+		withRedis(async ({ worker }) => {
+			const owner = await worker();
+			await own(owner, [G]);
+			// The shard reconnects. Redis applies the new session and the connection drops before the reply.
+			let dropped = false;
+			const restore = onReply(owner.inner.client, input => {
+				if (dropped || !carries(input, 'acquire')) return;
+				dropped = true;
+				throw new Error('Socket closed unexpectedly');
+			});
+			owner.state.ready(0, 'session-2', 1, [G], 1);
+			await expect(owner.binding.publish()).rejects.toThrow('Socket closed unexpectedly');
+			restore();
+
+			// The renewal timer fires before anything else applies the session again.
+			await Reflect.get(owner.binding, 'renew').call(owner.binding);
+
+			expect(owner.state.lifecycle).toBe('active');
+			owner.state.guildAvailable(0, G, 2, { startup: true, unavailable: false });
+			await owner.adapter.set(...role('1'));
+			expect(await owner.adapter.get('role.1')).toMatchObject({ id: '1' });
+		}));
+
+	it('gives a shard back again when Redis released it without answering', () =>
+		withRedis(async ({ namespace, raw, worker }) => {
+			const onShard0 = guildOn(2);
+			const onShard1 = guildOn(3);
+			const owner = await worker();
+			await own(owner, [onShard0], { shard: [0, 2] });
+			await own(owner, [onShard1], { shard: [1, 2] });
+			await owner.adapter.set(...role('a', onShard0));
+			let dropped = false;
+			const restore = onReply(owner.inner.client, input => {
+				if (dropped || !carries(input, 'release')) return;
+				dropped = true;
+				throw new Error('Socket closed unexpectedly');
+			});
+			owner.state.suspend(1);
+			await expect(owner.binding.publish()).rejects.toThrow('Socket closed unexpectedly');
+			restore();
+			expect(await raw.exists(`${namespace}:reconciler:lease:1`)).toBe(0);
+
+			// The shard it keeps is unaffected, by its next read and by its next renewal alike.
+			expect(await owner.adapter.get('role.a')).toMatchObject({ id: 'a' });
+			await Reflect.get(owner.binding, 'renew').call(owner.binding);
+			expect(owner.state.lifecycle).toBe('active');
+			expect(await raw.exists(`${namespace}:reconciler:lease:0`)).toBe(1);
+		}));
+
+	it('reopens a shard it gave back and took again in one step', () =>
+		withRedis(async ({ worker }) => {
+			const owner = await worker();
+			const reader = await worker();
+			await own(owner, [G]);
+			await owner.adapter.set(...role('old'));
+			// The worker stops following the shard and a new session arrives before anything reached Redis.
+			owner.state.suspend(0);
+			owner.state.ready(0, 'session-2', 1, [G], 1);
+			owner.state.guildAvailable(0, G, 2, { startup: true, unavailable: false });
+			await owner.adapter.set(...role('new'));
+
+			expect(await reader.adapter.keys(ROLES)).toEqual(['role.new']);
+			expect(owner.state.lifecycle).toBe('active');
+		}));
+
+	it('treats a guild entry it cannot read as a guild nobody opened', () =>
+		withRedis(async ({ namespace, raw, worker }) => {
+			const owner = await worker();
+			await own(owner, [G]);
+			const other = guildOn(4);
+			await raw.hSet(`${namespace}:reconciler:guilds`, other, 'not-a-partition');
+
+			await owner.adapter.set(...role('1', other));
+
+			expect(await owner.adapter.get('role.1')).toBeNull();
+			expect(await raw.hExists(`${namespace}:reconciler:guilds`, other)).toBeFalsy();
+			expect(owner.state.lifecycle).toBe('active');
 		}));
 
 	it('lets a successor take over once the lease of a stalled owner expires', () =>

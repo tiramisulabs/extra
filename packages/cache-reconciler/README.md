@@ -275,8 +275,10 @@ lease lasts 30 seconds and is renewed every 10.
 
 - A guild is served only while the instance that delivered it still holds the lease of its shard. When that process
   shuts down, its guilds stop being served to every other process at once; when it crashes, they stop once its lease
-  expires. The entries stay stored, and the next owner's snapshots make them readable again or remove them. Expect
-  other processes to see cache misses for a shard's guilds while its owner restarts.
+  expires. The entries stay stored. What the next owner's snapshots list becomes readable again, what they prove
+  stale is removed, and the rest stays unreadable until it is written again. Expect other processes to see cache
+  misses for a shard's guilds while its owner restarts. A process that was already waiting for the shard notices a
+  released lease on its next attempt, up to 10 seconds later.
 - While another instance holds a shard's lease, a new owner waits for it to be released or to expire, and keeps
   reading what that instance maintains. Its cache writes and cleanup for that shard wait with it. Seyfert caches a
   packet before it runs the event's listeners, so the events of that shard wait too: after a crash, a process that
