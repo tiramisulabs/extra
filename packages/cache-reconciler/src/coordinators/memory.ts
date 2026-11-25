@@ -44,6 +44,8 @@ class MemoryBinding implements CoordinatorBinding {
 
 	close(): void {}
 
+	publish(): void {}
+
 	visibleKeys(keys: readonly string[]): string[] {
 		return keys.filter(key => this.state.isVisible(key));
 	}

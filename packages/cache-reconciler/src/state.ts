@@ -52,6 +52,23 @@ export interface GuildClaim {
 	readonly work: GuildWork | undefined;
 }
 
+/**
+ * A change to which generation owns a shard or to which guild partitions are open. A coordinator that keeps
+ * this state outside the process applies the changes in the order they were reported.
+ */
+export type PartitionChange =
+	| { readonly type: 'generation'; readonly shardId: number; readonly generation: number }
+	| { readonly type: 'suspended'; readonly shardId: number; readonly generation: number }
+	| {
+			readonly type: 'opened';
+			readonly shardId: number;
+			readonly generation: number;
+			readonly guildId: string;
+			readonly cut: number;
+	  }
+	| { readonly type: 'closed'; readonly shardId: number; readonly generation: number; readonly guildId: string }
+	| { readonly type: 'committed'; readonly shardId: number; readonly generation: number };
+
 export interface KeyTarget {
 	readonly key: string;
 	readonly to: string;
@@ -109,7 +126,10 @@ export interface StateSnapshot {
 	pending: {
 		/** Guild packets registered and not settled yet. */
 		guilds: number;
-		/** Keys hidden while their physical removal is outstanding or failed. */
+		/**
+		 * Keys hidden while their physical removal is outstanding or failed. Counted by `memoryCoordinator()`
+		 * only: with `redisCoordinator()` visibility lives in Redis, and this stays 0.
+		 */
 		deletions: number;
 		/** Background sweeps in flight. */
 		tasks: number;
@@ -181,6 +201,18 @@ export class ReconciliationState {
 	private readonly failures: ReconcilerFailure[] = [];
 	private failureCount = 0;
 	private idleWaiters: (() => void)[] = [];
+	private changed: ((change: PartitionChange) => void) | undefined;
+	private stopped: (() => void) | undefined;
+
+	/** Reports every generation and partition change to the coordinator, synchronously and in order. */
+	subscribe(listener: (change: PartitionChange) => void): void {
+		this.changed = listener;
+	}
+
+	/** Calls back once, when the instance stops admitting work because it failed or began to close. */
+	onStop(listener: () => void): void {
+		this.stopped = listener;
+	}
 
 	get lifecycle(): ManagerLifecycle {
 		return this.currentLifecycle;
@@ -202,6 +234,7 @@ export class ReconciliationState {
 		this.failed = true;
 		this.failureCause = cause;
 		this.cancelWork();
+		this.stop();
 	}
 
 	/**
@@ -212,11 +245,18 @@ export class ReconciliationState {
 		if (this.currentLifecycle === 'closing' || this.currentLifecycle === 'closed') return;
 		this.currentLifecycle = 'closing';
 		this.cancelWork();
+		this.stop();
 	}
 
 	close(): void {
 		this.beginClose();
 		this.currentLifecycle = 'closed';
+	}
+
+	private stop(): void {
+		const stopped = this.stopped;
+		this.stopped = undefined;
+		stopped?.();
 	}
 
 	// Gateway observations
@@ -249,6 +289,7 @@ export class ReconciliationState {
 		this.generations.set(shardId, generation);
 		this.awaitingReady.delete(shardId);
 		this.owners.clear();
+		this.changed?.({ type: 'generation', shardId, generation: generation.id });
 		return cancelled;
 	}
 
@@ -270,11 +311,13 @@ export class ReconciliationState {
 	 * the shard.
 	 */
 	suspend(shardId: number): boolean {
-		if (!this.admits || (this.awaitingReady.has(shardId) && !this.generations.has(shardId))) return false;
+		const generation = this.generations.get(shardId);
+		if (!this.admits || (this.awaitingReady.has(shardId) && !generation)) return false;
 		this.generations.delete(shardId);
 		this.awaitingReady.add(shardId);
 		this.owners.clear();
 		this.cancelWork(shardId);
+		if (generation) this.changed?.({ type: 'suspended', shardId, generation: generation.id });
 		return true;
 	}
 
@@ -298,7 +341,7 @@ export class ReconciliationState {
 		if (!generation) return;
 		advance(generation, sequence);
 		if (sequence > (generation.seen.get(guildId) ?? 0)) generation.seen.set(guildId, sequence);
-		if (options.startup || !generation.cuts.has(guildId)) generation.cuts.set(guildId, sequence);
+		if (options.startup || !generation.cuts.has(guildId)) this.open(generation, guildId, sequence);
 		if (!options.startup) return;
 		return this.register(generation, options.unavailable ? 'unavailable' : 'snapshot', guildId, sequence, true);
 	}
@@ -319,7 +362,7 @@ export class ReconciliationState {
 		advance(generation, sequence);
 		if (!options.unavailable) return this.register(generation, 'delete', guildId, sequence, options.startup);
 		if (!options.startup) return;
-		if (!generation.cuts.has(guildId)) generation.cuts.set(guildId, sequence);
+		if (!generation.cuts.has(guildId)) this.open(generation, guildId, sequence);
 		return this.register(generation, 'unavailable', guildId, sequence, true);
 	}
 
@@ -369,7 +412,24 @@ export class ReconciliationState {
 				if (work.kind === 'delete' && work.guildId === guildId && work.sequence < limit) limit = work.sequence;
 			}
 		}
-		if ((owner.seen.get(guildId) ?? 0) <= limit) owner.cuts.delete(guildId);
+		if ((owner.seen.get(guildId) ?? 0) > limit || !owner.cuts.delete(guildId)) return;
+		this.changed?.({ type: 'closed', shardId: owner.shardId, generation: owner.id, guildId });
+	}
+
+	/** The local generation that owns the guild's shard, with the position a write issued now is stamped with. */
+	ownership(guildId: string): (CausalPosition & { readonly shardId: number }) | undefined {
+		const owner = this.ownerOf(guildId);
+		return owner && { shardId: owner.shardId, generation: owner.id, sequence: owner.sequence };
+	}
+
+	/** The shard a generation belongs to, while it is still the shard's current generation. */
+	shardOfGeneration(generation: number): number | undefined {
+		return this.findGeneration(generation)?.shardId;
+	}
+
+	/** Whether a shard waits for a READY, which leaves the owner of unscoped guilds unknown. */
+	get awaiting(): boolean {
+		return this.awaitingReady.size > 0;
 	}
 
 	/** Guild IDs the generation currently knows: the READY list plus guilds that became available since. */
@@ -703,8 +763,14 @@ export class ReconciliationState {
 			if (!outcome) return;
 		}
 		generation.committed = true;
+		this.changed?.({ type: 'committed', shardId: generation.shardId, generation: generation.id });
 		this.resolveIdle();
 		return generation.id;
+	}
+
+	private open(generation: Generation, guildId: string, cut: number): void {
+		generation.cuts.set(guildId, cut);
+		this.changed?.({ type: 'opened', shardId: generation.shardId, generation: generation.id, guildId, cut });
 	}
 
 	private findGeneration(id: number): Generation | undefined {

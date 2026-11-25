@@ -18,6 +18,12 @@
 			"require": "./lib/index.js",
 			"default": "./lib/index.js"
 		},
+		"./coordinators/redis": {
+			"types": "./lib/coordinators/redis.d.ts",
+			"import": "./lib/coordinators/redis.js",
+			"require": "./lib/coordinators/redis.js",
+			"default": "./lib/coordinators/redis.js"
+		},
 		"./package.json": "./package.json"
 	},
 	"scripts": {
@@ -31,13 +37,25 @@
 		"prepublishOnly": "pnpm build"
 	},
 	"devDependencies": {
+		"@redis/client": "^6.0.1",
+		"@slipher/redis-adapter": "workspace:*",
 		"@slipher/testing": "workspace:*",
 		"@types/node": "^26.0.1",
 		"seyfert": "6.0.0",
 		"typescript": "^6.0.3"
 	},
 	"peerDependencies": {
+		"@redis/client": "^6.0.1",
+		"@slipher/redis-adapter": "0.0.9",
 		"seyfert": ">=6.0.0"
+	},
+	"peerDependenciesMeta": {
+		"@redis/client": {
+			"optional": true
+		},
+		"@slipher/redis-adapter": {
+			"optional": true
+		}
 	},
 	"dependenciesMeta": {
 		"@slipher/testing": {

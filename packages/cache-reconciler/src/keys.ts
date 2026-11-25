@@ -46,6 +46,14 @@ export class KeyLayout {
 		return RESOURCES.has(namespaceOf(name));
 	}
 
+	/** The guild named by the key itself: a guild record, or an entry whose key carries its guild. */
+	guildOfKey(key: string): string | undefined {
+		const record = this.guildRecord(key);
+		if (record !== undefined) return guildScope(record);
+		const [namespace, guild, id] = key.split('.');
+		return id !== undefined && RESOURCES.get(namespace!)?.keyed ? guildScope(guild!) : undefined;
+	}
+
 	/** The guild a guild-record key stands for. */
 	guildRecord(key: string): string | undefined {
 		return namespaceOf(key) === GUILD ? key.slice(GUILD.length + 1) : undefined;
@@ -61,7 +69,7 @@ export class KeyLayout {
 			key,
 			to,
 			id,
-			guildId: namespace === GUILD ? guildScope(id) : resource.scoped ? this.guildOf(to) : undefined,
+			guildId: namespace === GUILD ? guildScope(id) : this.relationshipGuild(to),
 			replaceable: resource.replaceable,
 		};
 	}
@@ -88,12 +96,12 @@ export class KeyLayout {
 	}
 
 	/**
-	 * The guild partition a scoped relationship belongs to. The scope is not a guild for DM channels (`@me`) or
-	 * for application emojis, which Seyfert files under the application ID.
+	 * The guild partition a relationship of a guild-scoped resource belongs to. The scope is not a guild for DM
+	 * channels (`@me`) or for application emojis, which Seyfert files under the application ID.
 	 */
-	private guildOf(to: string): string | undefined {
+	relationshipGuild(to: string): string | undefined {
 		const separator = to.indexOf('.');
-		if (separator === -1) return;
+		if (separator === -1 || !RESOURCES.get(namespaceOf(to))?.scoped) return;
 		const scope = guildScope(to.slice(separator + 1));
 		return scope === this.applicationId() ? undefined : scope;
 	}

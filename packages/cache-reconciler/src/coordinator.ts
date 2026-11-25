@@ -5,8 +5,8 @@ import type { Awaitable } from './sync';
 
 /** Coordination backend selected through `cacheReconciler({ coordinator })`. */
 export interface CacheReconcilerCoordinator {
-	/** `memory` coordinates a single process. */
-	readonly kind: 'memory';
+	/** `memory` coordinates a single process; `redis` coordinates every worker sharing one Redis cache. */
+	readonly kind: 'memory' | 'redis';
 	/** @internal Binds the coordinator to one installation. Throws to refuse an adapter it cannot fence. */
 	bind(host: CoordinatorHost): CoordinatorBinding;
 }
@@ -17,8 +17,11 @@ export interface CoordinatorHost {
 	readonly inner: Adapter;
 	readonly state: ReconciliationState;
 	readonly layout: KeyLayout;
-	/** Called with the keys of a caller's write or removal that failed, before the failure reaches the caller. */
-	mutationFailed?(keys: readonly string[], cause: unknown): void;
+	/**
+	 * Called with the keys of a caller's write or removal that failed, before the failure reaches the caller.
+	 * `guildIds` names the guilds the mutation addressed when its keys alone do not say.
+	 */
+	mutationFailed?(keys: readonly string[], cause: unknown, guildIds?: readonly (string | undefined)[]): void;
 }
 
 export interface RelationshipMember {
@@ -48,6 +51,11 @@ export interface CoordinatorBinding {
 	/** Runs after the wrapped adapter started. */
 	start(): Awaitable<void>;
 	close(): Awaitable<void>;
+	/**
+	 * Makes the generation and partition changes the Gateway interceptor reported effective for every reader.
+	 * The interceptor itself performs no I/O, so a coordinator that keeps them elsewhere applies them here.
+	 */
+	publish(): Awaitable<void>;
 
 	/** The managed keys a caller may read, in input order. */
 	visibleKeys(keys: readonly string[]): Awaitable<string[]>;
@@ -88,10 +96,7 @@ export class ReconciliationCancelled extends Error {
 }
 
 export function isCoordinator(value: unknown): value is CacheReconcilerCoordinator {
-	return (
-		typeof value === 'object' &&
-		value !== null &&
-		Reflect.get(value, 'kind') === 'memory' &&
-		typeof Reflect.get(value, 'bind') === 'function'
-	);
+	if (typeof value !== 'object' || value === null || typeof Reflect.get(value, 'bind') !== 'function') return false;
+	const kind = Reflect.get(value, 'kind');
+	return kind === 'memory' || kind === 'redis';
 }

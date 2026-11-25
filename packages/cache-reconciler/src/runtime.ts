@@ -16,6 +16,7 @@ import { ReconciliationEngine } from './engine';
 import { KeyLayout } from './keys';
 import { type GuildSnapshotPlan, planGuildSnapshot } from './snapshot';
 import { type GuildOutcome, type GuildWork, ReconciliationState, type StateSnapshot } from './state';
+import { isThenable } from './sync';
 
 const PLUGIN_NAME = '@slipher/cache-reconciler';
 const PROBE_EVENT = `${PLUGIN_NAME}:probe`;
@@ -133,7 +134,7 @@ export class ReconcilerRuntime {
 			inner: original,
 			state: this.state,
 			layout,
-			mutationFailed: (keys, cause) => this.mutationFailed(keys, cause),
+			mutationFailed: (keys, cause, guildIds) => this.mutationFailed(keys, cause, guildIds),
 		});
 		const wrapper = new ReconciledAdapter(original, {
 			state: this.state,
@@ -340,6 +341,12 @@ export class ReconcilerRuntime {
 			return;
 		}
 		if (!this.state.admits) return;
+		if (event.t === 'READY') {
+			// The new generation hides the shard for this process already; other readers follow once it is published.
+			const publishing = this.installation?.binding.publish();
+			if (isThenable(publishing)) this.background(() => Promise.resolve(publishing));
+			return;
+		}
 		if (event.t !== 'RAW_GUILD_CREATE' && event.t !== 'RAW_GUILD_DELETE' && event.t !== 'GUILD_DELETE') return;
 		try {
 			const guildId = event.d.id;
@@ -414,21 +421,44 @@ export class ReconcilerRuntime {
 	 * A caller's cache mutation failed. When it belongs to a guild packet Seyfert was caching, the post-cache
 	 * callback will never run for that packet, so its work is settled here.
 	 */
-	private mutationFailed(keys: readonly string[], cause: unknown): void {
+	private mutationFailed(
+		keys: readonly string[],
+		cause: unknown,
+		guildIds: readonly (string | undefined)[] = [],
+	): void {
 		if (typeof cause === 'object' && cause !== null) this.attributed.add(cause);
 		const waiting = this.correlation.pending().filter(tracked => tracked.dispatched);
 		if (!waiting.length) return;
-		for (const key of keys) {
-			const record = this.installation?.layout.guildRecord(key);
-			const guildId = record ?? this.state.guildOf(key);
-			if (guildId === undefined) continue;
-			for (const tracked of waiting) {
-				if (tracked.work.guildId !== guildId) continue;
-				// A snapshot is only known to have failed when the write carrying its guild record failed.
-				if (tracked.work.kind !== 'delete' && record === undefined) continue;
-				this.abandon(tracked, `Seyfert could not apply ${tracked.event} to the cache.`, cause);
-			}
+		const layout = this.installation?.layout;
+		// Each guild the failed mutation touched, and whether it carried the guild record itself.
+		const touched = new Map<string, boolean>();
+		for (const guildId of guildIds) {
+			if (guildId !== undefined) touched.set(guildId, false);
 		}
+		for (const key of keys) {
+			const record = layout?.guildRecord(key);
+			const guildId = record ?? layout?.guildOfKey(key) ?? this.state.guildOf(key);
+			if (guildId !== undefined) touched.set(guildId, record !== undefined || touched.get(guildId) === true);
+		}
+		for (const tracked of waiting) {
+			const record = touched.get(tracked.work.guildId);
+			// A snapshot is only known to have failed when the write carrying its guild record failed.
+			if (record === undefined || (tracked.work.kind !== 'delete' && !record)) continue;
+			this.abandon(tracked, `Seyfert could not apply ${tracked.event} to the cache.`, cause);
+			if (tracked.work.kind === 'delete') this.stopServing(tracked.work);
+		}
+	}
+
+	/**
+	 * Discord reported the guild as removed and Seyfert could not remove it, so what is left at least stops
+	 * being served. It stays stored until the shard's next startup finds the guild missing from READY.
+	 */
+	private stopServing(work: GuildWork): void {
+		const binding = this.installation?.binding;
+		if (!binding) return;
+		this.background(async () => {
+			await binding.closeGuild(work.guildId, work.sequence);
+		});
 	}
 
 	private abandon(tracked: TrackedWork, message: string, cause?: unknown): void {

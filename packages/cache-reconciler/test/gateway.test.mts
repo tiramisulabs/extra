@@ -1,9 +1,18 @@
 import { createMockBot } from '@slipher/testing';
 import { type Adapter, CacheFrom, Client, createPlugin, definePlugins, MemoryAdapter, PluginOrder } from 'seyfert';
 import { describe, expect, it, vi } from 'vitest';
-import { cacheReconciler, memoryCoordinator } from '../src';
+import { type CacheReconcilerCoordinator, cacheReconciler, memoryCoordinator } from '../src';
 import { ReconciledAdapter } from '../src/adapter';
-import { innerCloner, managerOf, outerCloner, packetEntry, realClient, startReconciled, workerClient } from './clients';
+import {
+	innerCloner,
+	managerOf,
+	outerCloner,
+	packetEntry,
+	realClient,
+	startBot,
+	startReconciled,
+	workerClient,
+} from './clients';
 import {
 	AsyncAdapter,
 	BOT_ID,
@@ -454,14 +463,48 @@ describe('packets Seyfert never caches', () => {
 		adapter.failNext('bulkRemove', failure);
 
 		await expect(dispatch(guildDeletePacket('GUILD_DELETE', 5, { id: G }))).rejects.toBe(failure);
+		await manager.waitForIdle();
 
 		expect(adapter.memory.get(`role.${ROLE}`)).not.toBeNull();
 		expect(await client.cache.roles!.keys(G)).toEqual([]);
+		// Discord said the guild is gone: the record Seyfert never got to remove is not served either.
+		expect(adapter.memory.get(`guild.${G}`)).not.toBeNull();
+		expect(await client.cache.guilds!.raw(G)).toBeUndefined();
 		expect(manager.status()).toMatchObject({
 			idle: true,
 			pending: { guilds: 0 },
 			failures: [{ kind: 'removal' }, { kind: 'guild', guildId: G, cause: failure }],
 		});
+		await bot.close();
+	});
+
+	it('settles a removed guild when the coordinator names a guild the failed keys do not', async () => {
+		const failure = new Error('removal failed');
+		// Stands in for a coordinator that learns the guild from the relationship it was asked to remove.
+		const coordinator: CacheReconcilerCoordinator = {
+			kind: 'memory',
+			bind(host) {
+				const binding = memoryCoordinator().bind(host);
+				binding.remove = () => {
+					host.mutationFailed?.([], failure, [undefined, G]);
+					throw failure;
+				};
+				return binding;
+			},
+		};
+		const { bot, client, dispatch } = await startBot(new MemoryAdapter(), cacheReconciler({ coordinator }));
+		const manager = managerOf(client);
+		await startShard(dispatch);
+
+		await expect(dispatch(guildDeletePacket('GUILD_DELETE', 5, { id: G }))).rejects.toBe(failure);
+		await manager.waitForIdle();
+
+		expect(manager.status()).toMatchObject({
+			idle: true,
+			pending: { guilds: 0 },
+			failures: [{ kind: 'guild', guildId: G, cause: failure }],
+		});
+		expect(await client.cache.roles!.keys(G)).toEqual([]);
 		await bot.close();
 	});
 
