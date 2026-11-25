@@ -1,13 +1,20 @@
 # @slipher/cache-reconciler
 
-Seyfert plugin that reconciles a persistent cache with the Gateway's authoritative snapshots.
+Seyfert plugin that reconciles a cache with the Gateway's authoritative snapshots.
 
-A cache that outlives the process that wrote it keeps whatever Discord changed while nobody was listening: a role
-deleted during a deploy, a channel removed while a shard was reconnecting, a guild the bot was kicked from. The plugin
-wraps the configured cache adapter so that such entries stop being readable as soon as a new Gateway session starts,
-and removes them physically once the session's guild snapshots show what is actually there.
+Stale entries build up in two situations:
 
-The plugin makes no REST calls. An entry it does not serve is an ordinary cache miss.
+- **A new session in the same process.** Discord invalidates a session and sends a new `READY` with a fresh guild
+  stream while the process and its cache stay intact. `READY` does not flush, and Seyfert applies guild snapshots with
+  `guilds.patch()`, which writes what the payload lists and never removes what it leaves out. Anything deleted during
+  the gap stays cached with any adapter, including Seyfert's in-memory `MemoryAdapter`.
+- **A cache that outlives the process.** A restart, deploy, or crash with a persistent adapter such as `RedisAdapter`
+  keeps whatever Discord changed while the bot was offline: deleted roles, removed channels, or guilds the bot left.
+
+The plugin wraps the configured cache adapter so that after any new `READY`, nothing cached earlier in that shard's
+guilds is served until the new session writes or confirms it. Entries the session's guild snapshots prove stale are
+then removed physically. There is no warm guild cache after a restart: unconfirmed entries are ordinary cache misses,
+and the plugin makes no REST calls.
 
 ## Install
 
@@ -38,8 +45,18 @@ client.setServices({
 await client.start();
 ```
 
-`memoryCoordinator()` keeps the reconciliation state in the process. It works with any adapter and is correct while
-exactly one process reads and writes that cache.
+A coordinator stores only bookkeeping for the current Gateway session: which shard session is current, which guilds it
+delivered, and which keys it confirmed. Cached values stay in the adapter.
+
+After any new `READY`, with either coordinator, nothing cached earlier in that shard's guilds is served until the new
+session writes or confirms it. Keeping that bookkeeping in process memory with `memoryCoordinator()` therefore costs
+little in a crash: the next `READY` would discard the guild part anyway. Users, DM channels, and application emojis
+are the exception, and are misses until the new process writes them again.
+
+| Coordinator | Use when | Bookkeeping |
+| --- | --- | --- |
+| `memoryCoordinator()` | One process uses the cache, with any adapter except `WorkerAdapter` | Process memory |
+| `redisCoordinator()` | Several processes share one `RedisAdapter` cache | Redis |
 
 ### Configuration order
 
@@ -59,8 +76,14 @@ synthetic `@slipher/cache-reconciler:probe` packet through the cache resources o
 
 ### Workers that share a Redis cache
 
-When several processes use the same Redis cache, each of them needs the plugin with `redisCoordinator()`, which keeps
-ownership and visibility in Redis instead of in one process:
+When several processes share one `RedisAdapter` cache, every process must see the same session bookkeeping. Configure
+each process with `redisCoordinator()`, which stores shard ownership, open guilds, and key visibility in Redis instead
+of in one process.
+
+Like `memoryCoordinator()`, it gives no warm cache of a shard's guilds after that shard's owner restarts: their entries
+stay hidden until the new session writes or confirms them. Guilds of shards that other live processes own stay
+served. So do entries outside any guild (users, DM channels, and application emojis written by any coordinated
+process), across restarts.
 
 ```ts
 import { cacheReconciler } from '@slipher/cache-reconciler';
