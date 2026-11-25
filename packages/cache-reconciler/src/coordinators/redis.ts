@@ -35,6 +35,11 @@ const DEFAULT_LEASE_TTL = 30_000;
 const BATCH = 100;
 /** Removals kept while Redis does not answer. Beyond it the oldest is given up. */
 const MAX_UNCONFIRMED = 1024;
+/**
+ * Releases remembered per shard. A coordinator asks for its own again only when Redis never answered, so the
+ * record has to outlast the releases of that shard that follow before it asks, not all of them.
+ */
+const RELEASES_KEPT = 16;
 
 /**
  * Shared by every script. All keys derive from the two prefixes, which is the layout contract with
@@ -44,15 +49,16 @@ const MAX_UNCONFIRMED = 1024;
  *
  * Coordinator state: `vis` maps a key to `<generation>|<sequence>|<guild>`, `guilds` maps an open guild
  * partition to `<generation>|<cut>|<shard>`, `shard:<id>` holds the generation that owns a shard,
- * `shard:<id>:guilds` lists the partitions opened under it, and `lease:<id>` names the coordinator incarnation
- * that owns the shard. A generation is `<incarnation>:<number>`.
+ * `shard:<id>:guilds` lists the partitions opened under it, `shard:<id>:released` the last generations that gave
+ * its lease back, and `lease:<id>` names the coordinator incarnation that owns the shard. A generation is
+ * `<incarnation>:<number>`.
  *
  * A partition only stands while the incarnation that opened it still holds the lease of the shard it opened it
  * under. Whatever ends that ownership, a shutdown, a crash, or a shard count that moved the guild to a shard
  * nobody acquired, also ends what the partition confirmed.
  *
- * `input.held` lists the shards this incarnation believes it owns. If any of those leases is gone the caller is
- * a former owner, and every script refuses to act for it.
+ * `input.held` lists the shards the caller counts on: the ones it holds and is not giving back. If any of those
+ * leases is gone the caller is a former owner, and every script refuses to act for it.
  */
 const PRELUDE = `
 local input = cjson.decode(ARGV[1])
@@ -159,8 +165,22 @@ end
  * Applies ownership and partition changes in order. It stops at a lease another incarnation still holds. A
  * change for a shard this incarnation gave back, or for a generation the shard already replaced, is skipped:
  * the same owner simply moved on. Losing a lease it still counts on is what the shared check reports.
+ *
+ * `input.giving` lists the shards the batch gives back, each with the generation of its first release there,
+ * the one that ends what the caller counted on. Redis may have run the batch before and lost the reply, so a
+ * lease that is gone is only a lost one when that release is not on record as having given it back. Who took
+ * the shard since does not change that, nor who gave it back, for as many releases as the record keeps.
  */
 const META_SCRIPT = `${PRELUDE}
+local function gaveBack(shard, gen)
+	for _, released in ipairs(redis.call('LRANGE', ns .. 'shard:' .. shard .. ':released', 0, -1)) do
+		if released == gen then return true end
+	end
+	return false
+end
+for _, giving in ipairs(input.giving or {}) do
+	if not holds(giving[1]) and not gaveBack(giving[1], giving[2]) then fenced = true end
+end
 if fenced then return {'fenced'} end
 local results = {}
 for index, op in ipairs(input.ops) do
@@ -189,9 +209,12 @@ for index, op in ipairs(input.ops) do
 		redis.call('HSET', shardKey, 'gen', gen, 'owner', inc, 'committed', '0')
 		results[index] = 'ok'
 	elseif kind == 'release' then
-		-- Giving the lease back is what closes the shard's guilds for every reader.
+		-- Giving the lease back is what closes the shard's guilds for every reader. The record it leaves is how
+		-- the same release, asked again, is told apart from a lease that was lost.
 		if holds(shard) then
 			redis.call('DEL', leaseKey)
+			redis.call('LPUSH', shardKey .. ':released', gen)
+			redis.call('LTRIM', shardKey .. ':released', 0, ${RELEASES_KEPT - 1})
 			leases[tostring(shard)] = false
 			partitions = {}
 		end
@@ -485,16 +508,22 @@ class RedisBinding implements CoordinatorBinding {
 		this.renewal.unref();
 	}
 
-	/** Stops renewing first, then gives back the leases this incarnation still holds. */
+	/**
+	 * Stops renewing first, then gives back the leases this incarnation still holds. It counts on none of them
+	 * by then: a lease that is already gone does not keep the others from being given back. A lease Redis may
+	 * have handed over without its reply arriving is given back too.
+	 */
 	async close(): Promise<void> {
 		this.closed = true;
 		clearInterval(this.renewal);
 		this.unpark();
 		await this.applying?.catch(() => undefined);
-		const releases: MetaOp[] = [...this.owned].map(([shard, generation]) => ['release', shard, this.token(generation)]);
+		const leases = new Map(this.owned);
+		for (const change of this.queue) if (change.type === 'generation') leases.set(change.shardId, change.generation);
+		const releases: MetaOp[] = [...leases].map(([shard, generation]) => ['release', shard, this.token(generation)]);
 		if (!releases.length || this.leaseLost) return;
 		try {
-			await this.call(META_SCRIPT, { ops: releases, ttl: this.ttl });
+			await this.call(META_SCRIPT, { ops: releases, ttl: this.ttl, held: [] });
 		} catch (cause) {
 			if (cause instanceof LeaseLost) return;
 			this.state.recordFailure({
@@ -705,15 +734,20 @@ class RedisBinding implements CoordinatorBinding {
 		while (this.queue.length && !this.leaseLost && !this.closed) {
 			const changes = this.queue;
 			this.queue = [];
-			// A shard the batch gives back is not one it counts on: Redis may have released it already and lost
-			// the reply, and giving it back twice is not losing it.
-			const releasing = new Set(changes.filter(change => change.type === 'suspended').map(change => change.shardId));
+			// A shard the batch gives back is judged by its release instead of counted on: Redis may have given
+			// it back already and lost the reply, and asking twice is not losing it.
+			const giving = new Map<number, string>();
+			for (const change of changes) {
+				if (change.type !== 'suspended' || !this.owned.has(change.shardId) || giving.has(change.shardId)) continue;
+				giving.set(change.shardId, this.token(change.generation));
+			}
 			let results: string[];
 			try {
 				results = await this.call<string[]>(META_SCRIPT, {
 					ops: changes.map(change => this.metaOp(change)),
 					ttl: this.ttl,
-					held: [...this.owned.keys()].filter(shard => !releasing.has(shard)),
+					held: [...this.owned.keys()].filter(shard => !giving.has(shard)),
+					giving: [...giving],
 				});
 			} catch (cause) {
 				if (cause instanceof LeaseLost) return;

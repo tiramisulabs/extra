@@ -112,6 +112,16 @@ function carries(input: Record<string, unknown>, kind: string): boolean {
 	return Array.isArray(input.ops) && input.ops.some(op => Array.isArray(op) && op[0] === kind);
 }
 
+/** Loses the reply of the first script that carries an ownership change of this kind. Returns the undo. */
+function dropReply(client: RedisClientType, kind: string): () => void {
+	let dropped = false;
+	return onReply(client, input => {
+		if (dropped || !carries(input, kind)) return;
+		dropped = true;
+		throw new Error('Socket closed unexpectedly');
+	});
+}
+
 /** One process sharing the cache: its own RedisAdapter connection, state, and coordinator incarnation. */
 function createWorker(options: WorkerOptions): Worker {
 	const namespace = options.namespace!;
@@ -1116,12 +1126,7 @@ describe.skipIf(!redisUrl)('redisCoordinator against Redis', () => {
 			const owner = await worker();
 			await own(owner, [G]);
 			// The shard reconnects. Redis applies the new session and the connection drops before the reply.
-			let dropped = false;
-			const restore = onReply(owner.inner.client, input => {
-				if (dropped || !carries(input, 'acquire')) return;
-				dropped = true;
-				throw new Error('Socket closed unexpectedly');
-			});
+			const restore = dropReply(owner.inner.client, 'acquire');
 			owner.state.ready(0, 'session-2', 1, [G], 1);
 			await expect(owner.binding.publish()).rejects.toThrow('Socket closed unexpectedly');
 			restore();
@@ -1143,22 +1148,218 @@ describe.skipIf(!redisUrl)('redisCoordinator against Redis', () => {
 			await own(owner, [onShard0], { shard: [0, 2] });
 			await own(owner, [onShard1], { shard: [1, 2] });
 			await owner.adapter.set(...role('a', onShard0));
-			let dropped = false;
-			const restore = onReply(owner.inner.client, input => {
-				if (dropped || !carries(input, 'release')) return;
-				dropped = true;
-				throw new Error('Socket closed unexpectedly');
-			});
+			const restore = dropReply(owner.inner.client, 'release');
 			owner.state.suspend(1);
 			await expect(owner.binding.publish()).rejects.toThrow('Socket closed unexpectedly');
 			restore();
 			expect(await raw.exists(`${namespace}:reconciler:lease:1`)).toBe(0);
 
-			// The shard it keeps is unaffected, by its next read and by its next renewal alike.
-			expect(await owner.adapter.get('role.a')).toMatchObject({ id: 'a' });
+			// The renewal timer fires before anything else asks again. The shard it keeps is unaffected.
 			await Reflect.get(owner.binding, 'renew').call(owner.binding);
 			expect(owner.state.lifecycle).toBe('active');
+			expect(await owner.adapter.get('role.a')).toMatchObject({ id: 'a' });
 			expect(await raw.exists(`${namespace}:reconciler:lease:0`)).toBe(1);
+		}));
+
+	it('gives a shard back again after another process already took it', () =>
+		withRedis(async ({ namespace, raw, worker }) => {
+			const owner = await worker();
+			const successor = await worker();
+			await own(owner, [G]);
+			const restore = dropReply(owner.inner.client, 'release');
+			owner.state.suspend(0);
+			await expect(owner.binding.publish()).rejects.toThrow('Socket closed unexpectedly');
+			restore();
+			// A process that was waiting for the shard takes it before the first one asks again.
+			await own(successor, [G], { session: 'session-2' });
+			await successor.adapter.set(...role('new'));
+			const holder = await raw.get(`${namespace}:reconciler:lease:0`);
+
+			await owner.binding.publish();
+
+			expect(owner.state.lifecycle).toBe('active');
+			expect(await raw.get(`${namespace}:reconciler:lease:0`)).toBe(holder);
+			expect(await successor.adapter.get('role.new')).toMatchObject({ id: 'new' });
+		}));
+
+	it('gives a shard back again after another process took it and gave it back too', () =>
+		withRedis(async ({ namespace, raw, worker }) => {
+			const owner = await worker();
+			const successor = await worker();
+			await own(owner, [G]);
+			const restore = dropReply(owner.inner.client, 'release');
+			owner.state.suspend(0);
+			await expect(owner.binding.publish()).rejects.toThrow('Socket closed unexpectedly');
+			restore();
+			// Before the first one asks again, a process that was waiting takes the shard and stops following it.
+			await own(successor, [G], { session: 'session-2' });
+			successor.state.suspend(0);
+			await successor.binding.publish();
+
+			await owner.binding.publish();
+
+			expect(owner.state.lifecycle).toBe('active');
+			expect(successor.state.lifecycle).toBe('active');
+			expect(await raw.exists(`${namespace}:reconciler:lease:0`)).toBe(0);
+		}));
+
+	it('gives a shard back again when it asks together with a later session of that shard', () =>
+		withRedis(async ({ namespace, raw, worker }) => {
+			const owner = await worker();
+			const successor = await worker();
+			await own(owner, [G]);
+			const restore = dropReply(owner.inner.client, 'release');
+			owner.state.suspend(0);
+			await expect(owner.binding.publish()).rejects.toThrow('Socket closed unexpectedly');
+			restore();
+			await own(successor, [G], { session: 'session-2' });
+			const holder = await raw.get(`${namespace}:reconciler:lease:0`);
+			// The first one follows the shard again and stops once more before it reaches Redis.
+			owner.state.ready(0, 'session-3', 1, [G], 1);
+			owner.state.suspend(0);
+
+			await owner.binding.publish();
+
+			// It waits for the shard like any other process instead of counting it as lost.
+			expect(owner.state.lifecycle).toBe('active');
+			expect(await raw.get(`${namespace}:reconciler:lease:0`)).toBe(holder);
+		}));
+
+	it('remembers only the latest releases of a shard', () =>
+		withRedis(async ({ namespace, raw, worker }) => {
+			const owner = await worker();
+			for (let session = 0; session < 20; session++) {
+				owner.state.ready(0, `session-${session}`, 1, [G], 1);
+				owner.state.suspend(0);
+				await owner.binding.publish();
+			}
+
+			expect(owner.state.lifecycle).toBe('active');
+			expect(await raw.lLen(`${namespace}:reconciler:shard:0:released`)).toBe(16);
+		}));
+
+	it('gives a shard back again when one step gave it back twice', () =>
+		withRedis(async ({ namespace, raw, worker }) => {
+			const owner = await worker();
+			await own(owner, [G]);
+			const restore = dropReply(owner.inner.client, 'release');
+			// The worker stops following the shard, follows it again under a new session, and stops once more.
+			owner.state.suspend(0);
+			owner.state.ready(0, 'session-2', 1, [G], 1);
+			owner.state.suspend(0);
+			await expect(owner.binding.publish()).rejects.toThrow('Socket closed unexpectedly');
+			restore();
+
+			await owner.binding.publish();
+
+			expect(owner.state.lifecycle).toBe('active');
+			expect(await raw.exists(`${namespace}:reconciler:lease:0`)).toBe(0);
+		}));
+
+	it('gives back a shard it took and stopped following in one step', () =>
+		withRedis(async ({ namespace, raw, worker }) => {
+			const owner = await worker();
+			owner.state.ready(0, 'session', 1, [G], 1);
+			owner.state.suspend(0);
+			await owner.binding.publish();
+
+			expect(owner.state.lifecycle).toBe('active');
+			expect(await raw.exists(`${namespace}:reconciler:lease:0`)).toBe(0);
+		}));
+
+	it('treats a lease that was gone before it gave the shard back as a lost lease', () =>
+		withRedis(async ({ namespace, raw, worker }) => {
+			const lease = `${namespace}:reconciler:lease:0`;
+			const owner = await worker();
+			await own(owner, [G]);
+			// The owner stalled until its lease expired, and the first thing it does next is give the shard back.
+			await raw.del(lease);
+			owner.state.suspend(0);
+			await owner.binding.publish();
+
+			expect(owner.state.snapshot()).toMatchObject({ lifecycle: 'failed', cause: expect.any(Error) });
+			// It does not take the shard again under the identity that lost it.
+			owner.state.ready(0, 'session-2', 1, [G], 1);
+			await owner.binding.publish();
+			expect(await raw.exists(lease)).toBe(0);
+		}));
+
+	it('does not wait to take back a shard that another process took before it gave it up', () =>
+		withRedis(async ({ namespace, raw, worker }) => {
+			const lease = `${namespace}:reconciler:lease:0`;
+			const owner = await worker();
+			await own(owner, [G]);
+			await raw.set(lease, 'another-incarnation', { expiration: { type: 'PX', value: LEASE_TTL / 3 } });
+			// It stops following the shard and gets a new session for it before anything reached Redis.
+			owner.state.suspend(0);
+			owner.state.ready(0, 'session-2', 1, [G], 1);
+			await owner.binding.publish();
+
+			expect(owner.state.snapshot()).toMatchObject({ lifecycle: 'failed', cause: expect.any(Error) });
+			// The other lease runs out, and the former owner is not there to pick the shard up.
+			await sleep(LEASE_TTL);
+			expect(await raw.exists(lease)).toBe(0);
+		}));
+
+	it('notices at renewal that the lease of a shard it is about to give back is gone', () =>
+		withRedis(async ({ namespace, raw, worker }) => {
+			const owner = await worker();
+			await own(owner, [G]);
+			await raw.del(`${namespace}:reconciler:lease:0`);
+			owner.state.suspend(0);
+			// The renewal timer fires before the release reaches Redis.
+			await Reflect.get(owner.binding, 'renew').call(owner.binding);
+
+			expect(owner.state.snapshot()).toMatchObject({ lifecycle: 'failed', cause: expect.any(Error) });
+		}));
+
+	it('notices a lost lease when it reports a change of that shard', () =>
+		withRedis(async ({ namespace, raw, worker }) => {
+			const owner = await worker();
+			await own(owner, [G]);
+			await raw.set(`${namespace}:reconciler:lease:0`, 'another-incarnation');
+			owner.state.closeGuild(G);
+			await owner.binding.publish();
+
+			expect(owner.state.snapshot()).toMatchObject({ lifecycle: 'failed', cause: expect.any(Error) });
+		}));
+
+	it('gives back its other shards at shutdown after a release Redis never answered', () =>
+		withRedis(async ({ namespace, raw, worker }) => {
+			const onShard0 = guildOn(2);
+			const onShard1 = guildOn(3);
+			const owner = await worker();
+			const reader = await worker();
+			await own(owner, [onShard0], { shard: [0, 2] });
+			await own(owner, [onShard1], { shard: [1, 2] });
+			await owner.adapter.set(...role('a', onShard0));
+			const restore = dropReply(owner.inner.client, 'release');
+			owner.state.suspend(1);
+			await expect(owner.binding.publish()).rejects.toThrow('Socket closed unexpectedly');
+			restore();
+			expect(await reader.adapter.get('role.a')).toMatchObject({ id: 'a' });
+
+			owner.state.beginClose();
+			await owner.binding.close();
+
+			expect(await raw.exists(`${namespace}:reconciler:lease:0`)).toBe(0);
+			expect(await reader.adapter.get('role.a')).toBeNull();
+		}));
+
+	it('gives back at shutdown a shard Redis handed it without answering', () =>
+		withRedis(async ({ namespace, raw, worker }) => {
+			const lease = `${namespace}:reconciler:lease:0`;
+			const owner = await worker();
+			const restore = dropReply(owner.inner.client, 'acquire');
+			owner.state.ready(0, 'session', 1, [G], 1);
+			await expect(owner.binding.publish()).rejects.toThrow('Socket closed unexpectedly');
+			restore();
+			expect(await raw.exists(lease)).toBe(1);
+
+			owner.state.beginClose();
+			await owner.binding.close();
+
+			expect(await raw.exists(lease)).toBe(0);
 		}));
 
 	it('reopens a shard it gave back and took again in one step', () =>
